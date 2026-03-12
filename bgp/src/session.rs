@@ -343,6 +343,23 @@ pub fn v4_over_v6_nexthop(
     }
 }
 
+/// Returns true if the effective nexthop-AFI for IPv4 unicast is
+/// IPv6, which determines whether ENHE is needed.
+///
+/// The effective NH-AFI depends on the nexthop override and peer:
+/// - Explicit v6 override → v6 regardless of peer
+/// - Explicit v4 override → v4 regardless of peer
+/// - No override → derived from peer address AFI
+fn ipv4_nexthop_afi_is_v6(peer: &PeerId, config: &Ipv4UnicastConfig) -> bool {
+    match config.nexthop {
+        Some(IpAddr::V6(_)) => true,
+        Some(IpAddr::V4(_)) => false,
+        None => {
+            matches!(peer, PeerId::Ip(IpAddr::V6(_)) | PeerId::Interface(_))
+        }
+    }
+}
+
 /// The states a BGP finite state machine may be at any given time. Many
 /// of these states carry a connection by value. This is the same connection
 /// that moves from state to state as transitions are made. Transitions from
@@ -7979,19 +7996,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn use_extended_nexthop(&self) -> bool {
-        // ENHE is always used for unnumbered peers.
-        if self.is_unnumbered() {
-            return true;
-        }
-        // Numbered peers use ENHE if:
-        // 1. We peer with them over IPv6
-        // 2. IPv4 Unicast is enabled
-        // 3. The nexthop for IPv4 Unicast is not IPv4 (v4 over v4 is not ENHE)
-        matches!(self.neighbor.peer, PeerId::Ip(IpAddr::V6(_)))
-            && lock!(self.session)
-                .ipv4_unicast
-                .as_ref()
-                .is_some_and(|c| !matches!(c.nexthop, Some(IpAddr::V4(_))))
+        // ENHE is needed when the effective NH-AFI for IPv4
+        // unicast is IPv6. If IPv4 unicast isn't enabled, there's
+        // nothing to carry over ENHE.
+        lock!(self.session)
+            .ipv4_unicast
+            .as_ref()
+            .is_some_and(|c| ipv4_nexthop_afi_is_v6(&self.neighbor.peer, c))
     }
 
     fn is_ebgp(&self) -> Option<bool> {
@@ -9587,9 +9598,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 refresh_needed4 = true;
             }
 
-            // Nexthop override changed - trigger re-advertisement
+            // Nexthop override changed
             if current_v4.map(|c| c.nexthop) != info_v4.map(|c| c.nexthop) {
-                readvertise_needed4 = true;
+                let peer = &self.neighbor.peer;
+                match (current_v4, info_v4) {
+                    (Some(old), Some(new))
+                        if ipv4_nexthop_afi_is_v6(peer, old)
+                            != ipv4_nexthop_afi_is_v6(peer, new) =>
+                    {
+                        // NH-AFI changed — ENHE capability must be
+                        // added or removed, requiring a session reset.
+                        reset_needed = true;
+                    }
+                    _ => {
+                        readvertise_needed4 = true;
+                    }
+                }
             }
 
             // Export policy changed - send FSM notification
@@ -10473,6 +10497,141 @@ mod tests {
             &NegotiatedCaps::default(),
         );
         assert!(result.is_err());
+    }
+
+    // ================================================================
+    // ipv4_nexthop_afi_is_v6 unit tests
+    // ================================================================
+
+    use crate::params::Ipv4UnicastConfig;
+
+    fn v4_config_with_nexthop(nexthop: Option<IpAddr>) -> Ipv4UnicastConfig {
+        Ipv4UnicastConfig {
+            nexthop,
+            import_policy: Default::default(),
+            export_policy: Default::default(),
+        }
+    }
+
+    #[test]
+    fn nh_afi_v4_peer_no_override() {
+        let peer = PeerId::Ip(ip!("10.0.0.1"));
+        let config = v4_config_with_nexthop(None);
+        assert!(!ipv4_nexthop_afi_is_v6(&peer, &config));
+    }
+
+    #[test]
+    fn nh_afi_v6_peer_no_override() {
+        let peer = PeerId::Ip(ip!("2001:db8::1"));
+        let config = v4_config_with_nexthop(None);
+        assert!(ipv4_nexthop_afi_is_v6(&peer, &config));
+    }
+
+    #[test]
+    fn nh_afi_unnumbered_no_override() {
+        let peer = PeerId::Interface("eth0".into());
+        let config = v4_config_with_nexthop(None);
+        assert!(ipv4_nexthop_afi_is_v6(&peer, &config));
+    }
+
+    #[test]
+    fn nh_afi_explicit_v4_override_any_peer() {
+        let config = v4_config_with_nexthop(Some(ip!("10.0.0.1")));
+        // v4 override → NH-AFI v4 regardless of peer
+        for peer in [
+            PeerId::Ip(ip!("10.0.0.2")),
+            PeerId::Ip(ip!("2001:db8::1")),
+            PeerId::Interface("eth0".into()),
+        ] {
+            assert!(
+                !ipv4_nexthop_afi_is_v6(&peer, &config),
+                "v4 override should be NH-AFI v4 for {peer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nh_afi_explicit_v6_override_any_peer() {
+        let config = v4_config_with_nexthop(Some(ip!("2001:db8::1")));
+        // v6 override → NH-AFI v6 regardless of peer
+        for peer in [
+            PeerId::Ip(ip!("10.0.0.1")),
+            PeerId::Ip(ip!("2001:db8::2")),
+            PeerId::Interface("eth0".into()),
+        ] {
+            assert!(
+                ipv4_nexthop_afi_is_v6(&peer, &config),
+                "v6 override should be NH-AFI v6 for {peer:?}"
+            );
+        }
+    }
+
+    /// Verify NH-AFI transitions that flip ENHE state (require
+    /// session reset) vs those that don't (readvertise only).
+    #[test]
+    fn nh_afi_transitions_v6_peer() {
+        let peer = PeerId::Ip(ip!("2001:db8::1"));
+        let no_override = v4_config_with_nexthop(None);
+        let v4_override = v4_config_with_nexthop(Some(ip!("10.0.0.1")));
+        let v6_override = v4_config_with_nexthop(Some(ip!("2001:db8::99")));
+
+        // Transitions that change NH-AFI (reset needed)
+        // None → V4: v6 → v4
+        assert_ne!(
+            ipv4_nexthop_afi_is_v6(&peer, &no_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override),
+        );
+        // V6 → V4: v6 → v4
+        assert_ne!(
+            ipv4_nexthop_afi_is_v6(&peer, &v6_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override),
+        );
+
+        // Transitions that keep NH-AFI (readvertise only)
+        // None → V6: both v6
+        assert_eq!(
+            ipv4_nexthop_afi_is_v6(&peer, &no_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v6_override),
+        );
+        // V4(a) → V4(b): both v4
+        let v4_override_2 = v4_config_with_nexthop(Some(ip!("10.0.0.2")));
+        assert_eq!(
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override_2),
+        );
+    }
+
+    #[test]
+    fn nh_afi_transitions_v4_peer() {
+        let peer = PeerId::Ip(ip!("10.0.0.1"));
+        let no_override = v4_config_with_nexthop(None);
+        let v4_override = v4_config_with_nexthop(Some(ip!("10.0.0.2")));
+        let v6_override = v4_config_with_nexthop(Some(ip!("2001:db8::1")));
+
+        // Transitions that change NH-AFI (reset needed)
+        // None → V6: v4 → v6
+        assert_ne!(
+            ipv4_nexthop_afi_is_v6(&peer, &no_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v6_override),
+        );
+        // V4 → V6: v4 → v6
+        assert_ne!(
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v6_override),
+        );
+
+        // Transitions that keep NH-AFI (readvertise only)
+        // None → V4: both v4
+        assert_eq!(
+            ipv4_nexthop_afi_is_v6(&peer, &no_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override),
+        );
+        // V4(a) → V4(b): both v4
+        let v4_override_2 = v4_config_with_nexthop(Some(ip!("10.0.0.3")));
+        assert_eq!(
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override),
+            ipv4_nexthop_afi_is_v6(&peer, &v4_override_2),
+        );
     }
 
     // ================================================================
