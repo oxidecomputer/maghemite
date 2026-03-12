@@ -66,10 +66,11 @@ const ESTABLISHED_VERIFICATION: Duration =
     Duration::from_secs(TEST_HOLD_TIME_SECS + 2);
 
 /// Number of routes to originate in update tests. Sized to require multiple
-/// BGP UPDATE messages (each capped at MAX_MESSAGE_SIZE = 4096 bytes),
-/// exercising the chunk_and_send splitting and the incremental recv_msg
-/// body-read loop.
-const TEST_ROUTE_COUNT: usize = 4096;
+/// BGP UPDATE messages even when peers negotiate Extended Message Size
+/// (RFC 8654, max 65535 bytes). An IPv4 /24 prefix is 4 bytes on the wire,
+/// so ~16371 fit in a single extended UPDATE; 2^15 guarantees at least two
+/// chunks for both IPv4 and IPv6.
+const TEST_ROUTE_COUNT: usize = 32_768;
 
 /// Generate `count` unique IPv4 /24 prefixes: 10.0.0.0/24 .. 10.x.y.0/24
 fn generate_test_prefixes_v4(count: usize) -> Vec<Prefix> {
