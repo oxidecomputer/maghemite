@@ -1247,6 +1247,20 @@ fn display_neighbors_detail(
             format_duration_human(info.timers.delay_open.remaining),
         );
 
+        println_nopipe!("\n{}", "Capabilities:".bold());
+        println_nopipe!("  IPv4 Unicast: {}", info.cap_state.ipv4);
+        println_nopipe!("  IPv6 Unicast: {}", info.cap_state.ipv6);
+        println_nopipe!("  Extended Messages: {}", info.cap_state.ext_msg);
+        println_nopipe!("  Route Refresh: {}", info.cap_state.route_refresh);
+        println_nopipe!("  Extended Next Hop: {}", info.cap_state.enhe);
+
+        if !info.sent_capabilities.is_empty() {
+            println_nopipe!("\n{}", "Sent Capabilities:".bold());
+            for cap in &info.sent_capabilities {
+                println_nopipe!("  {:?}", cap);
+            }
+        }
+
         if !info.received_capabilities.is_empty() {
             println_nopipe!("\n{}", "Received Capabilities:".bold());
             for cap in &info.received_capabilities {

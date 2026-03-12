@@ -2169,7 +2169,7 @@ fn test_dual_stack_routes_ipv6_peer_success() {
 
 #[test]
 fn test_ipv4_routes_ipv6_peer_success() {
-    // IPv6 connection with IPv4-only routes
+    // IPv6 connection with IPv4-only routes (configured IPv4 nexthop)
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
         RouteExchange::Ipv4 {
             nexthop: Some(ip!("10.0.3.1")),
@@ -2177,6 +2177,95 @@ fn test_ipv4_routes_ipv6_peer_success() {
         sockaddr!(&format!("[3fff::12]:{TEST_BGP_PORT}")),
         sockaddr!(&format!("[3fff::13]:{TEST_BGP_PORT}")),
     )
+}
+
+/// IPv4 routes over an IPv6-addressed numbered peer with no configured
+/// nexthop. Both sides negotiate ENHE, so the IPv6 connection address
+/// is used as the nexthop for IPv4 NLRI.
+#[test]
+fn test_ipv4_routes_ipv6_peer_enhe() {
+    let r1_addr: SocketAddr = sockaddr!(&format!("[3fff::14]:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("[3fff::15]:{TEST_BGP_PORT}"));
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    r1_addr,
+                    r2_addr,
+                    true,
+                ),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    r2_addr,
+                    r1_addr,
+                    false,
+                ),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) =
+        test_setup::<BgpConnectionTcp, BgpListenerTcp>(
+            "ipv4_routes_ipv6_peer_enhe",
+            &routers,
+        );
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session =
+        r1.router.get_session(r2_addr.ip()).expect("get r1 session");
+    let r2_session =
+        r2.router.get_session(r1_addr.ip()).expect("get r2 session");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Originate IPv4 routes from R1
+    let prefixes_v4 = generate_test_prefixes_v4(TEST_ROUTE_COUNT);
+    r1.router
+        .create_origin(AddressFamily::Ipv4, prefixes_v4.clone())
+        .expect("originate IPv4");
+
+    // Wait for all routes to arrive at R2
+    wait_for!(
+        prefixes_v4
+            .iter()
+            .filter(|p| { !r2.router.db.get_prefix_paths(p).is_empty() })
+            .count()
+            == TEST_ROUTE_COUNT,
+        "all IPv4 routes should arrive at R2 via ENHE"
+    );
+
+    // Verify the nexthop is R1's IPv6 address
+    for prefix in &prefixes_v4 {
+        let paths = r2.router.db.get_prefix_paths(prefix);
+        assert_eq!(paths.len(), 1, "{prefix:?}: expected 1 path");
+        assert_eq!(
+            paths[0].nexthop,
+            r1_addr.ip(),
+            "{prefix:?}: nexthop should be R1's IPv6 address",
+        );
+    }
 }
 
 #[test]
@@ -2189,6 +2278,100 @@ fn test_ipv6_routes_ipv4_peer_success() {
         sockaddr!(&format!("10.0.0.7:{TEST_BGP_PORT}")),
         sockaddr!(&format!("10.0.0.8:{TEST_BGP_PORT}")),
     )
+}
+
+/// IPv6 routes over an IPv4-addressed numbered peer with no configured
+/// nexthop. The sender uses a v4-mapped v6 address as the nexthop on the
+/// wire. The receiver canonicalizes this to IPv4 before RIB installation.
+#[test]
+fn test_ipv6_routes_ipv4_peer_mapped_nexthop() {
+    let r1_addr: SocketAddr =
+        sockaddr!(&format!("10.0.0.9:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr =
+        sockaddr!(&format!("10.0.0.10:{TEST_BGP_PORT}"));
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv6 { nexthop: None },
+                    r1_addr,
+                    r2_addr,
+                    true,
+                ),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv6 { nexthop: None },
+                    r2_addr,
+                    r1_addr,
+                    false,
+                ),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) =
+        test_setup::<BgpConnectionTcp, BgpListenerTcp>(
+            "ipv6_routes_ipv4_peer_mapped_nh",
+            &routers,
+        );
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session =
+        r1.router.get_session(r2_addr.ip()).expect("get r1 session");
+    let r2_session =
+        r2.router.get_session(r1_addr.ip()).expect("get r2 session");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Originate IPv6 routes from R1
+    let prefixes_v6 = generate_test_prefixes_v6(TEST_ROUTE_COUNT);
+    r1.router
+        .create_origin(AddressFamily::Ipv6, prefixes_v6.clone())
+        .expect("originate IPv6");
+
+    // Wait for all routes to arrive at R2
+    wait_for!(
+        prefixes_v6
+            .iter()
+            .filter(|p| {
+                !r2.router.db.get_prefix_paths(p).is_empty()
+            })
+            .count()
+            == TEST_ROUTE_COUNT,
+        "all IPv6 routes should arrive at R2"
+    );
+
+    // Verify the nexthop is canonicalized to R1's IPv4 address
+    for prefix in &prefixes_v6 {
+        let paths = r2.router.db.get_prefix_paths(prefix);
+        assert_eq!(paths.len(), 1, "{prefix:?}: expected 1 path");
+        assert_eq!(
+            paths[0].nexthop,
+            r1_addr.ip(),
+            "{prefix:?}: nexthop should be R1's IPv4 address \
+             (canonicalized from v4-mapped v6)",
+        );
+    }
 }
 
 /// Helper to set up two routers with unnumbered BGP sessions.

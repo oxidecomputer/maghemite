@@ -116,7 +116,17 @@ impl Display for CapabilityState {
 }
 
 /// The result of comparing our OPEN capabilities with the peer's.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 pub struct NegotiatedCaps {
     /// IPv4 Unicast address-family
     pub ipv4: CapabilityState,
@@ -7973,7 +7983,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn use_extended_nexthop(&self) -> bool {
-        self.is_unnumbered()
+        // ENHE is always used for unnumbered peers.
+        if self.is_unnumbered() {
+            return true;
+        }
+        // Numbered peers use ENHE if:
+        // 1. We peer with them over IPv6
+        // 2. IPv4 Unicast is enabled
+        // 3. The nexthop for IPv4 Unicast is not IPv4 (v4 over v4 is not ENHE)
+        matches!(self.neighbor.peer, PeerId::Ip(IpAddr::V6(_)))
+            && lock!(self.session)
+                .ipv4_unicast
+                .as_ref()
+                .is_some_and(|c| !matches!(c.nexthop, Some(IpAddr::V4(_))))
     }
 
     fn is_ebgp(&self) -> Option<bool> {
@@ -9790,6 +9812,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         local_tcp_port: local.port(),
                         remote_tcp_port: remote.port(),
                         received_capabilities: vec![],
+                        sent_capabilities: vec![],
+                        cap_state: NegotiatedCaps::default(),
                         timers,
                         counters,
                         ipv4_unicast,
@@ -9805,6 +9829,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let remote = pc.conn.peer();
                     let received_capabilities =
                         pc.rx_caps.iter().map(BgpCapability::from).collect();
+                    let sent_capabilities =
+                        pc.tx_caps.iter().map(BgpCapability::from).collect();
                     PeerInfo {
                         name,
                         peer_group: peer_group.clone(),
@@ -9817,6 +9843,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         local_tcp_port: local.port(),
                         remote_tcp_port: remote.port(),
                         received_capabilities,
+                        sent_capabilities,
+                        cap_state: pc.cap_state,
                         timers,
                         counters,
                         ipv4_unicast,
@@ -9856,6 +9884,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_tcp_port: 0u16,
                     remote_tcp_port: self.neighbor.port,
                     received_capabilities: vec![],
+                    sent_capabilities: vec![],
+                    cap_state: NegotiatedCaps::default(),
                     timers,
                     counters,
                     ipv4_unicast,
@@ -10359,6 +10389,40 @@ mod tests {
         );
         // Should error because cannot derive IPv4 nexthop from IPv6 connection
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_select_nexthop_cross_af_ipv4_routes_ipv6_enhe() {
+        // IPv4 route with IPv6 local_ip and ENHE negotiated = IPv6 nexthop
+        let local_ip = ip!("2001:db8::1");
+        let caps = NegotiatedCaps {
+            enhe: CapabilityState::Negotiated,
+            ..Default::default()
+        };
+
+        let result = select_nexthop(Afi::Ipv4, local_ip, None, &caps);
+        assert_eq!(
+            result.unwrap(),
+            BgpNexthop::Ipv6Single("2001:db8::1".parse().unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_select_nexthop_v4_mapped_v6_canonicalized() {
+        // v4-mapped v6 local_ip is canonicalized to IPv4 before matching
+        let local_ip: IpAddr =
+            "::ffff:10.0.0.1".parse::<Ipv6Addr>().unwrap().into();
+
+        let result = select_nexthop(
+            Afi::Ipv4,
+            local_ip,
+            None,
+            &NegotiatedCaps::default(),
+        );
+        assert_eq!(
+            result.unwrap(),
+            BgpNexthop::Ipv4("10.0.0.1".parse().unwrap()),
+        );
     }
 
     #[test]

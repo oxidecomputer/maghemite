@@ -5,7 +5,7 @@
 use crate::{
     config::PeerConfig,
     messages::{AddPathElement, Afi, Capability},
-    session::{FsmStateKind, SessionCounters, SessionInfo},
+    session::{FsmStateKind, NegotiatedCaps, SessionCounters, SessionInfo},
 };
 use rdb::{
     Dscp, ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
@@ -807,6 +807,8 @@ pub enum BgpCapability {
     RouteRefresh,
     FourOctetAsn(u32),
     AddPath { elements: Vec<AfiSafi> },
+    ExtendedNextHopEncoding,
+    BGPExtendedMessage,
     Unknown(u8),
 }
 
@@ -826,7 +828,48 @@ impl From<&Capability> for BgpCapability {
             Capability::AddPath { elements } => BgpCapability::AddPath {
                 elements: elements.iter().map(AfiSafi::from).collect(),
             },
+            Capability::ExtendedNextHopEncoding { .. } => {
+                BgpCapability::ExtendedNextHopEncoding
+            }
+            Capability::BGPExtendedMessage {} => {
+                BgpCapability::BGPExtendedMessage
+            }
             c => BgpCapability::Unknown(c.code() as u8),
+        }
+    }
+}
+
+/// Previous version of BgpCapability.
+/// Used for API versions before VERSION_EXTENDED_NH_STATIC.
+/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported version.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "BgpCapability")]
+pub enum BgpCapabilityV1 {
+    MultiprotocolExtensions(AfiSafi),
+    RouteRefresh,
+    FourOctetAsn(u32),
+    AddPath { elements: Vec<AfiSafi> },
+    Unknown(u8),
+}
+
+impl From<BgpCapability> for BgpCapabilityV1 {
+    fn from(cap: BgpCapability) -> Self {
+        match cap {
+            BgpCapability::MultiprotocolExtensions(afi_safi) => {
+                BgpCapabilityV1::MultiprotocolExtensions(afi_safi)
+            }
+            BgpCapability::RouteRefresh => BgpCapabilityV1::RouteRefresh,
+            BgpCapability::FourOctetAsn(asn) => {
+                BgpCapabilityV1::FourOctetAsn(asn)
+            }
+            BgpCapability::AddPath { elements } => {
+                BgpCapabilityV1::AddPath { elements }
+            }
+            BgpCapability::ExtendedNextHopEncoding => {
+                BgpCapabilityV1::Unknown(5)
+            }
+            BgpCapability::BGPExtendedMessage => BgpCapabilityV1::Unknown(6),
+            BgpCapability::Unknown(code) => BgpCapabilityV1::Unknown(code),
         }
     }
 }
@@ -845,7 +888,7 @@ pub struct PeerInfoV3 {
     pub remote_ip: IpAddr,
     pub local_tcp_port: u16,
     pub remote_tcp_port: u16,
-    pub received_capabilities: Vec<BgpCapability>,
+    pub received_capabilities: Vec<BgpCapabilityV1>,
     pub timers: PeerTimers,
     pub counters: PeerCountersV1,
     pub ipv4_unicast: Ipv4UnicastConfig,
@@ -1061,6 +1104,8 @@ pub struct PeerInfo {
     pub local_tcp_port: u16,
     pub remote_tcp_port: u16,
     pub received_capabilities: Vec<BgpCapability>,
+    pub sent_capabilities: Vec<BgpCapability>,
+    pub cap_state: NegotiatedCaps,
     pub timers: PeerTimers,
     pub counters: PeerCounters,
     pub ipv4_unicast: Ipv4UnicastConfig,
@@ -1083,7 +1128,11 @@ impl From<PeerInfo> for PeerInfoV3 {
             remote_ip: info.remote_ip,
             local_tcp_port: info.local_tcp_port,
             remote_tcp_port: info.remote_tcp_port,
-            received_capabilities: info.received_capabilities,
+            received_capabilities: info
+                .received_capabilities
+                .into_iter()
+                .map(BgpCapabilityV1::from)
+                .collect(),
             timers: info.timers,
             counters: PeerCountersV1 {
                 connection_retries: info.counters.connection_retries,

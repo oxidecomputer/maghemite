@@ -2042,7 +2042,9 @@
           {
             "type": "string",
             "enum": [
-              "RouteRefresh"
+              "RouteRefresh",
+              "ExtendedNextHopEncoding",
+              "BGPExtendedMessage"
             ]
           },
           {
@@ -2797,6 +2799,39 @@
               "reserved"
             ],
             "additionalProperties": false
+          }
+        ]
+      },
+      "CapabilityState": {
+        "description": "The negotiation state of a capability for a given peer.",
+        "oneOf": [
+          {
+            "description": "We have not configured or advertised this capability, and the peer did not send it.",
+            "type": "string",
+            "enum": [
+              "Unconfigured"
+            ]
+          },
+          {
+            "description": "We advertised this capability but the peer did not send it.",
+            "type": "string",
+            "enum": [
+              "Advertised"
+            ]
+          },
+          {
+            "description": "The peer sent this capability but we did not advertise it.",
+            "type": "string",
+            "enum": [
+              "Received"
+            ]
+          },
+          {
+            "description": "Both sides advertised this capability.",
+            "type": "string",
+            "enum": [
+              "Negotiated"
+            ]
           }
         ]
       },
@@ -3987,6 +4022,59 @@
           "tx_running"
         ]
       },
+      "NegotiatedCaps": {
+        "description": "The result of comparing our OPEN capabilities with the peer's.",
+        "type": "object",
+        "properties": {
+          "enhe": {
+            "description": "Extended nexthop: IPv4 routes carried over IPv6 nexthops (RFC 8950)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "ext_msg": {
+            "description": "BGP Extended Message Size (RFC 8654)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "ipv4": {
+            "description": "IPv4 Unicast address-family",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "ipv6": {
+            "description": "IPv6 Unicast address-family",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "route_refresh": {
+            "description": "Route Refresh (RFC 2918)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enhe",
+          "ext_msg",
+          "ipv4",
+          "ipv6",
+          "route_refresh"
+        ]
+      },
       "Neighbor": {
         "description": "Neighbor configuration with explicit per-address-family enablement (v3 API)",
         "type": "object",
@@ -4987,6 +5075,9 @@
             "format": "uint32",
             "minimum": 0
           },
+          "cap_state": {
+            "$ref": "#/components/schemas/NegotiatedCaps"
+          },
           "counters": {
             "$ref": "#/components/schemas/PeerCounters"
           },
@@ -5062,11 +5153,18 @@
             "format": "uint16",
             "minimum": 0
           },
+          "sent_capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BgpCapability"
+            }
+          },
           "timers": {
             "$ref": "#/components/schemas/PeerTimers"
           }
         },
         "required": [
+          "cap_state",
           "counters",
           "fsm_state",
           "fsm_state_duration",
@@ -5079,6 +5177,7 @@
           "received_capabilities",
           "remote_ip",
           "remote_tcp_port",
+          "sent_capabilities",
           "timers"
         ]
       },
