@@ -228,13 +228,16 @@ fn egress(
     log: Logger,
 ) {
     spawn(move || {
+        let log = log.new(slog::o!(
+            "local" => format!("{local}"),
+            "src_port" => src_port,
+            "dst_port" => dst_port,
+        ));
+
         'egress: loop {
             let sk = match egress_socket(local, src_port) {
                 Err(e) => {
                     bfd_log!(log, error, "failed to bind egress socket: {e}";
-                        "local" => format!("{local}"),
-                        "src_port" => format!("{src_port}"),
-                        "dst_port" => format!("{dst_port}"),
                         "error" => format!("{e}")
                     );
                     // Explicit sleep call here to prevent spin-lock in case
@@ -250,9 +253,6 @@ fn egress(
                     Ok(result) => result,
                     Err(e) => {
                         bfd_log!(log, warn, "udp egress channel closed: {e}";
-                            "local" => format!("{local}"),
-                            "src_port" => format!("{src_port}"),
-                            "dst_port" => format!("{dst_port}"),
                             "error" => format!("{e}")
                         );
                         break 'egress;
@@ -262,9 +262,6 @@ fn egress(
                 let sa = SocketAddr::new(addr, dst_port);
                 if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
                     bfd_log!(log, error, "udp send error: {e}";
-                        "local" => format!("{local}"),
-                        "src_port" => format!("{src_port}"),
-                        "dst_port" => format!("{dst_port}"),
                         "message" => "control",
                         "message_contents" => format!("{pkt}"),
                         "error" => format!("{e}")
