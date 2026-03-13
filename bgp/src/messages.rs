@@ -10,8 +10,8 @@ use nom::{
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use path_attribute_flags::*;
-pub use rdb::types::Prefix;
 use rdb::types::{AddressFamily, Prefix4, Prefix6};
+pub use rdb::types::{PathOrigin, Prefix};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,6 +21,7 @@ use std::{
 };
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
+pub const MAX_EXTENDED_MESSAGE_SIZE: usize = 65535;
 
 /// Trait for encoding/decoding values to/from BGP wire format.
 ///
@@ -294,10 +295,10 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+    pub fn to_wire(&self, extended_msg: bool) -> Result<Vec<u8>, Error> {
         match self {
             Self::Open(m) => m.to_wire(),
-            Self::Update(m) => m.to_wire(),
+            Self::Update(m) => m.to_wire(extended_msg),
             Self::Notification(m) => m.to_wire(),
             Self::KeepAlive => Ok(Vec::new()),
             Self::RouteRefresh(m) => Ok(m.to_wire()),
@@ -494,13 +495,18 @@ const MARKER: [u8; 16] = [0xFFu8; 16];
 impl Header {
     pub const WIRE_SIZE: usize = 19;
 
-    /// Create a new BGP message header. Length must be between 19 and 4096 per
-    /// RFC 4271 §4.1.
-    pub fn new(length: u16, typ: MessageType) -> Result<Header, Error> {
+    /// Create a new BGP message header.
+    /// Length must be between 19 and 4096 bytes (RFC 4271 §4.1) unless extended
+    /// message size is permitted, in which case the max size is 65535 bytes.
+    pub fn new(
+        length: u16,
+        typ: MessageType,
+        extended_msg: bool,
+    ) -> Result<Header, Error> {
         if usize::from(length) < Header::WIRE_SIZE {
             return Err(Error::TooSmall("message header length".into()));
         }
-        if usize::from(length) > MAX_MESSAGE_SIZE {
+        if !extended_msg && usize::from(length) > MAX_MESSAGE_SIZE {
             return Err(Error::TooLarge("message header length".into()));
         }
         Ok(Header { length, typ })
@@ -583,11 +589,7 @@ impl OpenMessage {
     ) -> OpenMessage {
         let parameters = if extended_nexthop {
             let caps = BTreeSet::from([Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
+                elements: vec![ExtendedNexthopElement::v4_over_v6()],
             }]);
             vec![OptionalParameter::Capabilities(caps)]
         } else {
@@ -612,11 +614,7 @@ impl OpenMessage {
         let mut params = BTreeSet::from([Capability::FourOctetAs { asn }]);
         if extended_nexthop {
             params.insert(Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
+                elements: vec![ExtendedNexthopElement::v4_over_v6()],
             });
         }
         OpenMessage {
@@ -834,6 +832,11 @@ pub struct UpdateMessage {
 }
 
 impl UpdateMessage {
+    /// Size of the Withdrawn Routes Length field (u16) in the UPDATE body.
+    pub const WITHDRAWN_LEN_SIZE: usize = 2;
+    /// Size of the Total Path Attribute Length field (u16) in the UPDATE body.
+    pub const PATH_ATTRS_LEN_SIZE: usize = 2;
+
     /// Returns true if a TreatAsWithdraw error occurred during parsing.
     /// When true, all NLRI (v4 + v6) should be processed as withdrawals.
     pub fn treat_as_withdraw(&self) -> bool {
@@ -842,7 +845,97 @@ impl UpdateMessage {
         })
     }
 
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+    /// Mark this update for treat-as-withdraw processing due to a
+    /// session-level check failure. All NLRI will be treated as
+    /// withdrawals when this flag is set.
+    pub fn set_treat_as_withdraw(&mut self, reason: UpdateParseErrorReason) {
+        self.errors.push((reason, AttributeAction::TreatAsWithdraw));
+    }
+
+    /// Set the traditional IPv4 withdrawn routes field.
+    pub fn set_withdrawn(&mut self, withdrawn: Vec<Prefix4>) {
+        self.withdrawn = withdrawn;
+    }
+
+    /// Replace the NLRI inside an existing MpReachNlri::Ipv4Unicast
+    /// attribute, preserving the nexthop.
+    pub fn set_mp_reach_ipv4_nlri(&mut self, nlri: Vec<Prefix4>) {
+        for attr in &mut self.path_attributes {
+            if let PathAttributeValue::MpReachNlri(MpReachNlri::Ipv4Unicast(
+                ref mut inner,
+            )) = attr.value
+            {
+                inner.nlri = nlri;
+                return;
+            }
+        }
+    }
+
+    /// Replace the NLRI inside an existing MpReachNlri::Ipv6Unicast
+    /// attribute, preserving the nexthop.
+    pub fn set_mp_reach_ipv6_nlri(&mut self, nlri: Vec<Prefix6>) {
+        for attr in &mut self.path_attributes {
+            if let PathAttributeValue::MpReachNlri(MpReachNlri::Ipv6Unicast(
+                ref mut inner,
+            )) = attr.value
+            {
+                inner.nlri = nlri;
+                return;
+            }
+        }
+    }
+
+    /// Replace the withdrawn routes inside an existing
+    /// MpUnreachNlri::Ipv6Unicast attribute.
+    pub fn set_mp_unreach_ipv6_withdrawn(&mut self, withdrawn: Vec<Prefix6>) {
+        for attr in &mut self.path_attributes {
+            if let PathAttributeValue::MpUnreachNlri(
+                MpUnreachNlri::Ipv6Unicast(ref mut inner),
+            ) = attr.value
+            {
+                inner.withdrawn = withdrawn;
+                return;
+            }
+        }
+    }
+
+    /// Clone this message once per chunk of prefixes, stamping each
+    /// chunk in via `stamp`, then pass to `send`.
+    pub fn chunk_and_send<P>(
+        &self,
+        prefixes: Vec<P>,
+        stamp: fn(&mut Self, Vec<P>),
+        wire_len_fn: fn(&P) -> usize,
+        max_body: usize,
+        send: impl Fn(Self) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let available = max_body.saturating_sub(self.wire_len());
+        for chunk in split_prefixes_by_size(prefixes, available, wire_len_fn) {
+            let mut msg = self.clone();
+            stamp(&mut msg, chunk);
+            send(msg)?;
+        }
+        Ok(())
+    }
+
+    /// Wire size of the UPDATE body (not including the message header).
+    pub fn wire_len(&self) -> usize {
+        let withdrawn: usize =
+            self.withdrawn.iter().map(Prefix4::wire_len).sum();
+        let path_attrs: usize = self
+            .path_attributes
+            .iter()
+            .map(PathAttribute::wire_len)
+            .sum();
+        let nlri: usize = self.nlri.iter().map(Prefix4::wire_len).sum();
+        Self::WITHDRAWN_LEN_SIZE
+            + withdrawn
+            + Self::PATH_ATTRS_LEN_SIZE
+            + path_attrs
+            + nlri
+    }
+
+    pub fn to_wire(&self, extended_msg: bool) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
         // withdrawn
@@ -870,7 +963,12 @@ impl UpdateMessage {
         // nlri
         buf.extend_from_slice(&self.nlri_to_wire()?);
 
-        if buf.len() > MAX_MESSAGE_SIZE {
+        let max_size = if extended_msg {
+            MAX_EXTENDED_MESSAGE_SIZE
+        } else {
+            MAX_MESSAGE_SIZE
+        };
+        if buf.len() > max_size {
             return Err(Error::TooLarge(
                 "update exceeds max message size".into(),
             ));
@@ -1663,6 +1761,15 @@ impl UpdateMessage {
             .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
     }
 
+    pub fn origin(&self) -> PathOrigin {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::Origin(origin) = &a.value {
+                return *origin;
+            }
+        }
+        PathOrigin::Incomplete
+    }
+
     pub fn has_community(&self, community: Community) -> bool {
         for a in &self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &a.value {
@@ -1718,6 +1825,38 @@ impl UpdateMessage {
                 _ => None,
             })
     }
+}
+
+/// Split a vec of prefixes into chunks where each chunk's total wire
+/// size fits within `available` bytes.
+pub fn split_prefixes_by_size<P>(
+    prefixes: Vec<P>,
+    available: usize,
+    wire_len: fn(&P) -> usize,
+) -> Vec<Vec<P>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut current_size = 0usize;
+
+    for prefix in prefixes {
+        let size = wire_len(&prefix);
+        if current_size + size > available && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+            current_size = 0;
+        }
+        current_size += size;
+        current.push(prefix);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+/// Compute the total wire size of a slice of path attributes.
+pub fn path_attrs_wire_len(attrs: &[PathAttribute]) -> usize {
+    attrs.iter().map(PathAttribute::wire_len).sum()
 }
 
 impl Display for UpdateMessage {
@@ -1777,6 +1916,11 @@ impl From<PathAttributeValue> for PathAttribute {
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE
             }
+            PathAttributeValue::MpReachNlri(_)
+            | PathAttributeValue::MpUnreachNlri(_) => {
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::EXTENDED_LENGTH
+            }
             _ => path_attribute_flags::OPTIONAL,
         };
         Self {
@@ -1790,6 +1934,17 @@ impl From<PathAttributeValue> for PathAttribute {
 }
 
 impl PathAttribute {
+    /// Wire size: flags(1) + type_code(1) + length(1 or 2) + value.
+    pub fn wire_len(&self) -> usize {
+        let length_field =
+            match self.typ.flags & path_attribute_flags::EXTENDED_LENGTH {
+                0 => 1, // standard: 1-byte length
+                _ => 2, // extended: 2-byte length
+            };
+        // flags (u8) + type-code (u8) + length + value
+        2 + length_field + self.value.wire_len()
+    }
+
     pub fn to_wire(&self, extended_length: bool) -> Result<Vec<u8>, Error> {
         let mut buf = self.typ.to_wire();
         let val = &self.value.to_wire()?;
@@ -2203,6 +2358,25 @@ pub enum PathAttributeValue {
 }
 
 impl PathAttributeValue {
+    /// Wire size of the attribute value (not including the attribute header).
+    pub fn wire_len(&self) -> usize {
+        match self {
+            Self::Origin(_) => 1, // 1-byte origin code
+            Self::AsPath(segments) | Self::As4Path(segments) => {
+                segments.iter().map(As4PathSegment::wire_len).sum()
+            }
+            Self::NextHop(_) => 4,       // IPv4 address
+            Self::MultiExitDisc(_) => 4, // u32
+            Self::LocalPref(_) => 4,     // u32
+            Self::Aggregator(_) => 6,    // 2-byte ASN + 4-byte IPv4
+            Self::As4Aggregator(_) => 8, // 4-byte ASN + 4-byte IPv4
+            Self::Communities(c) => 4 * c.len(), // 4 bytes per community
+            Self::AtomicAggregate => 0,  // presence-only, no value
+            Self::MpReachNlri(mp) => mp.wire_len(),
+            Self::MpUnreachNlri(mp) => mp.wire_len(),
+        }
+    }
+
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
             Self::Origin(x) => Ok(vec![(*x).into()]),
@@ -2571,40 +2745,6 @@ pub enum Community {
     UserDefined(u32),
 }
 
-/// An enumeration indicating the origin type of a path.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum PathOrigin {
-    /// Interior gateway protocol
-    Igp = 0,
-    /// Exterior gateway protocol
-    Egp = 1,
-    /// Incomplete path origin
-    Incomplete = 2,
-}
-
-impl Display for PathOrigin {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            PathOrigin::Igp => write!(f, "igp"),
-            PathOrigin::Egp => write!(f, "egp"),
-            PathOrigin::Incomplete => write!(f, "incomplete"),
-        }
-    }
-}
-
 // A self describing segment found in path sets and sequences.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AsPathSegment {
@@ -2624,6 +2764,12 @@ pub struct As4PathSegment {
 }
 
 impl As4PathSegment {
+    /// Wire size: 1 (type) + 1 (count) + 4 * count (AS numbers).
+    pub fn wire_len(&self) -> usize {
+        // type (u8) + count (u8) + 4 bytes per AS number
+        2 + 4 * self.value.len()
+    }
+
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         if self.value.len() > u8::MAX as usize {
             return Err(Error::TooLarge("AS4 path segment".into()));
@@ -2877,6 +3023,23 @@ impl BgpNexthop {
         }
     }
 
+    /// Resolve to a canonical IpAddr for RIB installation.
+    pub fn to_ip(&self, unnumbered: bool) -> IpAddr {
+        let ip = match self {
+            BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
+            BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
+            BgpNexthop::Ipv6Double(addrs) => {
+                if unnumbered {
+                    IpAddr::V6(addrs.link_local)
+                } else {
+                    IpAddr::V6(addrs.global)
+                }
+            }
+        };
+
+        ip.to_canonical()
+    }
+
     /// Get byte length of this next-hop
     pub fn byte_len(&self) -> u8 {
         match self {
@@ -3090,6 +3253,21 @@ impl MpReachNlri {
             reserved: 0, // Always send 0 per RFC 4760
             nlri,
         })
+    }
+
+    /// Wire size: AFI(2) + SAFI(1) + NH_len(1) + NH + reserved(1) + NLRI.
+    pub fn wire_len(&self) -> usize {
+        let nh_len = usize::from(self.nexthop().byte_len());
+        let nlri_len: usize = match self {
+            Self::Ipv4Unicast(inner) => {
+                inner.nlri.iter().map(Prefix4::wire_len).sum()
+            }
+            Self::Ipv6Unicast(inner) => {
+                inner.nlri.iter().map(Prefix6::wire_len).sum()
+            }
+        };
+        // AFI (u16) + SAFI (u8) + NH-len (u8) + nexthop + reserved (u8) + NLRI
+        2 + 1 + 1 + nh_len + 1 + nlri_len
     }
 
     /// Serialize to wire format.
@@ -3357,6 +3535,20 @@ impl MpUnreachNlri {
     /// Create an IPv6 Unicast MP_UNREACH_NLRI.
     pub fn ipv6_unicast(withdrawn: Vec<Prefix6>) -> Self {
         Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
+    }
+
+    /// Wire size: AFI(2) + SAFI(1) + withdrawn prefixes.
+    pub fn wire_len(&self) -> usize {
+        let withdrawn_len: usize = match self {
+            Self::Ipv4Unicast(inner) => {
+                inner.withdrawn.iter().map(Prefix4::wire_len).sum()
+            }
+            Self::Ipv6Unicast(inner) => {
+                inner.withdrawn.iter().map(Prefix6::wire_len).sum()
+            }
+        };
+        // AFI (u16) + SAFI (u8) + withdrawn
+        2 + 1 + withdrawn_len
     }
 
     /// Serialize to wire format.
@@ -4152,19 +4344,32 @@ pub struct ExtendedNexthopElement {
 }
 
 impl ExtendedNexthopElement {
-    fn is_v4_over_v6(&self) -> bool {
-        self == &ExtendedNexthopElement {
+    /// IPv4 Unicast NLRI with IPv6 nexthops (RFC 8950).
+    pub fn v4_over_v6() -> Self {
+        Self {
             afi: Afi::Ipv4.into(),
             safi: u8::from(Safi::Unicast).into(),
             nh_afi: Afi::Ipv6.into(),
         }
     }
-    fn is_v6_over_v4(&self) -> bool {
-        self == &ExtendedNexthopElement {
+
+    /// IPv6 Unicast NLRI with IPv4 nexthops.
+    #[cfg(test)]
+    pub fn v6_over_v4() -> Self {
+        Self {
             afi: Afi::Ipv6.into(),
             safi: u8::from(Safi::Unicast).into(),
             nh_afi: Afi::Ipv4.into(),
         }
+    }
+
+    pub fn is_v4_over_v6(&self) -> bool {
+        self == &Self::v4_over_v6()
+    }
+
+    #[cfg(test)]
+    pub fn is_v6_over_v4(&self) -> bool {
+        self == &Self::v6_over_v4()
     }
 }
 
@@ -4222,9 +4427,7 @@ pub enum Capability {
         elements: Vec<ExtendedNexthopElement>,
     },
 
-    //TODO
-    /// Extended message capability as defined in RFC 8654. Note this
-    /// capability is not yet implemented.
+    /// Extended message capability as defined in RFC 8654
     BGPExtendedMessage {},
 
     //TODO
@@ -4475,6 +4678,10 @@ impl Capability {
                 let buf = vec![CapabilityCode::EnhancedRouteRefresh.into(), 0];
                 Ok(buf)
             }
+            Self::BGPExtendedMessage {} => {
+                let buf = vec![CapabilityCode::BGPExtendedMessage.into(), 0];
+                Ok(buf)
+            }
             Self::ExtendedNextHopEncoding { elements } => {
                 let mut buf = vec![
                     CapabilityCode::ExtendedNextHopEncoding as u8,
@@ -4559,7 +4766,6 @@ impl Capability {
                 Capability::PrestandardRouteRefresh {}
             }
             CapabilityCode::BGPExtendedMessage => {
-                //TODO handle for real
                 Capability::BGPExtendedMessage {}
             }
             CapabilityCode::LongLivedGracefulRestart => {
@@ -4814,6 +5020,7 @@ impl Capability {
         }
     }
 
+    #[cfg(test)]
     pub fn extended_nh_v6_over_v4(&self) -> bool {
         if let Self::ExtendedNextHopEncoding { elements } = self {
             elements.iter().any(|x| x.is_v6_over_v4())
@@ -5267,6 +5474,13 @@ pub enum UpdateParseErrorReason {
         available: usize,
     },
 
+    // Session-level checks (set after parsing, not during from_wire)
+    /// Own ASN found in AS_PATH — loop detection (session-level check)
+    AsLoopDetected,
+    /// First AS in path does not match eBGP peer AS (session-level
+    /// check)
+    EnforceFirstAsFailed { peer_as: u32, first_as: Option<u32> },
+
     // Generic fallback
     /// Other parse error (avoid if possible; prefer specific variant)
     Other { detail: String },
@@ -5390,6 +5604,21 @@ impl Display for UpdateParseErrorReason {
                     "truncated {} NLRI: need {} bytes, have {}",
                     section, needed, available
                 )
+            }
+            Self::AsLoopDetected => {
+                write!(f, "own ASN found in AS_PATH (loop)")
+            }
+            Self::EnforceFirstAsFailed { peer_as, first_as } => {
+                match first_as {
+                    Some(first) => write!(
+                        f,
+                        "enforce-first-AS failed: peer AS {peer_as}, first AS in path {first}"
+                    ),
+                    None => write!(
+                        f,
+                        "enforce-first-AS failed: peer AS {peer_as}, AS_PATH empty or missing"
+                    ),
+                }
             }
             Self::Other { detail } => {
                 write!(f, "{}", detail)
@@ -5949,7 +6178,7 @@ impl From<PathAttribute> for Option<PathAttributeV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mg_common::{cidr, ip, parse};
+    use mg_common::{cidr, ip, parse, prefix4};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -6084,12 +6313,83 @@ mod tests {
             errors: vec![],
         };
 
-        let buf = um0.to_wire().expect("update message to wire");
+        let buf = um0.to_wire(false).expect("update message to wire");
         println!("buf: {}", buf.hex_dump());
 
         let um1 =
             UpdateMessage::from_wire(&buf).expect("update message from wire");
         assert_eq!(um0, um1);
+    }
+
+    #[test]
+    fn extended_update_round_trip() {
+        // Each /24 is 4 bytes on wire; 1100 prefixes = 4400 bytes of
+        // NLRI alone, exceeding the standard 4077-byte body limit.
+        let nlri: Vec<rdb::Prefix4> = (0u32..1100)
+            .map(|i| rdb::Prefix4 {
+                value: std::net::Ipv4Addr::new(
+                    10,
+                    (i >> 8) as u8,
+                    (i & 0xFF) as u8,
+                    0,
+                ),
+                length: 24,
+            })
+            .collect();
+
+        let um = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![
+                PathAttributeValue::Origin(PathOrigin::Igp).into(),
+                PathAttributeValue::As4Path(vec![As4PathSegment {
+                    typ: AsPathType::AsSequence,
+                    value: vec![65000],
+                }])
+                .into(),
+                PathAttributeValue::NextHop(ip!("192.0.2.1")).into(),
+            ],
+            nlri,
+            errors: vec![],
+        };
+
+        assert!(
+            um.wire_len() > MAX_MESSAGE_SIZE - Header::WIRE_SIZE,
+            "test update must exceed standard body limit"
+        );
+
+        // Extended: encodes and round-trips successfully
+        let buf = um.to_wire(true).expect("extended update should encode");
+        let decoded = UpdateMessage::from_wire(&buf)
+            .expect("extended update should decode");
+        assert_eq!(um, decoded);
+
+        // Standard: encoding fails because the body exceeds 4096
+        assert!(um.to_wire(false).is_err());
+    }
+
+    #[test]
+    fn small_update_works_with_or_without_extended() {
+        let um = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![
+                PathAttributeValue::Origin(PathOrigin::Igp).into(),
+                PathAttributeValue::As4Path(vec![As4PathSegment {
+                    typ: AsPathType::AsSequence,
+                    value: vec![65000],
+                }])
+                .into(),
+                PathAttributeValue::NextHop(ip!("192.0.2.1")).into(),
+            ],
+            nlri: vec![prefix4!("10.0.0.0/24")],
+            errors: vec![],
+        };
+
+        let buf_std = um.to_wire(false).expect("standard encode");
+        let buf_ext = um.to_wire(true).expect("extended encode");
+        assert_eq!(buf_std, buf_ext);
+
+        let decoded = UpdateMessage::from_wire(&buf_ext).expect("decode");
+        assert_eq!(um, decoded);
     }
 
     #[test]
@@ -6840,7 +7140,7 @@ mod tests {
         };
 
         // Encode to wire format
-        let wire = update.to_wire().expect("encoding should succeed");
+        let wire = update.to_wire(false).expect("encoding should succeed");
 
         // Skip withdrawn routes length (2 bytes) and empty withdrawn routes (0 bytes)
         // Skip path attributes length (2 bytes)
@@ -6883,7 +7183,7 @@ mod tests {
         };
 
         // Encode to wire and decode back - should succeed
-        let wire = update.to_wire().expect("encoding should succeed");
+        let wire = update.to_wire(false).expect("encoding should succeed");
         let decoded = UpdateMessage::from_wire(&wire);
         assert!(
             decoded.is_ok(),
@@ -6942,7 +7242,7 @@ mod tests {
         };
 
         // Encode to wire and decode back - should succeed
-        let wire = update.to_wire().expect("encoding should succeed");
+        let wire = update.to_wire(false).expect("encoding should succeed");
         let decoded = UpdateMessage::from_wire(&wire);
         assert!(
             decoded.is_ok(),
@@ -7007,7 +7307,7 @@ mod tests {
         };
 
         // Round-trip through wire format
-        let wire = update.to_wire().expect("encoding should succeed");
+        let wire = update.to_wire(false).expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -7072,7 +7372,9 @@ mod tests {
             errors: vec![],
         };
 
-        let wire = empty_update.to_wire().expect("encoding should succeed");
+        let wire = empty_update
+            .to_wire(false)
+            .expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -7098,7 +7400,9 @@ mod tests {
             errors: vec![],
         };
 
-        let wire = mp_eor_update.to_wire().expect("encoding should succeed");
+        let wire = mp_eor_update
+            .to_wire(false)
+            .expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -7134,7 +7438,9 @@ mod tests {
             errors: vec![],
         };
 
-        let wire = mp_eor_v4_update.to_wire().expect("encoding should succeed");
+        let wire = mp_eor_v4_update
+            .to_wire(false)
+            .expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -8910,31 +9216,43 @@ mod tests {
 
         #[test]
         fn new_rejects_length_too_small() {
-            let result = Header::new(18, MessageType::KeepAlive);
+            let result = Header::new(18, MessageType::KeepAlive, false);
             assert!(result.is_err());
         }
 
         #[test]
         fn new_rejects_length_too_large() {
-            let result = Header::new(4097, MessageType::Update);
+            let result = Header::new(4097, MessageType::Update, false);
             assert!(result.is_err());
         }
 
         #[test]
         fn new_accepts_minimum_length() {
-            let hdr = Header::new(19, MessageType::KeepAlive).unwrap();
+            let hdr = Header::new(19, MessageType::KeepAlive, false).unwrap();
             assert_eq!(hdr.length, 19);
         }
 
         #[test]
         fn new_accepts_maximum_length() {
-            let hdr = Header::new(4096, MessageType::Update).unwrap();
+            let hdr = Header::new(4096, MessageType::Update, false).unwrap();
             assert_eq!(hdr.length, 4096);
         }
 
         #[test]
+        fn extended_accepts_large_update() {
+            let hdr = Header::new(65535, MessageType::Update, true).unwrap();
+            assert_eq!(hdr.length, 65535);
+        }
+
+        #[test]
+        fn non_extended_rejects_large_update() {
+            let result = Header::new(65535, MessageType::Update, false);
+            assert!(result.is_err());
+        }
+
+        #[test]
         fn roundtrip_keepalive_header() {
-            let hdr = Header::new(19, MessageType::KeepAlive).unwrap();
+            let hdr = Header::new(19, MessageType::KeepAlive, false).unwrap();
             let wire = hdr.to_wire();
             assert_eq!(wire.len(), Header::WIRE_SIZE);
             let parsed = Header::from_wire(&wire).unwrap();
@@ -8944,7 +9262,7 @@ mod tests {
 
         #[test]
         fn roundtrip_max_length_header() {
-            let hdr = Header::new(4096, MessageType::Update).unwrap();
+            let hdr = Header::new(4096, MessageType::Update, false).unwrap();
             let wire = hdr.to_wire();
             let parsed = Header::from_wire(&wire).unwrap();
             assert_eq!(parsed.length, 4096);
@@ -8978,7 +9296,7 @@ mod tests {
 
         #[test]
         fn from_wire_rejects_bad_marker() {
-            let hdr = Header::new(19, MessageType::KeepAlive).unwrap();
+            let hdr = Header::new(19, MessageType::KeepAlive, false).unwrap();
             let mut wire = hdr.to_wire();
             wire[0] = 0x00; // corrupt marker
             assert!(Header::from_wire(&wire).is_err());

@@ -13,10 +13,11 @@
 //! - RFC 7606 compliance (attribute deduplication, MP-BGP ordering)
 
 use crate::messages::{
-    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Ipv6DoubleNexthop,
+    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Header,
+    Ipv6DoubleNexthop, MAX_EXTENDED_MESSAGE_SIZE, MAX_MESSAGE_SIZE,
     MpReachNlri, MpUnreachNlri, PathAttribute, PathAttributeType,
     PathAttributeTypeCode, PathAttributeValue, PathOrigin, UpdateMessage,
-    path_attribute_flags,
+    path_attribute_flags, path_attrs_wire_len, split_prefixes_by_size,
 };
 use proptest::prelude::*;
 use rdb::types::{Prefix4, Prefix6};
@@ -251,6 +252,128 @@ fn update_strategy() -> impl Strategy<Value = UpdateMessage> {
 }
 
 // =============================================================================
+// Large-Prefix Strategies (for split_prefixes_by_size tests)
+// =============================================================================
+
+/// Strategy for generating enough IPv4 /24 prefixes to require chunking
+/// at standard message size. Each /24 prefix is 4 bytes on the wire.
+/// The max UPDATE body is 4077 bytes; with minimal overhead (~29 bytes)
+/// roughly 1012 prefixes fit, so 1100+ always forces a split.
+fn ipv4_prefixes_for_std_split() -> impl Strategy<Value = Vec<Prefix4>> {
+    (1100u32..1500).prop_flat_map(|count| {
+        Just(
+            (0..count)
+                .map(|i| Prefix4::new(Ipv4Addr::from(i << 8), 24))
+                .collect(),
+        )
+    })
+}
+
+/// Strategy for generating enough IPv6 /48 prefixes to require chunking
+/// at standard message size. Each /48 prefix is 7 bytes on the wire.
+/// With ~29 bytes overhead roughly 578 prefixes fit, so 600+ always
+/// forces a split.
+fn ipv6_prefixes_for_std_split() -> impl Strategy<Value = Vec<Prefix6>> {
+    (600u32..800).prop_flat_map(|count| {
+        Just(
+            (0..count as u128)
+                .map(|i| Prefix6::new(Ipv6Addr::from(i << 80), 48))
+                .collect(),
+        )
+    })
+}
+
+/// Strategy for generating enough IPv4 /24 prefixes to require chunking
+/// at extended message size. The extended body limit is 65516 bytes;
+/// with ~29 bytes overhead roughly 16371 prefixes fit, so 17000+
+/// always forces a split.
+fn ipv4_prefixes_for_ext_split() -> impl Strategy<Value = Vec<Prefix4>> {
+    (17000u32..18000).prop_flat_map(|count| {
+        Just(
+            (0..count)
+                .map(|i| Prefix4::new(Ipv4Addr::from(i << 8), 24))
+                .collect(),
+        )
+    })
+}
+
+/// Strategy for generating enough IPv6 /48 prefixes to require chunking
+/// at extended message size. With 7 bytes per prefix and ~29 bytes
+/// overhead roughly 9355 prefixes fit, so 10000+ always forces a split.
+fn ipv6_prefixes_for_ext_split() -> impl Strategy<Value = Vec<Prefix6>> {
+    (10000u32..11000).prop_flat_map(|count| {
+        Just(
+            (0..count as u128)
+                .map(|i| Prefix6::new(Ipv6Addr::from(i << 80), 48))
+                .collect(),
+        )
+    })
+}
+
+// =============================================================================
+// Update Skeleton Builders
+//
+// These mirror the skeletons used by chunk_and_send in session.rs for
+// each type of UPDATE message we send.
+// =============================================================================
+
+/// Skeleton for a traditional IPv4 announcement (nexthop in body).
+fn v4_announce_skeleton() -> UpdateMessage {
+    UpdateMessage {
+        path_attributes: vec![
+            PathAttributeValue::NextHop(Ipv4Addr::UNSPECIFIED).into(),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Skeleton for an ENHE IPv4 announcement (nexthop in MP_REACH).
+fn v4_mp_announce_skeleton() -> UpdateMessage {
+    UpdateMessage {
+        path_attributes: vec![
+            PathAttributeValue::MpReachNlri(MpReachNlri::ipv4_unicast(
+                BgpNexthop::Ipv6Single(Ipv6Addr::UNSPECIFIED),
+                vec![],
+            ))
+            .into(),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Skeleton for an IPv4 withdrawal (no path attributes).
+fn v4_withdraw_skeleton() -> UpdateMessage {
+    UpdateMessage::default()
+}
+
+/// Skeleton for an IPv6 announcement.
+fn v6_mp_announce_skeleton() -> UpdateMessage {
+    UpdateMessage {
+        path_attributes: vec![
+            PathAttributeValue::MpReachNlri(MpReachNlri::ipv6_unicast(
+                BgpNexthop::Ipv6Single(Ipv6Addr::UNSPECIFIED),
+                vec![],
+            ))
+            .into(),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Skeleton for an IPv6 withdrawal.
+fn v6_mp_withdraw_skeleton() -> UpdateMessage {
+    UpdateMessage {
+        path_attributes: vec![
+            PathAttributeValue::MpUnreachNlri(MpUnreachNlri::ipv6_unicast(
+                vec![],
+            ))
+            .into(),
+        ],
+        ..Default::default()
+    }
+}
+
+// =============================================================================
 // Property Tests
 // =============================================================================
 
@@ -296,7 +419,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         prop_assert_eq!(decoded.nlri, prefixes, "NLRI prefixes should round-trip");
@@ -312,7 +435,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         prop_assert_eq!(decoded.withdrawn, prefixes, "Withdrawn prefixes should round-trip");
@@ -339,7 +462,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_REACH_NLRI and verify prefixes
@@ -373,7 +496,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_UNREACH_NLRI and verify prefixes
@@ -410,7 +533,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_REACH_NLRI and verify prefixes
@@ -444,7 +567,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_UNREACH_NLRI and verify prefixes
@@ -483,7 +606,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract and verify the next-hop
@@ -510,7 +633,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         let decoded_nexthop = decoded.nexthop().expect("should have nexthop");
@@ -536,7 +659,7 @@ proptest! {
             errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         let decoded_nexthop = decoded.nexthop().expect("should have nexthop");
@@ -550,7 +673,7 @@ proptest! {
     /// Property: Traditional UpdateMessage round-trip preserves structure
     #[test]
     fn prop_update_traditional_roundtrip(update in update_traditional_strategy()) {
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         prop_assert_eq!(decoded.withdrawn, update.withdrawn);
@@ -566,7 +689,7 @@ proptest! {
     /// Property: MP-BGP UpdateMessage with MP_REACH_NLRI round-trip works
     #[test]
     fn prop_update_mp_reach_roundtrip(update in update_mp_reach_strategy()) {
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Should have MP_REACH_NLRI attribute
@@ -579,7 +702,7 @@ proptest! {
     /// Property: MP-BGP UpdateMessage with MP_UNREACH_NLRI round-trip works
     #[test]
     fn prop_update_mp_unreach_roundtrip(update in update_mp_unreach_strategy()) {
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Should have MP_UNREACH_NLRI attribute
@@ -596,7 +719,7 @@ proptest! {
     /// Property: MP-BGP attributes are always encoded first (RFC 7606 Section 5.1)
     #[test]
     fn prop_mp_bgp_attrs_encoded_first(update in update_mp_reach_strategy()) {
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
 
         // Skip to path attributes section
         // Wire format: 2 bytes withdrawn len + withdrawn + 2 bytes attrs len + attrs + nlri
@@ -663,7 +786,7 @@ proptest! {
     /// Property: Encoding then decoding produces semantically equivalent message
     #[test]
     fn prop_encode_decode_semantic_equivalence(update in update_strategy()) {
-        let wire = update.to_wire().expect("should encode");
+        let wire = update.to_wire(false).expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Withdrawn and NLRI should be identical
@@ -763,8 +886,8 @@ proptest! {
         };
 
         // Encode and decode both
-        let traditional_wire = traditional_update.to_wire().expect("traditional encode");
-        let mp_bgp_wire = mp_bgp_update.to_wire().expect("mp-bgp encode");
+        let traditional_wire = traditional_update.to_wire(false).expect("traditional encode");
+        let mp_bgp_wire = mp_bgp_update.to_wire(false).expect("mp-bgp encode");
 
         let traditional_decoded = UpdateMessage::from_wire(&traditional_wire)
             .expect("traditional decode");
@@ -807,5 +930,324 @@ proptest! {
             traditional_effective_withdrawn, mp_bgp_effective_withdrawn,
             "Withdrawn prefixes should be equivalent regardless of encoding"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // split_prefixes_by_size Tests
+    //
+    // Five update types mirror the chunk_and_send call sites in session.rs:
+    //   1. V4 announce (traditional): NextHop attr, NLRI in body
+    //   2. V4 announce (ENHE/MP-BGP): MpReachNlri(Ipv4Unicast) attr
+    //   3. V4 withdraw:               no attrs, withdrawn in body
+    //   4. V6 announce:               MpReachNlri(Ipv6Unicast) attr
+    //   5. V6 withdraw:               MpUnreachNlri(Ipv6Unicast) attr
+    //
+    // Each type is tested at both standard and extended message limits.
+    // -------------------------------------------------------------------------
+
+    // --- Standard message size (4096) ---
+
+    #[test]
+    fn prop_v4_announce_split_std(
+        prefixes in ipv4_prefixes_for_std_split()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_announce_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v4_mp_announce_split_std(
+        prefixes in ipv4_prefixes_for_std_split()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_mp_announce_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v4_withdraw_split_std(
+        prefixes in ipv4_prefixes_for_std_split()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_withdraw_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v6_mp_announce_split_std(
+        prefixes in ipv6_prefixes_for_std_split()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v6_mp_announce_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix6::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix6::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v6_mp_withdraw_split_std(
+        prefixes in ipv6_prefixes_for_std_split()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v6_mp_withdraw_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix6::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix6::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    // --- Extended message size (65535) ---
+
+    #[test]
+    fn prop_v4_announce_split_ext(
+        prefixes in ipv4_prefixes_for_ext_split()
+    ) {
+        let available = (MAX_EXTENDED_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_announce_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v4_mp_announce_split_ext(
+        prefixes in ipv4_prefixes_for_ext_split()
+    ) {
+        let available = (MAX_EXTENDED_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_mp_announce_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v4_withdraw_split_ext(
+        prefixes in ipv4_prefixes_for_ext_split()
+    ) {
+        let available = (MAX_EXTENDED_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_withdraw_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v6_mp_announce_split_ext(
+        prefixes in ipv6_prefixes_for_ext_split()
+    ) {
+        let available = (MAX_EXTENDED_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v6_mp_announce_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix6::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix6::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    #[test]
+    fn prop_v6_mp_withdraw_split_ext(
+        prefixes in ipv6_prefixes_for_ext_split()
+    ) {
+        let available = (MAX_EXTENDED_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v6_mp_withdraw_skeleton().wire_len());
+        let n = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix6::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, n);
+        for (i, c) in chunks.iter().enumerate() {
+            let sz: usize = c.iter().map(Prefix6::wire_len).sum();
+            prop_assert!(sz <= available, "chunk {i}: {sz} > {available}");
+        }
+    }
+
+    /// Property: Small IPv4 prefix vecs produce exactly 1 chunk.
+    #[test]
+    fn prop_small_v4_produces_single_chunk(
+        prefixes in ipv4_prefixes_strategy()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v4_announce_skeleton().wire_len());
+        let chunks = split_prefixes_by_size(prefixes.clone(), available, Prefix4::wire_len);
+        if !prefixes.is_empty() {
+            prop_assert_eq!(chunks.len(), 1, "small prefix vec should not be split");
+        }
+    }
+
+    /// Property: Small IPv6 prefix vecs produce exactly 1 chunk.
+    #[test]
+    fn prop_small_v6_produces_single_chunk(
+        prefixes in ipv6_prefixes_strategy()
+    ) {
+        let available = (MAX_MESSAGE_SIZE - Header::WIRE_SIZE)
+            .saturating_sub(v6_mp_announce_skeleton().wire_len());
+        let chunks = split_prefixes_by_size(prefixes.clone(), available, Prefix6::wire_len);
+        if !prefixes.is_empty() {
+            prop_assert_eq!(chunks.len(), 1, "small prefix vec should not be split");
+        }
+    }
+
+    /// Property: Empty prefix vec produces no chunks.
+    #[test]
+    fn prop_empty_produces_no_chunks(_dummy in 0u8..1u8) {
+        let chunks = split_prefixes_by_size(Vec::<Prefix4>::new(), 4000, Prefix4::wire_len);
+        prop_assert_eq!(chunks.len(), 0, "empty vec should produce 0 chunks");
+    }
+
+    /// Property: path_attrs_wire_len matches sum of individual wire_len.
+    #[test]
+    fn prop_path_attrs_wire_len_consistent(
+        attrs in distinct_traditional_attrs_strategy()
+    ) {
+        let expected: usize = attrs.iter().map(PathAttribute::wire_len).sum();
+        prop_assert_eq!(path_attrs_wire_len(&attrs), expected);
+    }
+
+    /// Property: wire_len() matches the actual to_wire() output length.
+    #[test]
+    fn prop_wire_len_matches_to_wire(update in update_strategy()) {
+        let expected = update.wire_len();
+        let wire = update.to_wire(false).expect("should encode");
+        prop_assert_eq!(
+            wire.len(), expected,
+            "wire_len() = {} but to_wire() produced {} bytes",
+            expected, wire.len()
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Extended Message Tests (RFC 8654)
+    // -------------------------------------------------------------------------
+
+    /// Property: Extended flag does not alter encoding for small updates.
+    #[test]
+    fn prop_extended_flag_no_effect_on_small_updates(
+        update in update_strategy()
+    ) {
+        let wire_std = update.to_wire(false).expect("standard encode");
+        let wire_ext = update.to_wire(true).expect("extended encode");
+        prop_assert_eq!(
+            wire_std, wire_ext,
+            "extended flag should not change encoding for small updates"
+        );
+    }
+
+    /// Property: Traditional updates round-trip with extended flag.
+    #[test]
+    fn prop_extended_traditional_roundtrip(
+        update in update_traditional_strategy()
+    ) {
+        let wire = update.to_wire(true).expect("extended encode");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decode");
+        prop_assert_eq!(decoded.withdrawn, update.withdrawn);
+        prop_assert_eq!(decoded.nlri, update.nlri);
+    }
+
+    /// Property: MP-BGP updates round-trip with extended flag.
+    #[test]
+    fn prop_extended_mp_reach_roundtrip(
+        update in update_mp_reach_strategy()
+    ) {
+        let wire = update.to_wire(true).expect("extended encode");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decode");
+        let original_mp = update.mp_reach().expect("original mp_reach");
+        let decoded_mp = decoded.mp_reach().expect("decoded mp_reach");
+        prop_assert_eq!(decoded_mp, original_mp);
+    }
+
+    /// Property: Large update encodes with extended flag and round-trips.
+    #[test]
+    fn prop_large_v4_extended_roundtrip(
+        prefixes in ipv4_prefixes_for_std_split()
+    ) {
+        let update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![
+                PathAttributeValue::Origin(PathOrigin::Igp).into(),
+                PathAttributeValue::As4Path(vec![As4PathSegment {
+                    typ: AsPathType::AsSequence,
+                    value: vec![65000],
+                }])
+                .into(),
+                PathAttributeValue::NextHop(Ipv4Addr::UNSPECIFIED)
+                    .into(),
+            ],
+            nlri: prefixes,
+            errors: vec![],
+        };
+        // Must exceed standard limit
+        prop_assert!(
+            update.wire_len()
+                > MAX_MESSAGE_SIZE - Header::WIRE_SIZE
+        );
+        // Standard encoding must fail
+        prop_assert!(update.to_wire(false).is_err());
+        // Extended encoding succeeds and round-trips
+        let wire =
+            update.to_wire(true).expect("extended encode");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decode");
+        prop_assert_eq!(decoded.nlri, update.nlri);
+        prop_assert_eq!(decoded.withdrawn, update.withdrawn);
     }
 }

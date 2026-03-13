@@ -9,15 +9,19 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use mg_api::{
-    AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
-    DeleteStaticRoute6Request, GetRibResult,
+    AddStaticRoute4Request, AddStaticRoute4V1Request, AddStaticRoute6Request,
+    AddStaticRoute6V1Request, DeleteStaticRoute4Request,
+    DeleteStaticRoute4V1Request, DeleteStaticRoute6Request,
+    DeleteStaticRoute6V1Request, GetRibResult,
 };
 use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
 
+// V1 handlers (pre-EXTENDED_NH_STATIC): typed nexthop per AF
+
 pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AddStaticRoute4Request>,
+    request: TypedBody<AddStaticRoute4V1Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
@@ -40,7 +44,7 @@ pub async fn static_add_v4_route(
 
 pub async fn static_remove_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<DeleteStaticRoute4Request>,
+    request: TypedBody<DeleteStaticRoute4V1Request>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
@@ -77,7 +81,7 @@ pub async fn static_list_v4_routes(
 
 pub async fn static_add_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AddStaticRoute6Request>,
+    request: TypedBody<AddStaticRoute6V1Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
@@ -100,7 +104,7 @@ pub async fn static_add_v6_route(
 
 pub async fn static_remove_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<DeleteStaticRoute6Request>,
+    request: TypedBody<DeleteStaticRoute6V1Request>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
@@ -133,6 +137,88 @@ pub async fn static_list_v6_routes(
     }
 
     Ok(HttpResponseOk(static_rib))
+}
+
+// V2 handlers (VERSION_EXTENDED_NH_STATIC+): IpAddr nexthop
+
+pub async fn static_add_v4_route_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AddStaticRoute4Request>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
+
+    ctx.context()
+        .db
+        .add_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn static_remove_v4_route_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<DeleteStaticRoute4Request>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    ctx.context()
+        .db
+        .remove_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseDeleted())
+}
+
+pub async fn static_add_v6_route_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AddStaticRoute6Request>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
+
+    ctx.context()
+        .db
+        .add_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn static_remove_v6_route_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<DeleteStaticRoute6Request>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    ctx.context()
+        .db
+        .remove_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseDeleted())
 }
 
 pub(crate) async fn switch_identifiers(

@@ -160,6 +160,20 @@ macro_rules! sockaddr {
     };
 }
 
+#[macro_export]
+macro_rules! prefix4 {
+    ($x:expr) => {
+        parse!($x, "ipv4 prefix")
+    };
+}
+
+#[macro_export]
+macro_rules! prefix6 {
+    ($x:expr) => {
+        parse!($x, "ipv6 prefix")
+    };
+}
+
 struct ManagedIp {
     address: IpAddr,
     installed: bool,

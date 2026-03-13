@@ -12,7 +12,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        ConnectionId, SocketOption, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -83,6 +83,7 @@ impl std::fmt::Display for Network {
 /// A listener that can listen for messages on our simulated network.
 struct Listener {
     rx: Receiver<(SocketAddr, Endpoint<Message>)>,
+    addr: SocketAddr,
 }
 
 impl Listener {
@@ -94,6 +95,12 @@ impl Listener {
             RecvTimeoutError::Timeout => Error::Timeout,
             RecvTimeoutError::Disconnected => Error::Disconnected,
         })
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        NET.unbind(&self.addr);
     }
 }
 
@@ -112,7 +119,12 @@ impl Network {
     fn bind(&self, sa: SocketAddr) -> Listener {
         let (tx, rx) = mpsc_channel();
         lock!(self.endpoints).insert(sa, tx);
-        Listener { rx }
+        Listener { rx, addr: sa }
+    }
+
+    /// Remove a bound address from the network.
+    fn unbind(&self, addr: &SocketAddr) {
+        lock!(self.endpoints).remove(addr);
     }
 
     /// Send a copy of the provided endpoint to the endpoint identified by the
@@ -265,8 +277,9 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
 
     fn apply_policy(
         _conn: &BgpConnectionChannel,
-        _min_ttl: Option<u8>,
+        _min_ttl: Option<std::num::NonZeroU8>,
         _md5_key: Option<String>,
+        _dscp: rdb::Dscp,
     ) -> Result<(), Error> {
         // Policy application is ignored for test connections
         Ok(())
@@ -294,6 +307,8 @@ pub struct BgpConnectionChannel {
     channel_id: u64,
     // Typestate managing the recv loop thread lifecycle (Ready or Running)
     recv_loop_state: Mutex<ThreadState>,
+    // BGP Extended Message Size is supported for this peer.
+    extended_msg: Arc<AtomicBool>,
 }
 
 impl BgpConnection for BgpConnectionChannel {
@@ -366,6 +381,23 @@ impl BgpConnection for BgpConnectionChannel {
 
         Ok(())
     }
+
+    fn update_socket_option(
+        &self,
+        _option: &SocketOption,
+    ) -> Result<(), Error> {
+        // Socket options are ignored for test connections
+        Ok(())
+    }
+
+    fn set_extended_msg(&self, ext_msg_supported: bool) {
+        self.extended_msg
+            .store(ext_msg_supported, Ordering::Relaxed)
+    }
+
+    fn extended_msg(&self) -> bool {
+        self.extended_msg.load(Ordering::Relaxed)
+    }
 }
 
 impl BgpConnectionChannel {
@@ -412,6 +444,7 @@ impl BgpConnectionChannel {
             recv_timeout: timeout,
             channel_id,
             recv_loop_state: Mutex::new(ThreadState::new()),
+            extended_msg: Arc::new(AtomicBool::new(false)),
         }
     }
 
