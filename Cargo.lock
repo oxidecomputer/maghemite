@@ -342,7 +342,7 @@ dependencies = [
  "serde",
  "serial_test",
  "slog",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 1.0.69",
  "uuid",
 ]
@@ -1222,7 +1222,7 @@ dependencies = [
  "serde_json",
  "sled",
  "slog",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
@@ -3672,7 +3672,7 @@ dependencies = [
  "rdb",
  "slog",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -3764,7 +3764,7 @@ dependencies = [
  "oxnet",
  "serde",
  "slog",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 1.0.69",
 ]
 
