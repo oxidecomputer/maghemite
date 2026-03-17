@@ -7,17 +7,42 @@ use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
     RequestContext, TypedBody,
 };
-use mg_api::{
-    BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery, RibV1,
+use mg_types::rib::{
+    BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery,
     filter_rib_by_protocol,
 };
+use mg_types_versions::{v1, v2};
 use std::sync::Arc;
 
-// Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED): BgpPathProperties.peer is IpAddr
+// Prior version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
+// BgpPathProperties.peer is IpAddr.
+pub async fn get_rib_imported_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    query: Query<v2::rib::RibQuery>,
+) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
+    let ctx = ctx.context();
+    let query = query.into_inner();
+    let imported = ctx.db.full_rib(query.address_family);
+    let filtered = filter_rib_by_protocol(imported, query.protocol);
+    Ok(HttpResponseOk(filtered.into()))
+}
+
+pub async fn get_rib_selected_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    query: Query<v2::rib::RibQuery>,
+) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
+    let ctx = ctx.context();
+    let query = query.into_inner();
+    let selected = ctx.db.loc_rib(query.address_family);
+    let filtered = filter_rib_by_protocol(selected, query.protocol);
+    Ok(HttpResponseOk(filtered.into()))
+}
+
+// Latest version (VERSION_UNNUMBERED+): BgpPathProperties.peer is PeerId enum.
 pub async fn get_rib_imported(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,
-) -> Result<HttpResponseOk<RibV1>, HttpError> {
+) -> Result<HttpResponseOk<Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
@@ -28,29 +53,6 @@ pub async fn get_rib_imported(
 pub async fn get_rib_selected(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,
-) -> Result<HttpResponseOk<RibV1>, HttpError> {
-    let ctx = ctx.context();
-    let query = query.into_inner();
-    let selected = ctx.db.loc_rib(query.address_family);
-    let filtered = filter_rib_by_protocol(selected, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
-}
-
-// VERSION_UNNUMBERED+ (BgpPathProperties.peer is PeerId enum)
-pub async fn get_rib_imported_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    query: Query<RibQuery>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
-    let ctx = ctx.context();
-    let query = query.into_inner();
-    let imported = ctx.db.full_rib(query.address_family);
-    let filtered = filter_rib_by_protocol(imported, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
-}
-
-pub async fn get_rib_selected_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    query: Query<RibQuery>,
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
@@ -59,7 +61,7 @@ pub async fn get_rib_selected_v2(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-pub async fn read_rib_bestpath_fanout(
+pub async fn read_bestpath_fanout(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
     let ctx = ctx.context();
@@ -71,7 +73,7 @@ pub async fn read_rib_bestpath_fanout(
     Ok(HttpResponseOk(BestpathFanoutResponse { fanout }))
 }
 
-pub async fn update_rib_bestpath_fanout(
+pub async fn update_bestpath_fanout(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<BestpathFanoutRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {

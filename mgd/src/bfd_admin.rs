@@ -9,8 +9,8 @@ use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
     RequestContext, TypedBody,
 };
-use mg_api::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_common::lock;
+use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use rdb::{BfdPeerConfig, SessionMode};
 use slog::Logger;
 use socket2::Socket;
