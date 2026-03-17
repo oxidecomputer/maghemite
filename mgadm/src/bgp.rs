@@ -1350,10 +1350,8 @@ async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
     match parse_peer_type(&peer) {
         PeerType::Numbered(addr) => {
-            let nbr = c
-                .read_neighbor(asn, &addr.to_string())
-                .await?
-                .into_inner();
+            let nbr =
+                c.read_neighbor(asn, &addr.to_string()).await?.into_inner();
             println!("{nbr:#?}");
         }
         PeerType::Unnumbered(interface) => {

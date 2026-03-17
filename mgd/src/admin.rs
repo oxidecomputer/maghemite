@@ -488,14 +488,16 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn message_history_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<v2::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError> {
+    ) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError>
+    {
         bgp_admin::message_history_v2(ctx, request).await
     }
 
     async fn message_history_v1(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError> {
+    ) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError>
+    {
         bgp_admin::message_history_v1(ctx, request).await
     }
 

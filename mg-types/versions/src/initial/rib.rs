@@ -15,16 +15,14 @@ pub struct Rib(pub BTreeMap<String, BTreeSet<PathV1>>);
 
 impl From<rdb::db::Rib> for Rib {
     fn from(value: rdb::db::Rib) -> Self {
-        Rib(
-            value
-                .into_iter()
-                .map(|(k, v)| {
-                    let paths_v1: BTreeSet<PathV1> =
-                        v.into_iter().map(PathV1::from).collect();
-                    (k.to_string(), paths_v1)
-                })
-                .collect(),
-        )
+        Rib(value
+            .into_iter()
+            .map(|(k, v)| {
+                let paths_v1: BTreeSet<PathV1> =
+                    v.into_iter().map(PathV1::from).collect();
+                (k.to_string(), paths_v1)
+            })
+            .collect())
     }
 }
 

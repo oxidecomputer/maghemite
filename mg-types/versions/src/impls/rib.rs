@@ -7,10 +7,7 @@ use crate::latest;
 impl From<rdb::db::Rib> for latest::rib::Rib {
     fn from(value: rdb::db::Rib) -> Self {
         latest::rib::Rib(
-            value
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
+            value.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         )
     }
 }

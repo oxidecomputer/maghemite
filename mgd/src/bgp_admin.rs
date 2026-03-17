@@ -1854,7 +1854,6 @@ pub async fn delete_shaper(
     helpers::unload_policy(ctx, rq.asn, PolicyKind::Shaper).await
 }
 
-
 pub(crate) mod helpers {
     use bgp::router::{EnsureSessionResult, UnloadPolicyError};
     use rdb::BgpNeighborParameters;
