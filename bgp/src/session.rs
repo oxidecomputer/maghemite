@@ -1787,7 +1787,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     pub counters: Arc<SessionCounters>,
 
     /// Session-level clock for timers that persist across connections
-    pub clock: Arc<SessionClock>,
+    pub clock: Arc<SessionClock<Cnx>>,
 
     /// Configuration for this BGP Session
     pub session: Arc<Mutex<SessionInfo>>,
@@ -2372,6 +2372,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         {
             return;
         };
+
+        // Ensure the session clock thread is running. It may have been
+        // stopped by a previous shutdown().
+        self.clock.start();
 
         self.initialize_capabilities();
 
@@ -7593,8 +7597,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.join_connector_thread(handle, "shutdown");
         }
 
-        // Disable session-level timers
-        self.clock.stop_all();
+        // Stop the session clock thread and disable all timers
+        self.clock.shutdown();
 
         let previous = self.state();
         let next = FsmStateKind::Idle;

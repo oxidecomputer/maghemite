@@ -200,17 +200,21 @@ impl Display for Timer {
 
 /// Clock for session-level timers that persist across connections
 #[derive(Clone, Debug)]
-pub struct SessionClock {
+pub struct SessionClock<Cnx: BgpConnection> {
     /// The rate at which the clock ticks
     pub resolution: Duration,
     /// The collection of BGP timers specific to this SessionRunner
     pub timers: Arc<SessionTimers>,
     /// Handle to the thread running the per-session clock
-    _thread: Arc<ManagedThread>,
+    thread: Arc<ManagedThread>,
+    /// Event sender for delivering timer expiry events to the FSM
+    event_tx: Sender<FsmEvent<Cnx>>,
+    /// Logger for the clock thread
+    log: Logger,
 }
 
-impl SessionClock {
-    pub fn new<Cnx: BgpConnection + 'static>(
+impl<Cnx: BgpConnection + 'static> SessionClock<Cnx> {
+    pub fn new(
         resolution: Duration,
         connect_retry_interval: Duration,
         idle_hold_interval: Duration,
@@ -233,55 +237,72 @@ impl SessionClock {
                 None => Timer::new(idle_hold_interval),
             }),
         });
-        let thread = Arc::new(ManagedThread::new());
-        let _ = thread.start(Self::run(
-            resolution,
-            timers.clone(),
-            event_tx,
-            thread.dropped_flag(),
-            log,
-        ));
         Self {
             resolution,
             timers,
-            _thread: thread,
+            thread: Arc::new(ManagedThread::new()),
+            event_tx,
+            log,
         }
     }
 
-    fn run<Cnx: BgpConnection + 'static>(
+    /// Start the clock thread. No-op if already running.
+    pub fn start(&self) {
+        if self.thread.is_running() {
+            return;
+        }
+        let dropped = self.thread.dropped_flag();
+        let resolution = self.resolution;
+        let timers = self.timers.clone();
+        let event_tx = self.event_tx.clone();
+        let log = self.log.clone();
+        let handle = std::thread::Builder::new()
+            .name("bgp-session-clock".into())
+            .spawn(move || {
+                Self::run(resolution, timers, event_tx, dropped, log)
+            })
+            .expect("failed to spawn bgp-session-clock thread");
+        self.thread.start(handle);
+    }
+
+    /// Stop the clock thread and disable all timers.
+    pub fn shutdown(&self) {
+        self.stop_all();
+        self.thread.stop();
+    }
+
+    fn run(
         resolution: Duration,
         timers: Arc<SessionTimers>,
         event_tx: Sender<FsmEvent<Cnx>>,
         dropped: Arc<AtomicBool>,
         log: Logger,
-    ) -> JoinHandle<()> {
-        spawn(move || {
-            loop {
-                if dropped.load(Ordering::Relaxed) {
-                    break;
-                }
-                sleep(resolution);
-
-                Self::step(
-                    resolution,
-                    &lock!(timers.connect_retry),
-                    FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires),
-                    event_tx.clone(),
-                    &log,
-                );
-
-                Self::step(
-                    resolution,
-                    &lock!(timers.idle_hold),
-                    FsmEvent::Session(SessionEvent::IdleHoldTimerExpires),
-                    event_tx.clone(),
-                    &log,
-                );
+    ) {
+        loop {
+            if dropped.load(Ordering::Relaxed) {
+                break;
             }
-        })
+            sleep(resolution);
+
+            Self::step(
+                resolution,
+                &lock!(timers.connect_retry),
+                FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires),
+                event_tx.clone(),
+                &log,
+            );
+
+            Self::step(
+                resolution,
+                &lock!(timers.idle_hold),
+                FsmEvent::Session(SessionEvent::IdleHoldTimerExpires),
+                event_tx.clone(),
+                &log,
+            );
+        }
     }
 
-    fn step<Cnx: BgpConnection + 'static>(
+    fn step(
         resolution: Duration,
         timer: &Timer,
         event: FsmEvent<Cnx>,
@@ -331,7 +352,7 @@ pub struct SessionTimerSnapshot {
     pub idle_hold_jitter: Option<JitterRange>,
 }
 
-impl Display for SessionClock {
+impl<Cnx: BgpConnection> Display for SessionClock<Cnx> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let connect_retry = lock!(self.timers.connect_retry);
         let idle_hold = lock!(self.timers.idle_hold);

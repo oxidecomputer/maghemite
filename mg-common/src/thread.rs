@@ -95,6 +95,24 @@ impl ManagedThread {
     pub fn is_running(&self) -> bool {
         lock!(self.state).is_running()
     }
+
+    /// Stop the thread: signal shutdown, join, and return to Ready.
+    ///
+    /// The dropped flag is reset so the thread can be restarted.
+    /// No-op if already in the Ready state.
+    pub fn stop(&self) {
+        self.dropped.store(true, Ordering::Relaxed);
+
+        let mut state = lock!(self.state);
+        if let ThreadState::Running(handle) =
+            std::mem::replace(&mut *state, ThreadState::Ready)
+        {
+            drop(state);
+            let _ = handle.join();
+        }
+
+        self.dropped.store(false, Ordering::Relaxed);
+    }
 }
 
 impl Drop for ManagedThread {
