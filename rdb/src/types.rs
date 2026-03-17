@@ -434,7 +434,7 @@ impl FromStr for PolicyAction {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "allow" | "Allow" => Ok(Self::Allow),
-            "deny" | "Deny" => Ok(Self::Allow),
+            "deny" | "Deny" => Ok(Self::Deny),
             _ => Err("Unknown policy action, must be allow or deny".into()),
         }
     }
