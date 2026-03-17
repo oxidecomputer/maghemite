@@ -348,25 +348,10 @@ pub trait MgAdminApi {
         request: Query<latest::rib::RibQuery>,
     ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
 
-    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum.
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED.. }]
-    async fn get_rib_selected(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<latest::rib::RibQuery>,
-    ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
-
     // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
     // BgpPathProperties.peer is IpAddr.
     #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn get_rib_imported_v2(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<v2::rib::RibQuery>,
-    ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
-
-    // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
-    // BgpPathProperties.peer is IpAddr.
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
-    async fn get_rib_selected_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<v2::rib::RibQuery>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
@@ -376,6 +361,21 @@ pub trait MgAdminApi {
     async fn get_imported_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
+
+    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum.
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED.. }]
+    async fn get_rib_selected(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<latest::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
+
+    // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
+    // BgpPathProperties.peer is IpAddr.
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    async fn get_rib_selected_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<v2::rib::RibQuery>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
 
     // selected moved under /rib/status in VERSION_IPV6_BASIC.
