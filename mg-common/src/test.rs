@@ -162,7 +162,10 @@ macro_rules! sockaddr {
 
 struct ManagedIp {
     address: IpAddr,
-    installed: bool,
+    /// Number of IpAllocations within this process currently using this IP.
+    /// The system-level install/uninstall only happens when this transitions
+    /// between 0 and 1. use_count > 0 implies the IP is installed.
+    use_count: u32,
     lockfile: Option<File>,
 }
 
@@ -196,13 +199,13 @@ impl LoopbackIpManager {
         }
     }
 
-    pub fn add(&mut self, addresses: &[IpAddr]) {
+    fn add(&mut self, addresses: &[IpAddr]) {
         for addr in addresses {
             // Only add if not already present
             if !self.ips.iter().any(|ip| ip.address == *addr) {
                 self.ips.push(ManagedIp {
                     address: *addr,
-                    installed: false,
+                    use_count: 0,
                     lockfile: None,
                 });
             }
@@ -219,7 +222,7 @@ impl LoopbackIpManager {
         {
             let mut mgr = lock!(manager);
             mgr.add(addresses);
-            mgr.install()?;
+            mgr.install(addresses)?;
         }
 
         // Return guard that will clean up on drop
@@ -228,6 +231,13 @@ impl LoopbackIpManager {
             manager,
         })
     }
+}
+
+/// Returns true for addresses that are always present on loopback interfaces
+/// and should never be installed or removed by the manager.
+fn is_always_present(addr: IpAddr) -> bool {
+    addr == IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        || addr == IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
 }
 
 // Helper functions for lockfile-based reference counting
@@ -258,12 +268,15 @@ fn write_refcount(file: &mut File, count: u32) -> std::io::Result<()> {
 }
 
 impl LoopbackIpManager {
-    pub fn install(&mut self) -> Result<(), std::io::Error> {
+    fn install(
+        &mut self,
+        addresses: &[IpAddr],
+    ) -> Result<(), std::io::Error> {
         let ifname = self.ifname.clone();
         let log = self.log.clone();
 
         for ip in &mut self.ips {
-            if !ip.installed {
+            if addresses.contains(&ip.address) {
                 Self::install_single_ip_static(&ifname, &log, ip)?;
             }
         }
@@ -277,13 +290,29 @@ impl LoopbackIpManager {
         log: &Logger,
         ip: &mut ManagedIp,
     ) -> Result<(), std::io::Error> {
-        // Skip 127.0.0.1/::1 as they're always present on loopback interfaces by default
-        let ip_str = ip.address.to_string();
-        if ip_str == "127.0.0.1" || ip_str == "::1" {
-            info!(log, "skipping {ip_str} (always present on loopback)");
-            ip.installed = true; // Mark as installed but don't create lockfile
+        if is_always_present(ip.address) {
+            info!(log, "skipping {} (always present on loopback)", ip.address);
+            ip.use_count += 1;
             return Ok(());
         }
+
+        // If already installed by another allocation in this process, nothing
+        // more to do — the system IP and lockfile refcount are already set up.
+        // Increment use_count now since this path can't fail.
+        if ip.use_count > 0 {
+            ip.use_count += 1;
+            info!(
+                log,
+                "{}: already installed, use_count now {}",
+                ip.address,
+                ip.use_count,
+            );
+            return Ok(());
+        }
+
+        // First use in this process: acquire the cross-process lockfile and
+        // install the IP if no other process has done so yet.
+        // Don't increment use_count until all fallible work succeeds.
 
         // 1. Acquire lock for this IP
         let lockfile_path = format!("/tmp/maghemite-ip-{}.lock", ip.address);
@@ -305,8 +334,8 @@ impl LoopbackIpManager {
         );
         write_refcount(&mut lockfile, new_refcount)?;
 
-        // 5. Update our state
-        ip.installed = true;
+        // 5. All fallible work done — update our state
+        ip.use_count += 1;
         ip.lockfile = Some(lockfile);
 
         Ok(())
@@ -387,7 +416,7 @@ impl LoopbackIpManager {
     }
 
     /// Uninstall all managed addresses
-    pub fn uninstall(&mut self) {
+    fn uninstall(&mut self) {
         let addresses: Vec<IpAddr> =
             self.ips.iter().map(|ip| ip.address).collect();
         self.uninstall_addresses(&addresses);
@@ -396,18 +425,14 @@ impl LoopbackIpManager {
     /// Uninstall a single IP address with proper refcount management
     /// Skips 127.0.0.1 as it should always remain on loopback interfaces
     fn uninstall_single_ip(&mut self, target_addr: IpAddr) {
-        // Skip 127.0.0.1 as it should always remain on loopback interfaces
-        let target_str = target_addr.to_string();
-        if target_str == "127.0.0.1" || target_str == "::1" {
+        if is_always_present(target_addr) {
             info!(
                 self.log,
-                "skipping {target_str} cleanup (always present on loopback)"
+                "skipping {target_addr} cleanup (always present on loopback)"
             );
-            // Just mark as uninstalled in our tracking, but don't touch the system
             for ip in &mut self.ips {
                 if ip.address == target_addr {
-                    ip.installed = false;
-                    ip.lockfile = None; // No lockfile was created for these addresses
+                    ip.use_count = ip.use_count.saturating_sub(1);
                     break;
                 }
             }
@@ -415,7 +440,22 @@ impl LoopbackIpManager {
         }
 
         for ip in &mut self.ips {
-            if ip.address == target_addr && ip.installed {
+            if ip.address == target_addr && ip.use_count > 0 {
+                ip.use_count -= 1;
+
+                if ip.use_count > 0 {
+                    // Other allocations in this process still need this IP.
+                    info!(
+                        self.log,
+                        "{}: use_count now {}, keeping installed",
+                        ip.address,
+                        ip.use_count,
+                    );
+                    break;
+                }
+
+                // Last in-process user: decrement the cross-process refcount
+                // and remove the IP from the system if no other process needs it.
                 if let Some(mut lockfile) = ip.lockfile.take() {
                     let lockfile_path =
                         format!("/tmp/maghemite-ip-{}.lock", ip.address);
@@ -436,7 +476,7 @@ impl LoopbackIpManager {
                         Self::remove_ip_from_system_static(
                             &self.ifname,
                             &self.log,
-                            ip,
+                            ip.address,
                         );
 
                         // Remove the lockfile completely when refcount reaches 0
@@ -459,9 +499,6 @@ impl LoopbackIpManager {
                     }
                 }
 
-                // Always update our state
-                ip.installed = false;
-                ip.lockfile = None;
                 info!(self.log, "uninstalled {}", ip.address);
                 break;
             }
@@ -469,20 +506,16 @@ impl LoopbackIpManager {
     }
 
     /// Remove IP from the system using platform-specific commands
-    fn remove_ip_from_system_static(
-        ifname: &str,
-        log: &Logger,
-        ip: &ManagedIp,
-    ) {
+    fn remove_ip_from_system_static(ifname: &str, log: &Logger, addr: IpAddr) {
         #[cfg(target_os = "illumos")]
         let output = {
-            let v = match ip.address {
+            let v = match addr {
                 IpAddr::V4(_) => "v4",
                 IpAddr::V6(_) => "v6",
             };
-            let mut ip_descr = format!("{v}{}", ip.address);
+            let mut ip_descr = format!("{v}{addr}");
             ip_descr.retain(|c| c.is_alphanumeric());
-            let addr_obj = format!("{}/{}", ifname, ip_descr);
+            let addr_obj = format!("{ifname}/{ip_descr}");
             Command::new("pfexec")
                 .args(["ipadm", "delete-addr", &addr_obj])
                 .output()
@@ -490,11 +523,11 @@ impl LoopbackIpManager {
 
         #[cfg(target_os = "linux")]
         let output = {
-            let mask = match ip.address {
+            let mask = match addr {
                 IpAddr::V4(_) => 32,
                 IpAddr::V6(_) => 128,
             };
-            let addr_str = format!("{}/{mask}", ip.address);
+            let addr_str = format!("{addr}/{mask}");
             Command::new("sudo")
                 .args(["ip", "addr", "del", &addr_str, "dev", ifname])
                 .output()
@@ -502,18 +535,12 @@ impl LoopbackIpManager {
 
         #[cfg(target_os = "macos")]
         let output = {
-            let af = match ip.address {
+            let af = match addr {
                 IpAddr::V4(_) => "inet",
                 IpAddr::V6(_) => "inet6",
             };
             Command::new("sudo")
-                .args([
-                    "ifconfig",
-                    ifname,
-                    af,
-                    &ip.address.to_string(),
-                    "-alias",
-                ])
+                .args(["ifconfig", ifname, af, &addr.to_string(), "-alias"])
                 .output()
         };
 
@@ -528,18 +555,17 @@ impl LoopbackIpManager {
                     {
                         error!(
                             log,
-                            "failed to remove {} from system: {stderr}",
-                            ip.address
+                            "failed to remove {addr} from system: {stderr}"
                         );
                         return;
                     }
                 }
-                info!(log, "removed {} from system", ip.address);
+                info!(log, "removed {addr} from system");
             }
             Err(e) => {
                 error!(
                     log,
-                    "failed to execute remove command for {}: {e}", ip.address
+                    "failed to execute remove command for {addr}: {e}"
                 );
             }
         }
