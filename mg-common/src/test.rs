@@ -222,7 +222,10 @@ impl LoopbackIpManager {
         {
             let mut mgr = lock!(manager);
             mgr.add(addresses);
-            mgr.install(addresses)?;
+            if let Err(e) = mgr.install(addresses) {
+                mgr.uninstall_addresses(addresses);
+                return Err(e);
+            }
         }
 
         // Return guard that will clean up on drop
@@ -413,13 +416,6 @@ impl LoopbackIpManager {
         for addr in addresses {
             self.uninstall_single_ip(*addr);
         }
-    }
-
-    /// Uninstall all managed addresses
-    fn uninstall(&mut self) {
-        let addresses: Vec<IpAddr> =
-            self.ips.iter().map(|ip| ip.address).collect();
-        self.uninstall_addresses(&addresses);
     }
 
     /// Uninstall a single IP address with proper refcount management
