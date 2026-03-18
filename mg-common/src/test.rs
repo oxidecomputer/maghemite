@@ -481,7 +481,7 @@ impl LoopbackIpManager {
             };
             let mut ip_descr = format!("{v}{}", ip.address);
             ip_descr.retain(|c| c.is_alphanumeric());
-            let addr_obj = format!("{}/test{}", ifname, ip_descr);
+            let addr_obj = format!("{}/{}", ifname, ip_descr);
             Command::new("pfexec")
                 .args(["ipadm", "delete-addr", &addr_obj])
                 .output()
