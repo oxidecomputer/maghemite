@@ -411,16 +411,17 @@ impl LoopbackIpManager {
     /// Skips 127.0.0.1 as it should always remain on loopback interfaces
     fn uninstall_single_ip(&mut self, target_addr: IpAddr) {
         // Skip 127.0.0.1 as it should always remain on loopback interfaces
-        if target_addr.to_string() == "127.0.0.1" {
+        let target_str = target_addr.to_string();
+        if target_str == "127.0.0.1" || target_str == "::1" {
             info!(
                 self.log,
-                "skipping 127.0.0.1 cleanup (always present on loopback)"
+                "skipping {target_str} cleanup (always present on loopback)"
             );
             // Just mark as uninstalled in our tracking, but don't touch the system
             for ip in &mut self.ips {
                 if ip.address == target_addr {
                     ip.installed = false;
-                    ip.lockfile = None; // No lockfile was created for 127.0.0.1
+                    ip.lockfile = None; // No lockfile was created for these addresses
                     break;
                 }
             }
