@@ -350,6 +350,7 @@ impl LoopbackIpManager {
             let cmd = [
                 "ipadm",
                 "create-addr",
+                "-t",
                 "-T",
                 "static",
                 "-a",
