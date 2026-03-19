@@ -285,10 +285,7 @@ fn write_refcount(file: &mut File, count: u32) -> std::io::Result<()> {
 }
 
 impl LoopbackIpManager {
-    fn install(
-        &mut self,
-        addresses: &[IpAddr],
-    ) -> Result<(), std::io::Error> {
+    fn install(&mut self, addresses: &[IpAddr]) -> Result<(), std::io::Error> {
         let ifname = self.ifname.clone();
         let log = self.log.clone();
 
@@ -573,10 +570,7 @@ impl LoopbackIpManager {
                 info!(log, "removed {addr} from system");
             }
             Err(e) => {
-                error!(
-                    log,
-                    "failed to execute remove command for {addr}: {e}"
-                );
+                error!(log, "failed to execute remove command for {addr}: {e}");
             }
         }
     }
