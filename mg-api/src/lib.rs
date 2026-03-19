@@ -160,13 +160,26 @@ pub trait MgAdminApi {
     async fn read_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+        let rq = request.into_inner();
+        Self::read_neighbor(
+            rqctx,
+            latest::bgp::NeighborSelector {
+                asn: rq.asn,
+                peer: rq.addr.to_string(),
+            }
+            .into(),
+        )
+        .await
+    }
 
     #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn read_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+        Self::read_neighbors(rqctx, request.into_inner().into()).await
+    }
 
     #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn update_neighbor_v4(
@@ -180,7 +193,18 @@ pub trait MgAdminApi {
     async fn delete_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError>;
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        let rq = request.into_inner();
+        Self::delete_neighbor(
+            rqctx,
+            latest::bgp::NeighborSelector {
+                asn: rq.asn,
+                peer: rq.addr.to_string(),
+            }
+            .into(),
+        )
+        .await
+    }
 
     // V1/V2 API - legacy Neighbor type with combined import/export policies
 
@@ -212,7 +236,18 @@ pub trait MgAdminApi {
     async fn delete_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError>;
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        let rq = request.into_inner();
+        Self::delete_neighbor(
+            rqctx,
+            latest::bgp::NeighborSelector {
+                asn: rq.asn,
+                peer: rq.addr.to_string(),
+            }
+            .into(),
+        )
+        .await
+    }
 
     // V4+ API clear neighbor with per-AF support
     #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = VERSION_MP_BGP.. }]
@@ -421,7 +456,9 @@ pub trait MgAdminApi {
     async fn bgp_apply_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequestV1>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::bgp_apply(rqctx, request.map(Into::into)).await
+    }
 
     #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_UNNUMBERED.. }]
     async fn message_history(

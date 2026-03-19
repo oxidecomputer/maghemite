@@ -202,28 +202,8 @@ impl MgAdminApi for MgAdminApiImpl {
     }
 
     // V4 (VERSION_MP_BGP..VERSION_UNNUMBERED)
-    // create_neighbor_v4 and update_neighbor_v4 are provided methods.
-
-    async fn read_neighbor_v4(
-        ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
-        bgp_admin::read_neighbor_v4(ctx, request).await
-    }
-
-    async fn read_neighbors_v4(
-        ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
-        bgp_admin::read_neighbors_v4(ctx, request).await
-    }
-
-    async fn delete_neighbor_v4(
-        ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor_v4(ctx, request).await
-    }
+    // create_neighbor_v4, update_neighbor_v4, read_neighbor_v4,
+    // read_neighbors_v4, and delete_neighbor_v4 are provided methods.
 
     // V1 (..VERSION_MP_BGP)
 
@@ -255,14 +235,7 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::update_neighbor_v1(ctx, request).await
     }
 
-    async fn delete_neighbor_v1(
-        ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor_v1(ctx, request).await
-    }
-
-    // clear_neighbor_v1 is a provided method.
+    // delete_neighbor_v1 and clear_neighbor_v1 are provided methods.
 
     async fn clear_neighbor(
         ctx: RequestContext<Self::Context>,
@@ -471,12 +444,7 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::bgp_apply(ctx, request).await
     }
 
-    async fn bgp_apply_v1(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequestV1>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::bgp_apply_v1(ctx, request).await
-    }
+    // bgp_apply_v1 is a provided method.
 
     async fn message_history(
         ctx: RequestContext<Self::Context>,

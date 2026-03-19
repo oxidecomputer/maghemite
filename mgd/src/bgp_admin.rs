@@ -40,7 +40,7 @@ use mg_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_types_versions::{v1, v2};
+use mg_types_versions::{v1, v2, v5};
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
     ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
@@ -187,30 +187,9 @@ pub async fn delete_router(
 
 // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-pub async fn read_neighbors_v4(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-
-    let nbrs = ctx
-        .db
-        .get_bgp_neighbors()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-
-    let result = nbrs
-        .into_iter()
-        .filter(|x| x.asn == rq.asn)
-        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
-        .collect();
-
-    Ok(HttpResponseOk(result))
-}
-
 pub async fn read_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -269,15 +248,6 @@ pub async fn update_neighbor_v1(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn delete_neighbor_v1(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::NeighborSelector>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
-}
-
 // Supports per-AF operations
 pub async fn clear_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -286,35 +256,6 @@ pub async fn clear_neighbor(
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::reset_neighbor(ctx.clone(), rq).await?)
-}
-
-pub async fn read_neighbor_v4(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::NeighborSelector>,
-) -> Result<HttpResponseOk<Neighbor>, HttpError> {
-    let rq = request.into_inner();
-    let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
-        HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
-    })?;
-    let neighbor_info = db_neighbors
-        .iter()
-        .find(|n| n.host.ip() == rq.addr)
-        .ok_or(HttpError::for_not_found(
-            None,
-            format!("neighbor {} not found in db", rq.addr),
-        ))?;
-
-    let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
-    Ok(HttpResponseOk(result))
-}
-
-pub async fn delete_neighbor_v4(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::NeighborSelector>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
 // Unified neighbor operations supporting both numbered and unnumbered
@@ -879,7 +820,7 @@ pub async fn delete_origin6(
 // Legacy endpoint (pre MP-BGP/unnumbered): IPv4 only, no filtering
 pub async fn get_exported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
+    request: TypedBody<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -933,7 +874,7 @@ pub async fn get_exported_v1(
 // MP-BGP + BGP unnumbered
 pub async fn get_exported_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<ExportedSelector>,
+    request: TypedBody<v5::bgp::ExportedSelector>,
 ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1049,7 +990,7 @@ pub async fn get_exported(
 // Pre-UNNUMBERED versions (BgpPathProperties.peer is IpAddr)
 pub async fn get_imported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
+    request: TypedBody<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1061,7 +1002,7 @@ pub async fn get_imported_v1(
 
 pub async fn get_selected_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
+    request: TypedBody<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1073,7 +1014,7 @@ pub async fn get_selected_v1(
 
 pub async fn get_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1138,7 +1079,7 @@ pub async fn get_neighbors_v1(
 
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1201,7 +1142,7 @@ pub async fn get_neighbors_v2(
 
 pub async fn get_neighbors_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1255,14 +1196,6 @@ pub async fn get_neighbors(
     }
 
     Ok(HttpResponseOk(peers))
-}
-
-pub async fn bgp_apply_v1(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<ApplyRequestV1>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    // Convert v1 request to current format (hardcodes IPv4-only)
-    do_bgp_apply(ctx.context(), ApplyRequest::from(request.into_inner())).await
 }
 
 pub async fn bgp_apply(
