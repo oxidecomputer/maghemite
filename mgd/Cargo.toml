@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 mg-lower = { path = "../mg-lower", optional = true }
 mg-api.workspace = true
+mg-types.workspace = true
+mg-types-versions.workspace = true
 mg-common.workspace = true
 bfd.workspace = true
 bgp.workspace = true

@@ -3533,11 +3533,10 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
- "bfd",
  "bgp",
- "chrono",
  "dropshot",
  "dropshot-api-manager-types",
+ "mg-types-versions",
  "rdb",
  "schemars 0.8.22",
  "serde",
@@ -3624,6 +3623,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mg-types"
+version = "0.1.0"
+dependencies = [
+ "mg-types-versions",
+ "rdb",
+]
+
+[[package]]
+name = "mg-types-versions"
+version = "0.1.0"
+dependencies = [
+ "bfd",
+ "bgp",
+ "rdb",
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
 name = "mgadm"
 version = "0.1.0"
 dependencies = [
@@ -3661,6 +3679,8 @@ dependencies = [
  "mg-api",
  "mg-common",
  "mg-lower",
+ "mg-types",
+ "mg-types-versions",
  "ndp",
  "network-interface",
  "omicron-common",

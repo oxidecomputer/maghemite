@@ -18,6 +18,8 @@ default-members = [
     "rdb-types",
     "bgp",
     "mg-api",
+    "mg-types",
+    "mg-types/versions",
     "mg-admin-client",
     "mgadm",
     "mgd",
@@ -60,6 +62,8 @@ members = [
 [workspace.dependencies]
 # Local
 mg-api = { path = "mg-api" }
+mg-types = { path = "mg-types" }
+mg-types-versions = { path = "mg-types/versions" }
 mg-common = { path = "mg-common" }
 rdb-types = { path = "rdb-types" }
 ndp = { path = "ndp" }

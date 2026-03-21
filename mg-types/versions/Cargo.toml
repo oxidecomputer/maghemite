@@ -1,13 +1,11 @@
 [package]
-name = "mg-api"
+name = "mg-types-versions"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bfd.workspace = true
 bgp.workspace = true
-dropshot.workspace = true
-dropshot-api-manager-types.workspace = true
-mg-types-versions.workspace = true
 rdb.workspace = true
 schemars.workspace = true
 serde.workspace = true

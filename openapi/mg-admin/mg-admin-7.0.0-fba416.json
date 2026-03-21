@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "6.0.0"
+    "version": "7.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -96,7 +96,7 @@
     },
     "/bgp/clear/neighbor": {
       "post": {
-        "operationId": "clear_neighbor_v2",
+        "operationId": "clear_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -259,7 +259,7 @@
     },
     "/bgp/config/neighbor": {
       "put": {
-        "operationId": "create_neighbor_v3",
+        "operationId": "create_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -283,7 +283,7 @@
         }
       },
       "post": {
-        "operationId": "update_neighbor_v3",
+        "operationId": "update_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -309,7 +309,7 @@
     },
     "/bgp/config/neighbor/{asn}/{peer}": {
       "get": {
-        "operationId": "read_neighbor_v3",
+        "operationId": "read_neighbor",
         "parameters": [
           {
             "in": "path",
@@ -351,7 +351,7 @@
         }
       },
       "delete": {
-        "operationId": "delete_neighbor_v3",
+        "operationId": "delete_neighbor",
         "parameters": [
           {
             "in": "path",
@@ -388,7 +388,7 @@
     },
     "/bgp/config/neighbors/{asn}": {
       "get": {
-        "operationId": "read_neighbors_v3",
+        "operationId": "read_neighbors",
         "parameters": [
           {
             "in": "path",
@@ -1064,7 +1064,7 @@
     },
     "/bgp/history/fsm": {
       "get": {
-        "operationId": "fsm_history_v2",
+        "operationId": "fsm_history",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1097,7 +1097,7 @@
     },
     "/bgp/history/message": {
       "get": {
-        "operationId": "message_history_v3",
+        "operationId": "message_history",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1130,7 +1130,7 @@
     },
     "/bgp/omicron/apply": {
       "post": {
-        "operationId": "bgp_apply_v2",
+        "operationId": "bgp_apply",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1156,7 +1156,7 @@
     },
     "/bgp/status/exported": {
       "get": {
-        "operationId": "get_exported_v3",
+        "operationId": "get_exported",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1196,7 +1196,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_v4",
+        "operationId": "get_neighbors",
         "parameters": [
           {
             "in": "query",
@@ -1357,7 +1357,7 @@
     },
     "/rib/config/bestpath/fanout": {
       "get": {
-        "operationId": "read_rib_bestpath_fanout",
+        "operationId": "read_bestpath_fanout",
         "responses": {
           "200": {
             "description": "successful operation",
@@ -1378,7 +1378,7 @@
         }
       },
       "post": {
-        "operationId": "update_rib_bestpath_fanout",
+        "operationId": "update_bestpath_fanout",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1404,7 +1404,7 @@
     },
     "/rib/status/imported": {
       "get": {
-        "operationId": "get_rib_imported_v2",
+        "operationId": "get_rib_imported",
         "parameters": [
           {
             "in": "query",
@@ -1445,7 +1445,7 @@
     },
     "/rib/status/selected": {
       "get": {
-        "operationId": "get_rib_selected_v2",
+        "operationId": "get_rib_selected",
         "parameters": [
           {
             "in": "query",
