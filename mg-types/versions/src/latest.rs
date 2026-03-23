@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 //! Re-exports of the latest versions of types.
 
 pub mod bfd {
@@ -25,6 +27,10 @@ pub mod bgp {
     pub use crate::v5::bgp::NeighborSelector;
     pub use crate::v5::bgp::UnnumberedNeighborResetRequest;
     pub use crate::v5::bgp::UnnumberedNeighborSelector;
+}
+
+pub mod mrib {
+    pub use crate::v8::mrib::*;
 }
 
 pub mod ndp {
