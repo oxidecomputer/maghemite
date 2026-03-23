@@ -2,12 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 //! Test utilities for rdb tests.
 
 use crate::{Db, error::Error};
 use slog::Logger;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Default iteration count for rdb wait_for! calls (5 seconds at 1s polling).
+pub const TEST_WAIT_ITERATIONS: u64 = 5;
 
 /// A test database wrapper that automatically cleans up the database directory
 /// when dropped, but only if the test succeeded.
