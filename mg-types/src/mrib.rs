@@ -4,10 +4,4 @@
 
 // Copyright 2026 Oxide Computer Company
 
-pub mod bfd;
-pub mod bgp;
-pub mod mrib;
-pub mod ndp;
-pub mod rib;
-pub mod static_routes;
-pub mod switch;
+pub use mg_types_versions::latest::mrib::*;

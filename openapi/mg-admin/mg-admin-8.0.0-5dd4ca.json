@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "7.0.0"
+    "version": "8.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1234,6 +1234,203 @@
         }
       }
     },
+    "/mrib/config/rpf/rebuild-interval": {
+      "get": {
+        "summary": "Get the RPF rebuild rate-limit interval.",
+        "operationId": "read_mrib_rpf_rebuild_interval",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MribRpfRebuildIntervalResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "summary": "Set the RPF rebuild rate-limit interval.",
+        "operationId": "update_mrib_rpf_rebuild_interval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribRpfRebuildIntervalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mrib/status/imported": {
+      "get": {
+        "summary": "Get imported multicast routes from `mrib_in`.",
+        "operationId": "get_mrib_imported",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family. Only used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "description": "Multicast group address. If provided, returns a specific route. If omitted, returns all routes matching the filters.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "route_origin",
+            "description": "Filter by route origin (\"static\" or \"dynamic\"). Only used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/RouteOriginFilter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "description": "Source address (`None` for (*,G) routes). Only used when `group` is set.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vni",
+            "description": "VNI (defaults to 77 for fleet-scoped multicast). Only used when `group` is set.",
+            "schema": {
+              "$ref": "#/components/schemas/Vni"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mrib/status/selected": {
+      "get": {
+        "summary": "Get selected multicast routes from `mrib_loc` (RPF-validated).",
+        "operationId": "get_mrib_selected",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family. Only used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "description": "Multicast group address. If provided, returns a specific route. If omitted, returns all routes matching the filters.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "route_origin",
+            "description": "Filter by route origin (\"static\" or \"dynamic\"). Only used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/RouteOriginFilter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "description": "Source address (`None` for (*,G) routes). Only used when `group` is set.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vni",
+            "description": "VNI (defaults to 77 for fleet-scoped multicast). Only used when `group` is set.",
+            "schema": {
+              "$ref": "#/components/schemas/Vni"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/ndp/interface": {
       "get": {
         "operationId": "get_ndp_interface_detail",
@@ -1474,6 +1671,84 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/static/mroute": {
+      "get": {
+        "summary": "List all static multicast routes from persistence.",
+        "operationId": "static_list_mcast_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Add static multicast routes.",
+        "operationId": "static_add_mcast_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribAddStaticRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove static multicast routes.",
+        "operationId": "static_remove_mcast_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribDeleteStaticRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -3725,6 +4000,237 @@
           }
         ]
       },
+      "MribAddStaticRequest": {
+        "description": "Request body for adding static multicast routes to the MRIB.",
+        "type": "object",
+        "properties": {
+          "routes": {
+            "description": "List of static multicast routes to add.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticMulticastRouteInput"
+            }
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "MribDeleteStaticRequest": {
+        "description": "Request body for deleting static multicast routes from the MRIB.",
+        "type": "object",
+        "properties": {
+          "keys": {
+            "description": "List of route keys to delete.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MulticastRouteKey"
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "MribRpfRebuildIntervalRequest": {
+        "description": "Request body for setting the RPF rebuild interval.",
+        "type": "object",
+        "properties": {
+          "interval_ms": {
+            "description": "Minimum interval between RPF cache rebuilds in milliseconds. A value of 0 disables rate-limiting. Every unicast RIB change triggers an immediate poptrie rebuild.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "interval_ms"
+        ]
+      },
+      "MribRpfRebuildIntervalResponse": {
+        "description": "Response containing the current RPF rebuild interval.",
+        "type": "object",
+        "properties": {
+          "interval_ms": {
+            "description": "Minimum interval between RPF cache rebuilds in milliseconds. A value of 0 means rate-limiting is disabled.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "interval_ms"
+        ]
+      },
+      "MulticastRoute": {
+        "description": "Multicast route entry containing replication groups and metadata.",
+        "type": "object",
+        "properties": {
+          "created": {
+            "description": "Creation timestamp.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "key": {
+            "description": "The multicast route key (S,G) or (*,G).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastRouteKey"
+              }
+            ]
+          },
+          "rpf_neighbor": {
+            "nullable": true,
+            "description": "Expected RPF neighbor for the source (for RPF checks).",
+            "type": "string",
+            "format": "ip"
+          },
+          "source": {
+            "description": "Route source (static, IGMP, etc.).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastRouteSource"
+              }
+            ]
+          },
+          "underlay_group": {
+            "description": "Underlay multicast group address (ff04::/64).",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "underlay_nexthops": {
+            "description": "Underlay unicast nexthops for multicast replication.\n\nUnicast IPv6 addresses where encapsulated overlay multicast traffic is forwarded. These are sled underlay addresses hosting VMs subscribed to the multicast group. Forms the outgoing interface list (OIL).",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ipv6"
+            },
+            "uniqueItems": true
+          },
+          "updated": {
+            "description": "Last updated timestamp.\n\nOnly updated when route fields change semantically (rpf_neighbor, underlay_group, underlay_nexthops, source). An idempotent upsert with an identical value does not update this timestamp.",
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "created",
+          "key",
+          "source",
+          "underlay_group",
+          "underlay_nexthops",
+          "updated"
+        ]
+      },
+      "MulticastRouteKey": {
+        "description": "Multicast route key: (Source, Group) pair for source-specific multicast, or (*, Group) for any-source multicast.\n\nUses type-enforced address family matching: IPv4 sources can only be paired with IPv4 groups, and IPv6 sources with IPv6 groups.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "V4": {
+                "$ref": "#/components/schemas/MulticastRouteKeyV4"
+              }
+            },
+            "required": [
+              "V4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "V6": {
+                "$ref": "#/components/schemas/MulticastRouteKeyV6"
+              }
+            },
+            "required": [
+              "V6"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "MulticastRouteKeyV4": {
+        "description": "IPv4 multicast route key with type-enforced address family matching.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "description": "Multicast group address.",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Source address (`None` for (*,G) routes).",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "vni": {
+            "description": "VNI (Virtual Network Identifier).",
+            "default": 77,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "group"
+        ]
+      },
+      "MulticastRouteKeyV6": {
+        "description": "IPv6 multicast route key with type-enforced address family matching.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "description": "Multicast group address.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Source address (`None` for (*,G) routes).",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "vni": {
+            "description": "VNI (Virtual Network Identifier).",
+            "default": 77,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "group"
+        ]
+      },
+      "MulticastRouteSource": {
+        "description": "Source of a multicast route entry.",
+        "oneOf": [
+          {
+            "description": "Static route configured via API.",
+            "type": "string",
+            "enum": [
+              "Static"
+            ]
+          },
+          {
+            "description": "Learned via IGMP snooping (future).",
+            "type": "string",
+            "enum": [
+              "Igmp"
+            ]
+          },
+          {
+            "description": "Learned via MLD snooping (future).",
+            "type": "string",
+            "enum": [
+              "Mld"
+            ]
+          }
+        ]
+      },
       "NdpInterface": {
         "description": "NDP state for an interface",
         "type": "object",
@@ -5244,6 +5750,38 @@
           "code"
         ]
       },
+      "StaticMulticastRouteInput": {
+        "description": "Input for adding static multicast routes.",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "The multicast route key (S,G) or (*,G).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastRouteKey"
+              }
+            ]
+          },
+          "underlay_group": {
+            "description": "Underlay multicast group address (ff04::/64).",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "underlay_nexthops": {
+            "description": "Underlay unicast nexthops for multicast replication.\n\nUnicast IPv6 addresses where encapsulated overlay multicast traffic is forwarded. These are sled underlay addresses hosting VMs subscribed to the multicast group. Forms the outgoing interface list (OIL).",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ipv6"
+            }
+          }
+        },
+        "required": [
+          "key",
+          "underlay_group",
+          "underlay_nexthops"
+        ]
+      },
       "StaticRoute4": {
         "type": "object",
         "properties": {
@@ -5751,6 +6289,31 @@
             ]
           }
         ]
+      },
+      "RouteOriginFilter": {
+        "description": "Filter for multicast route origin.",
+        "oneOf": [
+          {
+            "description": "Static routes only (operator configured).",
+            "type": "string",
+            "enum": [
+              "static"
+            ]
+          },
+          {
+            "description": "Dynamic routes only (learned via IGMP, MLD, etc.).",
+            "type": "string",
+            "enum": [
+              "dynamic"
+            ]
+          }
+        ]
+      },
+      "Vni": {
+        "description": "A Geneve Virtual Network Identifier",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
       },
       "ProtocolFilter": {
         "oneOf": [

@@ -4,10 +4,9 @@
 
 // Copyright 2026 Oxide Computer Company
 
-pub mod bfd;
-pub mod bgp;
+//! Version `MULTICAST_SUPPORT` of the Maghemite Admin API.
+//!
+//! Added MRIB (Multicast Routing Information Base) support with static
+//! multicast route management, RPF verification, and query endpoints.
+
 pub mod mrib;
-pub mod ndp;
-pub mod rib;
-pub mod static_routes;
-pub mod switch;

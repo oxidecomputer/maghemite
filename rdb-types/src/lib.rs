@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 //! Core types for routing database operations, shared across maghemite components.
 //!
 //! This crate provides the fundamental types used for representing network prefixes
@@ -59,22 +61,20 @@ impl Prefix4 {
         new
     }
 
-    pub fn host_bits_are_unset(&self) -> bool {
-        let mask = match self.length {
+    /// Return the network mask as a `u32` with the top `length` bits set.
+    pub fn mask(&self) -> u32 {
+        match self.length {
             0 => 0,
             _ => u32::MAX << (Self::HOST_MASK - self.length),
-        };
+        }
+    }
 
-        self.value.to_bits() & mask == self.value.to_bits()
+    pub fn host_bits_are_unset(&self) -> bool {
+        self.value.to_bits() & self.mask() == self.value.to_bits()
     }
 
     pub fn unset_host_bits(&mut self) {
-        let mask = match self.length {
-            0 => 0,
-            _ => u32::MAX << (Self::HOST_MASK - self.length),
-        };
-
-        self.value = Ipv4Addr::from_bits(self.value.to_bits() & mask)
+        self.value = Ipv4Addr::from_bits(self.value.to_bits() & self.mask())
     }
 
     /// Check if this prefix is contained within another prefix.
@@ -187,22 +187,20 @@ impl Prefix6 {
         new
     }
 
-    pub fn host_bits_are_unset(&self) -> bool {
-        let mask = match self.length {
+    /// Return the network mask as a `u128` with the top `length` bits set.
+    pub fn mask(&self) -> u128 {
+        match self.length {
             0 => 0,
             _ => u128::MAX << (Self::HOST_MASK - self.length),
-        };
+        }
+    }
 
-        self.value.to_bits() & mask == self.value.to_bits()
+    pub fn host_bits_are_unset(&self) -> bool {
+        self.value.to_bits() & self.mask() == self.value.to_bits()
     }
 
     pub fn unset_host_bits(&mut self) {
-        let mask = match self.length {
-            0 => 0,
-            _ => u128::MAX << (Self::HOST_MASK - self.length),
-        };
-
-        self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
+        self.value = Ipv6Addr::from_bits(self.value.to_bits() & self.mask())
     }
 
     /// Check if this prefix is contained within another prefix.
