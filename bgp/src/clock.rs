@@ -151,9 +151,7 @@ impl Timer {
     pub fn reset(&self) {
         let interval = match self.jitter_range {
             Some(jitter) => {
-                use rand::Rng;
-                let mut rng = rand::thread_rng();
-                let factor = rng.gen_range(jitter.min..=jitter.max);
+                let factor = rand::random_range(jitter.min..=jitter.max);
                 self.interval.mul_f64(factor)
             }
             None => self.interval,
