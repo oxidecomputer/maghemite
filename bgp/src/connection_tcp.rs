@@ -1298,10 +1298,9 @@ fn set_md5_sig(
         tcpm_key: key,
         ..Default::default()
     };
-    let x = socket2::SockAddr::from(peer);
-    let x = x.as_storage();
-    sig.tcpm_addr = x;
+    let addr = socket2::SockAddr::from(peer);
     unsafe {
+        sig.tcpm_addr = *addr.as_ptr().cast::<sockaddr_storage>();
         if libc::setsockopt(
             fd,
             IPPROTO_TCP,
