@@ -93,7 +93,7 @@ dropshot-api-manager-types = "0.5.2"
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 hyper = "1.8.1"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.149"
