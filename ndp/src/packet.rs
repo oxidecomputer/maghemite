@@ -86,10 +86,10 @@ pub enum Icmp6RaFromWireError {
     #[error("deserialization error: {0}")]
     Ispf(#[from] ispf::Error),
 
-    #[error("wrong type: expected {}, got {0}", Icmp6RouterAdvertisement::TYPE)]
+    #[error("wrong type: expected {expected}, got {0}", expected = Icmp6RouterAdvertisement::TYPE)]
     WrongType(u8),
 
-    #[error("wrong code: expected {}, got {0}", Icmp6RouterAdvertisement::CODE)]
+    #[error("wrong code: expected {expected}, got {0}", expected = Icmp6RouterAdvertisement::CODE)]
     WrongCode(u8),
 }
 
@@ -143,9 +143,9 @@ pub enum Icmp6RsFromWireError {
     #[error("deserialization error: {0}")]
     Ispf(#[from] ispf::Error),
 
-    #[error("wrong type: expected {}, got {0}", Icmp6RouterSolicitation::TYPE)]
+    #[error("wrong type: expected {expected}, got {0}", expected = Icmp6RouterSolicitation::TYPE)]
     WrongType(u8),
 
-    #[error("wrong code: expected {}, got {0}", Icmp6RouterSolicitation::CODE)]
+    #[error("wrong code: expected {expected}, got {0}", expected = Icmp6RouterSolicitation::CODE)]
     WrongCode(u8),
 }
