@@ -328,8 +328,7 @@ impl UnnumberedManagerNdp {
         }
 
         // Clean up scope mapping
-        lock!(self.interface_scope_map)
-            .remove_by_interface(interface_name);
+        lock!(self.interface_scope_map).remove_by_interface(interface_name);
     }
 
     /// Register an interface for NDP peer discovery.
@@ -424,8 +423,7 @@ impl UnnumberedManagerNdp {
 
         // Clean up scope mapping.
         // This works whether or not the interface still exists in the system.
-        lock!(self.interface_scope_map)
-            .remove_by_interface(interface_str);
+        lock!(self.interface_scope_map).remove_by_interface(interface_str);
 
         slog::info!(
             self.log,
