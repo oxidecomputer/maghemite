@@ -2,8 +2,70 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use iddqd::{BiHashItem, BiHashMap, bi_upcast};
 use std::fmt;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+
+/// Bidirectional mapping between scope_id and interface name.
+#[derive(Debug, Clone)]
+struct ScopeEntry {
+    scope_id: u32,
+    interface: String,
+}
+
+impl BiHashItem for ScopeEntry {
+    type K1<'a> = u32;
+    type K2<'a> = &'a str;
+
+    fn key1(&self) -> Self::K1<'_> {
+        self.scope_id
+    }
+
+    fn key2(&self) -> Self::K2<'_> {
+        &self.interface
+    }
+
+    bi_upcast!();
+}
+
+/// Bidirectional scope_id ↔ interface name map.
+///
+/// Wraps a `BiHashMap` to provide domain-specific accessors for the
+/// Dispatcher (lookup by scope_id) and session management (lookup/removal
+/// by interface name) paths.
+#[derive(Debug, Clone)]
+pub struct ScopeMap(BiHashMap<ScopeEntry>);
+
+impl ScopeMap {
+    pub fn new() -> Self {
+        Self(BiHashMap::new())
+    }
+
+    pub fn insert(&mut self, scope_id: u32, interface: String) {
+        self.0
+            .insert_overwrite(ScopeEntry { scope_id, interface });
+    }
+
+    pub fn remove_by_interface(&mut self, interface: &str) -> Option<u32> {
+        self.0.remove2(interface).map(|e| e.scope_id)
+    }
+
+    pub fn get_interface(&self, scope_id: u32) -> Option<&str> {
+        self.0.get1(&scope_id).map(|e| e.interface.as_str())
+    }
+
+    pub fn get_scope_id(&self, interface: &str) -> Option<u32> {
+        self.0.get2(interface).map(|e| e.scope_id)
+    }
+
+    pub fn contains_scope_id(&self, scope_id: u32) -> bool {
+        self.0.contains_key1(&scope_id)
+    }
+
+    pub fn contains_interface(&self, interface: &str) -> bool {
+        self.0.contains_key2(interface)
+    }
+}
 
 /// Error type for UnnumberedManager operations.
 #[derive(Debug, Clone)]

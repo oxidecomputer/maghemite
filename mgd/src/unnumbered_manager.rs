@@ -3,8 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use bgp::{
-    connection_tcp::BgpConnectionTcp, router::Router, session::SessionRunner,
-    unnumbered::NdpNeighbor,
+    connection_tcp::BgpConnectionTcp,
+    router::Router,
+    session::SessionRunner,
+    unnumbered::{NdpNeighbor, ScopeMap},
 };
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
@@ -36,8 +38,8 @@ struct PendingInterfaceConfig {
 pub struct UnnumberedManagerNdp {
     routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     ndp_mgr: Arc<NdpManager>,
-    /// Maps scope_id (interface index) to interface name for Dispatcher routing
-    interface_scope_map: Mutex<HashMap<u32, String>>,
+    /// Bidirectional scope_id ↔ interface name mapping for Dispatcher routing
+    interface_scope_map: Mutex<ScopeMap>,
     log: Logger,
 
     // =========================================================================
@@ -99,7 +101,7 @@ impl UnnumberedManagerNdp {
 
         let manager = Arc::new(Self {
             routers,
-            interface_scope_map: Mutex::new(HashMap::default()),
+            interface_scope_map: Mutex::new(ScopeMap::new()),
             ndp_mgr: NdpManager::new(log.clone()),
             log,
             pending_interfaces: Mutex::new(HashMap::new()),
@@ -325,14 +327,9 @@ impl UnnumberedManagerNdp {
             self.ndp_mgr.remove_interface(ifx);
         }
 
-        // Clean up scope mapping by searching for interface name
-        let mut scope_map = lock!(self.interface_scope_map);
-        if let Some((&scope_id, _)) = scope_map
-            .iter()
-            .find(|(_, name)| name.as_str() == interface_name)
-        {
-            scope_map.remove(&scope_id);
-        }
+        // Clean up scope mapping
+        lock!(self.interface_scope_map)
+            .remove_by_interface(interface_name);
     }
 
     /// Register an interface for NDP peer discovery.
@@ -425,15 +422,10 @@ impl UnnumberedManagerNdp {
             self.ndp_mgr.remove_interface(ifx);
         }
 
-        // Clean up scope mapping by searching for interface name.
+        // Clean up scope mapping.
         // This works whether or not the interface still exists in the system.
-        let mut scope_map = lock!(self.interface_scope_map);
-        if let Some((&scope_id, _)) = scope_map
-            .iter()
-            .find(|(_, name)| name.as_str() == interface_str)
-        {
-            scope_map.remove(&scope_id);
-        }
+        lock!(self.interface_scope_map)
+            .remove_by_interface(interface_str);
 
         slog::info!(
             self.log,
@@ -510,7 +502,9 @@ impl UnnumberedManagerNdp {
     /// * `Some(interface_name)` - Interface found for this scope_id
     /// * `None` - No interface registered with this scope_id
     pub fn get_interface_for_scope(&self, scope_id: u32) -> Option<String> {
-        lock!(self.interface_scope_map).get(&scope_id).cloned()
+        lock!(self.interface_scope_map)
+            .get_interface(scope_id)
+            .map(str::to_owned)
     }
 
     /// Validate that a peer address matches the discovered neighbor for an interface.
@@ -679,7 +673,7 @@ impl UnnumberedManagerNdp {
             .into_iter()
             .filter_map(|info| {
                 // Only include interfaces in our scope map
-                if !scope_map.contains_key(&info.interface.index) {
+                if !scope_map.contains_scope_id(info.interface.index) {
                     return None;
                 }
 
@@ -725,7 +719,7 @@ impl UnnumberedManagerNdp {
         let ifx = Self::get_interface(interface_name, &self.log)?;
 
         // Check if we're managing this interface
-        if !lock!(self.interface_scope_map).contains_key(&ifx.index) {
+        if !lock!(self.interface_scope_map).contains_scope_id(ifx.index) {
             return Ok(None);
         }
 
