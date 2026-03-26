@@ -304,11 +304,8 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     "timeout" => timeout.as_millis()
                 );
 
-                // Bind to source address if specified
-                if let Some(source_addr) = config.bind_addr {
-                    let mut src = source_addr;
-                    // clear source port, we only want to set the source ip
-                    src.set_port(0);
+                // Bind to source address/port if specified
+                if let Some(src) = config.bind_addr {
                     let ba: socket2::SockAddr = src.into();
                     if let Err(e) = s.bind(&ba) {
                         connection_log_lite!(log,

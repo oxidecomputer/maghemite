@@ -365,6 +365,8 @@ fn start_bgp_routers(
                         None
                     },
                     vlan_id: nbr.parameters.vlan_id,
+                    src_addr: nbr.parameters.src_addr,
+                    src_port: nbr.parameters.src_port,
                 },
             },
             true,
@@ -420,6 +422,8 @@ fn start_bgp_routers(
                         None
                     },
                     vlan_id: nbr.parameters.vlan_id,
+                    src_addr: nbr.parameters.src_addr,
+                    src_port: nbr.parameters.src_port,
                 },
             },
             true,

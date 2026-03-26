@@ -606,6 +606,14 @@ pub struct Neighbor {
     #[arg(long)]
     pub md5_auth_key: Option<String>,
 
+    /// Source IP address to bind when establishing outbound TCP connections.
+    #[arg(long)]
+    pub src_addr: Option<IpAddr>,
+
+    /// Source TCP port to bind when establishing outbound TCP connections.
+    #[arg(long)]
+    pub src_port: Option<u16>,
+
     /// Multi-exit discriminator to send to eBGP peers.
     #[arg(long)]
     pub med: Option<u32>,
@@ -767,6 +775,8 @@ impl Neighbor {
             idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
             deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
+            src_addr: self.src_addr,
+            src_port: self.src_port,
         }
     }
 
@@ -850,6 +860,8 @@ impl Neighbor {
             idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
             deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
+            src_addr: self.src_addr,
+            src_port: self.src_port,
         }
     }
 }
@@ -1294,8 +1306,8 @@ async fn get_exported(
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
     // Get both numbered and unnumbered neighbors
-    let numbered = c.read_neighbors_v3(asn).await?.into_inner();
-    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
+    let numbered = c.read_neighbors_v4(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors_v2(asn).await?.into_inner();
 
     if numbered.is_empty() && unnumbered.is_empty() {
         println!("No neighbors configured for ASN {}", asn);
@@ -1338,10 +1350,10 @@ async fn list_nbr(asn: u32, c: Client) -> Result<()> {
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
     match nbr.into_api_types()? {
         ApiNeighborType::Numbered(n) => {
-            c.create_neighbor_v3(&n).await?;
+            c.create_neighbor_v4(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.create_unnumbered_neighbor(&n).await?;
+            c.create_unnumbered_neighbor_v2(&n).await?;
         }
     }
     Ok(())
@@ -1351,14 +1363,14 @@ async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
     match parse_peer_type(&peer) {
         PeerType::Numbered(addr) => {
             let nbr = c
-                .read_neighbor_v3(asn, &addr.to_string())
+                .read_neighbor_v4(asn, &addr.to_string())
                 .await?
                 .into_inner();
             println!("{nbr:#?}");
         }
         PeerType::Unnumbered(interface) => {
             let nbr = c
-                .read_unnumbered_neighbor(asn, &interface)
+                .read_unnumbered_neighbor_v2(asn, &interface)
                 .await?
                 .into_inner();
             println!("{nbr:#?}");
@@ -1370,10 +1382,10 @@ async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
     match nbr.into_api_types()? {
         ApiNeighborType::Numbered(n) => {
-            c.update_neighbor_v3(&n).await?;
+            c.update_neighbor_v4(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.update_unnumbered_neighbor(&n).await?;
+            c.update_unnumbered_neighbor_v2(&n).await?;
         }
     }
     Ok(())
@@ -1382,7 +1394,7 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
     match parse_peer_type(&peer) {
         PeerType::Numbered(addr) => {
-            c.delete_neighbor_v3(asn, &addr.to_string()).await?;
+            c.delete_neighbor_v4(asn, &addr.to_string()).await?;
         }
         PeerType::Unnumbered(interface) => {
             c.delete_unnumbered_neighbor(asn, &interface).await?;
@@ -1501,7 +1513,7 @@ async fn read_origin6(asn: u32, c: Client) -> Result<()> {
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
-    c.bgp_apply_v2(&request).await?;
+    c.bgp_apply_v3(&request).await?;
     Ok(())
 }
 
