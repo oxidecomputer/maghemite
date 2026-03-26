@@ -19,16 +19,13 @@ use crate::{
         OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
         RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
-    session::{
-        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
-        SessionInfo,
-    },
+    router::SessionMap,
+    session::{ConnectionEvent, FsmEvent, PeerId, SessionEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::Logger;
 use std::{
-    collections::BTreeMap,
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
@@ -130,9 +127,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
-        peer_to_session: Arc<
-            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
-        >,
+        sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
         let start = Instant::now();
@@ -164,23 +159,24 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     // Resolve peer address to appropriate PeerId (IP or Interface)
                     let key = self.resolve_session_key(peer);
 
-                    // Check if we have a session for this peer
-                    match lock!(peer_to_session).get(&key) {
-                        Some(session_endpoint) => {
-                            let config = lock!(session_endpoint.config);
-                            return BgpConnectionTcp::with_conn(
-                                local,
-                                peer,
-                                conn,
-                                IO_TIMEOUT,
-                                session_endpoint.event_tx.clone(),
-                                log,
-                                ConnectionDirection::Inbound,
-                                &config,
-                            );
-                        }
-                        None => return Err(Error::UnknownPeer(ip)),
-                    }
+                    // Look up the session runner, clone the Arc, then release
+                    // the sessions lock before accessing session config.
+                    let runner = lock!(sessions)
+                        .get(&key)
+                        .cloned()
+                        .ok_or(Error::UnknownPeer(ip))?;
+
+                    let config = lock!(runner.session);
+                    return BgpConnectionTcp::with_conn(
+                        local,
+                        peer,
+                        conn,
+                        IO_TIMEOUT,
+                        runner.event_tx.clone(),
+                        log,
+                        ConnectionDirection::Inbound,
+                        &config,
+                    );
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // Check if we've exceeded the timeout

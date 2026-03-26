@@ -36,14 +36,22 @@ impl BiHashItem for ScopeEntry {
 #[derive(Debug, Clone)]
 pub struct ScopeMap(BiHashMap<ScopeEntry>);
 
+impl Default for ScopeMap {
+    fn default() -> Self {
+        Self(BiHashMap::new())
+    }
+}
+
 impl ScopeMap {
     pub fn new() -> Self {
-        Self(BiHashMap::new())
+        Self::default()
     }
 
     pub fn insert(&mut self, scope_id: u32, interface: String) {
-        self.0
-            .insert_overwrite(ScopeEntry { scope_id, interface });
+        self.0.insert_overwrite(ScopeEntry {
+            scope_id,
+            interface,
+        });
     }
 
     pub fn remove_by_interface(&mut self, interface: &str) -> Option<u32> {

@@ -6,14 +6,14 @@ use crate::{
     clock::ConnectionClock,
     error::Error,
     messages::Message,
-    session::{FsmEvent, PeerId, SessionEndpoint, SessionInfo},
+    router::SessionMap,
+    session::{FsmEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::{
-    collections::BTreeMap,
     net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
@@ -133,11 +133,11 @@ pub trait BgpListener<Cnx: BgpConnection> {
     /// Accept a connection. This Listener is non-blocking, so the timeout
     /// is used as a sleep between accept attempts. This function may be called
     /// multiple times, returning a new connection each time. Policy application
-    /// is handled by the Dispatcher after the peer_to_session lookup.
+    /// is handled by the Dispatcher after the session lookup.
     fn accept(
         &self,
         log: Logger,
-        peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
+        sessions: Arc<Mutex<SessionMap<Cnx>>>,
         timeout: Duration,
     ) -> Result<Cnx, Error>;
 
