@@ -7,7 +7,7 @@
   ],
   "packageRules": [
     {
-      "matchSourceUrls": ["https://github.com/oxidecomputer/opte"],
+      "matchPackageNames": ["opte-ioctl", "oxide-vpc"],
       "groupName": "opte"
     }
   ]
