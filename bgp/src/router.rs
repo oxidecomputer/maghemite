@@ -19,6 +19,7 @@ use crate::{
     },
     unnumbered::UnnumberedManager,
 };
+use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4, Prefix6};
 use rhai::AST;
@@ -34,6 +35,80 @@ use std::{
     time::Duration,
 };
 
+/// Internal newtype for `IdOrdItem` impl — not exposed outside this module.
+struct SessionHandle<Cnx: BgpConnection + 'static>(Arc<SessionRunner<Cnx>>);
+
+impl<Cnx: BgpConnection + 'static> IdOrdItem for SessionHandle<Cnx> {
+    type Key<'a> = &'a PeerId;
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.0.neighbor.peer
+    }
+
+    id_upcast!();
+}
+
+/// Ordered map of active BGP sessions, keyed by PeerId derived from each
+/// session's neighbor info. Wraps an `IdOrdMap` so the key can never
+/// diverge from the value it indexes.
+pub struct SessionMap<Cnx: BgpConnection + 'static>(
+    IdOrdMap<SessionHandle<Cnx>>,
+);
+
+impl<Cnx: BgpConnection + 'static> Default for SessionMap<Cnx> {
+    fn default() -> Self {
+        Self(IdOrdMap::default())
+    }
+}
+
+impl<Cnx: BgpConnection + 'static> SessionMap<Cnx> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(
+        &self,
+        peer: &PeerId,
+    ) -> Option<&Arc<SessionRunner<Cnx>>> {
+        self.0.get(peer).map(|h| &h.0)
+    }
+
+    pub fn insert(&mut self, session: Arc<SessionRunner<Cnx>>) {
+        self.0.insert_overwrite(SessionHandle(session));
+    }
+
+    pub fn remove(
+        &mut self,
+        peer: &PeerId,
+    ) -> Option<Arc<SessionRunner<Cnx>>> {
+        self.0.remove(peer).map(|h| h.0)
+    }
+
+    pub fn contains_key(&self, peer: &PeerId) -> bool {
+        self.0.contains_key(peer)
+    }
+
+    pub fn values(
+        &self,
+    ) -> impl Iterator<Item = &Arc<SessionRunner<Cnx>>> {
+        self.0.iter().map(|h| &h.0)
+    }
+
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&PeerId, &Arc<SessionRunner<Cnx>>)> {
+        self.0.iter().map(|h| (&h.0.neighbor.peer, &h.0))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &PeerId> {
+        self.0.iter().map(|h| &h.0.neighbor.peer)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
 pub struct Router<Cnx: BgpConnection + 'static> {
@@ -46,7 +121,7 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     pub config: RouterConfig,
 
     /// A set of BGP session runners indexed by PeerId (IP or interface).
-    pub sessions: Mutex<BTreeMap<PeerId, Arc<SessionRunner<Cnx>>>>,
+    pub sessions: Mutex<SessionMap<Cnx>>,
 
     /// Compiled policy programs.
     pub policy: Policy,
@@ -95,7 +170,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             shutdown: AtomicBool::new(false),
             graceful_shutdown: AtomicBool::new(false),
             db,
-            sessions: Mutex::new(BTreeMap::new()),
+            sessions: Mutex::new(SessionMap::new()),
             fanout4: Arc::new(RwLock::new(Fanout4::default())),
             fanout6: Arc::new(RwLock::new(Fanout6::default())),
             policy: Policy::default(),
@@ -139,8 +214,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     /// Also cleans up fanout entries for all stopped sessions.
     fn stop_all_sessions(&self) {
         let sessions = lock!(self.sessions);
-        for (key, s) in sessions.iter() {
-            self.remove_fanout(key.clone());
+        for (peer, s) in sessions.iter() {
+            self.remove_fanout(peer.clone());
             s.shutdown();
         }
     }
@@ -150,9 +225,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     /// references, allowing BgpConnections to drop and their threads to clean up.
     fn delete_all_sessions(&self) {
         let sessions = std::mem::take(&mut *lock!(self.sessions));
-        for (key, s) in sessions {
-            lock!(self.peer_to_session).remove(&key);
-            self.remove_fanout(key.clone());
+        for (peer, s) in sessions.iter() {
+            lock!(self.peer_to_session).remove(peer);
+            self.remove_fanout(peer.clone());
             s.shutdown();
         }
         // When `sessions` drops here, Arc<SessionRunner> references are released
@@ -398,7 +473,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         ));
 
         self.spawn_session_thread(runner.clone());
-        lock!(self.sessions).insert(peer_id, runner.clone());
+        lock!(self.sessions).insert(runner.clone());
 
         Ok(runner)
     }
