@@ -42,7 +42,9 @@
 //! - Interface exists at configuration time: `register_interface()` does all three
 //! - Interface removed while session established: `remove_system_interface()`
 
-use crate::unnumbered::{NdpNeighbor, UnnumberedError, UnnumberedManager};
+use crate::unnumbered::{
+    NdpNeighbor, ScopeMap, UnnumberedError, UnnumberedManager,
+};
 use mg_common::lock;
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv6Addr;
@@ -66,13 +68,9 @@ pub struct UnnumberedManagerMock {
     /// NOTE: Peer discovery only works if interface is in `ndp_initialized`.
     discoveries: Arc<Mutex<HashMap<String, Option<Ipv6Addr>>>>,
 
-    /// Map from scope_id to interface name.
+    /// Bidirectional scope_id ↔ interface name mapping.
     /// Used by Dispatcher to route incoming link-local connections.
-    scope_map: Arc<Mutex<HashMap<u32, String>>>,
-
-    /// Reverse map from interface name to scope_id.
-    /// Maintained alongside scope_map for efficient lookup.
-    interface_to_scope: Arc<Mutex<HashMap<String, u32>>>,
+    scope_map: Arc<Mutex<ScopeMap>>,
 
     /// Interfaces that exist on the system (link up).
     /// Presence here means `interface_is_active()` returns true.
@@ -90,8 +88,7 @@ impl UnnumberedManagerMock {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             discoveries: Arc::new(Mutex::new(HashMap::new())),
-            scope_map: Arc::new(Mutex::new(HashMap::new())),
-            interface_to_scope: Arc::new(Mutex::new(HashMap::new())),
+            scope_map: Arc::new(Mutex::new(ScopeMap::new())),
             system_interfaces: Arc::new(Mutex::new(HashSet::new())),
             ndp_initialized: Arc::new(Mutex::new(HashSet::new())),
         })
@@ -109,17 +106,14 @@ impl UnnumberedManagerMock {
     /// Use `add_system_interface()` separately to simulate the interface
     /// appearing on the system.
     pub fn configure_interface(&self, interface: String, scope_id: u32) {
-        lock!(self.scope_map).insert(scope_id, interface.clone());
-        lock!(self.interface_to_scope).insert(interface, scope_id);
+        lock!(self.scope_map).insert(scope_id, interface);
     }
 
     /// Remove interface configuration.
     ///
     /// Removes the scope_id → interface mapping. Does NOT affect system presence.
     pub fn unconfigure_interface(&self, interface: &str) -> Option<u32> {
-        let scope_id = lock!(self.interface_to_scope).remove(interface)?;
-        lock!(self.scope_map).remove(&scope_id);
-        Some(scope_id)
+        lock!(self.scope_map).remove_by_interface(interface)
     }
 
     // =========================================================================
@@ -178,7 +172,7 @@ impl UnnumberedManagerMock {
         }
 
         // Check interface is configured
-        if !lock!(self.interface_to_scope).contains_key(interface) {
+        if !lock!(self.scope_map).contains_interface(interface) {
             return Err("interface not configured");
         }
 
@@ -293,7 +287,7 @@ impl UnnumberedManagerMock {
         let addr = lock!(self.discoveries)
             .get(interface)
             .and_then(|opt| *opt)?;
-        let scope_id = *lock!(self.interface_to_scope).get(interface)?;
+        let scope_id = lock!(self.scope_map).get_scope_id(interface)?;
         Some(NdpNeighbor { addr, scope_id })
     }
 
@@ -302,7 +296,9 @@ impl UnnumberedManagerMock {
     /// This simulates querying `UnnumberedManagerNdp::get_interface_for_scope()`.
     /// Used by Dispatcher to route incoming link-local connections.
     pub fn get_interface_for_scope(&self, scope_id: u32) -> Option<String> {
-        lock!(self.scope_map).get(&scope_id).cloned()
+        lock!(self.scope_map)
+            .get_interface(scope_id)
+            .map(str::to_owned)
     }
 
     /// Get all registered interfaces.
@@ -310,13 +306,13 @@ impl UnnumberedManagerMock {
     /// Returns a list of (interface_name, scope_id, discovered_peer).
     pub fn get_all_interfaces(&self) -> Vec<(String, u32, Option<Ipv6Addr>)> {
         let discoveries = lock!(self.discoveries);
-        let interface_to_scope = lock!(self.interface_to_scope);
+        let scope_map = lock!(self.scope_map);
 
         discoveries
             .iter()
             .filter_map(|(iface, peer)| {
-                let scope_id = interface_to_scope.get(iface)?;
-                Some((iface.clone(), *scope_id, *peer))
+                let scope_id = scope_map.get_scope_id(iface)?;
+                Some((iface.clone(), scope_id, *peer))
             })
             .collect()
     }
