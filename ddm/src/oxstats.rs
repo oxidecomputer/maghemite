@@ -4,7 +4,10 @@
 
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
-use mg_common::nexus::{local_underlay_address, run_oximeter};
+use mg_common::{
+    lock,
+    nexus::{local_underlay_address, run_oximeter},
+};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::{
     MetricsError, Producer, Sample,
@@ -154,7 +157,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 SolicitationsSent,
                 peer.stats.solicitations_sent
             ));
@@ -163,7 +166,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 SolicitationsReceived,
                 peer.stats.solicitations_received
             ));
@@ -172,7 +175,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 AdvertisementsSent,
                 peer.stats.advertisements_sent
             ));
@@ -181,7 +184,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 AdvertisementsReceived,
                 peer.stats.advertisements_received
             ));
@@ -190,7 +193,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 PeerExpirations,
                 peer.stats.peer_expirations
             ));
@@ -199,7 +202,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 PeerAddressChanges,
                 peer.stats.peer_address_changes
             ));
@@ -208,7 +211,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 PeerSessionsEstablished,
                 peer.stats.peer_established
             ));
@@ -217,7 +220,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 UpdatesSent,
                 peer.stats.updates_sent
             ));
@@ -226,7 +229,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 UpdatesReceived,
                 peer.stats.updates_received
             ));
@@ -235,7 +238,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 UpdateSendFail,
                 peer.stats.update_send_fail
             ));
@@ -243,7 +246,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 ImportedUnderlayPrefixes,
                 peer.stats.imported_underlay_prefixes
             ));
@@ -251,7 +254,7 @@ impl Producer for Stats {
                 self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone().into(),
+                lock!(peer.iface.if_name).clone().into(),
                 ImportedTunnelEndpoints,
                 peer.stats.imported_tunnel_endpoints
             ));

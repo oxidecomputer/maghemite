@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use colored::*;
 use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
 use oxnet::{IpNet, Ipv6Net};
@@ -118,18 +119,24 @@ async fn run() -> Result<()> {
                 "Status".dimmed(),
             )?;
             for (index, info) in &msg.into_inner() {
+                let (state, duration) = match &info.status {
+                    PeerStatus::Init(d) => ("Init", d),
+                    PeerStatus::Solicit(d) => ("Solicit", d),
+                    PeerStatus::Exchange(d) => ("Exchange", d),
+                    PeerStatus::Expired(d) => ("Expired", d),
+                };
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{:?}",
+                    "{}\t{}\t{}\t{}\t{} {}",
                     index,
                     info.host,
                     info.addr,
-                    match *info.kind {
-                        0 => "Server",
-                        1 => "Transit",
-                        _ => "?",
+                    match info.kind {
+                        ddm_api_types_versions::latest::db::RouterKind::Server => "Server",
+                        ddm_api_types_versions::latest::db::RouterKind::Transit => "Transit",
                     },
-                    info.status,
+                    state,
+                    format_duration(duration),
                 )?;
             }
             tw.flush()?;
@@ -249,6 +256,19 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_duration(d: &std::time::Duration) -> String {
+    let secs = d.as_secs();
+    let mins = secs / 60;
+    let hours = mins / 60;
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, mins % 60, secs % 60)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
 }
 
 fn init_logger() -> Logger {
