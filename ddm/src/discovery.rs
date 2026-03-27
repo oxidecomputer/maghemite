@@ -85,11 +85,12 @@
 //! and 1 for a transit routers. The fourth byte is a hostname length followed
 //! directly by a hostname of up to 255 bytes in length.
 
-use crate::db::Db;
-use crate::sm::{Config, Event, NeighborEvent, SessionStats};
+use crate::sm::{
+    Config, Event, InterfaceState, NeighborEvent, PeerIdentity, SessionStats,
+};
 use crate::util::u8_slice_assume_init_ref;
 use crate::{dbg, err, inf, trc, wrn};
-use ddm_types::db::{PeerInfo, PeerStatus, RouterKind};
+use ddm_types::db::RouterKind;
 use mg_common::lock;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -173,7 +174,8 @@ struct HandlerContext {
     nbr: Arc<RwLock<Option<Neighbor>>>,
     log: Logger,
     event: Sender<Event>,
-    db: Db,
+    iface: Arc<InterfaceState>,
+    stats: Arc<SessionStats>,
 }
 
 struct Neighbor {
@@ -187,7 +189,7 @@ pub(crate) fn handler(
     hostname: String,
     config: Config,
     event: Sender<Event>,
-    db: Db,
+    iface: Arc<InterfaceState>,
     stats: Arc<SessionStats>,
     log: Logger,
 ) -> Result<(), DiscoveryError> {
@@ -227,7 +229,8 @@ pub(crate) fn handler(
         hostname,
         event,
         config,
-        db,
+        iface,
+        stats: stats.clone(),
     };
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -519,17 +522,24 @@ fn handle_advertisement(
         }
     };
     drop(guard);
-    let updated = ctx.db.set_peer(
-        ctx.config.if_index,
-        PeerInfo {
-            status: PeerStatus::Active,
-            addr: *sender,
-            host: hostname,
-            kind,
-        },
-    );
+    let updated = {
+        let mut info = lock!(ctx.iface.peer_identity);
+        let peer_addr = *lock!(ctx.stats.peer_address);
+        let changed = match &*info {
+            Some(existing) => {
+                existing.hostname != hostname
+                    || existing.kind != kind
+                    || peer_addr != Some(*sender)
+            }
+            None => true,
+        };
+        if changed {
+            *info = Some(PeerIdentity { hostname, kind });
+        }
+        changed
+    };
     if updated {
-        lock!(stats.peer_address).replace(*sender);
+        lock!(ctx.stats.peer_address).replace(*sender);
         emit_nbr_update(ctx, sender, version);
     }
 }

@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use ddm_types_versions::latest;
+use ddm_types_versions::v1;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -26,6 +27,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (2, PEER_DURATIONS),
     (1, INITIAL),
 ]);
 
@@ -45,10 +47,20 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
-    #[endpoint { method = GET, path = "/peers" }]
+    #[endpoint { method = GET, path = "/peers", versions = VERSION_PEER_DURATIONS.. }]
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, latest::db::PeerInfo>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/peers", versions = ..VERSION_PEER_DURATIONS }]
+    async fn get_peers_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v1::db::PeerInfo>>, HttpError> {
+        let resp = Self::get_peers(ctx).await?;
+        let converted: HashMap<u32, v1::db::PeerInfo> =
+            resp.0.into_iter().map(|(k, v)| (k, v.into())).collect();
+        Ok(HttpResponseOk(converted))
+    }
 
     #[endpoint { method = DELETE, path = "/peers/{addr}" }]
     async fn expire_peer(

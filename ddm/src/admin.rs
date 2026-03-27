@@ -7,7 +7,7 @@ use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_types::db::{PeerInfo, TunnelRoute};
+use ddm_types::db::{PeerInfo, RouterKind, TunnelRoute};
 use ddm_types::exchange::PathVector;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
@@ -20,12 +20,11 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use mg_common::lock;
-use mg_common::net::TunnelOrigin;
+use mg_common::{lock, net::TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info};
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,7 +112,31 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
-        Ok(HttpResponseOk(ctx.db.peers()))
+        let mut result = HashMap::new();
+        for sm in &ctx.peers {
+            let if_index = *lock!(sm.iface.if_index);
+            if if_index == 0 {
+                continue;
+            }
+            let status = sm.iface.peer_status();
+            let peer = lock!(sm.iface.peer_identity).clone();
+            let addr =
+                lock!(sm.stats.peer_address).unwrap_or(Ipv6Addr::UNSPECIFIED);
+            let (host, kind) = match peer {
+                Some(p) => (p.hostname, p.kind),
+                None => (String::new(), RouterKind::Server),
+            };
+            result.insert(
+                if_index,
+                PeerInfo {
+                    status,
+                    addr,
+                    host,
+                    kind,
+                },
+            );
+        }
+        Ok(HttpResponseOk(result))
     }
 
     async fn expire_peer(

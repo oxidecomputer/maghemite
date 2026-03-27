@@ -5,7 +5,7 @@
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 use ddm::sys::Route;
 use ddm_types::db::RouterKind;
 use signal::handle_signals;
@@ -164,6 +164,7 @@ async fn run() {
             log: log.clone(),
             hostname: hostname.clone(),
             rt: rt.clone(),
+            iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
         };
         let sm = StateMachine { ctx, rx: Some(rx) };
