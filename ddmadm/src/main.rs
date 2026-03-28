@@ -118,7 +118,9 @@ async fn run() -> Result<()> {
                 "Kind".dimmed(),
                 "Status".dimmed(),
             )?;
-            for (index, info) in &msg.into_inner() {
+            let mut peers: Vec<_> = msg.into_inner().into_iter().collect();
+            peers.sort_by_key(|(index, _)| index.clone());
+            for (index, info) in &peers {
                 let (state, duration) = match &info.status {
                     PeerStatus::Init(d) => ("Init", d),
                     PeerStatus::Solicit(d) => ("Solicit", d),
