@@ -7,7 +7,7 @@
   ],
   "packageRules": [
     {
-      "matchSourceUrls": ["https://github.com/oxidecomputer/opte"],
+      "matchPackageNames": ["https://github.com/oxidecomputer/opte"],
       "groupName": "opte"
     }
   ]

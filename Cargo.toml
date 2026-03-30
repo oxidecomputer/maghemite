@@ -102,14 +102,14 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 progenitor = "0.13"
 progenitor-client = "0.13"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
-clap = { version = "4.5.59", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.6.0", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.1"
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-anstyle = "1.0.13"
+anstyle = "1.0.14"
 nom = "8.0"
-num_enum = "0.7.5"
+num_enum = "0.7.6"
 pretty-hex = "0.4"
 pretty_assertions = "1.4"
 lazy_static = "1.5"
@@ -143,11 +143,11 @@ iddqd = "0.3"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
+rev = "04c3d5d37d7b919cbf01019d2a17b93ff2df2eb8"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
+rev = "04c3d5d37d7b919cbf01019d2a17b93ff2df2eb8"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
