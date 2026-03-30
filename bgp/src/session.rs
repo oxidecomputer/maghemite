@@ -1110,13 +1110,7 @@ impl<Cnx: BgpConnection> Clone for SessionEndpoint<Cnx> {
 pub const MAX_MESSAGE_HISTORY_ALL: usize = 1024;
 pub const MAX_MESSAGE_HISTORY_MAJOR: usize = 1024;
 
-/// Direction of a BGP message (sent or received).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageDirection {
-    Sent,
-    Received,
-}
+pub use rdb::MessageDirection;
 
 /// A message history entry is a BGP message with an associated timestamp,
 /// connection ID, and direction.

@@ -1082,7 +1082,7 @@ async fn get_neighbors(
     asn: u32,
     mode: NeighborDisplayMode,
 ) -> Result<()> {
-    let result = c.get_neighbors_v5(asn).await?.into_inner();
+    let result = c.get_neighbors(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
 
     // Sort using natural sorting to handle both IP addresses and interface names
@@ -1398,7 +1398,7 @@ async fn get_exported(
     });
 
     let exported = c
-        .get_exported_v3(&types::ExportedSelector {
+        .get_exported(&types::ExportedSelector {
             asn,
             peer: peer_id,
             afi: afi.map(afi_to_api),
@@ -1412,8 +1412,8 @@ async fn get_exported(
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
     // Get both numbered and unnumbered neighbors
-    let numbered = c.read_neighbors_v4(asn).await?.into_inner();
-    let unnumbered = c.read_unnumbered_neighbors_v2(asn).await?.into_inner();
+    let numbered = c.read_neighbors(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
 
     if numbered.is_empty() && unnumbered.is_empty() {
         println_nopipe!("No neighbors configured for ASN {}", asn);
@@ -1456,10 +1456,10 @@ async fn list_nbr(asn: u32, c: Client) -> Result<()> {
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
     match nbr.into_api_types()? {
         ApiNeighborType::Numbered(n) => {
-            c.create_neighbor_v4(&n).await?;
+            c.create_neighbor(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.create_unnumbered_neighbor_v2(&n).await?;
+            c.create_unnumbered_neighbor(&n).await?;
         }
     }
     Ok(())
@@ -1468,15 +1468,13 @@ async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
     match parse_peer_type(&peer) {
         PeerType::Numbered(addr) => {
-            let nbr = c
-                .read_neighbor_v4(asn, &addr.to_string())
-                .await?
-                .into_inner();
+            let nbr =
+                c.read_neighbor(asn, &addr.to_string()).await?.into_inner();
             println_nopipe!("{nbr:#?}");
         }
         PeerType::Unnumbered(interface) => {
             let nbr = c
-                .read_unnumbered_neighbor_v2(asn, &interface)
+                .read_unnumbered_neighbor(asn, &interface)
                 .await?
                 .into_inner();
             println_nopipe!("{nbr:#?}");
@@ -1488,10 +1486,10 @@ async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
     match nbr.into_api_types()? {
         ApiNeighborType::Numbered(n) => {
-            c.update_neighbor_v4(&n).await?;
+            c.update_neighbor(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.update_unnumbered_neighbor_v2(&n).await?;
+            c.update_unnumbered_neighbor(&n).await?;
         }
     }
     Ok(())
@@ -1500,10 +1498,10 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
     match parse_peer_type(&peer) {
         PeerType::Numbered(addr) => {
-            c.delete_neighbor_v4(asn, &addr.to_string()).await?;
+            c.delete_neighbor(asn, &addr.to_string()).await?;
         }
         PeerType::Unnumbered(interface) => {
-            c.delete_unnumbered_neighbor_v2(asn, &interface).await?;
+            c.delete_unnumbered_neighbor(asn, &interface).await?;
         }
     }
     Ok(())
@@ -1517,7 +1515,7 @@ async fn clear_nbr(
 ) -> Result<()> {
     match parse_peer_type(&peer) {
         PeerType::Numbered(addr) => {
-            c.clear_neighbor_v2(&NeighborResetRequest {
+            c.clear_neighbor(&NeighborResetRequest {
                 asn,
                 addr,
                 op: operation.into(),
@@ -1619,7 +1617,7 @@ async fn read_origin6(asn: u32, c: Client) -> Result<()> {
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
-    c.bgp_apply_v3(&request).await?;
+    c.bgp_apply(&request).await?;
     Ok(())
 }
 
@@ -1703,7 +1701,7 @@ async fn get_fsm_history(
     });
 
     let result = c
-        .fsm_history_v2(&types::FsmHistoryRequest {
+        .fsm_history(&types::FsmHistoryRequest {
             asn,
             peer: peer_id,
             buffer: Some(buffer.into()),
@@ -1849,7 +1847,7 @@ async fn get_message_history(
     let peer_id = peer_id_to_api(bgp_peer_id);
 
     let result = c
-        .message_history_v4(&types::MessageHistoryRequestV5 {
+        .message_history(&types::MessageHistoryRequest {
             asn,
             peer: Some(peer_id),
             direction: dir,

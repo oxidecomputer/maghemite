@@ -11,8 +11,25 @@ use dropshot::{
     HttpResponseOk, HttpResponseUpdatedNoContent, Path, Query, RequestContext,
     TypedBody,
 };
-use mg_api::*;
+use mg_api::{MgAdminApi, mg_admin_api_mod};
 use mg_common::stats::MgLowerStats;
+use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
+use mg_types::bgp::{
+    AsnSelector, ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
+    MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,
+    NeighborSelector, UnnumberedNeighborResetRequest,
+    UnnumberedNeighborSelector,
+};
+use mg_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
+use mg_types::rib::{
+    BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
+};
+use mg_types::static_routes::{
+    AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
+    DeleteStaticRoute6Request,
+};
+use mg_types::switch::SwitchIdentifiers;
+use mg_types_versions::{v1, v2, v5};
 use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
@@ -145,235 +162,127 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::delete_router(ctx, request).await
     }
 
-    async fn read_neighbors(
-        ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
-        bgp_admin::read_neighbors(ctx, request).await
-    }
-
     // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+    // Latest (VERSION_SPRING_CLEANING..) - Neighbor with DSCP
+
     async fn create_neighbor(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV1>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_neighbor(ctx, request).await
-    }
-
-    async fn read_neighbor(
-        ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV1>,
-    ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
-        bgp_admin::read_neighbor(ctx, request).await
-    }
-
-    async fn update_neighbor(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV1>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_neighbor(ctx, request).await
-    }
-
-    async fn delete_neighbor(
-        ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV1>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor(ctx, request).await
-    }
-
-    async fn read_neighbors_v2(
-        ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError> {
-        bgp_admin::read_neighbors_v2(ctx, request).await
-    }
-
-    async fn create_neighbor_v2(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV2>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_neighbor_v2(ctx, request).await
-    }
-
-    async fn read_neighbor_v2(
-        ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV1>,
-    ) -> Result<HttpResponseOk<NeighborV2>, HttpError> {
-        bgp_admin::read_neighbor_v2(ctx, request).await
-    }
-
-    async fn update_neighbor_v2(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV2>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_neighbor_v2(ctx, request).await
-    }
-
-    async fn delete_neighbor_v2(
-        ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV1>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor_v2(ctx, request).await
-    }
-
-    async fn create_neighbor_v3(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV2>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_neighbor_v3(ctx, request).await
-    }
-
-    async fn read_neighbor_v3(
-        ctx: RequestContext<Self::Context>,
-        path: Path<NeighborSelector>,
-    ) -> Result<HttpResponseOk<NeighborV2>, HttpError> {
-        bgp_admin::read_neighbor_v3(ctx, path).await
-    }
-
-    async fn read_neighbors_v3(
-        ctx: RequestContext<Self::Context>,
-        path: Path<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError> {
-        bgp_admin::read_neighbors_v3(ctx, path).await
-    }
-
-    async fn update_neighbor_v3(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV2>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_neighbor_v3(ctx, request).await
-    }
-
-    async fn delete_neighbor_v3(
-        ctx: RequestContext<Self::Context>,
-        path: Path<NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor_v3(ctx, path).await
-    }
-
-    async fn create_neighbor_v4(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_neighbor_v4(ctx, request).await
     }
 
-    async fn read_neighbor_v4(
+    async fn read_neighbor(
         ctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
         bgp_admin::read_neighbor_v4(ctx, path).await
     }
 
-    async fn read_neighbors_v4(
+    async fn read_neighbors(
         ctx: RequestContext<Self::Context>,
         path: Path<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
         bgp_admin::read_neighbors_v4(ctx, path).await
     }
 
-    async fn update_neighbor_v4(
+    async fn update_neighbor(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_neighbor_v4(ctx, request).await
     }
 
-    async fn delete_neighbor_v4(
+    async fn delete_neighbor(
         ctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_neighbor_v4(ctx, path).await
     }
 
+    // V5 (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING) - provided methods
+    // V4 (VERSION_MP_BGP..VERSION_UNNUMBERED) - provided methods
+
+    // V1 (..VERSION_MP_BGP)
+
+    async fn create_neighbor_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_neighbor_v1(ctx, request).await
+    }
+
+    async fn read_neighbor_v1(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::NeighborSelector>,
+    ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
+        bgp_admin::read_neighbor_v1(ctx, request).await
+    }
+
+    async fn read_neighbors_v1(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
+        bgp_admin::read_neighbors_v1(ctx, request).await
+    }
+
+    async fn update_neighbor_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_neighbor_v1(ctx, request).await
+    }
+
+    // delete_neighbor_v1 and clear_neighbor_v1 are provided methods.
+
     async fn clear_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborResetRequestV1>,
+        request: TypedBody<NeighborResetRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::clear_neighbor(ctx, request).await
     }
 
-    async fn clear_neighbor_v2(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborResetRequest>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::clear_neighbor_v2(ctx, request).await
-    }
+    // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    // Unnumbered neighbors (no DSCP) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // Latest (VERSION_SPRING_CLEANING..) - UnnumberedNeighbor with DSCP
 
     async fn read_unnumbered_neighbors(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighborV1>>, HttpError> {
-        bgp_admin::read_unnumbered_neighbors(rqctx, request).await
-    }
-
-    async fn create_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<UnnumberedNeighborV1>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_unnumbered_neighbor(rqctx, request).await
-    }
-
-    async fn read_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseOk<UnnumberedNeighborV1>, HttpError> {
-        bgp_admin::read_unnumbered_neighbor(rqctx, request).await
-    }
-
-    async fn update_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<UnnumberedNeighborV1>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_unnumbered_neighbor(rqctx, request).await
-    }
-
-    async fn delete_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
-    }
-
-    // Unnumbered neighbors (with DSCP) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    async fn read_unnumbered_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
         bgp_admin::read_unnumbered_neighbors_v2(rqctx, request).await
     }
 
-    async fn create_unnumbered_neighbor_v2(
+    async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_unnumbered_neighbor_v2(rqctx, request).await
     }
 
-    async fn read_unnumbered_neighbor_v2(
+    async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError> {
         bgp_admin::read_unnumbered_neighbor_v2(rqctx, request).await
     }
 
-    async fn update_unnumbered_neighbor_v2(
+    async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_unnumbered_neighbor_v2(rqctx, request).await
     }
 
-    async fn delete_unnumbered_neighbor_v2(
+    async fn delete_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_unnumbered_neighbor_v2(rqctx, request).await
     }
+
+    // V5 (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING) - provided methods
 
     async fn clear_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -442,176 +351,184 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_exported(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
+        request: TypedBody<ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
         bgp_admin::get_exported(ctx, request).await
     }
 
-    async fn get_exported_v2(
+    async fn get_exported_v5(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<ExportedSelector>,
+        request: TypedBody<v5::bgp::ExportedSelector>,
     ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
-        bgp_admin::get_exported_v2(ctx, request).await
+        bgp_admin::get_exported_v5(ctx, request).await
     }
 
-    async fn get_exported_v3(
+    async fn get_exported_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<ExportedSelector>,
-    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
-        bgp_admin::get_exported_v3(ctx, request).await
+        request: TypedBody<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
+        bgp_admin::get_exported_v1(ctx, request).await
     }
 
-    async fn get_imported(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
-        bgp_admin::get_imported_v1(ctx, request).await
-    }
+    // RIB imported/selected ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    async fn get_selected(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
-        bgp_admin::get_selected_v1(ctx, request).await
-    }
-
+    // Latest (VERSION_SPRING_CLEANING..) - RibQuery with prefix filter
     async fn get_rib_imported(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQueryV1>,
-    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
         rib_admin::get_rib_imported(ctx, request).await
     }
 
-    async fn get_rib_selected(
+    // V5 (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
+    async fn get_rib_imported_v5(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQueryV1>,
-    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
-        rib_admin::get_rib_selected(ctx, request).await
+        request: Query<v2::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<v5::rib::Rib>, HttpError> {
+        rib_admin::get_rib_imported_v5(ctx, request).await
     }
 
     async fn get_rib_imported_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQueryV1>,
-    ) -> Result<HttpResponseOk<RibV2>, HttpError> {
+        request: Query<v2::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
         rib_admin::get_rib_imported_v2(ctx, request).await
+    }
+
+    async fn get_imported_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
+        bgp_admin::get_imported_v1(ctx, request).await
+    }
+
+    // Latest (VERSION_SPRING_CLEANING..) - RibQuery with prefix filter
+    async fn get_rib_selected(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_selected(ctx, request).await
+    }
+
+    // V5 (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
+    async fn get_rib_selected_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v2::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<v5::rib::Rib>, HttpError> {
+        rib_admin::get_rib_selected_v5(ctx, request).await
     }
 
     async fn get_rib_selected_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQueryV1>,
-    ) -> Result<HttpResponseOk<RibV2>, HttpError> {
+        request: Query<v2::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
         rib_admin::get_rib_selected_v2(ctx, request).await
     }
 
-    async fn get_rib_imported_v3(
+    async fn get_selected_v1(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
-        rib_admin::get_rib_imported_v3(ctx, request).await
+        request: TypedBody<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
+        bgp_admin::get_selected_v1(ctx, request).await
     }
 
-    async fn get_rib_selected_v3(
-        ctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
-        rib_admin::get_rib_selected_v3(ctx, request).await
-    }
+    // Neighbors status ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+    // Latest (VERSION_SPRING_CLEANING..) - PeerInfo with per-AFI counters
     async fn get_neighbors(
-        ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
-        bgp_admin::get_neighbors(ctx, request).await
-    }
-
-    async fn get_neighbors_v2(
-        ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
-        bgp_admin::get_neighbors_v2(ctx, request).await
-    }
-
-    async fn get_neighbors_v3(
-        ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError> {
-        bgp_admin::get_neighbors_v3(ctx, request).await
-    }
-
-    async fn get_neighbors_v4(
-        ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError> {
-        bgp_admin::get_neighbors_unified(ctx, request).await
-    }
-
-    async fn get_neighbors_v5(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
         bgp_admin::get_neighbors_v5(ctx, request).await
     }
 
+    // V5 (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
+    async fn get_neighbors_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError> {
+        bgp_admin::get_neighbors(ctx, request).await
+    }
+
+    async fn get_neighbors_v4(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError> {
+        bgp_admin::get_neighbors_v4(ctx, request).await
+    }
+
+    async fn get_neighbors_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
+        bgp_admin::get_neighbors_v2(ctx, request).await
+    }
+
+    async fn get_neighbors_v1(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
+        bgp_admin::get_neighbors_v1(ctx, request).await
+    }
+
+    // Apply ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    // Latest (VERSION_SPRING_CLEANING..) - ApplyRequest with DSCP
     async fn bgp_apply(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequestV1>,
+        request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::bgp_apply(ctx, request).await
     }
 
-    async fn bgp_apply_v2(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequestV2>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::bgp_apply_v2(ctx, request).await
-    }
+    // bgp_apply_v4 and bgp_apply_v1 are provided methods.
 
-    async fn bgp_apply_v3(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequest>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::bgp_apply_v3(ctx, request).await
-    }
+    // Message history ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+    // Latest (VERSION_SPRING_CLEANING..) - buffer selection, flat entries
     async fn message_history(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<MessageHistoryRequestV1>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
-        bgp_admin::message_history(ctx, request).await
+        request: TypedBody<MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
+        bgp_admin::message_history_v4(ctx, request).await
+    }
+
+    // V5 (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
+    async fn message_history_v5(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v5::bgp::MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<v5::bgp::MessageHistoryResponse>, HttpError>
+    {
+        bgp_admin::message_history_v3(ctx, request).await
     }
 
     async fn message_history_v2(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<MessageHistoryRequestV4>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError> {
+        request: TypedBody<v2::bgp::MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError>
+    {
         bgp_admin::message_history_v2(ctx, request).await
     }
 
-    async fn message_history_v3(
+    async fn message_history_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
-        bgp_admin::message_history_v3(ctx, request).await
-    }
-
-    async fn message_history_v4(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<MessageHistoryRequestV5>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponseV5>, HttpError> {
-        bgp_admin::message_history_v4(ctx, request).await
+        request: TypedBody<v1::bgp::MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError>
+    {
+        bgp_admin::message_history_v1(ctx, request).await
     }
 
     async fn fsm_history(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<FsmHistoryRequestV4>,
-    ) -> Result<HttpResponseOk<FsmHistoryResponseV4>, HttpError> {
+        request: TypedBody<FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
         bgp_admin::fsm_history(ctx, request).await
     }
 
     async fn fsm_history_v2(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<FsmHistoryRequest>,
-    ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
+        request: TypedBody<v2::bgp::FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<v2::bgp::FsmHistoryResponse>, HttpError> {
         bgp_admin::fsm_history_v2(ctx, request).await
     }
 
@@ -671,45 +588,37 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::delete_shaper(ctx, request).await
     }
 
+    // read_bestpath_fanout_v1 and update_bestpath_fanout_v1 are provided
+    // methods.
+
     async fn read_bestpath_fanout(
-        ctx: RequestContext<Self::Context>,
+        rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
-        bgp_admin::read_bestpath_fanout(ctx).await
+        rib_admin::read_bestpath_fanout(rqctx).await
     }
 
     async fn update_bestpath_fanout(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<BestpathFanoutRequest>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_bestpath_fanout(ctx, request).await
-    }
-
-    async fn read_rib_bestpath_fanout(
-        rqctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
-        rib_admin::read_rib_bestpath_fanout(rqctx).await
-    }
-
-    async fn update_rib_bestpath_fanout(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<BestpathFanoutRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        rib_admin::update_rib_bestpath_fanout(rqctx, request).await
+        rib_admin::update_bestpath_fanout(rqctx, request).await
     }
 
-    // V1 static route methods (pre-SPRING_CLEANING)
+    // Static routes ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    // Latest (VERSION_SPRING_CLEANING..) - IpAddr nexthop + interface
     async fn static_add_v4_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute4V1Request>,
+        request: TypedBody<AddStaticRoute4Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        static_admin::static_add_v4_route(ctx, request).await
+        static_admin::static_add_v4_route_v2(ctx, request).await
     }
 
     async fn static_remove_v4_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute4V1Request>,
+        request: TypedBody<DeleteStaticRoute4Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        static_admin::static_remove_v4_route(ctx, request).await
+        static_admin::static_remove_v4_route_v2(ctx, request).await
     }
 
     async fn static_list_v4_routes(
@@ -720,16 +629,16 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn static_add_v6_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute6V1Request>,
+        request: TypedBody<AddStaticRoute6Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        static_admin::static_add_v6_route(ctx, request).await
+        static_admin::static_add_v6_route_v2(ctx, request).await
     }
 
     async fn static_remove_v6_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute6V1Request>,
+        request: TypedBody<DeleteStaticRoute6Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        static_admin::static_remove_v6_route(ctx, request).await
+        static_admin::static_remove_v6_route_v2(ctx, request).await
     }
 
     async fn static_list_v6_routes(
@@ -738,46 +647,38 @@ impl MgAdminApi for MgAdminApiImpl {
         static_admin::static_list_v6_routes(ctx).await
     }
 
-    // V2 static route methods (VERSION_SPRING_CLEANING+)
-    async fn static_add_v4_route_v2(
+    // V1 static routes (..VERSION_SPRING_CLEANING) - typed nexthop
+    async fn static_add_v4_route_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute4Request>,
+        request: TypedBody<v1::static_routes::AddStaticRoute4Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        static_admin::static_add_v4_route_v2(ctx, request).await
+        static_admin::static_add_v4_route(ctx, request).await
     }
 
-    async fn static_remove_v4_route_v2(
+    async fn static_remove_v4_route_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute4Request>,
+        request: TypedBody<v1::static_routes::DeleteStaticRoute4Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        static_admin::static_remove_v4_route_v2(ctx, request).await
+        static_admin::static_remove_v4_route(ctx, request).await
     }
 
-    async fn static_list_v4_routes_v2(
-        ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
-        static_admin::static_list_v4_routes(ctx).await
-    }
+    // static_list_v4_routes_v1 is a provided method.
 
-    async fn static_add_v6_route_v2(
+    async fn static_add_v6_route_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute6Request>,
+        request: TypedBody<v2::static_routes::AddStaticRoute6Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        static_admin::static_add_v6_route_v2(ctx, request).await
+        static_admin::static_add_v6_route(ctx, request).await
     }
 
-    async fn static_remove_v6_route_v2(
+    async fn static_remove_v6_route_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute6Request>,
+        request: TypedBody<v2::static_routes::DeleteStaticRoute6Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        static_admin::static_remove_v6_route_v2(ctx, request).await
+        static_admin::static_remove_v6_route(ctx, request).await
     }
 
-    async fn static_list_v6_routes_v2(
-        ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
-        static_admin::static_list_v6_routes(ctx).await
-    }
+    // static_list_v6_routes_v1 is a provided method.
 
     async fn switch_identifiers(
         ctx: RequestContext<Self::Context>,

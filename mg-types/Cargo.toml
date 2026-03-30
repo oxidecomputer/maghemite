@@ -1,0 +1,8 @@
+[package]
+name = "mg-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mg-types-versions.workspace = true
+rdb.workspace = true

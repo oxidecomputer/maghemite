@@ -47,7 +47,7 @@ pub struct StaticRoute6 {
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetV4Routes => {
-            let routes = client.static_list_v4_routes_v2().await?;
+            let routes = client.static_list_v4_routes().await?;
             println_nopipe!("{:#?}", routes);
         }
         Commands::AddV4Route(route) => {
@@ -65,7 +65,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                     }],
                 },
             };
-            client.static_add_v4_route_v2(&arg).await?;
+            client.static_add_v4_route(&arg).await?;
         }
         Commands::RemoveV4Routes(route) => {
             let arg = types::DeleteStaticRoute4Request {
@@ -82,10 +82,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                     }],
                 },
             };
-            client.static_remove_v4_route_v2(&arg).await?;
+            client.static_remove_v4_route(&arg).await?;
         }
         Commands::GetV6Routes => {
-            let routes = client.static_list_v6_routes_v2().await?;
+            let routes = client.static_list_v6_routes().await?;
             println_nopipe!("{:#?}", routes);
         }
         Commands::AddV6Route(route) => {
@@ -103,7 +103,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                     }],
                 },
             };
-            client.static_add_v6_route_v2(&arg).await?;
+            client.static_add_v6_route(&arg).await?;
         }
         Commands::RemoveV6Routes(route) => {
             let arg = types::DeleteStaticRoute6Request {
@@ -120,7 +120,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                     }],
                 },
             };
-            client.static_remove_v6_route_v2(&arg).await?;
+            client.static_remove_v6_route(&arg).await?;
         }
     }
     Ok(())

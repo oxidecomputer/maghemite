@@ -1347,7 +1347,7 @@ fn set_outgoing_ttl(
 ) -> Result<(), Error> {
     let s = SockRef::from(sock);
     if addr.is_ipv4() {
-        s.set_ttl(ttl as u32).map_err(Error::Io)?;
+        s.set_ttl_v4(ttl as u32).map_err(Error::Io)?;
     } else {
         s.set_unicast_hops_v6(ttl as u32).map_err(Error::Io)?;
     }
@@ -1445,10 +1445,9 @@ fn set_md5_sig(
         tcpm_key: key,
         ..Default::default()
     };
-    let x = socket2::SockAddr::from(peer);
-    let x = x.as_storage();
-    sig.tcpm_addr = x;
+    let addr = socket2::SockAddr::from(peer);
     unsafe {
+        sig.tcpm_addr = *addr.as_ptr().cast::<sockaddr_storage>();
         if libc::setsockopt(
             fd,
             IPPROTO_TCP,
@@ -1730,7 +1729,7 @@ mod tests {
 
         set_outgoing_ttl(&listener, 42, addr).unwrap();
 
-        let readback = SockRef::from(&listener).ttl().unwrap();
+        let readback = SockRef::from(&listener).ttl_v4().unwrap();
         assert_eq!(readback, 42);
     }
 

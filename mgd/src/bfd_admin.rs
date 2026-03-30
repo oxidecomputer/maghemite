@@ -9,9 +9,9 @@ use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,
 };
-use mg_api::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
+use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use rdb::{BfdPeerConfig, SessionMode};
 use slog::Logger;
 use socket2::Socket;
@@ -238,7 +238,7 @@ fn egress_socket(local: IpAddr, src_port: u16) -> std::io::Result<UdpSocket> {
     let sk = UdpSocket::bind(SocketAddr::new(local, src_port))?;
     let sock = Socket::from(sk);
     match local {
-        IpAddr::V4(_) => sock.set_ttl(DEFAULT_BFD_TTL)?,
+        IpAddr::V4(_) => sock.set_ttl_v4(DEFAULT_BFD_TTL)?,
         IpAddr::V6(_) => sock.set_unicast_hops_v6(DEFAULT_BFD_TTL)?,
     };
     Ok(sock.into())
@@ -504,7 +504,7 @@ mod test {
         let sk = egress_socket("127.0.0.1".parse().unwrap(), 0)
             .expect("failed to create v4 egress socket");
         let sock = Socket::from(sk);
-        assert_eq!(sock.ttl().unwrap(), DEFAULT_BFD_TTL);
+        assert_eq!(sock.ttl_v4().unwrap(), DEFAULT_BFD_TTL);
     }
 
     #[test]

@@ -4,11 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bfd = { path = "../bfd" }
-bgp = { path = "../bgp" }
-chrono.workspace = true
+bgp.workspace = true
 dropshot.workspace = true
 dropshot-api-manager-types.workspace = true
-rdb = { path = "../rdb" }
+mg-types-versions.workspace = true
+rdb.workspace = true
 schemars.workspace = true
 serde.workspace = true

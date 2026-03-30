@@ -1,0 +1,11 @@
+[package]
+name = "mg-types-versions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bfd.workspace = true
+bgp.workspace = true
+rdb.workspace = true
+schemars.workspace = true
+serde.workspace = true

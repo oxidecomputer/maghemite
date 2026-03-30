@@ -18,6 +18,8 @@ default-members = [
     "rdb-types",
     "bgp",
     "mg-api",
+    "mg-types",
+    "mg-types/versions",
     "mg-admin-client",
     "mgadm",
     "mgd",
@@ -60,6 +62,8 @@ members = [
 [workspace.dependencies]
 # Local
 mg-api = { path = "mg-api" }
+mg-types = { path = "mg-types" }
+mg-types-versions = { path = "mg-types/versions" }
 mg-common = { path = "mg-common" }
 rdb-types = { path = "rdb-types" }
 ndp = { path = "ndp" }
@@ -78,18 +82,18 @@ slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"
 slog-bunyan = "2.5"
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.228", features = ["derive"] }
-hostname = "0.3"
-thiserror = "1.0"
+hostname = "0.4"
+thiserror = "2.0"
 dropshot = { version = "0.16.7", features = [ "usdt-probes" ] }
 dropshot-api-manager = "0.5.2"
 dropshot-api-manager-types = "0.5.2"
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 hyper = "1.8.1"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.149"
@@ -98,14 +102,14 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 progenitor = "0.13"
 progenitor-client = "0.13"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
-clap = { version = "4.5.59", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.6.0", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.1"
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-anstyle = "1.0.13"
-nom = "7.1"
-num_enum = "0.7.5"
+anstyle = "1.0.14"
+nom = "8.0"
+num_enum = "0.7.6"
 pretty-hex = "0.4"
 pretty_assertions = "1.4"
 lazy_static = "1.5"
@@ -114,9 +118,9 @@ camino = "1.2.2"
 ciborium = "0.2.2"
 http = "1.4.0"
 http-body-util = "0.1"
-rand = "0.8.5"
+rand = "0.10.0"
 backoff = "0.4"
-chrono = { version = "0.4.43", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
@@ -138,11 +142,11 @@ natord = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
+rev = "04c3d5d37d7b919cbf01019d2a17b93ff2df2eb8"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
+rev = "04c3d5d37d7b919cbf01019d2a17b93ff2df2eb8"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"

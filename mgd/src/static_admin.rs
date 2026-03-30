@@ -8,11 +8,19 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_api::{
-    AddStaticRoute4Request, AddStaticRoute4V1Request, AddStaticRoute6Request,
-    AddStaticRoute6V1Request, DeleteStaticRoute4Request,
-    DeleteStaticRoute4V1Request, DeleteStaticRoute6Request,
-    DeleteStaticRoute6V1Request, GetRibResult,
+use mg_types::rib::GetRibResult;
+use mg_types::static_routes::{
+    AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
+    DeleteStaticRoute6Request,
+};
+use mg_types::switch::SwitchIdentifiers;
+use mg_types_versions::v1::static_routes::{
+    AddStaticRoute4Request as AddStaticRoute4V1Request,
+    DeleteStaticRoute4Request as DeleteStaticRoute4V1Request,
+};
+use mg_types_versions::v2::static_routes::{
+    AddStaticRoute6Request as AddStaticRoute6V1Request,
+    DeleteStaticRoute6Request as DeleteStaticRoute6V1Request,
 };
 use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
@@ -223,7 +231,7 @@ pub async fn static_remove_v6_route_v2(
 
 pub(crate) async fn switch_identifiers(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<mg_api::SwitchIdentifiers>, HttpError> {
+) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError> {
     let slot = ctx.context().db.slot();
-    Ok(HttpResponseOk(mg_api::SwitchIdentifiers { slot }))
+    Ok(HttpResponseOk(SwitchIdentifiers { slot }))
 }

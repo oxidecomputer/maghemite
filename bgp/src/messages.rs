@@ -522,7 +522,7 @@ impl Header {
 
     /// Deserialize a header from wire format.
     pub fn from_wire(input: &[u8]) -> Result<Header, Error> {
-        let (input, _) = tag(MARKER)(input)?;
+        let (input, _) = tag(&MARKER[..])(input)?;
         let (input, length) = be_u16(input)?;
         let (_, typ) = parse_u8(input)?;
         let typ = MessageType::try_from(typ)?;

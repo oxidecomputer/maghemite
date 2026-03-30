@@ -752,3 +752,11 @@ impl fmt::Display for PathOrigin {
         }
     }
 }
+
+/// Direction of a BGP message (sent or received).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageDirection {
+    Sent,
+    Received,
+}

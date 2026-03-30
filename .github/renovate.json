@@ -4,5 +4,11 @@
     "local>oxidecomputer/renovate-config",
     "local>oxidecomputer/renovate-config//rust/autocreate",
     "local>oxidecomputer/renovate-config//actions/pin"
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["https://github.com/oxidecomputer/opte"],
+      "groupName": "opte"
+    }
   ]
 }

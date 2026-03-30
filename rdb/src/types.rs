@@ -17,8 +17,8 @@ use std::str::FromStr;
 
 // Re-export core types from rdb-types
 pub use rdb_types::{
-    AddressFamily, Dscp, PathOrigin, PeerId, Prefix, Prefix4, Prefix6,
-    ProtocolFilter,
+    AddressFamily, Dscp, MessageDirection, PathOrigin, PeerId, Prefix, Prefix4,
+    Prefix6, ProtocolFilter,
 };
 
 // Marker types for compile-time address family discrimination.

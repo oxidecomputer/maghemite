@@ -20,8 +20,8 @@ use bgp::{
     router::{LoadPolicyError, Router},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmEventRecord, FsmStateKind,
-        MessageDirection, MessageHistoryEntry, MessageHistoryEntryV2,
-        MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo, SessionRunner,
+        MessageDirection, MessageHistoryEntry, MessageHistoryV1, PeerId,
+        SessionEndpoint, SessionInfo, SessionRunner,
     },
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -29,20 +29,18 @@ use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
-use mg_api::{
-    AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
-    ExportedSelector, FsmEventBuffer, FsmHistoryRequest, FsmHistoryRequestV4,
-    FsmHistoryResponse, FsmHistoryResponseV4, MessageBuffer,
-    MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryRequestV4,
-    MessageHistoryRequestV5, MessageHistoryResponse, MessageHistoryResponseV1,
-    MessageHistoryResponseV4, MessageHistoryResponseV5,
-    MessageHistorySentReceived, NdpInterface, NdpInterfaceSelector,
-    NdpManagerState, NdpPeer, NdpPendingInterface, NdpThreadState,
-    NeighborResetRequest, NeighborResetRequestV1, NeighborSelector,
-    NeighborSelectorV1, RibV1, UnnumberedNeighborResetRequest,
-    UnnumberedNeighborSelector,
-};
 use mg_common::lock;
+use mg_types::bgp::{
+    AsnSelector, ExportedSelector, FsmEventBuffer, FsmHistoryRequest,
+    FsmHistoryResponse, MessageBuffer, MessageHistoryRequest,
+    MessageHistoryResponse, NeighborResetRequest, NeighborSelector,
+    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
+};
+use mg_types::ndp::{
+    NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
+    NdpPendingInterface, NdpThreadState,
+};
+use mg_types_versions::{v1, v2, v5};
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, Dscp, ImportExportPolicy4,
     ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
@@ -189,30 +187,9 @@ pub async fn delete_router(
 
 // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-pub async fn read_neighbors_v2(
+pub async fn read_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-
-    let nbrs = ctx
-        .db
-        .get_bgp_neighbors()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-
-    let result = nbrs
-        .into_iter()
-        .filter(|x| x.asn == rq.asn)
-        .map(|x| NeighborV2::from(Neighbor::from_rdb_neighbor_info(rq.asn, &x)))
-        .collect();
-
-    Ok(HttpResponseOk(result))
-}
-
-pub async fn read_neighbors(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -231,7 +208,7 @@ pub async fn read_neighbors(
     Ok(HttpResponseOk(result))
 }
 
-pub async fn create_neighbor(
+pub async fn create_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<NeighborV1>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -241,9 +218,9 @@ pub async fn create_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn read_neighbor(
+pub async fn read_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV1>,
+    request: Query<v1::bgp::NeighborSelector>,
 ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
@@ -261,7 +238,7 @@ pub async fn read_neighbor(
     Ok(HttpResponseOk(result))
 }
 
-pub async fn update_neighbor(
+pub async fn update_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<NeighborV1>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -271,133 +248,14 @@ pub async fn update_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn delete_neighbor(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV1>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
-}
-
-// Legacy API handler - hardcoded to IPv4 for backwards compatibility
+// Supports per-AF operations
 pub async fn clear_neighbor(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborResetRequestV1>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-
-    Ok(helpers::reset_neighbor(ctx.clone(), rq.into()).await?)
-}
-
-// V2 API handler - supports per-AF operations
-pub async fn clear_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<NeighborResetRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::reset_neighbor(ctx.clone(), rq).await?)
-}
-
-pub async fn create_neighbor_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborV2>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq: Neighbor = request.into_inner().into();
-    let ctx = ctx.context();
-    helpers::add_neighbor(ctx.clone(), rq, false)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn read_neighbor_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV1>,
-) -> Result<HttpResponseOk<NeighborV2>, HttpError> {
-    let rq = request.into_inner();
-    let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
-        HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
-    })?;
-    let neighbor_info = db_neighbors
-        .iter()
-        .find(|n| n.host.ip() == rq.addr)
-        .ok_or(HttpError::for_not_found(
-            None,
-            format!("neighbor {} not found in db", rq.addr),
-        ))?;
-
-    let result = NeighborV2::from(Neighbor::from_rdb_neighbor_info(
-        rq.asn,
-        neighbor_info,
-    ));
-    Ok(HttpResponseOk(result))
-}
-
-pub async fn update_neighbor_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborV2>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq: Neighbor = request.into_inner().into();
-    let ctx = ctx.context();
-    helpers::add_neighbor(ctx.clone(), rq, true)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn delete_neighbor_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV1>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
-}
-
-// V3 API - Unified neighbor operations (no DSCP)
-pub async fn create_neighbor_v3(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborV2>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq: Neighbor = request.into_inner().into();
-    let ctx = ctx.context();
-    helpers::add_neighbor(ctx.clone(), rq, false)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn read_neighbor_v3(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    path: Path<NeighborSelector>,
-) -> Result<HttpResponseOk<NeighborV2>, HttpError> {
-    Ok(HttpResponseOk(do_read_neighbor(ctx, path)?.into()))
-}
-
-pub async fn read_neighbors_v3(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    path: Path<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError> {
-    Ok(HttpResponseOk(
-        do_read_neighbors(ctx, path)?
-            .into_iter()
-            .map(NeighborV2::from)
-            .collect(),
-    ))
-}
-
-pub async fn update_neighbor_v3(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborV2>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq: Neighbor = request.into_inner().into();
-    let ctx = ctx.context();
-    helpers::add_neighbor(ctx.clone(), rq, true)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn delete_neighbor_v3(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    path: Path<NeighborSelector>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    do_delete_neighbor(ctx, path).await
 }
 
 // V4 API - Unified neighbor operations (with DSCP)
@@ -542,58 +400,6 @@ async fn do_delete_neighbor(
 }
 
 // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-// Unnumbered neighbors (no DSCP) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-pub async fn read_unnumbered_neighbors(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<UnnumberedNeighborV1>>, HttpError> {
-    Ok(HttpResponseOk(
-        do_read_unnumbered_neighbors(rqctx, request)?
-            .into_iter()
-            .map(UnnumberedNeighborV1::from)
-            .collect(),
-    ))
-}
-
-pub async fn create_unnumbered_neighbor(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<UnnumberedNeighborV1>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq: UnnumberedNeighbor = request.into_inner().into();
-    let ctx = rqctx.context();
-    helpers::add_unnumbered_neighbor(ctx.clone(), rq, false)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn read_unnumbered_neighbor(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<UnnumberedNeighborSelector>,
-) -> Result<HttpResponseOk<UnnumberedNeighborV1>, HttpError> {
-    Ok(HttpResponseOk(
-        do_read_unnumbered_neighbor(rqctx, request)?.into(),
-    ))
-}
-
-pub async fn update_unnumbered_neighbor(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<UnnumberedNeighborV1>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq: UnnumberedNeighbor = request.into_inner().into();
-    let ctx = rqctx.context();
-    helpers::add_unnumbered_neighbor(ctx.clone(), rq, true)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn delete_unnumbered_neighbor(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<UnnumberedNeighborSelector>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    do_delete_unnumbered_neighbor(rqctx, request).await
-}
-
-// Unnumbered neighbors (with DSCP) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 pub async fn read_unnumbered_neighbors_v2(
     rqctx: RequestContext<Arc<HandlerContext>>,
@@ -1070,9 +876,9 @@ pub async fn delete_origin6(
 }
 
 // Legacy endpoint (pre MP-BGP/unnumbered): IPv4 only, no filtering
-pub async fn get_exported(
+pub async fn get_exported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
+    request: TypedBody<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1123,9 +929,9 @@ pub async fn get_exported(
 }
 
 // MP-BGP + BGP unnumbered
-pub async fn get_exported_v2(
+pub async fn get_exported_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<ExportedSelector>,
+    request: TypedBody<v5::bgp::ExportedSelector>,
 ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1177,7 +983,7 @@ pub async fn get_exported_v2(
 }
 
 // Fixed version: uses String keys from PeerId Display for JSON compatibility
-pub async fn get_exported_v3(
+pub async fn get_exported(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ExportedSelector>,
 ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
@@ -1241,8 +1047,8 @@ pub async fn get_exported_v3(
 // Pre-UNNUMBERED versions (BgpPathProperties.peer is IpAddr)
 pub async fn get_imported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<RibV1>, HttpError> {
+    request: TypedBody<v1::bgp::AsnSelector>,
+) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let imported = get_router!(ctx, rq.asn)?
@@ -1253,8 +1059,8 @@ pub async fn get_imported_v1(
 
 pub async fn get_selected_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<RibV1>, HttpError> {
+    request: TypedBody<v1::bgp::AsnSelector>,
+) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let selected = get_router!(ctx, rq.asn)?
@@ -1263,9 +1069,9 @@ pub async fn get_selected_v1(
     Ok(HttpResponseOk(selected.into()))
 }
 
-pub async fn get_neighbors(
+pub async fn get_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1330,7 +1136,7 @@ pub async fn get_neighbors(
 
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1391,9 +1197,9 @@ pub async fn get_neighbors_v2(
     Ok(HttpResponseOk(peers))
 }
 
-pub async fn get_neighbors_v3(
+pub async fn get_neighbors_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
+    request: Query<v1::bgp::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1421,7 +1227,7 @@ pub async fn get_neighbors_v3(
     Ok(HttpResponseOk(peers))
 }
 
-pub async fn get_neighbors_unified(
+pub async fn get_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError> {
@@ -1477,21 +1283,6 @@ pub async fn get_neighbors_v5(
 }
 
 pub async fn bgp_apply(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<ApplyRequestV1>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    // Convert v1 request to current format (hardcodes IPv4-only)
-    do_bgp_apply(ctx.context(), ApplyRequest::from(request.into_inner())).await
-}
-
-pub async fn bgp_apply_v2(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<ApplyRequestV2>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    do_bgp_apply(ctx.context(), ApplyRequest::from(request.into_inner())).await
-}
-
-pub async fn bgp_apply_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ApplyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -1793,6 +1584,16 @@ async fn do_bgp_apply(
     Ok(HttpResponseUpdatedNoContent())
 }
 
+/// Convert API direction type to session direction type.
+fn to_session_direction(
+    d: mg_types::bgp::MessageDirection,
+) -> MessageDirection {
+    match d {
+        mg_types::bgp::MessageDirection::Sent => MessageDirection::Sent,
+        mg_types::bgp::MessageDirection::Received => MessageDirection::Received,
+    }
+}
+
 /// Unified helper for message history retrieval.
 /// Selects the requested buffer, applies direction filter, and returns
 /// a flat `Vec<MessageHistoryEntry>` per peer keyed by PeerId Display.
@@ -1800,11 +1601,12 @@ fn get_message_history_filtered(
     ctx: &Arc<HandlerContext>,
     asn: u32,
     peer: Option<PeerId>,
-    direction: Option<MessageDirection>,
+    direction: Option<mg_types::bgp::MessageDirection>,
     buffer: MessageBuffer,
 ) -> Result<HashMap<String, Vec<MessageHistoryEntry>>, HttpError> {
     let mut result = HashMap::new();
     let use_all_buffer = matches!(buffer, MessageBuffer::All);
+    let session_dir = direction.map(to_session_direction);
 
     // Determine which peers to fetch history for
     let peers_to_query: Vec<PeerId> = if let Some(peer_id) = peer {
@@ -1832,7 +1634,7 @@ fn get_message_history_filtered(
                 history.major
             };
 
-            let entries: Vec<MessageHistoryEntry> = match direction {
+            let entries: Vec<MessageHistoryEntry> = match session_dir {
                 Some(dir) => source
                     .into_iter()
                     .filter(|e| e.direction() == dir)
@@ -1847,28 +1649,10 @@ fn get_message_history_filtered(
     Ok(result)
 }
 
-/// Reconstruct the old sent/received split format from a flat entry list.
-/// Converts to `MessageHistoryEntryV2` (without direction) for v2/v3 compat.
-fn to_sent_received(
-    entries: Vec<MessageHistoryEntry>,
-) -> MessageHistorySentReceived {
-    let mut sent = std::collections::VecDeque::new();
-    let mut received = std::collections::VecDeque::new();
-    for entry in entries {
-        let dir = entry.direction();
-        let v2: MessageHistoryEntryV2 = entry.into();
-        match dir {
-            MessageDirection::Sent => sent.push_back(v2),
-            MessageDirection::Received => received.push_back(v2),
-        }
-    }
-    MessageHistorySentReceived { sent, received }
-}
-
-pub async fn message_history(
+pub async fn message_history_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<MessageHistoryRequestV1>,
-) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
+    request: TypedBody<v1::bgp::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1882,67 +1666,69 @@ pub async fn message_history(
         }
     }
 
-    Ok(HttpResponseOk(MessageHistoryResponseV1 { by_peer: result }))
+    Ok(HttpResponseOk(v1::bgp::MessageHistoryResponse {
+        by_peer: result,
+    }))
 }
 
 // Pre-UNNUMBERED API endpoint (VERSION_IPV6_BASIC..VERSION_UNNUMBERED)
 // Uses IpAddr for numbered peers only
 pub async fn message_history_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<MessageHistoryRequestV4>,
-) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError> {
+    request: TypedBody<v2::bgp::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let peer_id = rq.peer.map(PeerId::Ip);
-    let by_peer_string = get_message_history_filtered(
-        ctx,
-        rq.asn,
-        peer_id,
-        rq.direction,
-        MessageBuffer::Major,
-    )?;
+    let mut result = HashMap::new();
 
-    // Convert String keys back to IpAddr (filters out unnumbered peers)
-    let by_peer = by_peer_string
-        .into_iter()
-        .filter_map(|(key, entries)| {
-            key.parse::<IpAddr>()
-                .ok()
-                .map(|addr| (addr, to_sent_received(entries)))
-        })
-        .collect();
+    for (key, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+        if let PeerId::Ip(addr) = key {
+            if rq.peer.is_some() && rq.peer != Some(*addr) {
+                continue;
+            }
+            let mh = lock!(session.message_history).clone();
+            result.insert(*addr, mh);
+        }
+    }
 
-    Ok(HttpResponseOk(MessageHistoryResponseV4 { by_peer }))
+    Ok(HttpResponseOk(v2::bgp::MessageHistoryResponse {
+        by_peer: result,
+    }))
 }
 
-// V3 API endpoint (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
+// V5 API endpoint (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
+// Uses PeerId enum for both numbered and unnumbered peers
 pub async fn message_history_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<v5::bgp::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v5::bgp::MessageHistoryResponse>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut result = HashMap::new();
+
+    for (peer_id, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+        if let Some(ref filter) = rq.peer
+            && peer_id != filter
+        {
+            continue;
+        }
+        let mh = lock!(session.message_history).clone();
+        result.insert(peer_id.to_string(), mh);
+    }
+
+    Ok(HttpResponseOk(v5::bgp::MessageHistoryResponse {
+        by_peer: result,
+    }))
+}
+
+// Latest API endpoint (VERSION_SPRING_CLEANING..)
+// Flat entries with buffer selection
+pub async fn message_history_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
 ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-
-    let by_peer_flat = get_message_history_filtered(
-        ctx,
-        rq.asn,
-        rq.peer,
-        rq.direction,
-        MessageBuffer::Major,
-    )?;
-    let by_peer = by_peer_flat
-        .into_iter()
-        .map(|(k, entries)| (k, to_sent_received(entries)))
-        .collect();
-    Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
-}
-
-// V4 API endpoint (VERSION_SPRING_CLEANING..)
-pub async fn message_history_v4(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<MessageHistoryRequestV5>,
-) -> Result<HttpResponseOk<MessageHistoryResponseV5>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1953,7 +1739,7 @@ pub async fn message_history_v4(
         rq.direction,
         rq.buffer.unwrap_or(MessageBuffer::Major),
     )?;
-    Ok(HttpResponseOk(MessageHistoryResponseV5 { by_peer }))
+    Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
 }
 
 /// Unified helper for FSM history retrieval.
@@ -1997,10 +1783,10 @@ fn get_fsm_history_filtered(
 
 // Original API endpoint (VERSION_IPV6_BASIC..VERSION_UNNUMBERED)
 // FSM event history for numbered peers only
-pub async fn fsm_history(
+pub async fn fsm_history_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<FsmHistoryRequestV4>,
-) -> Result<HttpResponseOk<FsmHistoryResponseV4>, HttpError> {
+    request: TypedBody<v2::bgp::FsmHistoryRequest>,
+) -> Result<HttpResponseOk<v2::bgp::FsmHistoryResponse>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -2017,12 +1803,11 @@ pub async fn fsm_history(
         })
         .collect();
 
-    Ok(HttpResponseOk(FsmHistoryResponseV4 { by_peer }))
+    Ok(HttpResponseOk(v2::bgp::FsmHistoryResponse { by_peer }))
 }
 
-// V2 API endpoint (VERSION_UNNUMBERED..)
 // FSM event history for all peers (numbered and unnumbered)
-pub async fn fsm_history_v2(
+pub async fn fsm_history(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<FsmHistoryRequest>,
 ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
@@ -2136,32 +1921,6 @@ pub async fn delete_shaper(
     let ctx = ctx.context();
     let rq = request.into_inner();
     helpers::unload_policy(ctx, rq.asn, PolicyKind::Shaper).await
-}
-
-pub async fn read_bestpath_fanout(
-    ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
-    let ctx = ctx.context();
-    let fanout = ctx
-        .db
-        .get_bestpath_fanout()
-        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
-
-    Ok(HttpResponseOk(BestpathFanoutResponse { fanout }))
-}
-
-pub async fn update_bestpath_fanout(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<BestpathFanoutRequest>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context();
-    let rq = request.into_inner();
-
-    ctx.db
-        .set_bestpath_fanout(rq.fanout)
-        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
-
-    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub(crate) mod helpers {
