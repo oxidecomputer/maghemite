@@ -9,6 +9,53 @@
     {
       "matchPackageNames": ["https://github.com/oxidecomputer/opte"],
       "groupName": "opte"
+    },
+    {
+      "matchPackageNames": ["https://github.com/oxidecomputer/omicron"],
+      "groupName": "omicron"
+    },
+    {
+      "matchPackageNames": ["https://github.com/oxidecomputer/falcon"],
+      "groupName": "falcon"
+    },
+    {
+      "matchPackageNames": [
+        "slog",
+        "slog-term",
+        "slog-envlogger",
+        "slog-async",
+        "slog-bunyan"
+      ],
+      "groupName": "slog"
+    },
+    {
+      "matchPackageNames": [
+        "dropshot",
+        "dropshot-api-manager",
+        "dropshot-api-manager-types"
+      ],
+      "groupName": "dropshot"
+    },
+    {
+      "matchPackageNames": [
+        "progenitor",
+        "progenitor-client"
+      ],
+      "groupName": "progenitor"
+    },
+    {
+      "matchPackageNames": [
+        "hyper",
+        "hyper-util"
+      ],
+      "groupName": "hyper"
+    },
+    {
+      "matchPackageNames": [
+        "http",
+        "http-body-util"
+      ],
+      "groupName": "http"
     }
   ]
 }
