@@ -1042,4 +1042,12 @@ mod test {
         let st = static_path(ip1);
         assert_eq!(bgp.cmp(&st), st.cmp(&bgp).reverse());
     }
+
+    #[test]
+    fn prefix_no_cross_family_within() {
+        let v4 = Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8));
+        let v6 = Prefix::V6(Prefix6::new(Ipv6Addr::LOCALHOST, 128));
+        assert!(!v4.within(&v6));
+        assert!(!v6.within(&v4));
+    }
 }
