@@ -171,8 +171,9 @@ impl FsmState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PeerIdentity {
+    pub addr: Ipv6Addr,
     pub hostname: String,
     pub kind: RouterKind,
 }
@@ -186,6 +187,15 @@ pub struct InterfaceState {
 }
 
 impl InterfaceState {
+    pub fn transition(&self, state: FsmState) {
+        *lock!(self.fsm_state) = state;
+        *lock!(self.last_fsm_state_change) = Instant::now();
+    }
+
+    pub fn clear_peer(&self) {
+        *lock!(self.peer_identity) = None;
+    }
+
     pub fn peer_status(&self) -> PeerStatus {
         let elapsed = lock!(self.last_fsm_state_change).elapsed();
         lock!(self.fsm_state).to_peer_status(elapsed)
@@ -214,7 +224,6 @@ pub struct SessionStats {
     pub peer_expirations: AtomicU64,
     pub peer_address_changes: AtomicU64,
     pub peer_established: AtomicU64,
-    pub peer_address: Mutex<Option<Ipv6Addr>>,
 
     // Exchange
     pub updates_sent: AtomicU64,
@@ -282,9 +291,8 @@ impl State for Init {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
-        *lock!(self.ctx.iface.fsm_state) = FsmState::Init;
-        *lock!(self.ctx.iface.last_fsm_state_change) = Instant::now();
-        *lock!(self.ctx.iface.peer_identity) = None;
+        self.ctx.iface.transition(FsmState::Init);
+        self.ctx.iface.clear_peer();
         loop {
             let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
                 Ok(info) => info,
@@ -362,8 +370,7 @@ impl State for Solicit {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
-        *lock!(self.ctx.iface.fsm_state) = FsmState::Solicit;
-        *lock!(self.ctx.iface.last_fsm_state_change) = Instant::now();
+        self.ctx.iface.transition(FsmState::Solicit);
         loop {
             let e = match event.recv() {
                 Ok(e) => e,
@@ -512,8 +519,7 @@ impl Exchange {
         pull_stop: &AtomicBool,
     ) {
         exchange_thread.abort();
-        *lock!(self.ctx.iface.peer_identity) = None;
-        *lock!(self.ctx.stats.peer_address) = None;
+        self.ctx.iface.clear_peer();
         let (to_remove, to_remove_tnl) =
             self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
@@ -591,8 +597,7 @@ impl State for Exchange {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
-        *lock!(self.ctx.iface.fsm_state) = FsmState::Exchange;
-        *lock!(self.ctx.iface.last_fsm_state_change) = Instant::now();
+        self.ctx.iface.transition(FsmState::Exchange);
         let exchange_thread = loop {
             match exchange::handler(
                 self.ctx.clone(),
