@@ -111,12 +111,13 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 "Interface".dimmed(),
                 "Host".dimmed(),
                 "Address".dimmed(),
                 "Kind".dimmed(),
                 "Status".dimmed(),
+                "Duration".dimmed(),
             )?;
             let mut peers: Vec<_> = msg.into_inner().into_iter().collect();
             peers.sort_by_key(|(index, _)| index.clone());
@@ -129,7 +130,7 @@ async fn run() -> Result<()> {
                 };
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{} {}",
+                    "{}\t{}\t{}\t{}\t{}\t{}",
                     index,
                     info.host,
                     info.addr,
