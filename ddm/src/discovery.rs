@@ -175,7 +175,6 @@ struct HandlerContext {
     log: Logger,
     event: Sender<Event>,
     iface: Arc<InterfaceState>,
-    stats: Arc<SessionStats>,
 }
 
 struct Neighbor {
@@ -230,7 +229,6 @@ pub(crate) fn handler(
         event,
         config,
         iface,
-        stats: stats.clone(),
     };
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -522,24 +520,15 @@ fn handle_advertisement(
         }
     };
     drop(guard);
-    let updated = {
-        let mut info = lock!(ctx.iface.peer_identity);
-        let peer_addr = *lock!(ctx.stats.peer_address);
-        let changed = match &*info {
-            Some(existing) => {
-                existing.hostname != hostname
-                    || existing.kind != kind
-                    || peer_addr != Some(*sender)
-            }
-            None => true,
-        };
-        if changed {
-            *info = Some(PeerIdentity { hostname, kind });
-        }
-        changed
+    let new_peer = PeerIdentity {
+        addr: *sender,
+        hostname,
+        kind,
     };
-    if updated {
-        lock!(ctx.stats.peer_address).replace(*sender);
+    let mut info = lock!(ctx.iface.peer_identity);
+    if info.as_ref() != Some(&new_peer) {
+        *info = Some(new_peer);
+        drop(info);
         emit_nbr_update(ctx, sender, version);
     }
 }
