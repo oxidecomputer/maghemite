@@ -13,19 +13,12 @@ use rdb::types::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::Ipv6Addr;
 
 /// Input for adding static multicast routes.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct StaticMulticastRouteInput {
     /// The multicast route key (S,G) or (*,G).
     pub key: MulticastRouteKey,
-    /// Underlay unicast nexthops for multicast replication.
-    ///
-    /// Unicast IPv6 addresses where encapsulated overlay multicast traffic
-    /// is forwarded. These are sled underlay addresses hosting VMs subscribed
-    /// to the multicast group. Forms the outgoing interface list (OIL).
-    pub underlay_nexthops: Vec<Ipv6Addr>,
     /// Underlay multicast group address (ff04::/64).
     pub underlay_group: UnderlayMulticastIpv6,
 }

@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -35,7 +35,7 @@ use mg_common::{lock, read_lock, write_lock};
 use crate::error::Error;
 use crate::types::{
     AddressFamily, MribChangeNotification, MulticastAddr, MulticastRoute,
-    MulticastRouteKey, MulticastRouteSource,
+    MulticastRouteKey, MulticastSourceProtocol,
 };
 
 pub mod rpf;
@@ -163,10 +163,10 @@ impl Mrib {
             let origin_match = match static_only {
                 None => true,
                 Some(true) => {
-                    matches!(route.source, MulticastRouteSource::Static)
+                    matches!(route.source, MulticastSourceProtocol::Static)
                 }
                 Some(false) => {
-                    !matches!(route.source, MulticastRouteSource::Static)
+                    !matches!(route.source, MulticastSourceProtocol::Static)
                 }
             };
             af_match && origin_match
@@ -224,7 +224,6 @@ impl Mrib {
                 Entry::Occupied(mut e) => {
                     let unchanged = e.get().rpf_neighbor == route.rpf_neighbor
                         && e.get().underlay_group == route.underlay_group
-                        && e.get().underlay_nexthops == route.underlay_nexthops
                         && e.get().source == route.source;
                     if !unchanged {
                         e.insert(route.clone());
@@ -280,8 +279,6 @@ impl Mrib {
                                     == route.rpf_neighbor
                                     && e.get().underlay_group
                                         == route.underlay_group
-                                    && e.get().underlay_nexthops
-                                        == route.underlay_nexthops
                                     && e.get().source == route.source;
                                 if !unchanged {
                                     e.insert(route.clone());
@@ -320,8 +317,7 @@ impl Mrib {
             let changed = match mrib_in.get(&key) {
                 Some(existing) => {
                     // Check if route actually changed
-                    existing.underlay_nexthops != route.underlay_nexthops
-                        || existing.rpf_neighbor != route.rpf_neighbor
+                    existing.rpf_neighbor != route.rpf_neighbor
                         || existing.source != route.source
                         || existing.underlay_group != route.underlay_group
                 }
@@ -345,76 +341,6 @@ impl Mrib {
             let mut mrib_loc = lock!(self.mrib_loc);
             let removed_in = mrib_in.remove(key).is_some();
             let removed_loc = mrib_loc.remove(key).is_some();
-            removed_in || removed_loc
-        };
-
-        if removed {
-            self.notify(MribChangeNotification::from(*key));
-        }
-        Ok(removed)
-    }
-
-    /// Add a replication target to an existing route in both `mrib_in` and
-    /// `mrib_loc`.
-    pub fn add_target(
-        &self,
-        key: &MulticastRouteKey,
-        target: Ipv6Addr,
-    ) -> Result<(), Error> {
-        // Acquire both locks following documented order to ensure atomicity
-        let changed = {
-            let mut mrib_in = lock!(self.mrib_in);
-            let mut mrib_loc = lock!(self.mrib_loc);
-
-            let changed_in = if let Some(route) = mrib_in.get_mut(key) {
-                route.add_target(target)
-            } else {
-                return Err(Error::NotFound(format!(
-                    "multicast route {key} not found",
-                )));
-            };
-
-            let changed_loc = if let Some(route) = mrib_loc.get_mut(key) {
-                route.add_target(target)
-            } else {
-                false
-            };
-
-            changed_in || changed_loc
-        };
-
-        if changed {
-            self.notify(MribChangeNotification::from(*key));
-        }
-        Ok(())
-    }
-
-    /// Remove a replication target from an existing route in both `mrib_in` and
-    /// `mrib_loc`.
-    pub fn remove_target(
-        &self,
-        key: &MulticastRouteKey,
-        target: &Ipv6Addr,
-    ) -> Result<bool, Error> {
-        // Acquire both locks following documented order to ensure atomicity
-        let removed = {
-            let mut mrib_in = lock!(self.mrib_in);
-            let mut mrib_loc = lock!(self.mrib_loc);
-
-            let removed_in = if let Some(route) = mrib_in.get_mut(key) {
-                route.remove_target(target)
-            } else {
-                return Err(Error::NotFound(format!(
-                    "multicast route {key} not found",
-                )));
-            };
-
-            let removed_loc = if let Some(route) = mrib_loc.get_mut(key) {
-                route.remove_target(target)
-            } else {
-                false
-            };
-
             removed_in || removed_loc
         };
 
@@ -527,12 +453,13 @@ pub(crate) fn spawn_rpf_revalidator(
 mod test {
     use super::*;
 
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     use mg_common::log::*;
 
     use crate::types::{
-        MulticastAddrV4, MulticastAddrV6, UnderlayMulticastIpv6,
+        MulticastAddrV4, MulticastAddrV6, UnderlayMulticastIpv6, UnicastAddrV4,
+        UnicastAddrV6,
     };
 
     fn test_underlay() -> UnderlayMulticastIpv6 {
@@ -551,29 +478,23 @@ mod test {
         let route = MulticastRoute::new(
             key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         mrib.add_route(route.clone()).expect("add route");
         assert!(mrib.get_route(&key).is_some());
 
         // Test source-specific multicast route (S,G)
-        let source = Ipv4Addr::new(10, 0, 0, 1);
+        let source = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 1))
+            .expect("valid unicast");
         let group_v4 = MulticastAddrV4::new(Ipv4Addr::new(225, 1, 1, 1))
             .expect("valid mcast");
         let key_sg = MulticastRouteKey::source_specific_v4(source, group_v4);
-        let mut route_sg = MulticastRoute::new(
+        let route_sg = MulticastRoute::new(
             key_sg,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
-
-        // Add replication targets
-        let target1 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
-        let target2 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 2);
-
-        route_sg.add_target(target1);
-        route_sg.add_target(target2);
 
         mrib.add_route(route_sg.clone()).expect("add S,G route");
         assert_eq!(mrib.full_mrib().len(), 2);
@@ -611,7 +532,7 @@ mod test {
         let route = MulticastRoute::new(
             key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         mrib.add_route(route.clone()).expect("add route");
@@ -640,7 +561,7 @@ mod test {
         let route = MulticastRoute::new(
             key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         mrib.add_route(route.clone()).expect("add route");
@@ -680,14 +601,16 @@ mod test {
         let route = MulticastRoute::new(
             key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         mrib.add_route(route.clone()).expect("add v6 route");
         assert!(mrib.get_route(&key).is_some());
 
         // IPv6 source-specific multicast route (S,G)
-        let source = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let source =
+            UnicastAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))
+                .expect("valid unicast");
         let group_v6 =
             MulticastAddrV6::new(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1))
                 .expect("valid mcast");
@@ -695,7 +618,7 @@ mod test {
         let route_sg = MulticastRoute::new(
             key_sg,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         mrib.add_route(route_sg).expect("add v6 S,G route");

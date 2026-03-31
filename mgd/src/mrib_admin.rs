@@ -18,7 +18,7 @@ use mg_types::mrib::{
     RouteOriginFilter,
 };
 use rdb::types::{
-    MulticastAddr, MulticastRoute, MulticastRouteKey, MulticastRouteSource,
+    MulticastAddr, MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
 };
 
 use crate::admin::HandlerContext;
@@ -49,7 +49,7 @@ pub async fn get_mrib_imported(
                 format!("invalid group address: {e}"),
             )
         })?;
-        let key = MulticastRouteKey::new(q.source, group, q.vni.as_u32())
+        let key = MulticastRouteKey::new(q.source, group, q.vni)
             .map_err(|e| HttpError::for_bad_request(None, format!("{e}")))?;
         let route = ctx.db.get_mcast_route(&key).ok_or_else(|| {
             HttpError::for_not_found(None, format!("route {key} not found"))
@@ -81,7 +81,7 @@ pub async fn get_mrib_selected(
                 format!("invalid group address: {e}"),
             )
         })?;
-        let key = MulticastRouteKey::new(q.source, group, q.vni.as_u32())
+        let key = MulticastRouteKey::new(q.source, group, q.vni)
             .map_err(|e| HttpError::for_bad_request(None, format!("{e}")))?;
         let route = ctx.db.get_selected_mcast_route(&key).ok_or_else(|| {
             HttpError::for_not_found(
@@ -113,14 +113,11 @@ pub async fn static_add_mcast_route(
         .routes
         .into_iter()
         .map(|input| {
-            let mut route = MulticastRoute::new(
+            MulticastRoute::new(
                 input.key,
                 input.underlay_group,
-                MulticastRouteSource::Static,
-            );
-            route.underlay_nexthops =
-                input.underlay_nexthops.into_iter().collect();
-            route
+                MulticastSourceProtocol::Static,
+            )
         })
         .collect();
 
