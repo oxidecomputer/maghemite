@@ -325,8 +325,10 @@ pub async fn read_neighbor_v2(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result =
-        NeighborV6::from(Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info));
+    let result = NeighborV6::from(Neighbor::from_rdb_neighbor_info(
+        rq.asn,
+        neighbor_info,
+    ));
     Ok(HttpResponseOk(result))
 }
 
@@ -380,9 +382,10 @@ pub async fn read_neighbor_v3(
                     None,
                     format!("neighbor {} not found in db", addr),
                 ))?;
-            let result = NeighborV6::from(
-                Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info),
-            );
+            let result = NeighborV6::from(Neighbor::from_rdb_neighbor_info(
+                rq.asn,
+                neighbor_info,
+            ));
             Ok(HttpResponseOk(result))
         }
         PeerId::Interface(ref iface) => {
@@ -482,7 +485,8 @@ pub async fn read_neighbor_v4(
                     None,
                     format!("neighbor {} not found in db", addr),
                 ))?;
-            let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+            let result =
+                Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
             Ok(HttpResponseOk(result))
         }
         PeerId::Interface(ref iface) => {
@@ -587,9 +591,9 @@ pub async fn read_unnumbered_neighbors(
         .into_iter()
         .filter(|x| x.asn == rq.asn)
         .map(|x| {
-            UnnumberedNeighborV6::from(UnnumberedNeighbor::from_rdb_neighbor_info(
-                rq.asn, &x,
-            ))
+            UnnumberedNeighborV6::from(
+                UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, &x),
+            )
         })
         .collect();
 

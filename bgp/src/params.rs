@@ -1165,7 +1165,12 @@ impl From<ApplyRequestV6> for ApplyRequest {
                 .unnumbered_peers
                 .into_iter()
                 .map(|(k, v)| {
-                    (k, v.into_iter().map(UnnumberedBgpPeerConfig::from).collect())
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfig::from)
+                            .collect(),
+                    )
                 })
                 .collect(),
         }
