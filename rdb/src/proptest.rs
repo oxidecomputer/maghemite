@@ -13,11 +13,11 @@
 use crate::{
     BgpNeighborParameters,
     types::{
-        BgpNeighborInfo, DEFAULT_MULTICAST_VNI, ImportExportPolicy4,
-        ImportExportPolicy6, MulticastAddr, MulticastAddrV4, MulticastAddrV6,
-        MulticastRoute, MulticastRouteKey, MulticastRouteKeyV4,
-        MulticastRouteKeyV6, MulticastRouteSource, Prefix, Prefix4, Prefix6,
-        StaticRouteKey, UnderlayMulticastIpv6,
+        BgpNeighborInfo, ImportExportPolicy4, ImportExportPolicy6,
+        MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
+        MulticastRouteKey, MulticastRouteKeyV4, MulticastRouteKeyV6,
+        MulticastSourceProtocol, Prefix, Prefix4, Prefix6, StaticRouteKey,
+        UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
     },
 };
 use omicron_common::address::{
@@ -554,7 +554,7 @@ proptest! {
 
 // Strategy for generating IPv4 unicast addresses (non-multicast, non-loopback)
 // Generates directly in valid ranges to avoid filter rejection limits
-fn ipv4_unicast_strategy() -> impl Strategy<Value = Ipv4Addr> {
+fn ipv4_unicast_strategy() -> impl Strategy<Value = UnicastAddrV4> {
     prop_oneof![
         // 1.x.x.x - 126.x.x.x (skip 0.x.x.x and 127.x.x.x loopback)
         (1u8..=126, any::<u8>(), any::<u8>(), any::<u8>())
@@ -563,10 +563,18 @@ fn ipv4_unicast_strategy() -> impl Strategy<Value = Ipv4Addr> {
         (128u8..=223, any::<u8>(), any::<u8>(), any::<u8>())
             .prop_map(|(a, b, c, d)| Ipv4Addr::new(a, b, c, d)),
     ]
+    .prop_filter_map("must be valid unicast", |addr| {
+        UnicastAddrV4::new(addr).ok()
+    })
 }
 
-// Strategy for generating IPv6 unicast addresses (non-multicast, non-loopback)
-// Generates directly in valid ranges to avoid filter rejection limits
+// Strategy for generating IPv6 addresses that are not multicast or loopback.
+//
+// Returns raw Ipv6Addr, not UnicastAddrV6. Use this for tests that need
+// a non-multicast address but don't require a routable unicast source
+// (e.g., AF mismatch tests, RPF neighbor fields, multicast addr rejection).
+//
+// For multicast route key sources, use routable_ipv6_unicast_strategy().
 fn ipv6_unicast_strategy() -> impl Strategy<Value = Ipv6Addr> {
     // Generate any address except ff00::/8 (multicast) and ::1 (loopback)
     // Multicast is only 1/256 of address space, so filter rejection is fine
@@ -581,8 +589,8 @@ fn ipv6_unicast_strategy() -> impl Strategy<Value = Ipv6Addr> {
 }
 
 // Strategy for generating valid VNIs (0 to Vni::MAX_VNI)
-fn valid_vni_strategy() -> impl Strategy<Value = u32> {
-    0u32..=Vni::MAX_VNI
+fn valid_vni_strategy() -> impl Strategy<Value = Vni> {
+    (0u32..=Vni::MAX_VNI).prop_map(|v| Vni::try_from(v).unwrap())
 }
 
 // Strategy for generating invalid VNIs (> Vni::MAX_VNI)
@@ -594,16 +602,15 @@ fn invalid_vni_strategy() -> impl Strategy<Value = u32> {
 fn admin_local_multicast_strategy()
 -> impl Strategy<Value = UnderlayMulticastIpv6> {
     any::<u64>().prop_map(|bits| {
-        let lower = bits | 1; // ensure non-zero group ID
         let addr = Ipv6Addr::new(
             IPV6_ADMIN_SCOPED_MULTICAST_PREFIX,
             0,
             0,
             0,
-            (lower >> 48) as u16,
-            (lower >> 32) as u16,
-            (lower >> 16) as u16,
-            lower as u16,
+            (bits >> 48) as u16,
+            (bits >> 32) as u16,
+            (bits >> 16) as u16,
+            bits as u16,
         );
         UnderlayMulticastIpv6::new(addr).expect("valid underlay address")
     })
@@ -635,18 +642,9 @@ fn non_admin_local_multicast_strategy() -> impl Strategy<Value = MulticastAddrV6
 }
 
 // Strategy for routable IPv6 unicast (not link-local, loopback, unspecified)
-fn routable_ipv6_unicast_strategy() -> impl Strategy<Value = Ipv6Addr> {
-    any::<u128>().prop_filter_map("must be routable unicast", |bits| {
-        let addr = Ipv6Addr::from(bits);
-        if !addr.is_multicast()
-            && !addr.is_loopback()
-            && !addr.is_unspecified()
-            && !addr.is_unicast_link_local()
-        {
-            Some(addr)
-        } else {
-            None
-        }
+fn routable_ipv6_unicast_strategy() -> impl Strategy<Value = UnicastAddrV6> {
+    any::<u128>().prop_filter_map("must be valid unicast", |bits| {
+        UnicastAddrV6::new(Ipv6Addr::from(bits)).ok()
     })
 }
 
@@ -871,7 +869,7 @@ impl Arbitrary for MulticastRouteKey {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // Generate directly without filtering for efficiency with high case counts
-        let vni = 0u32..=Vni::MAX_VNI;
+        let vni = (0u32..=Vni::MAX_VNI).prop_map(|v| Vni::try_from(v).unwrap());
 
         prop_oneof![
             // V4 ASM (*,G)
@@ -918,7 +916,7 @@ impl Arbitrary for MulticastRouteKey {
             }),
             // V6 ASM (S,G)
             (
-                ipv6_unicast_strategy(),
+                routable_ipv6_unicast_strategy(),
                 ipv6_asm_group_strategy(),
                 vni.clone()
             )
@@ -930,15 +928,18 @@ impl Arbitrary for MulticastRouteKey {
                     })
                 }),
             // V6 SSM (S,G) - SSM requires source
-            (ipv6_unicast_strategy(), ipv6_ssm_group_strategy(), vni).prop_map(
-                |(src, grp, vni)| {
+            (
+                routable_ipv6_unicast_strategy(),
+                ipv6_ssm_group_strategy(),
+                vni
+            )
+                .prop_map(|(src, grp, vni)| {
                     MulticastRouteKey::V6(MulticastRouteKeyV6 {
                         source: Some(src),
                         group: grp,
                         vni,
                     })
-                }
-            ),
+                }),
         ]
         .boxed()
     }
@@ -962,7 +963,7 @@ proptest! {
     /// Property: IPv4 unicast addresses are rejected as multicast
     #[test]
     fn prop_multicast_addr_v4_rejects_unicast(addr in ipv4_unicast_strategy()) {
-        let result = MulticastAddrV4::new(addr);
+        let result = MulticastAddrV4::new(addr.ip());
         prop_assert!(
             result.is_err(),
             "unicast {addr} should be rejected as multicast"
@@ -1079,7 +1080,7 @@ proptest! {
     /// Property: (S,G) with unicast source validates (covers ASM and SSM)
     #[test]
     fn prop_route_key_sg_valid_v6(
-        src in ipv6_unicast_strategy(),
+        src in routable_ipv6_unicast_strategy(),
         group in any::<MulticastAddrV6>(),
     ) {
         let key = MulticastRouteKey::source_specific_v6(src, group);
@@ -1125,7 +1126,7 @@ proptest! {
     /// Property: SSM with source passes validation (IPv6)
     #[test]
     fn prop_route_key_ssm_with_source_valid_v6(
-        src in ipv6_unicast_strategy(),
+        src in routable_ipv6_unicast_strategy(),
         group in ipv6_ssm_group_strategy(),
     ) {
         let key = MulticastRouteKey::source_specific_v6(src, group);
@@ -1144,7 +1145,7 @@ proptest! {
     ) {
         // Use (S,G) so both ASM and SSM groups work
         let key = MulticastRouteKey::new(
-            Some(IpAddr::V4(src)),
+            Some(IpAddr::V4(src.ip())),
             group.into(),
             vni,
         )
@@ -1152,40 +1153,30 @@ proptest! {
         let result = key.validate();
         prop_assert!(
             result.is_ok(),
-            "VNI {vni} should be valid: {result:?}"
+            "VNI {vni:?} should be valid: {result:?}"
         );
     }
 
-    /// Property: VNI exceeding 24 bits fails validation
+    /// Property: invalid VNI is rejected at construction by Vni::try_from.
     #[test]
     fn prop_route_key_invalid_vni(
-        src in ipv4_unicast_strategy(),
-        group in any::<MulticastAddrV4>(),
         vni in invalid_vni_strategy(),
     ) {
-        // Use (S,G) so both ASM and SSM groups work
-        let key = MulticastRouteKey::new(
-            Some(IpAddr::V4(src)),
-            group.into(),
-            vni,
-        )
-        .expect("valid key construction");
         prop_assert!(
-            key.validate().is_err(),
-            "VNI {vni} should be invalid (> 2^24-1)"
+            Vni::try_from(vni).is_err(),
+            "VNI {vni} should be rejected by Vni::try_from"
         );
     }
 
     /// Property: VNI in valid range passes validation (IPv6)
     #[test]
     fn prop_route_key_valid_vni_v6(
-        src in ipv6_unicast_strategy(),
+        src in routable_ipv6_unicast_strategy(),
         group in any::<MulticastAddrV6>(),
         vni in valid_vni_strategy(),
     ) {
-        // Use (S,G) so both ASM and SSM groups work
         let key = MulticastRouteKey::new(
-            Some(IpAddr::V6(src)),
+            Some(IpAddr::V6(src.ip())),
             group.into(),
             vni,
         )
@@ -1193,105 +1184,26 @@ proptest! {
         let result = key.validate();
         prop_assert!(
             result.is_ok(),
-            "VNI {vni} should be valid for v6: {result:?}"
+            "VNI {vni:?} should be valid for v6: {result:?}"
         );
     }
 
-    /// Property: VNI exceeding 24 bits fails validation (IPv6)
+    /// Property: Class E reserved (240/4) addresses rejected as unicast
+    /// source. Per RFC 1112 Section 4, this range is reserved.
     #[test]
-    fn prop_route_key_invalid_vni_v6(
-        src in ipv6_unicast_strategy(),
-        group in any::<MulticastAddrV6>(),
-        vni in invalid_vni_strategy(),
+    fn prop_unicast_addr_v4_rejects_class_e(
+        a in 240u8..=254,
+        b in any::<u8>(),
+        c in any::<u8>(),
+        d in any::<u8>(),
     ) {
-        // Use (S,G) so both ASM and SSM groups work
-        let key = MulticastRouteKey::new(
-            Some(IpAddr::V6(src)),
-            group.into(),
-            vni,
-        )
-        .expect("valid key construction");
+        let addr = Ipv4Addr::new(a, b, c, d);
         prop_assert!(
-            key.validate().is_err(),
-            "VNI {vni} should be invalid (> 2^24-1)"
+            UnicastAddrV4::new(addr).is_err(),
+            "Class E address {addr} should be rejected"
         );
     }
 
-    /// Property: Broadcast source address is rejected (IPv4)
-    #[test]
-    fn prop_route_key_broadcast_source_rejected(
-        group in ipv4_asm_group_strategy(),
-    ) {
-        let key = MulticastRouteKey::V4(MulticastRouteKeyV4 {
-            source: Some(Ipv4Addr::BROADCAST),
-            group,
-            vni: DEFAULT_MULTICAST_VNI,
-        });
-        prop_assert!(
-            key.validate().is_err(),
-            "broadcast source should be rejected"
-        );
-    }
-
-    /// Property: AF mismatch (v4 source, v6 group) rejected at construction
-    #[test]
-    fn prop_route_key_af_mismatch_v4_v6(
-        src in ipv4_unicast_strategy(),
-        group in any::<MulticastAddrV6>(),
-    ) {
-        let result = MulticastRouteKey::new(
-            Some(IpAddr::V4(src)),
-            group.into(),
-            DEFAULT_MULTICAST_VNI,
-        );
-        prop_assert!(
-            result.is_err(),
-            "v4 source with v6 group should be rejected"
-        );
-    }
-
-    /// Property: AF mismatch (v6 source, v4 group) rejected at construction
-    #[test]
-    fn prop_route_key_af_mismatch_v6_v4(
-        src in ipv6_unicast_strategy(),
-        group in any::<MulticastAddrV4>(),
-    ) {
-        let result = MulticastRouteKey::new(
-            Some(IpAddr::V6(src)),
-            group.into(),
-            DEFAULT_MULTICAST_VNI,
-        );
-        prop_assert!(
-            result.is_err(),
-            "v6 source with v4 group should be rejected"
-        );
-    }
-
-    /// Property: Multicast address as source rejected
-    #[test]
-    fn prop_route_key_multicast_source_rejected_v4(
-        src in any::<MulticastAddrV4>(),
-        group in ipv4_asm_group_strategy(),
-    ) {
-        let key = MulticastRouteKey::source_specific_v4(src.ip(), group);
-        prop_assert!(
-            key.validate().is_err(),
-            "multicast source {src} should be rejected"
-        );
-    }
-
-    /// Property: Multicast address as source rejected
-    #[test]
-    fn prop_route_key_multicast_source_rejected_v6(
-        src in any::<MulticastAddrV6>(),
-        group in ipv6_asm_group_strategy(),
-    ) {
-        let key = MulticastRouteKey::source_specific_v6(src.ip(), group);
-        prop_assert!(
-            key.validate().is_err(),
-            "multicast source {src} should be rejected"
-        );
-    }
 
     /// Property: Route with admin-local underlay group passes validation
     #[test]
@@ -1303,7 +1215,7 @@ proptest! {
         let route = MulticastRoute::new(
             key,
             underlay,
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
         prop_assert!(
             route.validate().is_ok(),
@@ -1322,227 +1234,6 @@ proptest! {
         );
     }
 
-    /// Property: Unicast RPF neighbor passes validation (v4 group, v4 rpf)
-    #[test]
-    fn prop_route_unicast_rpf_valid_v4(
-        group in ipv4_asm_group_strategy(),
-        rpf in ipv4_unicast_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V4(rpf));
-        prop_assert!(
-            route.validate().is_ok(),
-            "unicast v4 RPF {rpf} should be valid"
-        );
-    }
 
-    /// Property: Unicast RPF neighbor passes validation (v6 group, v6 rpf)
-    #[test]
-    fn prop_route_unicast_rpf_valid_v6(
-        group in ipv6_asm_group_strategy(),
-        rpf in ipv6_unicast_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V6(rpf));
-        prop_assert!(
-            route.validate().is_ok(),
-            "unicast v6 RPF {rpf} should be valid"
-        );
-    }
 
-    /// Property: Multicast RPF neighbor fails validation (IPv4)
-    #[test]
-    fn prop_route_multicast_rpf_invalid_v4(
-        group in ipv4_asm_group_strategy(),
-        rpf in any::<MulticastAddrV4>(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V4(rpf.ip()));
-        prop_assert!(
-            route.validate().is_err(),
-            "multicast RPF {rpf} should be rejected"
-        );
-    }
-
-    /// Property: Multicast RPF neighbor fails validation (IPv6)
-    #[test]
-    fn prop_route_multicast_rpf_invalid_v6(
-        group in ipv6_asm_group_strategy(),
-        rpf in any::<MulticastAddrV6>(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V6(rpf.ip()));
-        prop_assert!(
-            route.validate().is_err(),
-            "multicast RPF {rpf} should be rejected"
-        );
-    }
-
-    /// Property: RPF AF mismatch fails validation (v4 rpf, v6 group)
-    #[test]
-    fn prop_route_rpf_af_mismatch_v4_v6(
-        group in ipv6_asm_group_strategy(),
-        rpf in ipv4_unicast_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V4(rpf));
-        prop_assert!(
-            route.validate().is_err(),
-            "v4 RPF with v6 group should be rejected"
-        );
-    }
-
-    /// Property: RPF AF mismatch fails validation (v6 rpf, v4 group)
-    #[test]
-    fn prop_route_rpf_af_mismatch_v6_v4(
-        group in ipv4_asm_group_strategy(),
-        rpf in ipv6_unicast_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V6(rpf));
-        prop_assert!(
-            route.validate().is_err(),
-            "v6 RPF with v4 group should be rejected"
-        );
-    }
-
-    /// Property: Routable unicast underlay nexthops pass validation
-    #[test]
-    fn prop_route_routable_nexthop_valid(
-        group in ipv4_asm_group_strategy(),
-        nexthop in routable_ipv6_unicast_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.underlay_nexthops.insert(nexthop);
-        prop_assert!(
-            route.validate().is_ok(),
-            "routable nexthop {nexthop} should be valid"
-        );
-    }
-
-    /// Property: Multicast underlay nexthop fails validation
-    #[test]
-    fn prop_route_multicast_nexthop_invalid(
-        group in ipv4_asm_group_strategy(),
-        nexthop in any::<MulticastAddrV6>(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.underlay_nexthops.insert(nexthop.ip());
-        prop_assert!(
-            route.validate().is_err(),
-            "multicast nexthop {nexthop} should be rejected"
-        );
-    }
-
-    /// Property: Link-local underlay nexthop fails validation
-    #[test]
-    fn prop_route_link_local_nexthop_invalid(
-        group in ipv4_asm_group_strategy(),
-        segs in any::<[u16; 7]>(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        // Create a link-local address (fe80::/10)
-        let link_local = Ipv6Addr::new(
-            0xfe80,
-            segs[0] & 0x03ff, // Keep only bottom 10 bits for /10
-            segs[1], segs[2], segs[3], segs[4], segs[5], segs[6],
-        );
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.underlay_nexthops.insert(link_local);
-        prop_assert!(
-            route.validate().is_err(),
-            "link-local nexthop {link_local} should be rejected"
-        );
-    }
-
-    /// Property: Loopback underlay nexthop fails validation
-    #[test]
-    fn prop_route_loopback_nexthop_invalid(
-        group in ipv4_asm_group_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.underlay_nexthops.insert(Ipv6Addr::LOCALHOST);
-        prop_assert!(
-            route.validate().is_err(),
-            "loopback nexthop should be rejected"
-        );
-    }
-
-    /// Property: Unspecified underlay nexthop fails validation
-    #[test]
-    fn prop_route_unspecified_nexthop_invalid(
-        group in ipv4_asm_group_strategy(),
-        underlay in admin_local_multicast_strategy(),
-    ) {
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            underlay,
-            MulticastRouteSource::Static,
-        );
-        route.underlay_nexthops.insert(Ipv6Addr::UNSPECIFIED);
-        prop_assert!(
-            route.validate().is_err(),
-            "unspecified nexthop should be rejected"
-        );
-    }
 }

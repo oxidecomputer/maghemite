@@ -137,18 +137,17 @@ fn print_mroutes(routes: &[types::MulticastRoute]) {
             types::MulticastRouteKey::V4(k) => {
                 let src = k.source.map_or("*".to_string(), |s| s.to_string());
                 let grp = k.group.to_string();
-                (src, grp, k.vni)
+                (src, grp, k.vni.clone())
             }
             types::MulticastRouteKey::V6(k) => {
                 let src = k.source.map_or("*".to_string(), |s| s.to_string());
                 let grp = k.group.to_string();
-                (src, grp, k.vni)
+                (src, grp, k.vni.clone())
             }
         };
         println!(
-            "({source_str}, {group_str}) vni={vni} underlay={} nexthops={}",
+            "({source_str}, {group_str}) vni={vni} underlay={}",
             route.underlay_group,
-            route.underlay_nexthops.len(),
         );
     }
 }

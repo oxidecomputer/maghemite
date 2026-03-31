@@ -2026,8 +2026,9 @@ mod test {
         test::{TEST_WAIT_ITERATIONS, TestDb},
         types::{
             MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
-            MulticastRouteKey, MulticastRouteSource, PrefixDbKey,
-            UnderlayMulticastIpv6, test_helpers::path_vecs_equal,
+            MulticastRouteKey, MulticastSourceProtocol, PrefixDbKey,
+            UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
+            test_helpers::path_vecs_equal,
         },
     };
     use mg_common::log::*;
@@ -2390,7 +2391,7 @@ mod test {
             let route = MulticastRoute::new(
                 key,
                 test_underlay(),
-                MulticastRouteSource::Static,
+                MulticastSourceProtocol::Static,
             );
             db.add_static_mcast_routes(&[route]).unwrap();
 
@@ -2481,7 +2482,7 @@ mod test {
         let star_g_route = MulticastRoute::new(
             star_g_key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         db.add_static_mcast_routes(&[star_g_route]).unwrap();
@@ -2501,12 +2502,13 @@ mod test {
         // Case: (S,G) with SSM address (232.x) - requires unicast route
         let ssm_group = MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, 1))
             .expect("valid mcast"); // SSM range
-        let source = Ipv4Addr::new(10, 0, 0, 100);
+        let source = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 100))
+            .expect("valid unicast");
         let sg_key = MulticastRouteKey::source_specific_v4(source, ssm_group);
         let sg_route = MulticastRoute::new(
             sg_key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         db.add_static_mcast_routes(&[sg_route]).unwrap();
@@ -2545,7 +2547,7 @@ mod test {
         let v6_star_g_route = MulticastRoute::new(
             v6_star_g_key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         db.add_static_mcast_routes(&[v6_star_g_route]).unwrap();
@@ -2562,13 +2564,16 @@ mod test {
             0xff3e, 0, 0, 0, 0, 0, 0, 0x1234,
         ))
         .expect("valid mcast");
-        let v6_source = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100);
+        let v6_source = UnicastAddrV6::new(Ipv6Addr::new(
+            0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100,
+        ))
+        .expect("valid unicast");
         let v6_sg_key =
             MulticastRouteKey::source_specific_v6(v6_source, v6_ssm_group);
         let v6_sg_route = MulticastRoute::new(
             v6_sg_key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         db.add_static_mcast_routes(&[v6_sg_route]).unwrap();
@@ -2621,7 +2626,7 @@ mod test {
         let route = MulticastRoute::new(
             key,
             test_underlay(),
-            MulticastRouteSource::Static,
+            MulticastSourceProtocol::Static,
         );
 
         // Create Db and add static multicast route

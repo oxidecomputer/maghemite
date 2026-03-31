@@ -4089,26 +4089,17 @@
             "description": "Route source (static, IGMP, etc.).",
             "allOf": [
               {
-                "$ref": "#/components/schemas/MulticastRouteSource"
+                "$ref": "#/components/schemas/MulticastSourceProtocol"
               }
             ]
           },
           "underlay_group": {
-            "description": "Underlay multicast group address (ff04::/64).",
+            "description": "Underlay multicast group address (ff04::/64).\n\nOverlay multicast addresses are mapped 1:1 to admin-local scope underlay addresses. Switches replicate to this address via the PRE (with tofino_asic).\n\nOPTE handles the overlay/underlay translation at sled boundaries, while sled membership is managed by Omicron and programmed to DPD/OPTE directly.",
             "type": "string",
             "format": "ipv6"
           },
-          "underlay_nexthops": {
-            "description": "Underlay unicast nexthops for multicast replication.\n\nUnicast IPv6 addresses where encapsulated overlay multicast traffic is forwarded. These are sled underlay addresses hosting VMs subscribed to the multicast group. Forms the outgoing interface list (OIL).",
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "ipv6"
-            },
-            "uniqueItems": true
-          },
           "updated": {
-            "description": "Last updated timestamp.\n\nOnly updated when route fields change semantically (rpf_neighbor, underlay_group, underlay_nexthops, source). An idempotent upsert with an identical value does not update this timestamp.",
+            "description": "Last updated timestamp.\n\nOnly updated when route fields change semantically (rpf_neighbor, underlay_group, source). An idempotent upsert with an identical value does not update this timestamp.",
             "type": "string",
             "format": "date-time"
           }
@@ -4118,7 +4109,6 @@
           "key",
           "source",
           "underlay_group",
-          "underlay_nexthops",
           "updated"
         ]
       },
@@ -4169,9 +4159,11 @@
           "vni": {
             "description": "VNI (Virtual Network Identifier).",
             "default": 77,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
           }
         },
         "required": [
@@ -4196,16 +4188,18 @@
           "vni": {
             "description": "VNI (Virtual Network Identifier).",
             "default": 77,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
           }
         },
         "required": [
           "group"
         ]
       },
-      "MulticastRouteSource": {
+      "MulticastSourceProtocol": {
         "description": "Source of a multicast route entry.",
         "oneOf": [
           {
@@ -5766,20 +5760,11 @@
             "description": "Underlay multicast group address (ff04::/64).",
             "type": "string",
             "format": "ipv6"
-          },
-          "underlay_nexthops": {
-            "description": "Underlay unicast nexthops for multicast replication.\n\nUnicast IPv6 addresses where encapsulated overlay multicast traffic is forwarded. These are sled underlay addresses hosting VMs subscribed to the multicast group. Forms the outgoing interface list (OIL).",
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "ipv6"
-            }
           }
         },
         "required": [
           "key",
-          "underlay_group",
-          "underlay_nexthops"
+          "underlay_group"
         ]
       },
       "StaticRoute4": {
@@ -6271,6 +6256,12 @@
           "withdrawn"
         ]
       },
+      "Vni": {
+        "description": "A Geneve Virtual Network Identifier",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
       "AddressFamily": {
         "description": "Represents the address family (protocol version) for network routes.\n\nThis is the canonical source of truth for address family definitions across the entire codebase. All routing-related components (RIB operations, BGP messages, API filtering, CLI tools) use this single enum rather than defining their own.\n\n# Semantics\n\nWhen used in filtering contexts (e.g., database queries or API parameters), `Option<AddressFamily>` is preferred: - `None` = no filter (match all address families) - `Some(Ipv4)` = IPv4 routes only - `Some(Ipv6)` = IPv6 routes only\n\n# Examples\n\n``` use rdb_types::AddressFamily;\n\nlet ipv4 = AddressFamily::Ipv4; let ipv6 = AddressFamily::Ipv6;\n\n// For filtering, use Option let filter: Option<AddressFamily> = Some(AddressFamily::Ipv4); let no_filter: Option<AddressFamily> = None; // matches all families ```",
         "oneOf": [
@@ -6308,12 +6299,6 @@
             ]
           }
         ]
-      },
-      "Vni": {
-        "description": "A Geneve Virtual Network Identifier",
-        "type": "integer",
-        "format": "uint32",
-        "minimum": 0
       },
       "ProtocolFilter": {
         "oneOf": [
