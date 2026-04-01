@@ -19,11 +19,15 @@ backoff.workspace = true
 smf.workspace = true
 uuid.workspace = true
 libc.workspace = true
+omicron-common.workspace = true
 
 # We need this on illumos, but must omit it on other platforms
 [target.'cfg(target_os = "illumos")'.dependencies.libnet]
 workspace = true
 optional = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [features]
 default = ["libnet"]

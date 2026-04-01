@@ -39,3 +39,25 @@ impl std::hash::Hash for types::TunnelOrigin {
         self.metric.hash(state);
     }
 }
+
+impl std::cmp::PartialEq for types::MulticastOrigin {
+    fn eq(&self, other: &Self) -> bool {
+        self.overlay_group.eq(&other.overlay_group)
+            && self.underlay_group.eq(&other.underlay_group)
+            && self.vni.eq(&other.vni)
+            && self.source.eq(&other.source)
+    }
+}
+
+impl std::cmp::Eq for types::MulticastOrigin {}
+
+/// Metric is excluded from identity so that metric changes update
+/// an existing entry rather than creating a duplicate.
+impl std::hash::Hash for types::MulticastOrigin {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.overlay_group.hash(state);
+        self.underlay_group.hash(state);
+        self.vni.hash(state);
+        self.source.hash(state);
+    }
+}

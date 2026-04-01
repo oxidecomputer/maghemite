@@ -10,7 +10,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
-use mg_common::net::TunnelOrigin;
+use mg_common::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use std::collections::{HashMap, HashSet};
 
@@ -26,6 +26,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (2, MULTICAST_SUPPORT),
     (1, INITIAL),
 ]);
 
@@ -98,6 +99,44 @@ pub trait DdmAdminApi {
     async fn withdraw_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<TunnelOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/originated_multicast_groups",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn get_originated_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastOrigin>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/multicast_groups",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn get_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<latest::db::MulticastRoute>>, HttpError>;
+
+    #[endpoint {
+        method = PUT,
+        path = "/multicast_group",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn advertise_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = DELETE,
+        path = "/multicast_group",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn withdraw_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = PUT, path = "/sync" }]

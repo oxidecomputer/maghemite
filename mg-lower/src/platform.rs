@@ -216,6 +216,31 @@ pub trait Ddm {
         ddm_admin_client::ResponseValue<()>,
         ddm_admin_client::Error<DdmError>,
     >;
+
+    async fn get_originated_multicast_groups(
+        &self,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
+        ddm_admin_client::Error<DdmError>,
+    >;
+
+    #[allow(clippy::ptr_arg)]
+    async fn advertise_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    >;
+
+    #[allow(clippy::ptr_arg)]
+    async fn withdraw_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    >;
 }
 
 /// This trait wraps the methods that have expectations about switch zone
@@ -404,6 +429,35 @@ impl Ddm for ProductionDdm {
         ddm_admin_client::Error<DdmError>,
     > {
         self.client.withdraw_tunnel_endpoints(body).await
+    }
+
+    async fn get_originated_multicast_groups(
+        &self,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.get_originated_multicast_groups().await
+    }
+
+    async fn advertise_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.advertise_multicast_groups(body).await
+    }
+
+    async fn withdraw_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.withdraw_multicast_groups(body).await
     }
 }
 
@@ -699,6 +753,7 @@ pub(crate) mod test {
     pub(crate) struct TestDdm {
         pub(crate) tunnel_originated: Mutex<Vec<TunnelOrigin>>,
         pub(crate) originated: Mutex<Vec<oxnet::Ipv6Net>>,
+        pub(crate) multicast_originated: Mutex<Vec<MulticastOrigin>>,
     }
 
     impl Default for TestDdm {
@@ -706,6 +761,7 @@ pub(crate) mod test {
             Self {
                 tunnel_originated: Mutex::new(Vec::default()),
                 originated: Mutex::new(Vec::default()),
+                multicast_originated: Mutex::new(Vec::default()),
             }
         }
     }
@@ -761,6 +817,45 @@ pub(crate) mod test {
             ddm_admin_client::Error<DdmError>,
         > {
             self.tunnel_originated
+                .lock()
+                .unwrap()
+                .retain(|x| !body.contains(x));
+            Ok(ddm_response_ok!(()))
+        }
+
+        async fn get_originated_multicast_groups(
+            &self,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            Ok(ddm_response_ok!(
+                self.multicast_originated.lock().unwrap().clone()
+            ))
+        }
+
+        async fn advertise_multicast_groups<'a>(
+            &'a self,
+            body: &'a Vec<MulticastOrigin>,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<()>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            self.multicast_originated
+                .lock()
+                .unwrap()
+                .extend(body.clone());
+            Ok(ddm_response_ok!(()))
+        }
+
+        async fn withdraw_multicast_groups<'a>(
+            &'a self,
+            body: &'a Vec<MulticastOrigin>,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<()>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            self.multicast_originated
                 .lock()
                 .unwrap()
                 .retain(|x| !body.contains(x));

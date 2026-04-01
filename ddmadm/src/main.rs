@@ -60,6 +60,18 @@ enum SubCommand {
     /// Withdraw prefixes from a DDM router.
     TunnelWithdraw(TunnelEndpoint),
 
+    /// Get multicast groups imported from DDM peers.
+    MulticastImported,
+
+    /// Get locally originated multicast groups.
+    MulticastOriginated,
+
+    /// Advertise multicast groups from this router.
+    MulticastAdvertise(MulticastGroup),
+
+    /// Withdraw multicast groups from this router.
+    MulticastWithdraw(MulticastGroup),
+
     /// Sync prefix information from peers.
     Sync,
 }
@@ -82,6 +94,29 @@ struct TunnelEndpoint {
 
     #[arg(short, long)]
     pub metric: u64,
+}
+
+#[derive(Debug, Parser)]
+struct MulticastGroup {
+    /// Overlay multicast group address (e.g. 233.252.0.1 or ff0e::1).
+    #[arg(short = 'g', long)]
+    pub overlay_group: IpAddr,
+
+    /// Underlay multicast address (ff04::/64 admin-local scope).
+    #[arg(short = 'u', long)]
+    pub underlay_group: Ipv6Addr,
+
+    /// Virtual Network Identifier.
+    #[arg(short, long)]
+    pub vni: u32,
+
+    /// Path metric.
+    #[arg(short, long, default_value_t = 0)]
+    pub metric: u64,
+
+    /// Source address for (S,G) routes (omit for (*,G)).
+    #[arg(short, long)]
+    pub source: Option<IpAddr>,
 }
 
 #[derive(Debug, Parser)]
@@ -239,6 +274,94 @@ async fn run() -> Result<()> {
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
+                }])
+                .await?;
+        }
+        SubCommand::MulticastImported => {
+            let msg = client.get_multicast_groups().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                "Overlay Group".dimmed(),
+                "Underlay Group".dimmed(),
+                "VNI".dimmed(),
+                "Metric".dimmed(),
+                "Source".dimmed(),
+                "Path".dimmed(),
+            )?;
+            for route in msg.into_inner() {
+                let source = match &route.origin.source {
+                    Some(s) => s.to_string(),
+                    None => "(*,G)".to_string(),
+                };
+                let path: Vec<_> = route
+                    .path
+                    .iter()
+                    .rev()
+                    .map(|h| h.router_id.clone())
+                    .collect();
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{}\t{}\t{}\t{}",
+                    route.origin.overlay_group,
+                    route.origin.underlay_group,
+                    route.origin.vni,
+                    route.origin.metric,
+                    source,
+                    path.join(" "),
+                )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::MulticastOriginated => {
+            let msg = client.get_originated_multicast_groups().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{}\t{}",
+                "Overlay Group".dimmed(),
+                "Underlay Group".dimmed(),
+                "VNI".dimmed(),
+                "Metric".dimmed(),
+                "Source".dimmed(),
+            )?;
+            for origin in msg.into_inner() {
+                let source = match &origin.source {
+                    Some(s) => s.to_string(),
+                    None => "(*,G)".to_string(),
+                };
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{}\t{}\t{}",
+                    origin.overlay_group,
+                    origin.underlay_group,
+                    origin.vni,
+                    origin.metric,
+                    source,
+                )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::MulticastAdvertise(mg) => {
+            client
+                .advertise_multicast_groups(&vec![types::MulticastOrigin {
+                    overlay_group: mg.overlay_group,
+                    underlay_group: mg.underlay_group,
+                    vni: mg.vni,
+                    metric: mg.metric,
+                    source: mg.source,
+                }])
+                .await?;
+        }
+        SubCommand::MulticastWithdraw(mg) => {
+            client
+                .withdraw_multicast_groups(&vec![types::MulticastOrigin {
+                    overlay_group: mg.overlay_group,
+                    underlay_group: mg.underlay_group,
+                    vni: mg.vni,
+                    metric: mg.metric,
+                    source: mg.source,
                 }])
                 .await?;
         }
