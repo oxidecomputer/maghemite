@@ -113,6 +113,7 @@ const ADVERTISE: u8 = 1 << 1;
 pub enum Version {
     V2 = 2,
     V3 = 3,
+    V4 = 4,
 }
 
 #[derive(Error, Debug)]
@@ -136,7 +137,7 @@ pub struct DiscoveryPacket {
 impl DiscoveryPacket {
     pub fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::V4 as u8,
             flags: SOLICIT,
             hostname,
             kind,
@@ -144,7 +145,7 @@ impl DiscoveryPacket {
     }
     pub fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::V4 as u8,
             flags: ADVERTISE,
             hostname,
             kind,
@@ -461,12 +462,12 @@ fn handle_advertisement(
     let version = match version {
         2 => Version::V2,
         3 => Version::V3,
+        4 => Version::V4,
         x => {
             err!(
                 ctx.log,
                 ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
-                x
+                "unknown protocol version {x}, known versions are: 2, 3, 4"
             );
             return;
         }

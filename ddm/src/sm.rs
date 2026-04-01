@@ -4,12 +4,13 @@
 
 use crate::db::Db;
 use crate::discovery::Version;
-use crate::exchange::{TunnelUpdate, UnderlayUpdate, Update};
+use crate::exchange::{MulticastUpdate, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_types::db::RouterKind;
+use ddm_types::exchange::MulticastPathHop;
 use ddm_types::exchange::PathVector;
 use libnet::get_ipaddr_info;
-use mg_common::net::TunnelOrigin;
+use mg_common::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
@@ -41,11 +42,12 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
+    Multicast(HashSet<MulticastOrigin>),
 }
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(Update),
+    Push(Arc<Update>),
 }
 
 #[derive(Debug)]
@@ -425,7 +427,7 @@ impl Exchange {
         );
         let interval = 250; // TODO as parameter
         loop {
-            match exchange::do_pull(
+            match exchange::do_pull_v4(
                 &self.ctx,
                 &self.ctx.config.addr,
                 &self.ctx.rt,
@@ -455,7 +457,7 @@ impl Exchange {
     ) {
         exchange_thread.abort();
         self.ctx.db.remove_peer(self.ctx.config.if_index);
-        let (to_remove, to_remove_tnl) =
+        let (to_remove, to_remove_tnl, to_remove_mcast) =
             self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
@@ -518,9 +520,33 @@ impl Exchange {
                 ))
             };
 
-            let push = Update { underlay, tunnel };
+            // Build multicast withdrawal with our hop info
+            let multicast = if to_remove_mcast.is_empty() {
+                None
+            } else {
+                let hop = MulticastPathHop::new(
+                    self.ctx.hostname.clone(),
+                    self.ctx.config.addr,
+                );
+                Some(MulticastUpdate::withdraw(
+                    to_remove_mcast
+                        .iter()
+                        .map(|route| ddm_types::exchange::MulticastPathVector {
+                            origin: route.origin.clone(),
+                            path: vec![hop.clone()],
+                        })
+                        .collect(),
+                ))
+            };
+
+            let push = Arc::new(Update {
+                underlay,
+                tunnel,
+                multicast,
+            });
             for ec in &self.ctx.event_channels {
-                ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+                ec.send(Event::Peer(PeerEvent::Push(Arc::clone(&push))))
+                    .unwrap();
             }
         }
         pull_stop.store(true, Ordering::Relaxed);
@@ -601,6 +627,7 @@ impl State for Exchange {
                             "announce: {}",
                             e,
                         );
+
                         wrn!(
                             self.log,
                             self.ctx.config.if_name,
@@ -728,6 +755,104 @@ impl State for Exchange {
                         );
                     }
                 }
+                Event::Admin(AdminEvent::Announce(PrefixSet::Multicast(
+                    groups,
+                ))) => {
+                    // Convert `MulticastOrigin` to `MulticastPathVector` with
+                    // our hop info
+                    let hop = MulticastPathHop::new(
+                        self.ctx.hostname.clone(),
+                        self.ctx.config.addr,
+                    );
+                    let pvs: HashSet<_> = groups
+                        .iter()
+                        .map(|origin| {
+                            ddm_types::exchange::MulticastPathVector {
+                                origin: origin.clone(),
+                                path: vec![hop.clone()],
+                            }
+                        })
+                        .collect();
+
+                    if let Err(e) = crate::exchange::announce_multicast(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        pvs,
+                        self.peer,
+                        self.version,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "announce multicast: {}",
+                            e,
+                        );
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "expiring peer {} due to failed multicast announce",
+                            self.peer,
+                        );
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
+                    }
+                }
+                Event::Admin(AdminEvent::Withdraw(PrefixSet::Multicast(
+                    groups,
+                ))) => {
+                    // Convert MulticastOrigin to MulticastPathVector for withdrawal
+                    let hop = MulticastPathHop::new(
+                        self.ctx.hostname.clone(),
+                        self.ctx.config.addr,
+                    );
+                    let pvs: HashSet<_> = groups
+                        .iter()
+                        .map(|origin| {
+                            ddm_types::exchange::MulticastPathVector {
+                                origin: origin.clone(),
+                                path: vec![hop.clone()],
+                            }
+                        })
+                        .collect();
+
+                    if let Err(e) = crate::exchange::withdraw_multicast(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        pvs,
+                        self.peer,
+                        self.version,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "withdraw multicast: {e}",
+                        );
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "expiring peer {} due to failed multicast withdraw",
+                            self.peer,
+                        );
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
+                    }
+                }
                 Event::Admin(AdminEvent::Expire(peer)) => {
                     if self.peer == peer {
                         inf!(
@@ -770,6 +895,8 @@ impl State for Exchange {
                         self.peer,
                         update,
                     );
+                    let update = Arc::try_unwrap(update)
+                        .unwrap_or_else(|arc| (*arc).clone());
                     if let Some(push) = update.underlay {
                         if !push.announce.is_empty()
                             && let Err(e) = crate::exchange::announce_underlay(
@@ -817,13 +944,77 @@ impl State for Exchange {
                             err!(
                                 self.log,
                                 self.ctx.config.if_name,
-                                "withdraw: {}",
-                                e,
+                                "withdraw: {e}",
                             );
                             wrn!(
                                 self.log,
                                 self.ctx.config.if_name,
                                 "expiring peer {} due to failed withdraw",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_thread, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
+                    }
+                    // Handle multicast redistribution
+                    if let Some(push) = update.multicast {
+                        if !push.announce.is_empty()
+                            && let Err(e) = crate::exchange::announce_multicast(
+                                &self.ctx,
+                                self.ctx.config.clone(),
+                                push.announce,
+                                self.peer,
+                                self.version,
+                                self.ctx.rt.clone(),
+                                self.log.clone(),
+                            )
+                        {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "announce multicast: {e}",
+                            );
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed multicast announce",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_thread, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
+                        if !push.withdraw.is_empty()
+                            && let Err(e) = crate::exchange::withdraw_multicast(
+                                &self.ctx,
+                                self.ctx.config.clone(),
+                                push.withdraw,
+                                self.peer,
+                                self.version,
+                                self.ctx.rt.clone(),
+                                self.log.clone(),
+                            )
+                        {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "withdraw multicast: {e}",
+                            );
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed multicast withdraw",
                                 self.peer,
                             );
                             self.expire_peer(&exchange_thread, &pull_stop);
