@@ -94,7 +94,7 @@ schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0.102"
-hyper = "1.8.1"
+hyper = "1.9.0"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.149"
 percent-encoding = "2.3.2"
