@@ -164,7 +164,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    // Latest (VERSION_UNNUMBERED..)
+    // Latest (VERSION_BGP_SRC_ADDR..)
 
     async fn create_neighbor(
         ctx: RequestContext<Self::Context>,
@@ -195,6 +195,47 @@ impl MgAdminApi for MgAdminApiImpl {
     }
 
     async fn delete_neighbor(
+        ctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_neighbor(ctx, path).await
+    }
+
+    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - convert V6 types to latest
+
+    async fn create_neighbor_v5(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_neighbor(ctx, request.map(Into::into)).await
+    }
+
+    async fn read_neighbor_v5(
+        ctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseOk<NeighborV6>, HttpError> {
+        bgp_admin::read_neighbor(ctx, path)
+            .await
+            .map(|r| r.map(Into::into))
+    }
+
+    async fn read_neighbors_v5(
+        ctx: RequestContext<Self::Context>,
+        path: Path<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NeighborV6>>, HttpError> {
+        bgp_admin::read_neighbors(ctx, path)
+            .await
+            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+    }
+
+    async fn update_neighbor_v5(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_neighbor(ctx, request.map(Into::into)).await
+    }
+
+    async fn delete_neighbor_v5(
         ctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
@@ -246,32 +287,77 @@ impl MgAdminApi for MgAdminApiImpl {
 
     // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    async fn read_unnumbered_neighbors(
+    // Latest (VERSION_BGP_SRC_ADDR..)
+
+    async fn read_unnumbered_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
         bgp_admin::read_unnumbered_neighbors(rqctx, request).await
     }
 
-    async fn create_unnumbered_neighbor(
+    async fn create_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn read_unnumbered_neighbor(
+    async fn read_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError> {
         bgp_admin::read_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn update_unnumbered_neighbor(
+    async fn update_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_unnumbered_neighbor(rqctx, request).await
+    }
+
+    async fn delete_unnumbered_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
+    }
+
+    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - convert V6 types to latest
+
+    async fn read_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighborV6>>, HttpError> {
+        bgp_admin::read_unnumbered_neighbors(rqctx, request)
+            .await
+            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+    }
+
+    async fn create_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborV6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_unnumbered_neighbor(rqctx, request.map(Into::into))
+            .await
+    }
+
+    async fn read_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<UnnumberedNeighborV6>, HttpError> {
+        bgp_admin::read_unnumbered_neighbor(rqctx, request)
+            .await
+            .map(|r| r.map(Into::into))
+    }
+
+    async fn update_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborV6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_unnumbered_neighbor(rqctx, request.map(Into::into))
+            .await
     }
 
     async fn delete_unnumbered_neighbor(
@@ -437,11 +523,18 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::get_neighbors_v1(ctx, request).await
     }
 
-    async fn bgp_apply(
+    async fn bgp_apply_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::bgp_apply(ctx, request).await
+    }
+
+    async fn bgp_apply(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRequestV6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::bgp_apply(ctx, request.map(Into::into)).await
     }
 
     // bgp_apply_v1 is a provided method.
