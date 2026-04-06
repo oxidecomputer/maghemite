@@ -203,12 +203,44 @@ pub struct Neighbor {
 }
 
 impl Neighbor {
-    /// Validate that at least one address family is enabled
+    /// Validate that at least one address family is enabled, and that
+    /// `src_addr` (if set) is the same IP version as `host`.
     pub fn validate_address_families(&self) -> Result<(), String> {
         if self.parameters.ipv4_unicast.is_none()
             && self.parameters.ipv6_unicast.is_none()
         {
             return Err("at least one address family must be enabled".into());
+        }
+        if let Some(src) = self.parameters.src_addr {
+            let host_is_v4 = self.host.ip().is_ipv4();
+            let src_is_v4 = src.is_ipv4();
+            if host_is_v4 != src_is_v4 {
+                return Err(format!(
+                    "src_addr ({src}) IP version does not match host ({}) IP version",
+                    self.host.ip()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl UnnumberedNeighbor {
+    /// Validate that at least one address family is enabled, and that
+    /// `src_addr` (if set) is IPv6 — unnumbered BGP uses link-local IPv6
+    /// addressing, so an IPv4 source address is never valid.
+    pub fn validate_address_families(&self) -> Result<(), String> {
+        if self.parameters.ipv4_unicast.is_none()
+            && self.parameters.ipv6_unicast.is_none()
+        {
+            return Err("at least one address family must be enabled".into());
+        }
+        if let Some(src) = self.parameters.src_addr
+            && src.is_ipv4()
+        {
+            return Err(format!(
+                "src_addr ({src}) must be IPv6 for unnumbered neighbors"
+            ));
         }
         Ok(())
     }
