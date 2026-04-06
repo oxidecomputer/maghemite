@@ -201,46 +201,9 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::delete_neighbor(ctx, path).await
     }
 
-    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - convert V6 types to latest
-
-    async fn create_neighbor_v5(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV6>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_neighbor(ctx, request.map(Into::into)).await
-    }
-
-    async fn read_neighbor_v5(
-        ctx: RequestContext<Self::Context>,
-        path: Path<NeighborSelector>,
-    ) -> Result<HttpResponseOk<NeighborV6>, HttpError> {
-        bgp_admin::read_neighbor(ctx, path)
-            .await
-            .map(|r| r.map(Into::into))
-    }
-
-    async fn read_neighbors_v5(
-        ctx: RequestContext<Self::Context>,
-        path: Path<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<NeighborV6>>, HttpError> {
-        bgp_admin::read_neighbors(ctx, path)
-            .await
-            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
-    }
-
-    async fn update_neighbor_v5(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV6>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_neighbor(ctx, request.map(Into::into)).await
-    }
-
-    async fn delete_neighbor_v5(
-        ctx: RequestContext<Self::Context>,
-        path: Path<NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor(ctx, path).await
-    }
+    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - create_neighbor_v5,
+    // read_neighbor_v5, read_neighbors_v5, update_neighbor_v5, and
+    // delete_neighbor_v5 are provided methods.
 
     // V4 (VERSION_MP_BGP..VERSION_UNNUMBERED)
     // create_neighbor_v4, update_neighbor_v4, read_neighbor_v4,
@@ -324,48 +287,10 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
     }
 
-    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - convert V6 types to latest
-
-    async fn read_unnumbered_neighbors(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighborV6>>, HttpError> {
-        bgp_admin::read_unnumbered_neighbors(rqctx, request)
-            .await
-            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
-    }
-
-    async fn create_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<UnnumberedNeighborV6>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_unnumbered_neighbor(rqctx, request.map(Into::into))
-            .await
-    }
-
-    async fn read_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseOk<UnnumberedNeighborV6>, HttpError> {
-        bgp_admin::read_unnumbered_neighbor(rqctx, request)
-            .await
-            .map(|r| r.map(Into::into))
-    }
-
-    async fn update_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<UnnumberedNeighborV6>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_unnumbered_neighbor(rqctx, request.map(Into::into))
-            .await
-    }
-
-    async fn delete_unnumbered_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
-    }
+    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - read_unnumbered_neighbors,
+    // create_unnumbered_neighbor, read_unnumbered_neighbor,
+    // update_unnumbered_neighbor, and delete_unnumbered_neighbor are provided
+    // methods.
 
     async fn clear_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -530,14 +455,7 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::bgp_apply(ctx, request).await
     }
 
-    async fn bgp_apply(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequestV6>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::bgp_apply(ctx, request.map(Into::into)).await
-    }
-
-    // bgp_apply_v1 is a provided method.
+    // bgp_apply and bgp_apply_v1 are provided methods.
 
     async fn message_history(
         ctx: RequestContext<Self::Context>,
