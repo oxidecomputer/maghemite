@@ -12,16 +12,15 @@ use crate::v2::exchange::MulticastPathHop;
 
 /// A multicast route learned via DDM.
 ///
-/// Carries both the group origin and the path vector from the
-/// originating subscriber through intermediate transit routers.
-/// The path enables loop detection and (in multi-rack topologies)
-/// replication optimizations per [RFD 488] in the future.
-///
-/// Equality and hashing consider only `origin` and `nexthop` so that
-/// a route update with a longer path replaces the existing entry in
-/// hash-based collections.
-///
-/// [RFD 488]: https://rfd.shared.oxide.computer/rfd/0488
+/// Carries a MulticastOrigin (overlay group + ff04::/64 underlay
+/// mapping) and the path vector from the originating subscriber
+/// through intermediate transit routers.
+// The path enables loop detection and (in multi-rack topologies)
+// replication optimizations (RFD 488) in the future.
+//
+// Equality and hashing consider only `origin` and `nexthop` so that
+// a route update with a longer path replaces the existing entry in
+// hash-based collections.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MulticastRoute {
     /// The multicast group origin information.

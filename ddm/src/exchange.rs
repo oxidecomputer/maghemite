@@ -406,8 +406,11 @@ impl TunnelUpdate {
 
 /// Multicast group subscription updates.
 ///
-/// Carries path-vector information for multicast group subscriptions,
-/// enabling loop detection and optimal replication point computation.
+/// Each entry carries a [`MulticastPathVector`] containing a
+/// [`MulticastOrigin`] (overlay group + ff04::/64 underlay mapping)
+/// and the path vector for loop detection.
+///
+/// [`MulticastOrigin`]: mg_common::net::MulticastOrigin
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct MulticastUpdate {
     pub announce: HashSet<MulticastPathVector>,
@@ -1210,9 +1213,7 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
 /// apply at this layer. The MRIB RPF module in rdb handles that check
 /// before routes are originated into DDM. At the DDM exchange level,
 /// the path vector provides loop detection and carries topology
-/// information for replication optimization per [RFD 488].
-///
-/// [RFD 488]: https://rfd.shared.oxide.computer/rfd/0488
+/// information for replication optimization (RFD 488).
 fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
     let db = &ctx.ctx.db;
     let hostname = &ctx.ctx.hostname;

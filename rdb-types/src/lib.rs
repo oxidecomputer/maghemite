@@ -459,8 +459,8 @@ pub enum ProtocolFilter {
 ///
 /// # Route Tracking
 ///
-/// This type is used in [`BgpPathProperties`](crate::BgpPathProperties) to track
-/// which peer advertised a route. Using `PeerId` instead of `IpAddr` ensures:
+/// This type is used in `BgpPathProperties` to track which peer advertised a
+/// route. Using `PeerId` instead of `IpAddr` ensures:
 /// - Unnumbered peers are properly distinguished even if they share link-local IPs
 /// - Route cleanup correctly removes only the routes from the intended peer
 /// - No cross-contamination when multiple unnumbered sessions exist
