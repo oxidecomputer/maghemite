@@ -8,12 +8,9 @@ use std::net::Ipv6Addr;
 
 /// A single hop in the multicast path, carrying metadata needed for
 /// replication optimization.
-///
-/// Unlike unicast paths which only need hostnames, multicast hops carry
-/// additional information for computing optimal replication points per
-/// [RFD 488].
-///
-/// [RFD 488]: https://rfd.shared.oxide.computer/rfd/0488
+// Unlike unicast paths which only need hostnames, multicast hops carry
+// additional information for computing optimal replication points
+// (RFD 488).
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
@@ -46,11 +43,12 @@ impl MulticastPathHop {
 
 /// Multicast group subscription announcement propagating through DDM.
 ///
-/// The path records the sequence of routers from the original subscriber
-/// toward the current receiving router. Currently, this is used for loop
-/// detection: if our router_id appears in the path, the announcement has
-/// already traversed us and is dropped. The path structure also carries
-/// topology information for future replication optimizations (RFD 488).
+/// Contains a MulticastOrigin (overlay group + ff04::/64 underlay
+/// mapping) and the path from the original subscriber outward.
+// Currently, this is used for loop detection: if our router_id appears in the
+// path, the announcement has already traversed us and is dropped. The path
+// structure also carries topology information for future replication
+// optimizations (RFD 488).
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]

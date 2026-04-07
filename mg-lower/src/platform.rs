@@ -217,6 +217,13 @@ pub trait Ddm {
         ddm_admin_client::Error<DdmError>,
     >;
 
+    /// Get multicast group subscriptions originated by this router.
+    ///
+    /// Each `MulticastOrigin` pairs an overlay group address with its
+    /// underlay mapping (ff04::/64) and optional source for (S,G) routes.
+    ///
+    /// Method names follow the DDM admin API convention
+    /// (`originated_multicast_groups`, not `originated_multicast_origins`).
     async fn get_originated_multicast_groups(
         &self,
     ) -> Result<
@@ -224,6 +231,10 @@ pub trait Ddm {
         ddm_admin_client::Error<DdmError>,
     >;
 
+    /// Advertise multicast group subscriptions to DDM peers.
+    ///
+    /// Each entry is a `MulticastOrigin` pairing an overlay group
+    /// with its ff04::/64 underlay mapping.
     #[allow(clippy::ptr_arg)]
     async fn advertise_multicast_groups<'a>(
         &'a self,
@@ -233,6 +244,10 @@ pub trait Ddm {
         ddm_admin_client::Error<DdmError>,
     >;
 
+    /// Withdraw multicast group subscriptions from DDM peers.
+    ///
+    /// Each entry is a `MulticastOrigin` pairing an overlay group
+    /// with its ff04::/64 underlay mapping.
     #[allow(clippy::ptr_arg)]
     async fn withdraw_multicast_groups<'a>(
         &'a self,
@@ -484,6 +499,7 @@ pub(crate) mod test {
     use crate::MG_LOWER_TAG;
 
     use super::*;
+    use mg_common::lock;
     use std::sync::Mutex;
     use std::{collections::HashMap, net::IpAddr};
 
@@ -538,7 +554,7 @@ pub(crate) mod test {
             link_id: &LinkId,
         ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>>
         {
-            let links = self.links.lock().unwrap();
+            let links = lock!(self.links);
             let link = links
                 .iter()
                 .find(|x| &x.port_id == port_id && &x.link_id == link_id);
@@ -556,10 +572,7 @@ pub(crate) mod test {
             dpd_client::ResponseValue<Vec<Route>>,
             DpdClientError<DpdError>,
         > {
-            let result = self
-                .v4_routes
-                .lock()
-                .unwrap()
+            let result = lock!(self.v4_routes)
                 .get(cidr)
                 .cloned()
                 .unwrap_or(Vec::default());
@@ -573,10 +586,7 @@ pub(crate) mod test {
             dpd_client::ResponseValue<Vec<Ipv6Route>>,
             DpdClientError<DpdError>,
         > {
-            let result = self
-                .v6_routes
-                .lock()
-                .unwrap()
+            let result = lock!(self.v6_routes)
                 .get(cidr)
                 .cloned()
                 .unwrap_or(Vec::default());
@@ -588,7 +598,7 @@ pub(crate) mod test {
             addr: &Ipv6Entry,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            self.loopback.lock().unwrap().replace(addr.clone());
+            lock!(self.loopback).replace(addr.clone());
             Ok(dpd_response_ok!(()))
         }
 
@@ -599,7 +609,7 @@ pub(crate) mod test {
             dpd_client::ResponseValue<Vec<Link>>,
             DpdClientError<DpdError>,
         > {
-            let links = self.links.lock().unwrap();
+            let links = lock!(self.links);
             let result = links
                 .iter()
                 .filter(|x| match filter {
@@ -666,7 +676,7 @@ pub(crate) mod test {
                 RouteTarget::V4(v4) => Route::V4(v4.clone()),
                 RouteTarget::V6(v6) => Route::V6(v6.clone()),
             };
-            let mut routes = self.v4_routes.lock().unwrap();
+            let mut routes = lock!(self.v4_routes);
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
                     targets.push(route);
@@ -683,7 +693,7 @@ pub(crate) mod test {
             body: &'a Ipv6RouteUpdate,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut routes = self.v6_routes.lock().unwrap();
+            let mut routes = lock!(self.v6_routes);
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
                     targets.push(body.target.clone());
@@ -703,7 +713,7 @@ pub(crate) mod test {
             tgt_ip: &'a IpAddr,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut routes = self.v4_routes.lock().unwrap();
+            let mut routes = lock!(self.v4_routes);
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| match (x, tgt_ip) {
                     (Route::V4(x), IpAddr::V4(ip)) => {
@@ -731,7 +741,7 @@ pub(crate) mod test {
             tgt_ip: &'a std::net::Ipv6Addr,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut routes = self.v6_routes.lock().unwrap();
+            let mut routes = lock!(self.v6_routes);
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| {
                     !(x.tgt_ip == *tgt_ip
@@ -773,9 +783,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<TunnelOrigin>>,
             ddm_admin_client::Error<DdmError>,
         > {
-            Ok(ddm_response_ok!(
-                self.tunnel_originated.lock().unwrap().clone()
-            ))
+            Ok(ddm_response_ok!(lock!(self.tunnel_originated).clone()))
         }
 
         async fn get_originated(
@@ -784,7 +792,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
             ddm_admin_client::Error<DdmError>,
         > {
-            Ok(ddm_response_ok!(self.originated.lock().unwrap().clone()))
+            Ok(ddm_response_ok!(lock!(self.originated).clone()))
         }
 
         async fn advertise_prefixes<'a>(
@@ -794,7 +802,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.originated.lock().unwrap().extend(body);
+            lock!(self.originated).extend(body);
             Ok(ddm_response_ok!(()))
         }
 
@@ -805,7 +813,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.tunnel_originated.lock().unwrap().extend(body.clone());
+            lock!(self.tunnel_originated).extend(body.clone());
             Ok(ddm_response_ok!(()))
         }
 
@@ -816,10 +824,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.tunnel_originated
-                .lock()
-                .unwrap()
-                .retain(|x| !body.contains(x));
+            lock!(self.tunnel_originated).retain(|x| !body.contains(x));
             Ok(ddm_response_ok!(()))
         }
 
@@ -829,9 +834,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
             ddm_admin_client::Error<DdmError>,
         > {
-            Ok(ddm_response_ok!(
-                self.multicast_originated.lock().unwrap().clone()
-            ))
+            Ok(ddm_response_ok!(lock!(self.multicast_originated).clone()))
         }
 
         async fn advertise_multicast_groups<'a>(
@@ -841,10 +844,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.multicast_originated
-                .lock()
-                .unwrap()
-                .extend(body.clone());
+            lock!(self.multicast_originated).extend(body.clone());
             Ok(ddm_response_ok!(()))
         }
 
@@ -855,10 +855,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.multicast_originated
-                .lock()
-                .unwrap()
-                .retain(|x| !body.contains(x));
+            lock!(self.multicast_originated).retain(|x| !body.contains(x));
             Ok(ddm_response_ok!(()))
         }
     }
