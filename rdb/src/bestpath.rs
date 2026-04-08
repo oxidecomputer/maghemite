@@ -63,7 +63,7 @@ pub fn bgp_bestpaths(
     candidates: BTreeSet<&Path>,
     max: usize,
 ) -> BTreeSet<Path> {
-    // Per RFC 4721 Section 9.1.2.2:
+    // Per RFC 4271 Section 9.1.2.2:
     // """
     // The tie-breaking algorithm begins by considering all equally
     // preferable routes to the same destination, and then selects routes to

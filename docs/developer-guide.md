@@ -7,7 +7,7 @@ support for illumos/Helios and Dendrite/Sidecar data planes.
 
 ## Tech Stack
 
-- **Language**: Rust 1.92.0 (pinned in `rust-toolchain.toml`)
+- **Language**: Rust (version pinned in `rust-toolchain.toml`)
 - **Async runtime**: Tokio via `oxide_tokio_rt::run` (clippy
   disallows `#[tokio::main]`)
 - **HTTP API framework**: Dropshot (server) + Progenitor (client
@@ -51,7 +51,8 @@ support for illumos/Helios and Dendrite/Sidecar data planes.
 - **`rdb`** — Routing Information Base shared by BGP, BFD, static,
   DDM. Separate in/loc RIBs for IPv4/IPv6. Bestpath algorithm:
   shutdown filter -> RIB priority -> local_pref -> AS path length ->
-  MED. ECMP support. Persistent via sled at `/var/run/rdb`.
+  multi-exit discriminator (MED). Equal-cost multipath (ECMP) support.
+  Persistent via sled at `/var/run/rdb`.
 - **`rdb-types`** — Shared types for the RIB.
 - **`mg-lower`** — Syncs RIB to data plane (Dendrite). Watches RIB
   for changes, full sync on startup + incremental updates. Platform

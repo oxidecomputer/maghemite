@@ -46,6 +46,7 @@ pub enum StatusCmd {
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
         /// Exact-match prefix filter (e.g. 10.0.0.0/24)
+        #[clap(long)]
         prefix: Option<String>,
         /// Display mode: summary (default) or detail.
         /// Defaults to detail when a prefix is specified.
@@ -63,6 +64,7 @@ pub enum StatusCmd {
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
         /// Exact-match prefix filter (e.g. 10.0.0.0/24)
+        #[clap(long)]
         prefix: Option<String>,
         /// Display mode: summary (default) or detail.
         /// Defaults to detail when a prefix is specified.

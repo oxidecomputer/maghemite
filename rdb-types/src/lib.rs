@@ -380,6 +380,14 @@ impl Prefix {
         matches!(self, Prefix::V4(_))
     }
 
+    /// Return the address family corresponding to this prefix.
+    pub fn address_family(&self) -> AddressFamily {
+        match self {
+            Prefix::V4(_) => AddressFamily::Ipv4,
+            Prefix::V6(_) => AddressFamily::Ipv6,
+        }
+    }
+
     /// Check if a prefix contains a subnet that is valid for use in the RIB.
     pub fn valid_for_rib(&self) -> bool {
         match self {

@@ -295,10 +295,10 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn to_wire(&self, extended_msg: bool) -> Result<Vec<u8>, Error> {
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
             Self::Open(m) => m.to_wire(),
-            Self::Update(m) => m.to_wire(extended_msg),
+            Self::Update(m) => m.to_wire(),
             Self::Notification(m) => m.to_wire(),
             Self::KeepAlive => Ok(Vec::new()),
             Self::RouteRefresh(m) => Ok(m.to_wire()),
@@ -935,7 +935,7 @@ impl UpdateMessage {
             + nlri
     }
 
-    pub fn to_wire(&self, extended_msg: bool) -> Result<Vec<u8>, Error> {
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
         // withdrawn
@@ -962,17 +962,6 @@ impl UpdateMessage {
 
         // nlri
         buf.extend_from_slice(&self.nlri_to_wire()?);
-
-        let max_size = if extended_msg {
-            MAX_EXTENDED_MESSAGE_SIZE
-        } else {
-            MAX_MESSAGE_SIZE
-        };
-        if buf.len() > max_size {
-            return Err(Error::TooLarge(
-                "update exceeds max message size".into(),
-            ));
-        }
 
         Ok(buf)
     }
@@ -6313,7 +6302,7 @@ mod tests {
             errors: vec![],
         };
 
-        let buf = um0.to_wire(false).expect("update message to wire");
+        let buf = um0.to_wire().expect("update message to wire");
         println!("buf: {}", buf.hex_dump());
 
         let um1 =
@@ -6357,18 +6346,20 @@ mod tests {
             "test update must exceed standard body limit"
         );
 
-        // Extended: encodes and round-trips successfully
-        let buf = um.to_wire(true).expect("extended update should encode");
-        let decoded = UpdateMessage::from_wire(&buf)
-            .expect("extended update should decode");
+        // Encodes and round-trips successfully
+        let buf = um.to_wire().expect("encode");
+        let decoded = UpdateMessage::from_wire(&buf).expect("decode");
         assert_eq!(um, decoded);
 
-        // Standard: encoding fails because the body exceeds 4096
-        assert!(um.to_wire(false).is_err());
+        // Size enforcement for non-extended messages is handled by
+        // Header::new(), not to_wire().
+        let total = u16::try_from(buf.len() + Header::WIRE_SIZE).unwrap();
+        assert!(Header::new(total, MessageType::Update, false).is_err());
+        assert!(Header::new(total, MessageType::Update, true).is_ok());
     }
 
     #[test]
-    fn small_update_works_with_or_without_extended() {
+    fn small_update_round_trip() {
         let um = UpdateMessage {
             withdrawn: vec![],
             path_attributes: vec![
@@ -6384,11 +6375,8 @@ mod tests {
             errors: vec![],
         };
 
-        let buf_std = um.to_wire(false).expect("standard encode");
-        let buf_ext = um.to_wire(true).expect("extended encode");
-        assert_eq!(buf_std, buf_ext);
-
-        let decoded = UpdateMessage::from_wire(&buf_ext).expect("decode");
+        let buf = um.to_wire().expect("encode");
+        let decoded = UpdateMessage::from_wire(&buf).expect("decode");
         assert_eq!(um, decoded);
     }
 
@@ -7140,7 +7128,7 @@ mod tests {
         };
 
         // Encode to wire format
-        let wire = update.to_wire(false).expect("encoding should succeed");
+        let wire = update.to_wire().expect("encoding should succeed");
 
         // Skip withdrawn routes length (2 bytes) and empty withdrawn routes (0 bytes)
         // Skip path attributes length (2 bytes)
@@ -7183,7 +7171,7 @@ mod tests {
         };
 
         // Encode to wire and decode back - should succeed
-        let wire = update.to_wire(false).expect("encoding should succeed");
+        let wire = update.to_wire().expect("encoding should succeed");
         let decoded = UpdateMessage::from_wire(&wire);
         assert!(
             decoded.is_ok(),
@@ -7242,7 +7230,7 @@ mod tests {
         };
 
         // Encode to wire and decode back - should succeed
-        let wire = update.to_wire(false).expect("encoding should succeed");
+        let wire = update.to_wire().expect("encoding should succeed");
         let decoded = UpdateMessage::from_wire(&wire);
         assert!(
             decoded.is_ok(),
@@ -7307,7 +7295,7 @@ mod tests {
         };
 
         // Round-trip through wire format
-        let wire = update.to_wire(false).expect("encoding should succeed");
+        let wire = update.to_wire().expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -7372,9 +7360,7 @@ mod tests {
             errors: vec![],
         };
 
-        let wire = empty_update
-            .to_wire(false)
-            .expect("encoding should succeed");
+        let wire = empty_update.to_wire().expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -7400,9 +7386,7 @@ mod tests {
             errors: vec![],
         };
 
-        let wire = mp_eor_update
-            .to_wire(false)
-            .expect("encoding should succeed");
+        let wire = mp_eor_update.to_wire().expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 
@@ -7438,9 +7422,7 @@ mod tests {
             errors: vec![],
         };
 
-        let wire = mp_eor_v4_update
-            .to_wire(false)
-            .expect("encoding should succeed");
+        let wire = mp_eor_v4_update.to_wire().expect("encoding should succeed");
         let decoded =
             UpdateMessage::from_wire(&wire).expect("decoding should succeed");
 

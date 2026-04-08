@@ -1082,7 +1082,7 @@ impl BgpConnectionTcp {
             "message" => msg.title(),
             "message_contents" => format!("{msg}")
         );
-        let msg_buf = msg.to_wire(extended_msg)?;
+        let msg_buf = msg.to_wire()?;
         let length =
             u16::try_from(msg_buf.len() + Header::WIRE_SIZE).map_err(|_| {
                 Error::TooLarge("BGP message being sent is too large".into())

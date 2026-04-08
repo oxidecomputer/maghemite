@@ -1051,7 +1051,9 @@ impl Db {
             false
         };
 
-        self.recompute_rib_loc(rib_in, rib_loc, prefix);
+        if changed {
+            self.recompute_rib_loc(rib_in, rib_loc, prefix);
+        }
         changed
     }
 

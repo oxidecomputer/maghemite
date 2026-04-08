@@ -73,6 +73,14 @@ pub async fn get_rib_imported(
         let prefix: Prefix = prefix_str
             .parse()
             .map_err(|e: String| HttpError::for_bad_request(None, e))?;
+        if let Some(af) = query.address_family
+            && af != prefix.address_family()
+        {
+            return Err(HttpError::for_bad_request(
+                None,
+                "prefix/address_family mismatch".to_string(),
+            ));
+        }
         match ctx.db.get_imported_prefix(&prefix) {
             Some(paths) => BTreeMap::from([(prefix, paths)]),
             None => BTreeMap::new(),
@@ -94,6 +102,14 @@ pub async fn get_rib_selected(
         let prefix: Prefix = prefix_str
             .parse()
             .map_err(|e: String| HttpError::for_bad_request(None, e))?;
+        if let Some(af) = query.address_family
+            && af != prefix.address_family()
+        {
+            return Err(HttpError::for_bad_request(
+                None,
+                "prefix/address_family mismatch".to_string(),
+            ));
+        }
         match ctx.db.get_selected_prefix(&prefix) {
             Some(paths) => BTreeMap::from([(prefix, paths)]),
             None => BTreeMap::new(),
