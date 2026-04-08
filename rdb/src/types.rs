@@ -794,9 +794,6 @@ impl Display for PrefixChangeNotification {
 // MRIB (Multicast RIB) Types
 // ============================================================================
 
-/// Default VNI for fleet-wide multicast routing.
-pub const DEFAULT_MULTICAST_VNI: Vni = Vni::DEFAULT_MULTICAST_VNI;
-
 /// A validated IPv4 unicast address suitable for multicast source fields.
 ///
 /// This rejects addresses that cannot appear as a forwarded unicast source:
@@ -1112,92 +1109,7 @@ impl From<MulticastAddrV6> for Ipv6Addr {
     }
 }
 
-/// A validated underlay multicast IPv6 address within ff04::/64.
-///
-/// The Oxide rack maps overlay multicast groups 1:1 to admin-local scoped
-/// IPv6 multicast addresses in `UNDERLAY_MULTICAST_SUBNET` (ff04::/64).
-/// This type enforces that invariant at construction time.
-///
-// TODO: This duplicates `dpd_types::mcast::UnderlayMulticastIpv6` in dendrite.
-// Both should be consolidated into `omicron_common` so maghemite, dendrite,
-// and omicron share a single definition.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
-#[schemars(transparent)]
-pub struct UnderlayMulticastIpv6(Ipv6Addr);
-
-impl UnderlayMulticastIpv6 {
-    /// Create a new validated underlay multicast address.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the address is not within `UNDERLAY_MULTICAST_SUBNET`
-    /// (ff04::/64).
-    pub fn new(value: Ipv6Addr) -> Result<Self, Error> {
-        if !UNDERLAY_MULTICAST_SUBNET.contains(value) {
-            return Err(Error::Validation(format!(
-                "underlay address {value} is not within \
-                 {UNDERLAY_MULTICAST_SUBNET}"
-            )));
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the underlying IPv6 address.
-    #[inline]
-    pub const fn ip(&self) -> Ipv6Addr {
-        self.0
-    }
-}
-
-impl fmt::Display for UnderlayMulticastIpv6 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<Ipv6Addr> for UnderlayMulticastIpv6 {
-    type Error = Error;
-
-    fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<UnderlayMulticastIpv6> for Ipv6Addr {
-    fn from(addr: UnderlayMulticastIpv6) -> Self {
-        addr.0
-    }
-}
-
-impl From<UnderlayMulticastIpv6> for IpAddr {
-    fn from(addr: UnderlayMulticastIpv6) -> Self {
-        IpAddr::V6(addr.0)
-    }
-}
-
-impl FromStr for UnderlayMulticastIpv6 {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let addr: Ipv6Addr = s.parse().map_err(|_| {
-            Error::Validation(format!("invalid IPv6 address: {s}"))
-        })?;
-        Self::new(addr)
-    }
-}
+pub use mg_common::net::UnderlayMulticastIpv6;
 
 /// A validated multicast group address (IPv4 or IPv6).
 ///
@@ -1694,6 +1606,18 @@ impl MulticastRoute {
     }
 }
 
+impl From<&MulticastRoute> for mg_common::net::MulticastOrigin {
+    fn from(route: &MulticastRoute) -> Self {
+        Self {
+            overlay_group: route.key.group().ip(),
+            underlay_group: route.underlay_group,
+            vni: route.key.vni(),
+            metric: 0,
+            source: route.key.source(),
+        }
+    }
+}
+
 /// Source of a multicast route entry.
 #[derive(
     Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq,
@@ -2034,7 +1958,7 @@ mod test {
         let result = MulticastRouteKey::new(
             Some(IpAddr::V4(src.ip())),
             group.into(),
-            DEFAULT_MULTICAST_VNI,
+            Vni::DEFAULT_MULTICAST_VNI,
         );
         assert!(
             result.is_err(),
@@ -2049,7 +1973,7 @@ mod test {
         let result = MulticastRouteKey::new(
             Some(IpAddr::V6(src)),
             group.into(),
-            DEFAULT_MULTICAST_VNI,
+            Vni::DEFAULT_MULTICAST_VNI,
         );
         assert!(
             result.is_err(),

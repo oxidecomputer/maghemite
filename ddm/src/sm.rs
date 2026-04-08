@@ -494,12 +494,9 @@ impl Exchange {
                 self.ctx.event_channels.len()
             );
 
-            let underlay = if to_remove.is_empty() {
-                None
-            } else {
-                Some(UnderlayUpdate::withdraw(
-                    to_remove
-                        .iter()
+            let underlay = crate::non_empty(to_remove).map(|set| {
+                UnderlayUpdate::withdraw(
+                    set.iter()
                         .map(|x| PathVector {
                             destination: x.destination,
                             path: {
@@ -509,35 +506,30 @@ impl Exchange {
                             },
                         })
                         .collect(),
-                ))
-            };
+                )
+            });
 
-            let tunnel = if to_remove_tnl.is_empty() {
-                None
-            } else {
-                Some(TunnelUpdate::withdraw(
-                    to_remove_tnl.iter().cloned().map(Into::into).collect(),
-                ))
-            };
+            let tunnel = crate::non_empty(to_remove_tnl).map(|set| {
+                TunnelUpdate::withdraw(
+                    set.iter().cloned().map(Into::into).collect(),
+                )
+            });
 
-            // Build multicast withdrawal with our hop info
-            let multicast = if to_remove_mcast.is_empty() {
-                None
-            } else {
+            // Build multicast withdrawal with our hop info.
+            let multicast = crate::non_empty(to_remove_mcast).map(|set| {
                 let hop = MulticastPathHop::new(
                     self.ctx.hostname.clone(),
                     self.ctx.config.addr,
                 );
-                Some(MulticastUpdate::withdraw(
-                    to_remove_mcast
-                        .iter()
+                MulticastUpdate::withdraw(
+                    set.iter()
                         .map(|route| ddm_types::exchange::MulticastPathVector {
                             origin: route.origin.clone(),
                             path: vec![hop.clone()],
                         })
                         .collect(),
-                ))
-            };
+                )
+            });
 
             let push = Arc::new(Update {
                 underlay,

@@ -40,6 +40,20 @@ impl std::hash::Hash for types::TunnelOrigin {
     }
 }
 
+impl std::cmp::PartialEq for types::Vni {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl std::cmp::Eq for types::Vni {}
+
+impl std::hash::Hash for types::Vni {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
 impl std::cmp::PartialEq for types::MulticastOrigin {
     fn eq(&self, other: &Self) -> bool {
         self.overlay_group.eq(&other.overlay_group)
@@ -59,5 +73,17 @@ impl std::hash::Hash for types::MulticastOrigin {
         self.underlay_group.hash(state);
         self.vni.hash(state);
         self.source.hash(state);
+    }
+}
+
+impl From<mg_common::net::MulticastOrigin> for types::MulticastOrigin {
+    fn from(o: mg_common::net::MulticastOrigin) -> Self {
+        Self {
+            overlay_group: o.overlay_group,
+            underlay_group: o.underlay_group.ip(),
+            vni: types::Vni(o.vni.as_u32()),
+            metric: o.metric,
+            source: o.source,
+        }
     }
 }

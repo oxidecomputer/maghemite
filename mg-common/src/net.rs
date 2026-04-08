@@ -2,20 +2,35 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Re-export so consumers of MulticastOrigin.vni don't need a direct
+// omicron_common dependency.
+pub use omicron_common::api::external::Vni;
+
 use omicron_common::address::UNDERLAY_MULTICAST_SUBNET;
-use omicron_common::api::external::Vni;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
+use thiserror::Error;
 
-/// Default VNI for multicast routing.
-pub const DEFAULT_MULTICAST_VNI: u32 = Vni::DEFAULT_MULTICAST_VNI.as_u32();
+fn default_multicast_vni() -> Vni {
+    Vni::DEFAULT_MULTICAST_VNI
+}
 
-fn default_multicast_vni() -> u32 {
-    DEFAULT_MULTICAST_VNI
+/// Error constructing an [`UnderlayMulticastIpv6`] address.
+#[derive(Debug, Clone, Error)]
+pub enum UnderlayMulticastError {
+    /// The address is not within the underlay multicast subnet (ff04::/64).
+    #[error(
+        "underlay address {addr} is not within {UNDERLAY_MULTICAST_SUBNET}"
+    )]
+    NotInSubnet { addr: Ipv6Addr },
+
+    /// The string could not be parsed as an IPv6 address.
+    #[error("invalid IPv6 address: {0}")]
+    InvalidIpv6(#[from] std::net::AddrParseError),
 }
 
 /// A validated underlay multicast IPv6 address within ff04::/64.
@@ -45,13 +60,11 @@ impl UnderlayMulticastIpv6 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the address is not within ff04::/64.
-    pub fn new(value: Ipv6Addr) -> Result<Self, String> {
+    /// Returns [`UnderlayMulticastError::NotInSubnet`] if the address is
+    /// not within ff04::/64.
+    pub fn new(value: Ipv6Addr) -> Result<Self, UnderlayMulticastError> {
         if !UNDERLAY_MULTICAST_SUBNET.contains(value) {
-            return Err(format!(
-                "underlay address {value} is not within \
-                 {UNDERLAY_MULTICAST_SUBNET}"
-            ));
+            return Err(UnderlayMulticastError::NotInSubnet { addr: value });
         }
         Ok(Self(value))
     }
@@ -70,7 +83,7 @@ impl fmt::Display for UnderlayMulticastIpv6 {
 }
 
 impl TryFrom<Ipv6Addr> for UnderlayMulticastIpv6 {
-    type Error = String;
+    type Error = UnderlayMulticastError;
 
     fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
         Self::new(value)
@@ -90,11 +103,10 @@ impl From<UnderlayMulticastIpv6> for IpAddr {
 }
 
 impl FromStr for UnderlayMulticastIpv6 {
-    type Err = String;
+    type Err = UnderlayMulticastError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let addr: Ipv6Addr =
-            s.parse().map_err(|e| format!("invalid IPv6: {e}"))?;
+        let addr: Ipv6Addr = s.parse()?;
         Self::new(addr)
     }
 }
@@ -194,7 +206,7 @@ pub enum IpPrefix {
 /// advertised via DDM. The overlay_group is the application-visible multicast
 /// address (e.g., 233.252.0.1 or ff0e::1), while underlay_group is the mapped
 /// admin-local scoped IPv6 address (ff04::X) used in the underlay network.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MulticastOrigin {
     /// The overlay multicast group address (IPv4 or IPv6).
     /// This is the group address visible to applications.
@@ -206,7 +218,7 @@ pub struct MulticastOrigin {
 
     /// VNI for this multicast group (identifies the VPC/network context).
     #[serde(default = "default_multicast_vni")]
-    pub vni: u32,
+    pub vni: Vni,
 
     /// Metric for path selection (lower is better).
     ///
@@ -222,6 +234,11 @@ pub struct MulticastOrigin {
     pub source: Option<IpAddr>,
 }
 
+// Equality and hashing consider only the identity fields (overlay_group,
+// underlay_group, vni, source), not metric. This allows metric updates to
+// replace existing entries in HashSet-based collections without creating
+// duplicates. This type is not used in ordered collections (BTreeSet).
+// See #649 for why adding Ord here would require more care.
 impl PartialEq for MulticastOrigin {
     fn eq(&self, other: &Self) -> bool {
         self.overlay_group == other.overlay_group
@@ -230,8 +247,6 @@ impl PartialEq for MulticastOrigin {
             && self.source == other.source
     }
 }
-
-impl Eq for MulticastOrigin {}
 
 impl std::hash::Hash for MulticastOrigin {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {

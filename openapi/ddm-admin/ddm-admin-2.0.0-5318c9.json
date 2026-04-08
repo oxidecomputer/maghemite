@@ -591,9 +591,11 @@
           "vni": {
             "description": "VNI for this multicast group (identifies the VPC/network context).",
             "default": 77,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
           }
         },
         "required": [
@@ -758,6 +760,12 @@
           "nexthop",
           "origin"
         ]
+      },
+      "Vni": {
+        "description": "A Geneve Virtual Network Identifier",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
       }
     },
     "responses": {

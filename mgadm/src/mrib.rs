@@ -21,9 +21,9 @@ use mg_admin_client::types::{
     MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
     RouteOriginFilter, Vni,
 };
-use rdb::types::{AddressFamily, DEFAULT_MULTICAST_VNI};
+use rdb::types::AddressFamily;
 
-const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI.as_u32();
+const DEFAULT_VNI: u32 = rdb::Vni::DEFAULT_MULTICAST_VNI.as_u32();
 
 fn parse_route_origin(s: &str) -> Result<RouteOriginFilter, String> {
     match s.to_lowercase().as_str() {
