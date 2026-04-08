@@ -35,3 +35,4 @@ oxnet.workspace = true
 uuid.workspace = true
 ddm-api.workspace = true
 ddm-types.workspace = true
+ddm-types-versions.workspace = true

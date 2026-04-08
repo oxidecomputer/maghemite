@@ -8,6 +8,7 @@ use mg_common::net::MulticastOrigin;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::v1::db::{PeerStatus, RouterKind};
 use crate::v2::exchange::MulticastPathHop;
 
 /// A multicast route learned via DDM.
@@ -57,5 +58,32 @@ impl std::hash::Hash for MulticastRoute {
 impl From<MulticastRoute> for MulticastOrigin {
     fn from(x: MulticastRoute) -> Self {
         x.origin
+    }
+}
+
+/// Peer information with an optional interface name.
+///
+// Adds the `if_name` field to identify which underlay interface the peer
+// was discovered on.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct PeerInfo {
+    pub status: PeerStatus,
+    pub addr: Ipv6Addr,
+    pub host: String,
+    pub kind: RouterKind,
+    /// Interface name the peer was discovered on (e.g., "tfportrear0_0").
+    #[serde(default)]
+    pub if_name: Option<String>,
+}
+
+/// Downconvert v2 PeerInfo to v1 PeerInfo by dropping `if_name`.
+impl From<PeerInfo> for crate::v1::db::PeerInfo {
+    fn from(p: PeerInfo) -> Self {
+        Self {
+            status: p.status,
+            addr: p.addr,
+            host: p.host,
+            kind: p.kind,
+        }
     }
 }

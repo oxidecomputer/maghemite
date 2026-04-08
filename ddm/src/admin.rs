@@ -116,6 +116,22 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseOk(ctx.db.peers()))
     }
 
+    async fn get_peers_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<u32, ddm_types_versions::v1::db::PeerInfo>>,
+        HttpError,
+    > {
+        let ctx = lock!(ctx.context());
+        let peers = ctx
+            .db
+            .peers()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        Ok(HttpResponseOk(peers))
+    }
+
     async fn expire_peer(
         ctx: RequestContext<Self::Context>,
         params: Path<ExpirePathParams>,

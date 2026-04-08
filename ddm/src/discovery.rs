@@ -527,6 +527,7 @@ fn handle_advertisement(
             addr: *sender,
             host: hostname,
             kind,
+            if_name: Some(ctx.config.if_name.clone()),
         },
     );
     if updated {
