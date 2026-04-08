@@ -496,8 +496,10 @@ impl Header {
     pub const WIRE_SIZE: usize = 19;
 
     /// Create a new BGP message header.
-    /// Length must be between 19 and 4096 bytes (RFC 4271 §4.1) unless extended
-    /// message size is permitted, in which case the max size is 65535 bytes.
+    /// Length must be between 19 and 4096 bytes (RFC 4271 §4.1) unless
+    /// extended message size is permitted, in which case the max size
+    /// is 65535 bytes. Per RFC 8654 §4, extended messages apply to all
+    /// types except OPEN and KEEPALIVE.
     pub fn new(
         length: u16,
         typ: MessageType,
@@ -506,7 +508,11 @@ impl Header {
         if usize::from(length) < Header::WIRE_SIZE {
             return Err(Error::TooSmall("message header length".into()));
         }
-        if !extended_msg && usize::from(length) > MAX_MESSAGE_SIZE {
+        // RFC 8654 §4: only UPDATE, NOTIFICATION, and ROUTE-REFRESH
+        // may use extended message size.
+        let ext_eligible = extended_msg
+            && !matches!(typ, MessageType::Open | MessageType::KeepAlive);
+        if !ext_eligible && usize::from(length) > MAX_MESSAGE_SIZE {
             return Err(Error::TooLarge("message header length".into()));
         }
         Ok(Header { length, typ })
