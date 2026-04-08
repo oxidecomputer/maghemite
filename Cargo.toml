@@ -138,6 +138,7 @@ serial_test = "3.3"
 internet-checksum = "0.2.1"
 network-interface = { git = "https://github.com/oxidecomputer/network-interface", branch = "illumos" }
 natord = "1.0"
+iddqd = "0.3"
 
 
 [workspace.dependencies.opte-ioctl]
