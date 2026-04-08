@@ -679,6 +679,7 @@
         ]
       },
       "PeerInfo": {
+        "description": "Peer information with an optional interface name.",
         "type": "object",
         "properties": {
           "addr": {
@@ -686,6 +687,12 @@
             "format": "ipv6"
           },
           "host": {
+            "type": "string"
+          },
+          "if_name": {
+            "nullable": true,
+            "description": "Interface name the peer was discovered on (e.g., \"tfportrear0_0\").",
+            "default": null,
             "type": "string"
           },
           "kind": {
