@@ -8,9 +8,8 @@
 
 use std::net::IpAddr;
 
-use rdb::types::{
-    AddressFamily, MulticastRouteKey, UnderlayMulticastIpv6, Vni,
-};
+use mg_common::net::UnderlayMulticastIpv6;
+use rdb::types::{AddressFamily, MulticastRouteKey, Vni};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

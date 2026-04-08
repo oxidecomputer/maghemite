@@ -279,6 +279,13 @@ async fn run() -> Result<()> {
         }
         SubCommand::MulticastImported => {
             let msg = client.get_multicast_groups().await?;
+            let mut routes: Vec<_> = msg.into_inner().into_iter().collect();
+            routes.sort_by(|a, b| {
+                a.origin
+                    .overlay_group
+                    .cmp(&b.origin.overlay_group)
+                    .then_with(|| a.origin.source.cmp(&b.origin.source))
+            });
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
@@ -290,7 +297,7 @@ async fn run() -> Result<()> {
                 "Source".dimmed(),
                 "Path".dimmed(),
             )?;
-            for route in msg.into_inner() {
+            for route in &routes {
                 let source = match &route.origin.source {
                     Some(s) => s.to_string(),
                     None => "(*,G)".to_string(),
@@ -316,6 +323,12 @@ async fn run() -> Result<()> {
         }
         SubCommand::MulticastOriginated => {
             let msg = client.get_originated_multicast_groups().await?;
+            let mut origins: Vec<_> = msg.into_inner().into_iter().collect();
+            origins.sort_by(|a, b| {
+                a.overlay_group
+                    .cmp(&b.overlay_group)
+                    .then_with(|| a.source.cmp(&b.source))
+            });
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
@@ -326,7 +339,7 @@ async fn run() -> Result<()> {
                 "Metric".dimmed(),
                 "Source".dimmed(),
             )?;
-            for origin in msg.into_inner() {
+            for origin in &origins {
                 let source = match &origin.source {
                     Some(s) => s.to_string(),
                     None => "(*,G)".to_string(),
@@ -348,7 +361,7 @@ async fn run() -> Result<()> {
                 .advertise_multicast_groups(&vec![types::MulticastOrigin {
                     overlay_group: mg.overlay_group,
                     underlay_group: mg.underlay_group,
-                    vni: mg.vni,
+                    vni: types::Vni(mg.vni),
                     metric: mg.metric,
                     source: mg.source,
                 }])
@@ -359,7 +372,7 @@ async fn run() -> Result<()> {
                 .withdraw_multicast_groups(&vec![types::MulticastOrigin {
                     overlay_group: mg.overlay_group,
                     underlay_group: mg.underlay_group,
-                    vni: mg.vni,
+                    vni: types::Vni(mg.vni),
                     metric: mg.metric,
                     source: mg.source,
                 }])

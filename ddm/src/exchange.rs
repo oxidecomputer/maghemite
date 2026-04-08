@@ -977,10 +977,6 @@ fn collect_multicast(
     Ok(multicast)
 }
 
-fn opt<T>(s: HashSet<T>) -> Option<HashSet<T>> {
-    if s.is_empty() { None } else { Some(s) }
-}
-
 #[endpoint { method = GET, path = "/v3/pull" }]
 async fn pull_handler_v3(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
@@ -988,8 +984,8 @@ async fn pull_handler_v3(
     let ctx = ctx.context().lock().await.clone();
     let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
     Ok(HttpResponseOk(PullResponseV3 {
-        underlay: opt(underlay),
-        tunnel: opt(tunnel),
+        underlay: crate::non_empty(underlay),
+        tunnel: crate::non_empty(tunnel),
     }))
 }
 
@@ -1001,9 +997,9 @@ async fn pull_handler_v4(
     let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
     let multicast = collect_multicast(&ctx)?;
     Ok(HttpResponseOk(PullResponse {
-        underlay: opt(underlay),
-        tunnel: opt(tunnel),
-        multicast: opt(multicast),
+        underlay: crate::non_empty(underlay),
+        tunnel: crate::non_empty(tunnel),
+        multicast: crate::non_empty(multicast),
     }))
 }
 
@@ -1253,48 +1249,29 @@ fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
     }
 
     // Atomic import + delete + diff under a single lock.
-    let (to_add, to_del) = db.update_imported_mcast(&import, &remove);
-
-    if let Err(e) = crate::sys::add_multicast_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &to_add,
-    ) {
-        err!(
-            ctx.log,
-            ctx.ctx.config.if_name,
-            "add multicast routes: {e}: {to_add:#?}",
-        )
-    }
-
-    if let Err(e) = crate::sys::remove_multicast_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &to_del,
-    ) {
-        err!(
-            ctx.log,
-            ctx.ctx.config.if_name,
-            "remove multicast routes: {e}: {to_del:#?}",
-        )
-    }
+    //
+    // DDM stores learned multicast state, which feeds back into Omicron, as
+    // the latter owns OPTE M2P programming via sled-agent (the M2P table is
+    // global to xde).
+    // Learned state is queryable via the DDM admin API (get_multicast_groups).
+    db.update_imported_mcast(&import, &remove);
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
     use ddm_types::exchange::MulticastPathHop;
-    use mg_common::net::{MulticastOrigin, UnderlayMulticastIpv6};
+    use mg_common::net::{MulticastOrigin, UnderlayMulticastIpv6, Vni};
     use std::net::Ipv6Addr;
 
     fn sample_multicast_update() -> MulticastUpdate {
         let origin = MulticastOrigin {
             overlay_group: "233.252.0.1".parse().unwrap(),
-            underlay_group: UnderlayMulticastIpv6::new(Ipv6Addr::new(
-                0xff04, 0, 0, 0, 0, 0, 0, 1,
-            ))
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::1".parse().unwrap(),
+            )
             .unwrap(),
-            vni: 77,
+            vni: Vni::try_from(77u32).unwrap(),
             metric: 0,
             source: None,
         };
@@ -1352,11 +1329,11 @@ mod test {
     fn v4_pull_response_round_trips() {
         let origin = MulticastOrigin {
             overlay_group: "ff0e::1".parse().unwrap(),
-            underlay_group: UnderlayMulticastIpv6::new(Ipv6Addr::new(
-                0xff04, 0, 0, 0, 0, 0, 0, 2,
-            ))
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::2".parse().unwrap(),
+            )
             .unwrap(),
-            vni: 77,
+            vni: Vni::try_from(77u32).unwrap(),
             metric: 0,
             source: None,
         };
@@ -1378,11 +1355,11 @@ mod test {
     fn v4_pull_response_deserializes_as_v3() {
         let origin = MulticastOrigin {
             overlay_group: "233.252.0.1".parse().unwrap(),
-            underlay_group: UnderlayMulticastIpv6::new(Ipv6Addr::new(
-                0xff04, 0, 0, 0, 0, 0, 0, 1,
-            ))
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::1".parse().unwrap(),
+            )
             .unwrap(),
-            vni: 77,
+            vni: Vni::try_from(77u32).unwrap(),
             metric: 0,
             source: None,
         };

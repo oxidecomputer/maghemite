@@ -4,7 +4,7 @@
 
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use ddm_types::db::{MulticastRoute, TunnelRoute};
+use ddm_types::db::TunnelRoute;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use dpd_client::types;
@@ -353,99 +353,6 @@ pub fn remove_tunnel_routes(
         let req = ClearVirt2BoundaryReq { vip, tep };
         if let Err(e) = hdl.clear_v2b(&req) {
             err!(log, ifname, "failed to clear v2p route: {:?}: {}", req, e);
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "illumos"))]
-pub fn add_multicast_routes(
-    _log: &Logger,
-    _ifname: &str,
-    _routes: &HashSet<MulticastRoute>,
-) -> Result<(), String> {
-    todo!();
-}
-
-/// Update OPTE multicast-to-physical (M2P) table entries for learned
-/// multicast routes. Each route's overlay group is mapped to the
-/// corresponding underlay multicast address so that OPTE can direct
-/// multicast traffic to the correct underlay destinations.
-#[cfg(target_os = "illumos")]
-pub fn add_multicast_routes(
-    log: &Logger,
-    ifname: &str,
-    routes: &HashSet<MulticastRoute>,
-) -> Result<(), String> {
-    use oxide_vpc::api::MulticastUnderlay;
-    use oxide_vpc::api::SetMcast2PhysReq;
-
-    let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
-
-    for route in routes {
-        let underlay =
-            MulticastUnderlay::new(route.origin.underlay_group.ip().into())
-                .map_err(|e| {
-                    format!(
-                        "invalid underlay multicast address {}: {e}",
-                        route.origin.underlay_group,
-                    )
-                })?;
-        let req = SetMcast2PhysReq {
-            group: route.origin.overlay_group.into(),
-            underlay,
-        };
-        let overlay = route.origin.overlay_group;
-        let underlay_addr = route.origin.underlay_group;
-        inf!(log, ifname, "adding M2P: {overlay:?} -> {underlay_addr}");
-        if let Err(e) = hdl.set_m2p(&req) {
-            err!(log, ifname, "failed to set M2P route: {req:?}: {e}");
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "illumos"))]
-pub fn remove_multicast_routes(
-    _log: &Logger,
-    _ifname: &str,
-    _routes: &HashSet<MulticastRoute>,
-) -> Result<(), String> {
-    todo!()
-}
-
-/// Remove OPTE M2P table entries for withdrawn multicast routes.
-#[cfg(target_os = "illumos")]
-pub fn remove_multicast_routes(
-    log: &Logger,
-    ifname: &str,
-    routes: &HashSet<MulticastRoute>,
-) -> Result<(), String> {
-    use oxide_vpc::api::ClearMcast2PhysReq;
-    use oxide_vpc::api::MulticastUnderlay;
-
-    let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
-
-    for route in routes {
-        let underlay =
-            MulticastUnderlay::new(route.origin.underlay_group.ip().into())
-                .map_err(|e| {
-                    format!(
-                        "invalid underlay multicast address {}: {e}",
-                        route.origin.underlay_group,
-                    )
-                })?;
-        let req = ClearMcast2PhysReq {
-            group: route.origin.overlay_group.into(),
-            underlay,
-        };
-        let overlay = route.origin.overlay_group;
-        let underlay_addr = route.origin.underlay_group;
-        inf!(log, ifname, "removing M2P: {overlay:?} -> {underlay_addr}");
-        if let Err(e) = hdl.clear_m2p(&req) {
-            err!(log, ifname, "failed to clear M2P route: {req:?}: {e}");
         }
     }
 

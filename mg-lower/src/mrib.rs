@@ -10,7 +10,7 @@
 //! ## Data Flow
 //!
 //! ```text
-//! MRIB (loc_mrib changes)
+//!    MRIB (loc_mrib changes)
 //!        |
 //!        v [MribChangeNotification]
 //!    mg-lower/mrib.rs
@@ -27,15 +27,11 @@ use crate::ddm::{
 };
 use crate::platform::{Ddm, ProductionDdm};
 use ddm_admin_client::types::MulticastOrigin;
-use mg_common::net::DEFAULT_MULTICAST_VNI;
+use mg_common::net::Vni;
 use rdb::Mrib;
-use rdb::types::{
-    DEFAULT_MULTICAST_VNI as DEFAULT_MCAST_VNI, MribChangeNotification,
-    MulticastAddr, MulticastRoute,
-};
+use rdb::types::{MribChangeNotification, MulticastAddr, MulticastRoute};
 use slog::{Logger, debug, error, info};
 use std::collections::HashSet;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread::sleep;
@@ -43,33 +39,11 @@ use std::time::Duration;
 
 const MG_LOWER_MRIB_TAG: &str = "mg-lower-mrib";
 
-/// Convert an MRIB MulticastRoute to a DDM MulticastOrigin.
+/// Convert an MRIB [`MulticastRoute`] to a DDM [`MulticastOrigin`].
 ///
-/// The MulticastOrigin captures the essential information needed for DDM
-/// to advertise the multicast group subscription to other routers:
-/// - overlay_group: The multicast group address (e.g., 233.252.0.1 or ff0e::1)
-/// - underlay_group: The mapped underlay address within the ff04::/64 subnet
-///   (a /64 within admin-local scope per RFC 7346, reserved for the rack's
-///   underlay multicast traffic)
-/// - source: Optional source for (S,G) routes, None for (*,G)
-/// - vni: Virtual Network Identifier (default multicast VNI)
-fn mrib_route_to_ddm_origin(route: &MulticastRoute) -> MulticastOrigin {
-    // Extract overlay group address from the route key
-    let overlay_group: IpAddr = match route.key.group() {
-        MulticastAddr::V4(v4) => IpAddr::V4(v4.ip()),
-        MulticastAddr::V6(v6) => IpAddr::V6(v6.ip()),
-    };
-
-    // Extract source address for (S,G) routes
-    let source = route.key.source();
-
-    MulticastOrigin {
-        overlay_group,
-        underlay_group: route.underlay_group.into(),
-        vni: DEFAULT_MULTICAST_VNI,
-        metric: 0, // Default metric
-        source,
-    }
+/// [`MulticastOrigin`]: ddm_admin_client::types::MulticastOrigin
+fn ddm_origin(route: &MulticastRoute) -> MulticastOrigin {
+    mg_common::net::MulticastOrigin::from(route).into()
 }
 
 /// Run the MRIB synchronization loop.
@@ -135,7 +109,7 @@ pub(crate) fn full_sync<D: Ddm>(
 
     // Convert to DDM MulticastOrigin set
     let mrib_origins: HashSet<MulticastOrigin> =
-        mrib_routes.values().map(mrib_route_to_ddm_origin).collect();
+        mrib_routes.values().map(ddm_origin).collect();
 
     // Get current DDM advertised state
     let ddm_current: HashSet<MulticastOrigin> = rt
@@ -192,7 +166,7 @@ fn handle_change<D: Ddm>(
     for key in notification.changed {
         // Check if route exists in loc_mrib (installed)
         if let Some(route) = mrib.get_selected_route(&key) {
-            let origin = mrib_route_to_ddm_origin(&route);
+            let origin = ddm_origin(&route);
             if !ddm_current.contains(&origin) {
                 to_add.push(origin);
             }
@@ -206,7 +180,7 @@ fn handle_change<D: Ddm>(
                     && let Ok(ddm_key) = rdb::types::MulticastRouteKey::new(
                         ddm_origin.source,
                         overlay_group,
-                        DEFAULT_MCAST_VNI,
+                        Vni::DEFAULT_MULTICAST_VNI,
                     )
                     && ddm_key == key
                 {

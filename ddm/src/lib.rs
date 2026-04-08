@@ -11,6 +11,13 @@ pub mod sm;
 pub mod sys;
 mod util;
 
+/// Returns `None` if the set is empty, otherwise `Some(s)`.
+pub(crate) fn non_empty<T>(
+    set: std::collections::HashSet<T>,
+) -> Option<std::collections::HashSet<T>> {
+    (!set.is_empty()).then_some(set)
+}
+
 #[macro_export]
 macro_rules! err {
     ($log:expr, $index:expr, $($args:tt)+) => {

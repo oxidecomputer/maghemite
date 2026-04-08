@@ -159,7 +159,7 @@ pub(crate) fn remove_multicast_routes<
             "groups" => format!("{routes:#?}")
         ),
         Ok(_) => ddm_log!(log,
-            info,
+            debug,
             "withdrew multicast groups";
             "groups" => format!("{routes:#?}")
         ),
