@@ -94,7 +94,7 @@ schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0.102"
-hyper = "1.8.1"
+hyper = "1.9.0"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.149"
 percent-encoding = "2.3.2"
@@ -143,11 +143,11 @@ natord = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "c570ac2126dbbebbd8e98e73b580c5be6b7e460e"
+rev = "b60decb70fe491ebdaa30c824619470b015556fc"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "c570ac2126dbbebbd8e98e73b580c5be6b7e460e"
+rev = "b60decb70fe491ebdaa30c824619470b015556fc"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
