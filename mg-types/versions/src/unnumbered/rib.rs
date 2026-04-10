@@ -4,9 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rdb::Path as RdbPath;
+use rdb::PathV2;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Rib for VERSION_UNNUMBERED..VERSION_SPRING_CLEANING.
+///
+/// Uses PathV2 (without origin/internal/peer_ip fields added in
+/// SPRING_CLEANING).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct Rib(pub BTreeMap<String, BTreeSet<RdbPath>>);
+pub struct Rib(pub BTreeMap<String, BTreeSet<PathV2>>);

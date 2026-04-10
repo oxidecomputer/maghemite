@@ -41,3 +41,5 @@ pub mod v3;
 pub mod v4;
 #[path = "unnumbered/mod.rs"]
 pub mod v5;
+#[path = "spring_cleaning/mod.rs"]
+pub mod v8;

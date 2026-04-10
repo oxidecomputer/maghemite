@@ -15,7 +15,7 @@ use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::types::{Cumulative, ProducerRegistry};
 use oximeter::{MetricsError, Producer, Sample};
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
-use rdb::Db;
+use rdb::{AddressFamily, Db};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -359,26 +359,44 @@ impl Stats {
                     UpdatesReceived,
                     counters.updates_received
                 ));
-                samples.push(bgp_session_counter!(
-                    self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
-                    *asn,
-                    *addr,
-                    PrefixesAdvertised,
-                    counters.prefixes_advertised
-                ));
-                samples.push(bgp_session_counter!(
-                    self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
-                    *asn,
-                    *addr,
-                    PrefixesImported,
-                    counters.prefixes_imported
-                ));
+                let prefixes_advertised = counters
+                    .ipv4_prefixes_advertised
+                    .load(Ordering::Relaxed)
+                    + counters.ipv6_prefixes_advertised.load(Ordering::Relaxed);
+                samples.push(Sample::new(
+                    &BgpSession {
+                        hostname: self.hostname.clone().into(),
+                        rack_id: self.rack_id,
+                        sled_id: self.sled_id,
+                        local_asn: *asn,
+                        peer: *addr,
+                    },
+                    &PrefixesAdvertised {
+                        datum: Cumulative::<u64>::with_start_time(
+                            self.start_time,
+                            prefixes_advertised,
+                        ),
+                    },
+                )?);
+                let prefixes_imported = counters
+                    .ipv4_prefixes_imported
+                    .load(Ordering::Relaxed)
+                    + counters.ipv6_prefixes_imported.load(Ordering::Relaxed);
+                samples.push(Sample::new(
+                    &BgpSession {
+                        hostname: self.hostname.clone().into(),
+                        rack_id: self.rack_id,
+                        sled_id: self.sled_id,
+                        local_asn: *asn,
+                        peer: *addr,
+                    },
+                    &PrefixesImported {
+                        datum: Cumulative::<u64>::with_start_time(
+                            self.start_time,
+                            prefixes_imported,
+                        ),
+                    },
+                )?);
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
                     self.rack_id,
@@ -686,7 +704,7 @@ impl Stats {
     fn static_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
-        match self.db.get_static4_count() {
+        match self.db.get_static_count(AddressFamily::Ipv4) {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
@@ -701,7 +719,7 @@ impl Stats {
                 olog!(self.log, warn, "failed to produce static4 count: {e}");
             }
         }
-        match self.db.get_static_nexthop4_count() {
+        match self.db.get_static_nexthop_count(AddressFamily::Ipv4) {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),

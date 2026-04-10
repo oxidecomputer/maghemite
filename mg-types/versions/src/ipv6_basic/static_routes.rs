@@ -4,7 +4,7 @@
 
 use std::net::Ipv6Addr;
 
-use rdb::Prefix6;
+use rdb::{Prefix6, StaticRouteKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -29,4 +29,16 @@ pub struct StaticRoute6 {
     pub nexthop: Ipv6Addr,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
+}
+
+impl From<StaticRoute6> for StaticRouteKey {
+    fn from(val: StaticRoute6) -> Self {
+        StaticRouteKey {
+            prefix: val.prefix.into(),
+            nexthop: val.nexthop.into(),
+            nexthop_interface: None,
+            vlan_id: val.vlan_id,
+            rib_priority: val.rib_priority,
+        }
+    }
 }

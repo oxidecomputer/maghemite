@@ -6,13 +6,11 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "7.0.0"
+    "version": "8.0.0"
   },
   "paths": {
     "/bfd/peers": {
       "get": {
-        "summary": "Get all the peers and their associated BFD state. Peers are identified by IP",
-        "description": "address.",
         "operationId": "get_bfd_peers",
         "responses": {
           "200": {
@@ -38,8 +36,6 @@
         }
       },
       "put": {
-        "summary": "Add a new peer to the daemon. A session for the specified peer will start",
-        "description": "immediately.",
         "operationId": "add_bfd_peer",
         "requestBody": {
           "content": {
@@ -66,8 +62,6 @@
     },
     "/bfd/peers/{addr}": {
       "delete": {
-        "summary": "Remove the specified peer from the daemon. The associated peer session will",
-        "description": "be stopped immediately.",
         "operationId": "remove_bfd_peer",
         "parameters": [
           {
@@ -1409,15 +1403,22 @@
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family (None means all families)",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
           },
           {
             "in": "query",
+            "name": "prefix",
+            "description": "Exact-match prefix filter (e.g. \"10.0.0.0/24\").",
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "protocol",
-            "description": "Filter by protocol (optional)",
             "schema": {
               "$ref": "#/components/schemas/ProtocolFilter"
             }
@@ -1450,15 +1451,22 @@
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family (None means all families)",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
           },
           {
             "in": "query",
+            "name": "prefix",
+            "description": "Exact-match prefix filter (e.g. \"10.0.0.0/24\").",
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "protocol",
-            "description": "Filter by protocol (optional)",
             "schema": {
               "$ref": "#/components/schemas/ProtocolFilter"
             }
@@ -2024,7 +2032,9 @@
           {
             "type": "string",
             "enum": [
-              "RouteRefresh"
+              "RouteRefresh",
+              "ExtendedNextHopEncoding",
+              "BGPExtendedMessage"
             ]
           },
           {
@@ -2151,6 +2161,9 @@
             "format": "uint32",
             "minimum": 0
           },
+          "internal": {
+            "type": "boolean"
+          },
           "local_pref": {
             "nullable": true,
             "type": "integer",
@@ -2163,6 +2176,9 @@
             "format": "uint32",
             "minimum": 0
           },
+          "origin": {
+            "$ref": "#/components/schemas/PathOrigin"
+          },
           "origin_as": {
             "type": "integer",
             "format": "uint32",
@@ -2170,6 +2186,10 @@
           },
           "peer": {
             "$ref": "#/components/schemas/PeerId"
+          },
+          "peer_ip": {
+            "type": "string",
+            "format": "ip"
           },
           "stale": {
             "nullable": true,
@@ -2180,11 +2200,33 @@
         "required": [
           "as_path",
           "id",
+          "internal",
+          "origin",
           "origin_as",
-          "peer"
+          "peer",
+          "peer_ip"
         ]
       },
       "BgpPeerConfig": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
+          }
+        },
+        "required": [
+          "host",
+          "name",
+          "parameters"
+        ]
+      },
+      "BgpPeerParameters": {
         "type": "object",
         "properties": {
           "communities": {
@@ -2218,6 +2260,15 @@
             "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
+          "dscp": {
+            "description": "DSCP value for BGP TCP connections (0-63). RFC 4271 Appendix E recommends CS6 (48) for BGP traffic. Default: CS6 (48).",
+            "default": 48,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Dscp"
+              }
+            ]
+          },
           "enforce_first_as": {
             "type": "boolean"
           },
@@ -2225,9 +2276,6 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
-          },
-          "host": {
-            "type": "string"
           },
           "idle_hold_jitter": {
             "nullable": true,
@@ -2280,16 +2328,13 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
             "type": "integer",
             "format": "uint32",
             "minimum": 0
-          },
-          "name": {
-            "type": "string"
           },
           "passive": {
             "type": "boolean"
@@ -2319,10 +2364,8 @@
           "deterministic_collision_resolution",
           "enforce_first_as",
           "hold_time",
-          "host",
           "idle_hold_time",
           "keepalive",
-          "name",
           "passive",
           "resolution"
         ]
@@ -2412,7 +2455,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Extended message capability as defined in RFC 8654. Note this capability is not yet implemented.",
+            "description": "Extended message capability as defined in RFC 8654",
             "type": "object",
             "properties": {
               "b_g_p_extended_message": {
@@ -2749,6 +2792,39 @@
           }
         ]
       },
+      "CapabilityState": {
+        "description": "The negotiation state of a capability for a given peer.",
+        "oneOf": [
+          {
+            "description": "We have not configured or advertised this capability, and the peer did not send it.",
+            "type": "string",
+            "enum": [
+              "Unconfigured"
+            ]
+          },
+          {
+            "description": "We advertised this capability but the peer did not send it.",
+            "type": "string",
+            "enum": [
+              "Advertised"
+            ]
+          },
+          {
+            "description": "The peer sent this capability but we did not advertise it.",
+            "type": "string",
+            "enum": [
+              "Received"
+            ]
+          },
+          {
+            "description": "Both sides advertised this capability.",
+            "type": "string",
+            "enum": [
+              "Negotiated"
+            ]
+          }
+        ]
+      },
       "CeaseErrorSubcode": {
         "description": "Cease error subcode types from RFC 4486",
         "type": "string",
@@ -2874,6 +2950,13 @@
         "required": [
           "routes"
         ]
+      },
+      "Dscp": {
+        "description": "DSCP value (0-63). Default: CS6 (48).",
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 63
       },
       "Duration": {
         "type": "object",
@@ -3197,6 +3280,23 @@
           "by_peer"
         ]
       },
+      "FsmResetRecord": {
+        "description": "Information about the most recent session reset.",
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/ResetReason"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "reason",
+          "timestamp"
+        ]
+      },
       "FsmStateKind": {
         "description": "Simplified representation of a BGP state without having to carry a connection.",
         "oneOf": [
@@ -3495,41 +3595,42 @@
           }
         ]
       },
+      "MessageBuffer": {
+        "description": "Which message buffer to retrieve.",
+        "oneOf": [
+          {
+            "description": "All messages including KeepAlives.",
+            "type": "string",
+            "enum": [
+              "all"
+            ]
+          },
+          {
+            "description": "Major messages only (excludes KeepAlives).",
+            "type": "string",
+            "enum": [
+              "major"
+            ]
+          }
+        ]
+      },
       "MessageDirection": {
+        "description": "Direction of a BGP message (sent or received).",
         "type": "string",
         "enum": [
           "sent",
           "received"
         ]
       },
-      "MessageHistory": {
-        "description": "Message history for a BGP session",
-        "type": "object",
-        "properties": {
-          "received": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MessageHistoryEntry"
-            }
-          },
-          "sent": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MessageHistoryEntry"
-            }
-          }
-        },
-        "required": [
-          "received",
-          "sent"
-        ]
-      },
       "MessageHistoryEntry": {
-        "description": "A message history entry is a BGP message with an associated timestamp and connection ID",
+        "description": "A message history entry is a BGP message with an associated timestamp, connection ID, and direction.",
         "type": "object",
         "properties": {
           "connection_id": {
             "$ref": "#/components/schemas/ConnectionId"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MessageDirection"
           },
           "message": {
             "$ref": "#/components/schemas/Message"
@@ -3541,23 +3642,31 @@
         },
         "required": [
           "connection_id",
+          "direction",
           "message",
           "timestamp"
         ]
       },
       "MessageHistoryRequest": {
-        "description": "Unified message history request supporting both numbered and unnumbered peers",
+        "description": "Message history request with buffer selection (VERSION_SPRING_CLEANING+).",
         "type": "object",
         "properties": {
           "asn": {
-            "description": "ASN of the BGP router",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
           },
+          "buffer": {
+            "nullable": true,
+            "description": "Which buffer to retrieve — if None, returns major buffer.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MessageBuffer"
+              }
+            ]
+          },
           "direction": {
             "nullable": true,
-            "description": "Optional direction filter - if None, returns both sent and received",
             "allOf": [
               {
                 "$ref": "#/components/schemas/MessageDirection"
@@ -3566,7 +3675,6 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
             "allOf": [
               {
                 "$ref": "#/components/schemas/PeerId"
@@ -3579,13 +3687,16 @@
         ]
       },
       "MessageHistoryResponse": {
-        "description": "Unified message history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
+        "description": "Message history response with flat list of entries per peer (VERSION_SPRING_CLEANING+).\n\nEach entry carries its own direction, unlike the sent/received split used by older API versions.",
         "type": "object",
         "properties": {
           "by_peer": {
             "type": "object",
             "additionalProperties": {
-              "$ref": "#/components/schemas/MessageHistory"
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/MessageHistoryEntry"
+              }
             }
           }
         },
@@ -3898,6 +4009,59 @@
           "tx_running"
         ]
       },
+      "NegotiatedCaps": {
+        "description": "The result of comparing our OPEN capabilities with the peer's.",
+        "type": "object",
+        "properties": {
+          "enhe": {
+            "description": "Extended nexthop: IPv4 routes carried over IPv6 nexthops (RFC 8950)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "ext_msg": {
+            "description": "BGP Extended Message Size (RFC 8654)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "ipv4": {
+            "description": "IPv4 Unicast address-family",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "ipv6": {
+            "description": "IPv6 Unicast address-family",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          },
+          "route_refresh": {
+            "description": "Route Refresh (RFC 2918)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityState"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enhe",
+          "ext_msg",
+          "ipv4",
+          "ipv6",
+          "route_refresh"
+        ]
+      },
       "Neighbor": {
         "description": "Neighbor configuration with explicit per-address-family enablement (v3 API)",
         "type": "object",
@@ -3907,149 +4071,25 @@
             "format": "uint32",
             "minimum": 0
           },
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
           "group": {
             "type": "string"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
           },
           "host": {
             "type": "string"
           },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "name": {
             "type": "string"
           },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
           }
         },
         "required": [
           "asn",
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
           "group",
-          "hold_time",
           "host",
-          "idle_hold_time",
-          "keepalive",
           "name",
-          "passive",
-          "resolution"
+          "parameters"
         ]
       },
       "NeighborResetOp": {
@@ -4155,6 +4195,23 @@
           "data",
           "error_code",
           "error_subcode"
+        ]
+      },
+      "NotificationRecord": {
+        "description": "A record of a BGP notification message with a timestamp.",
+        "type": "object",
+        "properties": {
+          "notification": {
+            "$ref": "#/components/schemas/NotificationMessage"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "notification",
+          "timestamp"
         ]
       },
       "OpenErrorSubcode": {
@@ -4648,7 +4705,7 @@
         ]
       },
       "PathOrigin": {
-        "description": "An enumeration indicating the origin type of a path.",
+        "description": "BGP ORIGIN path attribute (RFC 4271 Section 4.3).\n\nIndicates how the route was learned: - `Igp` (0): Route interior to the originating AS - `Egp` (1): Route learned via EGP - `Incomplete` (2): Route learned by some other means\n\nUsed in bestpath selection: lower origin value is preferred (IGP < EGP < Incomplete).",
         "oneOf": [
           {
             "description": "Interior gateway protocol",
@@ -4674,7 +4731,7 @@
         ]
       },
       "PeerCounters": {
-        "description": "Session-level counters that persist across connection changes These serve as aggregate counters across all connections for the session",
+        "description": "Session-level counters with per-AFI NLRI gauges (v7+ API).",
         "type": "object",
         "properties": {
           "active_connections_accepted": {
@@ -4703,6 +4760,26 @@
             "minimum": 0
           },
           "idle_hold_timer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv4_prefixes_advertised": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv4_prefixes_imported": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv6_prefixes_advertised": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv6_prefixes_imported": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
@@ -4772,12 +4849,7 @@
             "format": "uint64",
             "minimum": 0
           },
-          "prefixes_advertised": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "prefixes_imported": {
+          "reset_count": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
@@ -4891,6 +4963,11 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "updates_treated_as_withdraw": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
@@ -4900,6 +4977,10 @@
           "connector_panics",
           "hold_timer_expirations",
           "idle_hold_timer_expirations",
+          "ipv4_prefixes_advertised",
+          "ipv4_prefixes_imported",
+          "ipv6_prefixes_advertised",
+          "ipv6_prefixes_imported",
           "keepalive_send_failure",
           "keepalives_received",
           "keepalives_sent",
@@ -4913,8 +4994,7 @@
           "opens_sent",
           "passive_connections_accepted",
           "passive_connections_declined",
-          "prefixes_advertised",
-          "prefixes_imported",
+          "reset_count",
           "route_refresh_received",
           "route_refresh_send_failure",
           "route_refresh_sent",
@@ -4936,7 +5016,8 @@
           "update_nexhop_missing",
           "update_send_failure",
           "updates_received",
-          "updates_sent"
+          "updates_sent",
+          "updates_treated_as_withdraw"
         ]
       },
       "PeerId": {
@@ -4972,6 +5053,7 @@
         ]
       },
       "PeerInfo": {
+        "description": "Peer info for v7+ API (per-AFI counters, reset/notification tracking).",
         "type": "object",
         "properties": {
           "asn": {
@@ -4979,6 +5061,9 @@
             "type": "integer",
             "format": "uint32",
             "minimum": 0
+          },
+          "cap_state": {
+            "$ref": "#/components/schemas/NegotiatedCaps"
           },
           "counters": {
             "$ref": "#/components/schemas/PeerCounters"
@@ -5000,6 +5085,30 @@
           },
           "ipv6_unicast": {
             "$ref": "#/components/schemas/Ipv6UnicastConfig"
+          },
+          "last_notification_received": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationRecord"
+              }
+            ]
+          },
+          "last_notification_sent": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationRecord"
+              }
+            ]
+          },
+          "last_reset": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FsmResetRecord"
+              }
+            ]
           },
           "local_ip": {
             "type": "string",
@@ -5031,11 +5140,18 @@
             "format": "uint16",
             "minimum": 0
           },
+          "sent_capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BgpCapability"
+            }
+          },
           "timers": {
             "$ref": "#/components/schemas/PeerTimers"
           }
         },
         "required": [
+          "cap_state",
           "counters",
           "fsm_state",
           "fsm_state_duration",
@@ -5048,6 +5164,7 @@
           "received_capabilities",
           "remote_ip",
           "remote_tcp_port",
+          "sent_capabilities",
           "timers"
         ]
       },
@@ -5158,7 +5275,23 @@
           "value"
         ]
       },
+      "ResetReason": {
+        "description": "Reason for the most recent session reset.",
+        "type": "string",
+        "enum": [
+          "AdministrativeReset",
+          "AdministrativeShutdown",
+          "HoldTimerExpired",
+          "FsmError",
+          "ConnectionRejected",
+          "CollisionResolution",
+          "IoError",
+          "ParseError",
+          "NotificationReceived"
+        ]
+      },
       "Rib": {
+        "description": "Rib for VERSION_SPRING_CLEANING+.\n\nUses current rdb::Path (with origin/internal/peer_ip fields).",
         "type": "object",
         "additionalProperties": {
           "type": "array",
@@ -5249,7 +5382,11 @@
         "properties": {
           "nexthop": {
             "type": "string",
-            "format": "ipv4"
+            "format": "ip"
+          },
+          "nexthop_interface": {
+            "nullable": true,
+            "type": "string"
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix4"
@@ -5291,7 +5428,11 @@
         "properties": {
           "nexthop": {
             "type": "string",
-            "format": "ipv6"
+            "format": "ip"
+          },
+          "nexthop_interface": {
+            "nullable": true,
+            "type": "string"
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix6"
@@ -5360,149 +5501,25 @@
       "UnnumberedBgpPeerConfig": {
         "type": "object",
         "properties": {
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
           "interface": {
             "type": "string"
-          },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
           },
           "name": {
             "type": "string"
           },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
           },
           "router_lifetime": {
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
             "type": "integer",
             "format": "uint16",
             "minimum": 0
           }
         },
         "required": [
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
-          "hold_time",
-          "idle_hold_time",
           "interface",
-          "keepalive",
           "name",
-          "passive",
-          "resolution",
+          "parameters",
           "router_lifetime"
         ]
       },
@@ -5519,150 +5536,26 @@
             "format": "uint32",
             "minimum": 0
           },
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
           "group": {
             "type": "string"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
           },
           "interface": {
             "type": "string"
           },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "name": {
             "type": "string"
           },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
           }
         },
         "required": [
           "act_as_a_default_ipv6_router",
           "asn",
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
           "group",
-          "hold_time",
-          "idle_hold_time",
           "interface",
-          "keepalive",
           "name",
-          "passive",
-          "resolution"
+          "parameters"
         ]
       },
       "UnnumberedNeighborResetRequest": {

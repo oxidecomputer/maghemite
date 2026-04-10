@@ -8,10 +8,11 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use mg_types::rib::{
-    BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery,
-    filter_rib_by_protocol,
+    BestpathFanoutRequest, BestpathFanoutResponse, filter_rib_by_protocol,
 };
-use mg_types_versions::{v1, v2};
+use mg_types_versions::{latest, v1, v2, v5, v8};
+use rdb::Prefix;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // Prior version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
@@ -38,11 +39,11 @@ pub async fn get_rib_selected_v2(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-// Latest version (VERSION_UNNUMBERED+): BgpPathProperties.peer is PeerId enum.
-pub async fn get_rib_imported(
+// VERSION_UNNUMBERED..VERSION_SPRING_CLEANING: PeerId, no prefix filter.
+pub async fn get_rib_imported_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
-    query: Query<RibQuery>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
+    query: Query<v2::rib::RibQuery>,
+) -> Result<HttpResponseOk<v5::rib::Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
@@ -50,14 +51,73 @@ pub async fn get_rib_imported(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-pub async fn get_rib_selected(
+pub async fn get_rib_selected_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
-    query: Query<RibQuery>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
+    query: Query<v2::rib::RibQuery>,
+) -> Result<HttpResponseOk<v5::rib::Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
     let selected = ctx.db.loc_rib(query.address_family);
     let filtered = filter_rib_by_protocol(selected, query.protocol);
+    Ok(HttpResponseOk(filtered.into()))
+}
+
+// VERSION_SPRING_CLEANING+: PeerId, prefix filter, origin/internal.
+pub async fn get_rib_imported(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    query: Query<v8::rib::RibQuery>,
+) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError> {
+    let ctx = ctx.context();
+    let query = query.into_inner();
+    let rib = if let Some(ref prefix_str) = query.prefix {
+        let prefix: Prefix = prefix_str
+            .parse()
+            .map_err(|e: String| HttpError::for_bad_request(None, e))?;
+        if let Some(af) = query.address_family
+            && af != prefix.address_family()
+        {
+            return Err(HttpError::for_bad_request(
+                None,
+                "prefix/address_family mismatch".to_string(),
+            ));
+        }
+        match ctx.db.get_imported_prefix(&prefix) {
+            Some(paths) => BTreeMap::from([(prefix, paths)]),
+            None => BTreeMap::new(),
+        }
+    } else {
+        ctx.db.full_rib(query.address_family)
+    };
+    let filtered = filter_rib_by_protocol(rib, query.protocol);
+    Ok(HttpResponseOk(filtered.into()))
+}
+
+pub async fn get_rib_selected(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    query: Query<v8::rib::RibQuery>,
+) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError> {
+    let ctx = ctx.context();
+    let query = query.into_inner();
+    let rib = if let Some(ref prefix_str) = query.prefix {
+        let prefix: Prefix = prefix_str
+            .parse()
+            .map_err(|e: String| HttpError::for_bad_request(None, e))?;
+        if let Some(af) = query.address_family
+            && af != prefix.address_family()
+        {
+            return Err(HttpError::for_bad_request(
+                None,
+                "prefix/address_family mismatch".to_string(),
+            ));
+        }
+        match ctx.db.get_selected_prefix(&prefix) {
+            Some(paths) => BTreeMap::from([(prefix, paths)]),
+            None => BTreeMap::new(),
+        }
+    } else {
+        ctx.db.loc_rib(query.address_family)
+    };
+    let filtered = filter_rib_by_protocol(rib, query.protocol);
     Ok(HttpResponseOk(filtered.into()))
 }
 

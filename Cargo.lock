@@ -336,6 +336,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-bunyan",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5953,6 +5954,7 @@ name = "rdb-types"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "num_enum 0.7.6",
  "oxnet",
  "schemars 0.8.22",
  "serde",

@@ -9,12 +9,7 @@ use bgp::session::{FsmEventRecord, MessageHistory};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageDirection {
-    Sent,
-    Received,
-}
+pub use rdb::MessageDirection;
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
 pub struct MessageHistoryRequest {

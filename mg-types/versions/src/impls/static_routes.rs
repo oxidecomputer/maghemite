@@ -9,7 +9,8 @@ impl From<latest::static_routes::StaticRoute4> for StaticRouteKey {
     fn from(val: latest::static_routes::StaticRoute4) -> Self {
         StaticRouteKey {
             prefix: val.prefix.into(),
-            nexthop: val.nexthop.into(),
+            nexthop: val.nexthop,
+            nexthop_interface: val.nexthop_interface,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }
@@ -20,7 +21,8 @@ impl From<latest::static_routes::StaticRoute6> for StaticRouteKey {
     fn from(val: latest::static_routes::StaticRoute6) -> Self {
         StaticRouteKey {
             prefix: val.prefix.into(),
-            nexthop: val.nexthop.into(),
+            nexthop: val.nexthop,
+            nexthop_interface: val.nexthop_interface,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }

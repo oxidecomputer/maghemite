@@ -103,6 +103,13 @@ impl Prefix4 {
         self_masked == other_masked
     }
 
+    /// Wire size of this prefix: 1 byte for the length field plus the
+    /// minimum number of bytes needed to hold `length` bits.
+    pub fn wire_len(&self) -> usize {
+        // prefix-length byte + ceil(length / 8) address bytes
+        1 + usize::from(self.length).div_ceil(8)
+    }
+
     /// Check if a prefix contains a subnet that is valid for use in the RIB.
     /// Currently this only checks if the prefix overlaps with Loopback
     /// (127.0.0.0/8) or Multicast (224.0.0.0/4) address space. We deliberately
@@ -229,6 +236,13 @@ impl Prefix6 {
         let other_masked = other.value.to_bits() & mask;
 
         self_masked == other_masked
+    }
+
+    /// Wire size of this prefix: 1 byte for the length field plus the
+    /// minimum number of bytes needed to hold `length` bits.
+    pub fn wire_len(&self) -> usize {
+        // prefix-length byte + ceil(length / 8) address bytes
+        1 + usize::from(self.length).div_ceil(8)
     }
 
     /// Check if a prefix contains a subnet that is valid for use in the RIB.
@@ -366,6 +380,14 @@ impl Prefix {
         matches!(self, Prefix::V4(_))
     }
 
+    /// Return the address family corresponding to this prefix.
+    pub fn address_family(&self) -> AddressFamily {
+        match self {
+            Prefix::V4(_) => AddressFamily::Ipv4,
+            Prefix::V6(_) => AddressFamily::Ipv6,
+        }
+    }
+
     /// Check if a prefix contains a subnet that is valid for use in the RIB.
     pub fn valid_for_rib(&self) -> bool {
         match self {
@@ -419,6 +441,15 @@ pub enum AddressFamily {
     Ipv4,
     /// Internet Protocol Version 6 (IPv6)
     Ipv6,
+}
+
+impl std::fmt::Display for AddressFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressFamily::Ipv4 => write!(f, "IPv4"),
+            AddressFamily::Ipv6 => write!(f, "IPv6"),
+        }
+    }
 }
 
 #[derive(
@@ -580,4 +611,160 @@ impl PeerId {
     pub fn is_numbered(&self) -> bool {
         matches!(self, Self::Ip(_))
     }
+}
+
+/// DSCP value for BGP TCP connections (0-63).
+///
+/// RFC 4271 Appendix E recommends CS6 (48) for BGP traffic.
+/// Default: CS6 (48).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub struct Dscp(u8);
+
+impl Dscp {
+    /// CS6 (48) — the RFC 4271 Appendix E recommended default.
+    pub const CS6: Self = Self(48);
+
+    /// Create a new DSCP value from a raw 6-bit value (0-63).
+    pub fn new(val: u8) -> Result<Self, String> {
+        if val > 63 {
+            Err(format!("DSCP value {val} out of range (0-63)"))
+        } else {
+            Ok(Self(val))
+        }
+    }
+
+    /// Create a DSCP value from a TOS/Traffic-Class byte as
+    /// returned by `getsockopt(IP_TOS)` or `getsockopt(IPV6_TCLASS)`.
+    /// Extracts the upper 6 bits (DSCP), ignoring the lower 2 ECN
+    /// bits.
+    pub fn from_tos_byte(tos: u8) -> Self {
+        Self(tos >> 2)
+    }
+
+    /// Return the raw numeric value (0-63).
+    pub fn value(self) -> u8 {
+        self.0
+    }
+
+    /// Return the TOS/Traffic-Class byte for use with `IP_TOS` or
+    /// `IPV6_TCLASS`. The DSCP value occupies the upper 6 bits of
+    /// the byte (value << 2), with the lower 2 ECN bits left zero.
+    pub fn tos_byte(self) -> u8 {
+        self.0 << 2
+    }
+}
+
+impl Default for Dscp {
+    fn default() -> Self {
+        Self::CS6
+    }
+}
+
+impl TryFrom<u8> for Dscp {
+    type Error = String;
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        Self::new(val)
+    }
+}
+
+impl From<Dscp> for u8 {
+    fn from(d: Dscp) -> u8 {
+        d.0
+    }
+}
+
+impl fmt::Display for Dscp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for Dscp {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let val: u8 =
+            s.parse().map_err(|_| format!("invalid DSCP value: {s}"))?;
+        Self::new(val)
+    }
+}
+
+impl JsonSchema for Dscp {
+    fn schema_name() -> String {
+        "Dscp".to_string()
+    }
+    fn json_schema(
+        _g: &mut schemars::r#gen::SchemaGenerator,
+    ) -> schemars::schema::Schema {
+        schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::Integer.into()),
+            format: Some("uint8".to_string()),
+            number: Some(Box::new(schemars::schema::NumberValidation {
+                minimum: Some(0.0),
+                maximum: Some(63.0),
+                ..Default::default()
+            })),
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "DSCP value (0-63). Default: CS6 (48).".to_string(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
+/// BGP ORIGIN path attribute (RFC 4271 Section 4.3).
+///
+/// Indicates how the route was learned:
+/// - `Igp` (0): Route interior to the originating AS
+/// - `Egp` (1): Route learned via EGP
+/// - `Incomplete` (2): Route learned by some other means
+///
+/// Used in bestpath selection: lower origin value is preferred
+/// (IGP < EGP < Incomplete).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    num_enum::IntoPrimitive,
+    JsonSchema,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    num_enum::TryFromPrimitive,
+)]
+#[repr(u8)]
+#[serde(rename_all = "snake_case")]
+pub enum PathOrigin {
+    /// Interior gateway protocol
+    Igp = 0,
+    /// Exterior gateway protocol
+    Egp = 1,
+    /// Incomplete path origin
+    Incomplete = 2,
+}
+
+impl fmt::Display for PathOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PathOrigin::Igp => write!(f, "igp"),
+            PathOrigin::Egp => write!(f, "egp"),
+            PathOrigin::Incomplete => write!(f, "incomplete"),
+        }
+    }
+}
+
+/// Direction of a BGP message (sent or received).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageDirection {
+    Sent,
+    Received,
 }
