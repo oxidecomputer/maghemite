@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "7.0.0"
+    "version": "8.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -899,7 +899,7 @@
     },
     "/bgp/config/unnumbered-neighbor": {
       "get": {
-        "operationId": "read_unnumbered_neighbor",
+        "operationId": "read_unnumbered_neighbor_v2",
         "parameters": [
           {
             "in": "query",
@@ -940,7 +940,7 @@
         }
       },
       "put": {
-        "operationId": "create_unnumbered_neighbor",
+        "operationId": "create_unnumbered_neighbor_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -964,7 +964,7 @@
         }
       },
       "post": {
-        "operationId": "update_unnumbered_neighbor",
+        "operationId": "update_unnumbered_neighbor_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -988,7 +988,7 @@
         }
       },
       "delete": {
-        "operationId": "delete_unnumbered_neighbor",
+        "operationId": "delete_unnumbered_neighbor_v2",
         "parameters": [
           {
             "in": "query",
@@ -1024,7 +1024,7 @@
     },
     "/bgp/config/unnumbered-neighbors": {
       "get": {
-        "operationId": "read_unnumbered_neighbors",
+        "operationId": "read_unnumbered_neighbors_v2",
         "parameters": [
           {
             "in": "query",
@@ -1130,7 +1130,7 @@
     },
     "/bgp/omicron/apply": {
       "post": {
-        "operationId": "bgp_apply",
+        "operationId": "bgp_apply_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2303,6 +2303,19 @@
           "resolution": {
             "type": "integer",
             "format": "uint64",
+            "minimum": 0
+          },
+          "src_addr": {
+            "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
+            "type": "string",
+            "format": "ip"
+          },
+          "src_port": {
+            "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
+            "type": "integer",
+            "format": "uint16",
             "minimum": 0
           },
           "vlan_id": {
@@ -4028,6 +4041,19 @@
             "format": "uint64",
             "minimum": 0
           },
+          "src_addr": {
+            "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
+            "type": "string",
+            "format": "ip"
+          },
+          "src_port": {
+            "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
           "vlan_id": {
             "nullable": true,
             "type": "integer",
@@ -5483,6 +5509,19 @@
             "format": "uint16",
             "minimum": 0
           },
+          "src_addr": {
+            "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
+            "type": "string",
+            "format": "ip"
+          },
+          "src_port": {
+            "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
           "vlan_id": {
             "nullable": true,
             "type": "integer",
@@ -5638,6 +5677,19 @@
           "resolution": {
             "type": "integer",
             "format": "uint64",
+            "minimum": 0
+          },
+          "src_addr": {
+            "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
+            "type": "string",
+            "format": "ip"
+          },
+          "src_port": {
+            "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
+            "type": "integer",
+            "format": "uint16",
             "minimum": 0
           },
           "vlan_id": {

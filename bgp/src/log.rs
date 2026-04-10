@@ -210,43 +210,6 @@ macro_rules! collision_log {
     };
 }
 
-macro_rules! dispatcher_log {
-    ($self:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
-        slog::$level!($self.log,
-            $msg;
-            "component" => crate::COMPONENT_BGP,
-            "module" => crate::MOD_NEIGHBOR,
-            "unit" => UNIT_DISPATCHER,
-            $($key => $value),*
-        )
-    };
-    ($self:expr, $level:ident, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
-        slog::$level!($self.log,
-            $msg, $($args),*;
-            "component" => crate::COMPONENT_BGP,
-            "module" => crate::MOD_NEIGHBOR,
-            "unit" => UNIT_DISPATCHER,
-            $($key => $value),*
-        )
-    };
-    ($self:expr, $level:ident, $msg:expr) => {
-        slog::$level!($self.log,
-            $msg;
-            "component" => crate::COMPONENT_BGP,
-            "module" => crate::MOD_NEIGHBOR,
-            "unit" => UNIT_DISPATCHER,
-        )
-    };
-    ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
-        slog::$level!($self.log,
-            $msg, $($args),*;
-            "component" => crate::COMPONENT_BGP,
-            "module" => crate::MOD_NEIGHBOR,
-            "unit" => UNIT_DISPATCHER,
-        )
-    };
-}
-
 #[allow(unused_macros)]
 macro_rules! connection_log {
     ($self:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
@@ -341,6 +304,6 @@ macro_rules! connection_log_lite {
 
 #[allow(unused_imports)]
 pub(crate) use {
-    collision_log, connection_log, connection_log_lite, dispatcher_log,
-    session_log, session_log_lite,
+    collision_log, connection_log, connection_log_lite, session_log,
+    session_log_lite,
 };
