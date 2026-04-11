@@ -118,7 +118,7 @@ camino = "1.2.2"
 ciborium = "0.2.2"
 http = "1.4.0"
 http-body-util = "0.1"
-rand = "0.10.0"
+rand = "0.10.1"
 backoff = "0.4"
 chrono = { version = "0.4.44", features = ["serde"] }
 oxide-tokio-rt = "0.1.3"
