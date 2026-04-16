@@ -1918,6 +1918,8 @@ pub(crate) mod helpers {
                 allow_export6: ImportExportPolicy6::NoFiltering,
                 nexthop4: None,
                 nexthop6: None,
+                src_addr: None,
+                src_port: None,
             },
         })?;
 
@@ -1949,7 +1951,7 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
                 rq.clone().into(),
-                None,
+                info.bind_addr,
                 event_tx.clone(),
                 event_rx,
                 info,
@@ -1960,7 +1962,7 @@ pub(crate) mod helpers {
         } else {
             get_router!(&ctx, rq.asn)?.new_session(
                 rq.clone().into(),
-                None,
+                info.bind_addr,
                 event_tx.clone(),
                 event_rx,
                 info,
@@ -2028,6 +2030,8 @@ pub(crate) mod helpers {
                 nexthop4,
                 nexthop6,
                 vlan_id: rq.parameters.vlan_id,
+                src_addr: rq.parameters.src_addr,
+                src_port: rq.parameters.src_port,
             },
         })?;
 
@@ -2047,6 +2051,10 @@ pub(crate) mod helpers {
         bgp_log!(log, info, "add unnumbered neighbor {}", rq.interface;
             "params" => format!("{rq:#?}")
         );
+
+        // Validate that at least one AF is enabled
+        rq.validate_address_families()
+            .map_err(Error::InvalidRequest)?;
 
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
@@ -2147,6 +2155,8 @@ pub(crate) mod helpers {
                     nexthop4,
                     nexthop6,
                     vlan_id: rq.parameters.vlan_id,
+                    src_addr: rq.parameters.src_addr,
+                    src_port: rq.parameters.src_port,
                 },
             })?;
 

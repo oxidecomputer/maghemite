@@ -223,6 +223,8 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                         nexthop4,
                         nexthop6,
                         vlan_id: Some(1),
+                        src_addr: None,
+                        src_port: None,
                     },
                 }
             },

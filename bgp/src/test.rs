@@ -382,10 +382,15 @@ where
                 resolution: 100,
             };
 
-            // Use bind_addr from LogicalRouter if specified, otherwise use listen_addr
+            // Use bind_addr IP from LogicalRouter (port 0 so OS picks ephemeral),
+            // otherwise use listen_addr IP. The source port for outbound connections
+            // must not conflict with the dispatcher's listen port.
             let bind_addr = logical_router
                 .bind_addr
-                .unwrap_or(logical_router.listen_addr);
+                .map(|addr| SocketAddr::new(addr.ip(), 0))
+                .unwrap_or_else(|| {
+                    SocketAddr::new(logical_router.listen_addr.ip(), 0)
+                });
 
             let session_info = neighbor.session_info.clone();
 

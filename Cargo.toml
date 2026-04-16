@@ -118,7 +118,7 @@ camino = "1.2.2"
 ciborium = "0.2.2"
 http = "1.4.0"
 http-body-util = "0.1"
-rand = "0.10.0"
+rand = "0.10.1"
 backoff = "0.4"
 chrono = { version = "0.4.44", features = ["serde"] }
 oxide-tokio-rt = "0.1.3"
@@ -143,11 +143,11 @@ natord = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "b60decb70fe491ebdaa30c824619470b015556fc"
+rev = "87ab6e17133d057f762cdcb27940faaa705737a3"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "b60decb70fe491ebdaa30c824619470b015556fc"
+rev = "87ab6e17133d057f762cdcb27940faaa705737a3"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"

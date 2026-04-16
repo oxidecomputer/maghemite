@@ -203,12 +203,44 @@ pub struct Neighbor {
 }
 
 impl Neighbor {
-    /// Validate that at least one address family is enabled
+    /// Validate that at least one address family is enabled, and that
+    /// `src_addr` (if set) is the same IP version as `host`.
     pub fn validate_address_families(&self) -> Result<(), String> {
         if self.parameters.ipv4_unicast.is_none()
             && self.parameters.ipv6_unicast.is_none()
         {
             return Err("at least one address family must be enabled".into());
+        }
+        if let Some(src) = self.parameters.src_addr {
+            let host_is_v4 = self.host.ip().is_ipv4();
+            let src_is_v4 = src.is_ipv4();
+            if host_is_v4 != src_is_v4 {
+                return Err(format!(
+                    "src_addr ({src}) IP version does not match host ({}) IP version",
+                    self.host.ip()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl UnnumberedNeighbor {
+    /// Validate that at least one address family is enabled, and that
+    /// `src_addr` (if set) is IPv6 — unnumbered BGP uses link-local IPv6
+    /// addressing, so an IPv4 source address is never valid.
+    pub fn validate_address_families(&self) -> Result<(), String> {
+        if self.parameters.ipv4_unicast.is_none()
+            && self.parameters.ipv6_unicast.is_none()
+        {
+            return Err("at least one address family must be enabled".into());
+        }
+        if let Some(src) = self.parameters.src_addr
+            && src.is_ipv4()
+        {
+            return Err(format!(
+                "src_addr ({src}) must be IPv6 for unnumbered neighbors"
+            ));
         }
         Ok(())
     }
@@ -396,6 +428,8 @@ impl UnnumberedNeighbor {
                     min: 0.75,
                     max: 1.0,
                 }),
+                src_addr: rq.parameters.src_addr,
+                src_port: rq.parameters.src_port,
             },
         }
     }
@@ -462,6 +496,8 @@ impl Neighbor {
                 }),
                 idle_hold_jitter: None,
                 deterministic_collision_resolution: false,
+                src_addr: rq.parameters.src_addr,
+                src_port: rq.parameters.src_port,
             },
         }
     }
@@ -919,6 +955,14 @@ pub struct BgpPeerParameters {
     /// is multiplied by a random value within the (min, max) range supplied.
     /// Useful to help break repeated synchronization of connection collisions.
     pub connect_retry_jitter: Option<JitterRange>,
+
+    // new stuff after v6 (VERSION_BGP_SRC_ADDR)
+    /// Source IP address to bind when establishing outbound TCP connections.
+    /// None means the system selects the source address.
+    pub src_addr: Option<IpAddr>,
+    /// Source TCP port to bind when establishing outbound TCP connections.
+    /// None means the system selects the source port.
+    pub src_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
@@ -978,6 +1022,8 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 }),
                 idle_hold_jitter: None,
                 deterministic_collision_resolution: false,
+                src_addr: None,
+                src_port: None,
             },
         }
     }
@@ -1131,4 +1177,278 @@ impl From<ApplyRequestV1> for ApplyRequest {
             unnumbered_peers: HashMap::default(),
         }
     }
+}
+
+impl From<ApplyRequestV6> for ApplyRequest {
+    fn from(req: ApplyRequestV6) -> Self {
+        Self {
+            asn: req.asn,
+            originate: req.originate,
+            checker: req.checker,
+            shaper: req.shaper,
+            peers: req
+                .peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: req
+                .unnumbered_peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfig::from)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_MP_BGP through VERSION_RIB_EXPORTED_STRING_KEY / v4.0.0 - v6.0.0)
+// ============================================================================
+// These types maintain backward compatibility for API versions 4-6.
+// They lack the src_addr and src_port fields added in VERSION_BGP_SRC_ADDR.
+// Never used internally - always convert to/from current types at API boundary.
+//
+// Delete these types when all clients have migrated to VERSION_BGP_SRC_ADDR+.
+
+/// BGP peer parameters for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "BgpPeerParameters")]
+pub struct BgpPeerParametersV6 {
+    pub hold_time: u64,
+    pub idle_hold_time: u64,
+    pub delay_open: u64,
+    pub connect_retry: u64,
+    pub keepalive: u64,
+    pub resolution: u64,
+    pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<String>,
+    pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
+    pub vlan_id: Option<u16>,
+    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
+    pub deterministic_collision_resolution: bool,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub connect_retry_jitter: Option<JitterRange>,
+}
+
+impl From<BgpPeerParameters> for BgpPeerParametersV6 {
+    fn from(p: BgpPeerParameters) -> Self {
+        Self {
+            hold_time: p.hold_time,
+            idle_hold_time: p.idle_hold_time,
+            delay_open: p.delay_open,
+            connect_retry: p.connect_retry,
+            keepalive: p.keepalive,
+            resolution: p.resolution,
+            passive: p.passive,
+            remote_asn: p.remote_asn,
+            min_ttl: p.min_ttl,
+            md5_auth_key: p.md5_auth_key,
+            multi_exit_discriminator: p.multi_exit_discriminator,
+            communities: p.communities,
+            local_pref: p.local_pref,
+            enforce_first_as: p.enforce_first_as,
+            vlan_id: p.vlan_id,
+            ipv4_unicast: p.ipv4_unicast,
+            ipv6_unicast: p.ipv6_unicast,
+            deterministic_collision_resolution: p
+                .deterministic_collision_resolution,
+            idle_hold_jitter: p.idle_hold_jitter,
+            connect_retry_jitter: p.connect_retry_jitter,
+        }
+    }
+}
+
+impl From<BgpPeerParametersV6> for BgpPeerParameters {
+    fn from(p: BgpPeerParametersV6) -> Self {
+        Self {
+            hold_time: p.hold_time,
+            idle_hold_time: p.idle_hold_time,
+            delay_open: p.delay_open,
+            connect_retry: p.connect_retry,
+            keepalive: p.keepalive,
+            resolution: p.resolution,
+            passive: p.passive,
+            remote_asn: p.remote_asn,
+            min_ttl: p.min_ttl,
+            md5_auth_key: p.md5_auth_key,
+            multi_exit_discriminator: p.multi_exit_discriminator,
+            communities: p.communities,
+            local_pref: p.local_pref,
+            enforce_first_as: p.enforce_first_as,
+            vlan_id: p.vlan_id,
+            ipv4_unicast: p.ipv4_unicast,
+            ipv6_unicast: p.ipv6_unicast,
+            deterministic_collision_resolution: p
+                .deterministic_collision_resolution,
+            idle_hold_jitter: p.idle_hold_jitter,
+            connect_retry_jitter: p.connect_retry_jitter,
+            src_addr: None,
+            src_port: None,
+        }
+    }
+}
+
+/// BGP peer config for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "BgpPeerConfig")]
+pub struct BgpPeerConfigV6 {
+    pub host: SocketAddr,
+    pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV6,
+}
+
+impl From<BgpPeerConfig> for BgpPeerConfigV6 {
+    fn from(cfg: BgpPeerConfig) -> Self {
+        Self {
+            host: cfg.host,
+            name: cfg.name,
+            parameters: BgpPeerParametersV6::from(cfg.parameters),
+        }
+    }
+}
+
+impl From<BgpPeerConfigV6> for BgpPeerConfig {
+    fn from(cfg: BgpPeerConfigV6) -> Self {
+        Self {
+            host: cfg.host,
+            name: cfg.name,
+            parameters: BgpPeerParameters::from(cfg.parameters),
+        }
+    }
+}
+
+/// Unnumbered BGP peer config for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedBgpPeerConfig")]
+pub struct UnnumberedBgpPeerConfigV6 {
+    pub interface: String,
+    pub name: String,
+    pub router_lifetime: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV6,
+}
+
+impl From<UnnumberedBgpPeerConfig> for UnnumberedBgpPeerConfigV6 {
+    fn from(cfg: UnnumberedBgpPeerConfig) -> Self {
+        Self {
+            interface: cfg.interface,
+            name: cfg.name,
+            router_lifetime: cfg.router_lifetime,
+            parameters: BgpPeerParametersV6::from(cfg.parameters),
+        }
+    }
+}
+
+impl From<UnnumberedBgpPeerConfigV6> for UnnumberedBgpPeerConfig {
+    fn from(cfg: UnnumberedBgpPeerConfigV6) -> Self {
+        Self {
+            interface: cfg.interface,
+            name: cfg.name,
+            router_lifetime: cfg.router_lifetime,
+            parameters: BgpPeerParameters::from(cfg.parameters),
+        }
+    }
+}
+
+/// Neighbor configuration for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "Neighbor")]
+pub struct NeighborV6 {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub host: SocketAddr,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV6,
+}
+
+impl From<Neighbor> for NeighborV6 {
+    fn from(n: Neighbor) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            host: n.host,
+            parameters: BgpPeerParametersV6::from(n.parameters),
+        }
+    }
+}
+
+impl From<NeighborV6> for Neighbor {
+    fn from(n: NeighborV6) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            host: n.host,
+            parameters: BgpPeerParameters::from(n.parameters),
+        }
+    }
+}
+
+/// Unnumbered neighbor configuration for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedNeighbor")]
+pub struct UnnumberedNeighborV6 {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub act_as_a_default_ipv6_router: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV6,
+}
+
+impl From<UnnumberedNeighbor> for UnnumberedNeighborV6 {
+    fn from(n: UnnumberedNeighbor) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            interface: n.interface,
+            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
+            parameters: BgpPeerParametersV6::from(n.parameters),
+        }
+    }
+}
+
+impl From<UnnumberedNeighborV6> for UnnumberedNeighbor {
+    fn from(n: UnnumberedNeighborV6) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            interface: n.interface,
+            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
+            parameters: BgpPeerParameters::from(n.parameters),
+        }
+    }
+}
+
+/// Apply request for v4-v6 API (lacks src_addr/src_port in peer configs).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "ApplyRequest")]
+pub struct ApplyRequestV6 {
+    pub asn: u32,
+    pub originate: Vec<Prefix>,
+    pub checker: Option<CheckerSource>,
+    pub shaper: Option<ShaperSource>,
+    pub peers: HashMap<String, Vec<BgpPeerConfigV6>>,
+    #[serde(default)]
+    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfigV6>>,
 }

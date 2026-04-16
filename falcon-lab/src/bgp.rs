@@ -46,5 +46,7 @@ pub fn basic_unnumbered_neighbor(
         connect_retry_jitter: None,
         deterministic_collision_resolution: false,
         idle_hold_jitter: None,
+        src_addr: None,
+        src_port: None,
     }
 }

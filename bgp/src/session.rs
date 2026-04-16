@@ -944,7 +944,9 @@ impl From<&BgpPeerParameters> for SessionInfo {
             enforce_first_as: value.enforce_first_as,
             vlan_id: value.vlan_id,
             remote_id: None,
-            bind_addr: None,
+            bind_addr: value
+                .src_addr
+                .map(|addr| SocketAddr::new(addr, value.src_port.unwrap_or(0))),
             connect_retry_time: Duration::from_secs(value.connect_retry),
             keepalive_time: Duration::from_secs(value.keepalive),
             hold_time: Duration::from_secs(value.hold_time),
