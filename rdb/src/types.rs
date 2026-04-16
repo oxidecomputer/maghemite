@@ -724,6 +724,12 @@ pub struct BgpNeighborParameters {
     #[serde(default)]
     pub nexthop6: Option<IpAddr>,
     pub vlan_id: Option<u16>,
+    /// Source IP address to bind when establishing outbound TCP connections.
+    #[serde(default)]
+    pub src_addr: Option<IpAddr>,
+    /// Source TCP port to bind when establishing outbound TCP connections.
+    #[serde(default)]
+    pub src_port: Option<u16>,
 }
 
 /// Default value for ipv4_enabled - true for backward compatibility

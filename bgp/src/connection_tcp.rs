@@ -26,7 +26,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
-use slog::Logger;
+use slog::{Logger, info};
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -79,6 +79,7 @@ enum RecvError {
 pub struct BgpListenerTcp {
     listener: TcpListener,
     unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    bind_addr: SocketAddr,
 }
 
 impl BgpListenerTcp {
@@ -103,6 +104,7 @@ impl BgpListenerTcp {
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn bind<A: ToSocketAddrs>(
         addr: A,
+        log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Self, Error>
     where
@@ -116,14 +118,19 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 "at least one address required".into(),
             ))?;
         let listener = TcpListener::bind(addr)?;
+        let bind_addr = listener.local_addr()?;
+
+        info!(log, "TcpListener created"; "listener" => ?listener);
         // We set nonblocking to true on the listener because accept() can block
         // indefinitely and there isn't a portable way to do so with a timeout.
         // We would have to start using poll() to accomplish this, which is a
         // heavier lift that hasn't yet been deemed worthwhile.
         listener.set_nonblocking(true)?;
+
         Ok(Self {
             listener,
             unnumbered_manager,
+            bind_addr,
         })
     }
 
@@ -243,6 +250,10 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 
         Ok(())
     }
+
+    fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
 }
 
 pub struct BgpConnectorTcp;
@@ -308,11 +319,8 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     "timeout" => timeout.as_millis()
                 );
 
-                // Bind to source address if specified
-                if let Some(source_addr) = config.bind_addr {
-                    let mut src = source_addr;
-                    // clear source port, we only want to set the source ip
-                    src.set_port(0);
+                // Bind to source address/port if specified
+                if let Some(src) = config.bind_addr {
                     let ba: socket2::SockAddr = src.into();
                     if let Err(e) = s.bind(&ba) {
                         connection_log_lite!(log,

@@ -21,7 +21,7 @@
 //! 2. MRIB locks (see [`mrib`] module: `mrib_in` → `mrib_loc` → `watchers`)
 //! 3. RpfTable poptrie caches (`cache_v4`, `cache_v6`)
 //!
-//! **RPF lookup exception**: RPF lookups ([`mrib::rpf::RpfTable::lookup`]) hold
+//! **RPF lookup exception**: RPF lookups (`mrib::rpf::RpfTable::lookup`) hold
 //! at most one lock at a time. They first try the poptrie cache (read lock),
 //! release it, then fall back to linear scan (RIB lock) if needed. This avoids
 //! deadlocks since no path holds cache + RIB locks simultaneously.

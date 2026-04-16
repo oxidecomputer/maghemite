@@ -44,6 +44,7 @@ pub mod v4;
 #[path = "unnumbered/mod.rs"]
 pub mod v5;
 // v6 (RIB_EXPORTED_STRING_KEY) and v7 (OPERATION_ID_CLEANUP) introduced
-// no new types.
+// no new types. v8 (BGP_SRC_ADDR) added types in bgp/src/params.rs under
+// the legacy suffix-naming scheme (e.g. NeighborV6), not in this crate.
 #[path = "multicast_support/mod.rs"]
-pub mod v8;
+pub mod v9;
