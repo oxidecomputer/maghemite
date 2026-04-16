@@ -30,7 +30,7 @@ pub mod bgp {
 }
 
 pub mod mrib {
-    pub use crate::v8::mrib::*;
+    pub use crate::v9::mrib::*;
 }
 
 pub mod ndp {
