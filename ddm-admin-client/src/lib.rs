@@ -75,15 +75,3 @@ impl std::hash::Hash for types::MulticastOrigin {
         self.source.hash(state);
     }
 }
-
-impl From<mg_common::net::MulticastOrigin> for types::MulticastOrigin {
-    fn from(o: mg_common::net::MulticastOrigin) -> Self {
-        Self {
-            overlay_group: o.overlay_group,
-            underlay_group: o.underlay_group.ip(),
-            vni: types::Vni(o.vni.as_u32()),
-            metric: o.metric,
-            source: o.source,
-        }
-    }
-}

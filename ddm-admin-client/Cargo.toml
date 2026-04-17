@@ -7,7 +7,6 @@ edition = "2024"
 ignored = ["oxnet", "serde", "uuid"]
 
 [dependencies]
-mg-common.workspace = true
 oxnet.workspace = true
 progenitor.workspace = true
 reqwest.workspace = true
