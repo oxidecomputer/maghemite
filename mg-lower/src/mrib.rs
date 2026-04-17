@@ -43,7 +43,13 @@ const MG_LOWER_MRIB_TAG: &str = "mg-lower-mrib";
 ///
 /// [`MulticastOrigin`]: ddm_admin_client::types::MulticastOrigin
 fn ddm_origin(route: &MulticastRoute) -> MulticastOrigin {
-    mg_common::net::MulticastOrigin::from(route).into()
+    MulticastOrigin {
+        overlay_group: route.key.group().ip(),
+        underlay_group: route.underlay_group.ip(),
+        vni: ddm_admin_client::types::Vni(route.key.vni().as_u32()),
+        metric: 0,
+        source: route.key.source(),
+    }
 }
 
 /// Run the MRIB synchronization loop.
