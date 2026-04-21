@@ -1452,6 +1452,19 @@ impl Db {
             });
         }
 
+        // Synchronously revalidate affected (S,G) routes against the
+        // updated unicast RIB. The poptrie rebuild triggered above is
+        // async, so without this the MRIB update would depend on
+        // the rebuild thread completing first. The linear-scan fallback
+        // in rpf_table's lookup is sufficient here.
+        for prefix in &pcn.changed {
+            let event = match prefix {
+                Prefix::V4(p) => crate::mrib::rpf::RebuildEvent::V4(Some(*p)),
+                Prefix::V6(p) => crate::mrib::rpf::RebuildEvent::V6(Some(*p)),
+            };
+            self.revalidate_mrib(Some(event));
+        }
+
         self.notify(pcn);
         Ok(())
     }
