@@ -55,3 +55,6 @@ pfexec ./dhcp-server "$first" "$last" "$gw" "$server" &> /work/dhcp-server.log &
 
 RUST_LOG=debug pfexec ./falcon-lab run \
 	trio-unnumbered
+
+RUST_LOG=debug pfexec ./falcon-lab run \
+	trio-bfd-static-routing

@@ -53,6 +53,32 @@ impl FrrNode {
         LinuxNode(self.0)
     }
 
+    /// Freeze the BFD daemon. Control packets stop flowing without disturbing
+    /// the peer's configuration or interfaces, so `resume_bfdd` restores the
+    /// session without reapplying config.
+    pub async fn pause_bfdd(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: pausing frr bfdd", self.name(d));
+        d.exec(self.0, "pkill -STOP bfdd").await?;
+        Ok(())
+    }
+
+    pub async fn resume_bfdd(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: resuming frr bfdd", self.name(d));
+        d.exec(self.0, "pkill -CONT bfdd").await?;
+        Ok(())
+    }
+
+    /// Query FRR for the local status of a BFD session to `peer`. Returns
+    /// `true` iff bfdd reports the session as `up`.
+    pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {
+        let output = self.shell(d, "show bfd peers json").await?;
+        let peers: Vec<FrrBfdPeer> = serde_json::from_str(&output)
+            .context("parse frr bfd peers json")?;
+        Ok(peers
+            .iter()
+            .any(|p| p.peer == peer && p.status.eq_ignore_ascii_case("up")))
+    }
+
     /// Execute a vtysh command and return the output.
     pub async fn shell(&self, d: &Runner, script: &str) -> Result<String> {
         info!(
@@ -145,4 +171,11 @@ pub struct FrrBgpRoutePath {
 #[derive(Debug, Deserialize)]
 pub struct FrrBgpNexthop {
     pub ip: IpAddr,
+}
+
+/// Subset of an element in FRR's `show bfd peers json` response.
+#[derive(Debug, Deserialize)]
+pub struct FrrBfdPeer {
+    pub peer: IpAddr,
+    pub status: String,
 }

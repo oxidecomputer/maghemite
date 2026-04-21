@@ -3,13 +3,14 @@
 #![allow(dead_code)]
 
 use crate::linux::LinuxNode;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
 use oxnet::{Ipv4Net, Ipv6Net};
 use serde::Deserialize;
 use slog::info;
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 #[derive(Copy, Clone)]
 pub struct EosNode(pub NodeRef);
@@ -61,6 +62,39 @@ impl EosNode {
 
     pub fn linux(&self) -> LinuxNode {
         LinuxNode(self.0)
+    }
+
+    /// Freeze the ceos container. BFD packets stop being processed without
+    /// tearing down running-config, so `unpause` restores the session.
+    pub async fn pause(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: pausing ceos", self.name(d));
+        d.exec(self.0, "docker pause ceos").await?;
+        Ok(())
+    }
+
+    pub async fn unpause(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: unpausing ceos", self.name(d));
+        d.exec(self.0, "docker unpause ceos").await?;
+        Ok(())
+    }
+
+    /// Query ceos for the local status of a BFD session to `peer`. Returns
+    /// `true` iff EOS reports the session as `up`.
+    pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {
+        let output = self.shell(d, "show bfd peers | json").await?;
+        let resp: EosBfdResponse = serde_json::from_str(&output)
+            .context("parse eos bfd peers json")?;
+        let key = peer.to_string();
+        for vrf in resp.vrfs.values() {
+            let neighbors = match peer {
+                IpAddr::V4(_) => &vrf.ipv4_neighbors,
+                IpAddr::V6(_) => &vrf.ipv6_neighbors,
+            };
+            if let Some(n) = neighbors.get(&key) {
+                return Ok(n.status.eq_ignore_ascii_case("up"));
+            }
+        }
+        Ok(false)
     }
 
     /// Get BGP IPv4 imported prefixes from EOS.
@@ -164,4 +198,25 @@ impl BgpIpv6Response {
             })
         })
     }
+}
+
+/// Subset of `show bfd peers | json` output. Neighbor keys are raw IP
+/// strings; we compare after normalizing via `IpAddr::to_string()`.
+#[derive(Debug, Deserialize)]
+pub struct EosBfdResponse {
+    pub vrfs: HashMap<String, EosBfdVrf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EosBfdVrf {
+    #[serde(default)]
+    pub ipv4_neighbors: HashMap<String, EosBfdNeighbor>,
+    #[serde(default)]
+    pub ipv6_neighbors: HashMap<String, EosBfdNeighbor>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EosBfdNeighbor {
+    pub status: String,
 }

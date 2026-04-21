@@ -47,6 +47,20 @@ impl IllumosNode {
         Err(anyhow!("dhcp timed out"))
     }
 
+    pub async fn staticaddr(
+        &self,
+        d: &Runner,
+        addrobj: &str,
+        cidr: &str,
+    ) -> Result<IpAddr> {
+        d.exec(
+            self.0,
+            &format!("ipadm create-addr -T static -a {cidr} {addrobj}"),
+        )
+        .await?;
+        self.ip(d, addrobj).await
+    }
+
     pub async fn addrconf(&self, d: &Runner, addrobj: &str) -> Result<IpAddr> {
         d.exec(self.0, &format!("ipadm create-addr -T addrconf {addrobj}"))
             .await?;
