@@ -1328,8 +1328,8 @@ dependencies = [
  "libnet",
  "mg-common",
  "omicron-common",
- "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
+ "opte-ioctl",
+ "oxide-vpc",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -3000,14 +3000,6 @@ dependencies = [
 [[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3#87ab6e17133d057f762cdcb27940faaa705737a3"
-dependencies = [
- "bitflags 2.11.0",
-]
-
-[[package]]
-name = "illumos-sys-hdrs"
-version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56#e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 dependencies = [
  "bitflags 2.11.0",
@@ -3041,8 +3033,8 @@ dependencies = [
  "omicron-common",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
- "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
+ "opte-ioctl",
+ "oxide-vpc",
  "oxlog",
  "oxnet",
  "rustix 1.1.4",
@@ -3431,15 +3423,6 @@ source = "git+https://github.com/oxidecomputer/omicron?branch=main#dfcd9ac2d3321
 dependencies = [
  "omicron-workspace-hack",
  "secrecy",
-]
-
-[[package]]
-name = "kstat-macro"
-version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3#87ab6e17133d057f762cdcb27940faaa705737a3"
-dependencies = [
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -4631,33 +4614,14 @@ dependencies = [
 [[package]]
 name = "opte"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3#87ab6e17133d057f762cdcb27940faaa705737a3"
-dependencies = [
- "bitflags 2.11.0",
- "dyn-clone",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "ingot",
- "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "postcard",
- "ref-cast",
- "serde",
- "tabwriter",
- "version_check",
- "zerocopy 0.8.48",
-]
-
-[[package]]
-name = "opte"
-version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56#e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 dependencies = [
  "bitflags 2.11.0",
  "dyn-clone",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
+ "illumos-sys-hdrs",
  "ingot",
- "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
- "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
+ "kstat-macro",
+ "opte-api",
  "postcard",
  "ref-cast",
  "serde",
@@ -4669,22 +4633,9 @@ dependencies = [
 [[package]]
 name = "opte-api"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3#87ab6e17133d057f762cdcb27940faaa705737a3"
-dependencies = [
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "ingot",
- "ipnetwork",
- "postcard",
- "serde",
- "smoltcp",
-]
-
-[[package]]
-name = "opte-api"
-version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56#e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 dependencies = [
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
+ "illumos-sys-hdrs",
  "ingot",
  "ipnetwork",
  "postcard",
@@ -4695,26 +4646,12 @@ dependencies = [
 [[package]]
 name = "opte-ioctl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3#87ab6e17133d057f762cdcb27940faaa705737a3"
-dependencies = [
- "libc",
- "libnet",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "postcard",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "opte-ioctl"
-version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56#e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 dependencies = [
  "libc",
  "libnet",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
+ "opte",
+ "oxide-vpc",
  "postcard",
  "serde",
  "thiserror 2.0.18",
@@ -4741,25 +4678,11 @@ dependencies = [
 [[package]]
 name = "oxide-vpc"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3#87ab6e17133d057f762cdcb27940faaa705737a3"
-dependencies = [
- "cfg-if",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=87ab6e17133d057f762cdcb27940faaa705737a3)",
- "serde",
- "tabwriter",
- "uuid",
- "zerocopy 0.8.48",
-]
-
-[[package]]
-name = "oxide-vpc"
-version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56#e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 dependencies = [
  "cfg-if",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=e547d07b08c3f3d6c821c9eb7a958adcffce6e56)",
+ "illumos-sys-hdrs",
+ "opte",
  "serde",
  "tabwriter",
  "uuid",
