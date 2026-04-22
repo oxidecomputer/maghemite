@@ -464,7 +464,8 @@ pub async fn run_trio_bfd_static_test(
     // Register each ox-side address with dpd so softnpu punts packets for
     // those destinations to the CPU port. Link-local v6 is handled
     // implicitly by the P4 pipeline, but globally-scoped addresses need an
-    // explicit per-link mapping.
+    // explicit per-link mapping. IPv6 is also disabled by default per-link
+    // in the P4 pipeline, so enable it before registering v6 addresses.
     for (qsfp, v4, v6) in [
         ("qsfp0", OX_CR1_V4, OX_CR1_V6),
         ("qsfp1", OX_CR2_V4, OX_CR2_V6),
@@ -481,6 +482,9 @@ pub async fn run_trio_bfd_static_test(
         )
         .await
         .context(format!("dpd: program {v4} on {qsfp}/0"))?;
+        dpd.link_ipv6_enabled_set(&port, &link, true)
+            .await
+            .context(format!("dpd: enable ipv6 on {qsfp}/0"))?;
         dpd.link_ipv6_create(
             &port,
             &link,
