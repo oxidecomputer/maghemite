@@ -458,11 +458,18 @@ pub async fn run_trio_bfd_static_test(
     .await?;
 
     // Configure numbered v4 + v6 addresses on the ox side of each softnpu
-    // link so static-route nexthops resolve.
+    // link so static-route nexthops resolve. illumos requires a v6 link-local
+    // (via addrconf) on an interface before a static global v6 address can
+    // be added, so do addrconf first.
     for (link, v4_cidr, v6_cidr) in [
         ("tfportqsfp0_0", OX_CR1_V4_CIDR, OX_CR1_V6_CIDR),
         ("tfportqsfp1_0", OX_CR2_V4_CIDR, OX_CR2_V6_CIDR),
     ] {
+        let ll = format!("{link}/ll");
+        ox.illumos()
+            .addrconf(&ad, &ll)
+            .await
+            .context(format!("addrconf {ll}"))?;
         for (suffix, cidr) in [("v4", v4_cidr), ("v6", v6_cidr)] {
             let addrobj = format!("{link}/{suffix}");
             ox.illumos()
