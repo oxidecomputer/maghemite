@@ -759,15 +759,15 @@ async fn expect_route(
 ) -> Result<()> {
     // Push cr1 before cr2 so the list is already in the sorted order that
     // dpd_v*_targets returns.
-    let mut want_v4 = Vec::new();
-    let mut want_v6 = Vec::new();
+    let mut want_v4: Vec<IpAddr> = Vec::new();
+    let mut want_v6: Vec<IpAddr> = Vec::new();
     if cr1_in {
-        want_v4.push(CR1_V4);
-        want_v6.push(CR1_V6);
+        want_v4.push(IpAddr::V4(CR1_V4));
+        want_v6.push(IpAddr::V6(CR1_V6));
     }
     if cr2_in {
-        want_v4.push(CR2_V4);
-        want_v6.push(CR2_V6);
+        want_v4.push(IpAddr::V4(CR2_V4));
+        want_v6.push(IpAddr::V6(CR2_V6));
     }
 
     let desc_v4 = format!("{phase} v4");
@@ -841,19 +841,22 @@ async fn mgd_selected_paths(
         .map(|paths| paths.len())
 }
 
-async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Prefix4) -> Vec<Ipv4Addr> {
+/// All dpd target addresses for the given v4 prefix. Targets may be v4
+/// (static routes) or v6 (BGP-unnumbered uses v6 link-local next-hops for
+/// v4 prefixes), so the return type is `IpAddr`.
+async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Prefix4) -> Vec<IpAddr> {
     let items = match dpd.route_ipv4_list(None, None).await {
         Ok(r) => r.into_inner().items,
         Err(_) => return Vec::new(),
     };
     let want_cidr = prefix.to_string();
-    let mut out: Vec<Ipv4Addr> = items
+    let mut out: Vec<IpAddr> = items
         .into_iter()
         .filter(|r| r.cidr.to_string() == want_cidr)
         .flat_map(|r| {
-            r.targets.into_iter().filter_map(|t| match t {
-                dpd_client::types::Route::V4(rt) => Some(rt.tgt_ip),
-                _ => None,
+            r.targets.into_iter().map(|t| match t {
+                dpd_client::types::Route::V4(rt) => IpAddr::V4(rt.tgt_ip),
+                dpd_client::types::Route::V6(rt) => IpAddr::V6(rt.tgt_ip),
             })
         })
         .collect();
@@ -861,16 +864,16 @@ async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Prefix4) -> Vec<Ipv4Addr> {
     out
 }
 
-async fn dpd_v6_targets(dpd: &DpdClient, prefix: &Prefix6) -> Vec<Ipv6Addr> {
+async fn dpd_v6_targets(dpd: &DpdClient, prefix: &Prefix6) -> Vec<IpAddr> {
     let items = match dpd.route_ipv6_list(None, None).await {
         Ok(r) => r.into_inner().items,
         Err(_) => return Vec::new(),
     };
     let want_cidr = prefix.to_string();
-    let mut out: Vec<Ipv6Addr> = items
+    let mut out: Vec<IpAddr> = items
         .into_iter()
         .filter(|r| r.cidr.to_string() == want_cidr)
-        .flat_map(|r| r.targets.into_iter().map(|t| t.tgt_ip))
+        .flat_map(|r| r.targets.into_iter().map(|t| IpAddr::V6(t.tgt_ip)))
         .collect();
     out.sort();
     out
