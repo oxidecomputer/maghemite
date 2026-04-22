@@ -26,6 +26,7 @@ use mg_admin_client::{
         StaticRoute6List,
     },
 };
+use oxnet::{Ipv4Net, Ipv6Net};
 use rdb_types::{AddressFamily, Prefix4, Prefix6};
 use slog::info;
 use std::{
@@ -196,6 +197,14 @@ pub async fn run_trio_unnumbered_test(
     ox.ddm().run_ddm(&ad).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
+    // Fanout of 2 so both peer paths survive best-path selection and we can
+    // validate ECMP in loc_rib and dpd.
+    mgd.update_bestpath_fanout(&BestpathFanoutRequest {
+        fanout: std::num::NonZeroU8::new(2).expect("fanout > 0"),
+    })
+    .await
+    .context("mgd: set bestpath fanout")?;
+
     let local_asn: u32 = 33;
 
     info!(ad.log, "adding BGP router to mgd");
@@ -243,112 +252,102 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("announce v6 prefix")?;
 
+    // Prefixes announced by the two peers back to ox, and by ox back to them.
+    const CR_V4_PREFIX: &str = "1.2.3.0/24";
+    const CR_V6_PREFIX: &str = "fd99::/64";
+    const OX_V4_ORIGIN: &str = "4.5.6.0/24";
+    const OX_V6_ORIGIN: &str = "fdee::/64";
+
     wait_for_eq!(
         mgd.get_neighbors(local_asn)
             .await
             .map(|x| x.into_inner().len())
             .unwrap_or(0),
         2,
-        "neighbors"
+        "mgd neighbor count"
     );
 
-    wait_for_eq!(
-        mgd.get_neighbors(local_asn)
-            .await
-            .map(|x| x.into_inner().values().nth(0).map(|y| y.fsm_state))
-            .unwrap_or(None),
-        Some(FsmStateKind::Established),
-        "first neighbor established"
-    );
+    for name in ["cr1", "cr2"] {
+        let desc = format!("mgd bgp {name} established");
+        wait_for_eq!(
+            neighbor_fsm_state(&mgd, local_asn, name).await,
+            Some(FsmStateKind::Established),
+            &desc
+        );
+    }
 
+    // Both peers advertise the same prefix, so mgd should see a single
+    // imported entry per family with two paths, and — with fanout=2 — the
+    // same two paths should survive into the selected (loc) RIB.
     wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv4), None)
-            .await
-            .map(|x| x.len())
-            .unwrap_or(0),
-        1,
-        "imported ipv4 route"
-    );
-
-    wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv4), None)
-            .await
-            .map(|x| x.values().nth(0).map(|x| x.len()))
-            .unwrap_or(None),
+        mgd_imported_paths(&mgd, AddressFamily::Ipv4, CR_V4_PREFIX).await,
         Some(2),
-        "ipv4 paths"
+        "mgd imported paths for 1.2.3.0/24"
     );
-
     wait_for_eq!(
-        dpd.route_ipv4_list(None, None)
-            .await
-            .map(|x| x.items.len())
-            .unwrap_or(0),
-        1,
-        "dpd ipv4 routes"
-    );
-
-    wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv6), None)
-            .await
-            .map(|x| x.len())
-            .unwrap_or(0),
-        1,
-        "imported ipv6 route"
-    );
-
-    wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv6), None)
-            .await
-            .map(|x| x.values().nth(0).map(|x| x.len()))
-            .unwrap_or(None),
+        mgd_imported_paths(&mgd, AddressFamily::Ipv6, CR_V6_PREFIX).await,
         Some(2),
-        "ipv6 paths"
+        "mgd imported paths for fd99::/64"
     );
-
     wait_for_eq!(
-        dpd.route_ipv6_list(None, None)
-            .await
-            .map(|x| x.items.len())
-            .unwrap_or(0),
-        1,
-        "dpd ipv6 routes"
+        mgd_selected_paths(&mgd, AddressFamily::Ipv4, CR_V4_PREFIX).await,
+        Some(2),
+        "mgd selected paths for 1.2.3.0/24"
+    );
+    wait_for_eq!(
+        mgd_selected_paths(&mgd, AddressFamily::Ipv6, CR_V6_PREFIX).await,
+        Some(2),
+        "mgd selected paths for fd99::/64"
     );
 
+    // dpd should have the specific prefixes, each with two ECMP targets.
+    let cr_v4: Prefix4 = CR_V4_PREFIX.parse().expect("parse cr v4 prefix");
+    let cr_v6: Prefix6 = CR_V6_PREFIX.parse().expect("parse cr v6 prefix");
+    wait_for_eq!(
+        dpd_v4_targets(&dpd, &cr_v4).await.len(),
+        2,
+        "dpd ipv4 targets for 1.2.3.0/24"
+    );
+    wait_for_eq!(
+        dpd_v6_targets(&dpd, &cr_v6).await.len(),
+        2,
+        "dpd ipv6 targets for fd99::/64"
+    );
+
+    // Each peer should have imported ox's originated prefixes.
+    let ox_v4: Ipv4Net = OX_V4_ORIGIN.parse().expect("parse ox v4 origin");
+    let ox_v6: Ipv6Net = OX_V6_ORIGIN.parse().expect("parse ox v6 origin");
     wait_for_eq!(
         cr1.bgp_ipv4_imported(&ad)
             .await
-            .map(|x| x.all().count())
-            .unwrap_or(0),
-        1,
-        "cr1 imported ipv4 routes"
+            .map(|r| r.all().any(|(p, _)| *p == ox_v4))
+            .unwrap_or(false),
+        true,
+        "cr1 imported 4.5.6.0/24"
     );
-
     wait_for_eq!(
         cr1.bgp_ipv6_imported(&ad)
             .await
-            .map(|x| x.all().count())
-            .unwrap_or(0),
-        1,
-        "cr1 imported ipv6 routes"
+            .map(|r| r.all().any(|(p, _)| *p == ox_v6))
+            .unwrap_or(false),
+        true,
+        "cr1 imported fdee::/64"
     );
-
     wait_for_eq!(
         cr2.bgp_ipv4_imported(&ad)
             .await
-            .map(|x| x.all().count())
-            .unwrap_or(0),
-        1,
-        "cr2 imported ipv4 routes"
+            .map(|r| r.all().any(|(p, _)| *p == ox_v4))
+            .unwrap_or(false),
+        true,
+        "cr2 imported 4.5.6.0/24"
     );
-
     wait_for_eq!(
         cr2.bgp_ipv6_imported(&ad)
             .await
-            .map(|x| x.all().count())
-            .unwrap_or(0),
-        1,
-        "cr2 imported ipv6 routes"
+            .map(|r| r.all().any(|(p, _)| *p == ox_v6))
+            .unwrap_or(false),
+        true,
+        "cr2 imported fdee::/64"
     );
 
     info!(ad.log, "trio bgp unnumbered test passed 🎉");
@@ -792,6 +791,54 @@ async fn bfd_state(mgd: &MgdClient, peer: IpAddr) -> Option<BfdPeerState> {
         .into_iter()
         .find(|p| p.config.peer == peer)
         .map(|p| p.state)
+}
+
+/// Look up the FSM state of the neighbor with the given `name`. The
+/// `get_neighbors` map is keyed by interface/peer-id which we don't care
+/// about here; we iterate values and match on `PeerInfo::name`.
+async fn neighbor_fsm_state(
+    mgd: &MgdClient,
+    local_asn: u32,
+    name: &str,
+) -> Option<FsmStateKind> {
+    mgd.get_neighbors(local_asn)
+        .await
+        .ok()?
+        .into_inner()
+        .into_values()
+        .find(|p| p.name == name)
+        .map(|p| p.fsm_state)
+}
+
+/// Number of imported paths in the mgd RIB for a given prefix, or `None`
+/// if the prefix is absent. Reflects every path mgd has seen regardless of
+/// best-path selection.
+async fn mgd_imported_paths(
+    mgd: &MgdClient,
+    af: AddressFamily,
+    prefix: &str,
+) -> Option<usize> {
+    mgd.get_rib_imported(Some(&af), None)
+        .await
+        .ok()?
+        .into_inner()
+        .get(prefix)
+        .map(|paths| paths.len())
+}
+
+/// Number of selected (loc_rib) paths in the mgd RIB for a given prefix,
+/// or `None` if the prefix is absent. Reflects bestpath fanout.
+async fn mgd_selected_paths(
+    mgd: &MgdClient,
+    af: AddressFamily,
+    prefix: &str,
+) -> Option<usize> {
+    mgd.get_rib_selected(Some(&af), None)
+        .await
+        .ok()?
+        .into_inner()
+        .get(prefix)
+        .map(|paths| paths.len())
 }
 
 async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Prefix4) -> Vec<Ipv4Addr> {
