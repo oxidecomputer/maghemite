@@ -362,22 +362,18 @@ async fn frr_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
         ipv6 forwarding
         ip route 1.2.3.0/24 null0
         ipv6 route fd99::/64 null0
-        route-map PERMIT-ALL permit 10
         router bgp 44
+          no bgp ebgp-requires-policy
           timers bgp 2 6
           neighbor enp0s8 interface remote-as external
           neighbor enp0s8 timers connect 1     
           address-family ipv4 unicast
             network 1.2.3.0/24
             neighbor enp0s8 activate
-            neighbor enp0s8 route-map PERMIT-ALL out
-            neighbor enp0s8 route-map PERMIT-ALL in
           exit-address-family
           address-family ipv6 unicast
             network fd99::/64
             neighbor enp0s8 activate
-            neighbor enp0s8 route-map PERMIT-ALL out
-            neighbor enp0s8 route-map PERMIT-ALL in
           exit-address-family
         exit
     ";
