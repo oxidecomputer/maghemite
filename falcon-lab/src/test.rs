@@ -20,9 +20,10 @@ use libfalcon::Runner;
 use mg_admin_client::{
     Client as MgdClient,
     types::{
-        AddStaticRoute4Request, AddStaticRoute6Request, BfdPeerConfig,
-        BfdPeerState, FsmStateKind, Origin4, Origin6, Router, SessionMode,
-        StaticRoute4, StaticRoute4List, StaticRoute6, StaticRoute6List,
+        AddStaticRoute4Request, AddStaticRoute6Request, BestpathFanoutRequest,
+        BfdPeerConfig, BfdPeerState, FsmStateKind, Origin4, Origin6, Router,
+        SessionMode, StaticRoute4, StaticRoute4List, StaticRoute6,
+        StaticRoute6List,
     },
 };
 use rdb_types::{AddressFamily, Prefix4, Prefix6};
@@ -515,7 +516,20 @@ pub async fn run_trio_bfd_static_test(
     }
 
     ox.run_mgd(&ad).await?;
+    // mg-lower's sync loop queries ddm on every prefix change and bails the
+    // whole sync when ddm is unreachable. We don't exercise DDM here, but
+    // ddmd has to be up for static routes to lower into dpd.
+    ox.ddm().run_ddm(&ad).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
+
+    // Default fanout is 1, which collapses the two static paths into a single
+    // selected nexthop. Bump to 2 so both paths propagate through best-path
+    // selection and land in dpd as ECMP.
+    mgd.update_bestpath_fanout(&BestpathFanoutRequest {
+        fanout: std::num::NonZeroU8::new(2).expect("fanout > 0"),
+    })
+    .await
+    .context("mgd: set bestpath fanout")?;
 
     let prefix_v4: Prefix4 =
         TEST_PREFIX_V4.parse().expect("parse v4 test prefix");
