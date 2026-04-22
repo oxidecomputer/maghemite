@@ -585,7 +585,7 @@ async fn frr_bfd_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
           no shutdown
         exit
         bfd
-          peer {ox_v4}
+          peer {ox_v4} local-address {cr_v4}
             detect-multiplier {mult}
             receive-interval {rx_ms}
             transmit-interval {rx_ms}
@@ -603,6 +603,7 @@ async fn frr_bfd_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
         cr_v6_cidr = CR1_V6_CIDR,
         ox_v4 = OX_CR1_V4,
         ox_v6 = OX_CR1_V6,
+        cr_v4 = CR1_V4,
         cr_v6 = CR1_V6,
         mult = BFD_DETECTION_MULT,
     );
