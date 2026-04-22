@@ -12,7 +12,10 @@ use crate::{
     wait_for_eq,
 };
 use anyhow::{Context, Result};
-use dpd_client::Client as DpdClient;
+use dpd_client::{
+    Client as DpdClient,
+    types::{Ipv4Entry, Ipv6Entry, LinkId, PortId},
+};
 use libfalcon::Runner;
 use mg_admin_client::{
     Client as MgdClient,
@@ -456,6 +459,38 @@ pub async fn run_trio_bfd_static_test(
         },
     )
     .await?;
+
+    // Register each ox-side address with dpd so softnpu punts packets for
+    // those destinations to the CPU port. Link-local v6 is handled
+    // implicitly by the P4 pipeline, but globally-scoped addresses need an
+    // explicit per-link mapping.
+    for (qsfp, v4, v6) in [
+        ("qsfp0", OX_CR1_V4, OX_CR1_V6),
+        ("qsfp1", OX_CR2_V4, OX_CR2_V6),
+    ] {
+        let port = PortId::Qsfp(qsfp.parse().expect("parse qsfp port"));
+        let link = LinkId(0);
+        dpd.link_ipv4_create(
+            &port,
+            &link,
+            &Ipv4Entry {
+                addr: v4,
+                tag: "falcon-lab".into(),
+            },
+        )
+        .await
+        .context(format!("dpd: program {v4} on {qsfp}/0"))?;
+        dpd.link_ipv6_create(
+            &port,
+            &link,
+            &Ipv6Entry {
+                addr: v6,
+                tag: "falcon-lab".into(),
+            },
+        )
+        .await
+        .context(format!("dpd: program {v6} on {qsfp}/0"))?;
+    }
 
     // Configure numbered v4 + v6 addresses on the ox side of each softnpu
     // link so static-route nexthops resolve. illumos requires a v6 link-local
