@@ -79,7 +79,9 @@ impl EosNode {
     }
 
     /// Query ceos for the local status of a BFD session to `peer`. Returns
-    /// `true` iff EOS reports the session as `up`.
+    /// `true` iff EOS reports any per-interface peerStats entry under this
+    /// peer with status `up`. The nested shape is:
+    ///   vrfs.<vrf>.ipv4Neighbors.<peer>.peers.<iface>.types.normal.peerStats.<local>.status
     pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {
         let output = self.shell(d, "show bfd peers | json").await?;
         let resp: EosBfdResponse = serde_json::from_str(&output)
@@ -90,8 +92,18 @@ impl EosNode {
                 IpAddr::V4(_) => &vrf.ipv4_neighbors,
                 IpAddr::V6(_) => &vrf.ipv6_neighbors,
             };
-            if let Some(n) = neighbors.get(&key) {
-                return Ok(n.status.eq_ignore_ascii_case("up"));
+            let Some(neighbor) = neighbors.get(&key) else {
+                continue;
+            };
+            for if_peer in neighbor.peers.values() {
+                let Some(normal) = if_peer.types.normal.as_ref() else {
+                    continue;
+                };
+                for stats in normal.peer_stats.values() {
+                    if stats.status.eq_ignore_ascii_case("up") {
+                        return Ok(true);
+                    }
+                }
             }
         }
         Ok(false)
@@ -201,7 +213,9 @@ impl BgpIpv6Response {
 }
 
 /// Subset of `show bfd peers | json` output. Neighbor keys are raw IP
-/// strings; we compare after normalizing via `IpAddr::to_string()`.
+/// strings; we compare after normalizing via `IpAddr::to_string()`. The
+/// schema is deeply nested:
+/// `vrfs.<vrf>.ipv[46]Neighbors.<peer>.peers.<iface>.types.normal.peerStats.<local>.status`.
 #[derive(Debug, Deserialize)]
 pub struct EosBfdResponse {
     pub vrfs: HashMap<String, EosBfdVrf>,
@@ -218,5 +232,28 @@ pub struct EosBfdVrf {
 
 #[derive(Debug, Deserialize)]
 pub struct EosBfdNeighbor {
+    #[serde(default)]
+    pub peers: HashMap<String, EosBfdIfPeer>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EosBfdIfPeer {
+    pub types: EosBfdTypes,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EosBfdTypes {
+    #[serde(default)]
+    pub normal: Option<EosBfdNormal>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EosBfdNormal {
+    pub peer_stats: HashMap<String, EosBfdStats>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EosBfdStats {
     pub status: String,
 }

@@ -667,8 +667,8 @@ async fn eos_bfd_setup(r: EosNode, d: Arc<Runner>) -> Result<()> {
           ipv6 address {cr_v6_cidr}
           bfd interval {rx_ms} min-rx {rx_ms} multiplier {mult}
         exit
-        ip route 172.30.0.0/24 {ox_v4} bfd
-        ipv6 route fd99::/64 {ox_v6} bfd
+        ip route 100.64.0.0/24 {ox_v4} track bfd
+        ipv6 route 3fff::/64 {ox_v6} track bfd
         exit
         ",
         cr_v4_cidr = CR2_V4_CIDR,
