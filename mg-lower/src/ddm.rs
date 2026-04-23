@@ -5,7 +5,7 @@
 use crate::log::ddm_log;
 #[cfg(target_os = "illumos")]
 use ddm_admin_client::Client;
-use ddm_admin_client::types::TunnelOrigin;
+use ddm_admin_client::types::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::{net::Ipv6Addr, sync::Arc};
@@ -110,4 +110,58 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
 #[cfg(target_os = "illumos")]
 pub fn new_ddm_client(log: &Logger) -> Client {
     Client::new("http://localhost:8000", log.clone())
+}
+
+pub(crate) fn add_multicast_routes<
+    'a,
+    I: Iterator<Item = &'a MulticastOrigin>,
+>(
+    client: &impl Ddm,
+    routes: I,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    let routes: Vec<MulticastOrigin> = routes.cloned().collect();
+    if routes.is_empty() {
+        return;
+    }
+    let resp =
+        rt.block_on(async { client.advertise_multicast_groups(&routes).await });
+    if let Err(e) = resp {
+        ddm_log!(log,
+            error,
+            "advertise multicast groups error: {e}";
+            "error" => format!("{e}"),
+            "groups" => format!("{routes:#?}")
+        );
+    }
+}
+
+pub(crate) fn remove_multicast_routes<
+    'a,
+    I: Iterator<Item = &'a MulticastOrigin>,
+>(
+    client: &impl Ddm,
+    routes: I,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    let routes: Vec<MulticastOrigin> = routes.cloned().collect();
+    if routes.is_empty() {
+        return;
+    }
+    let resp =
+        rt.block_on(async { client.withdraw_multicast_groups(&routes).await });
+    match resp {
+        Err(e) => ddm_log!(log,
+            error,
+            "withdraw multicast groups error: {e}";
+            "groups" => format!("{routes:#?}")
+        ),
+        Ok(_) => ddm_log!(log,
+            debug,
+            "withdrew multicast groups";
+            "groups" => format!("{routes:#?}")
+        ),
+    }
 }

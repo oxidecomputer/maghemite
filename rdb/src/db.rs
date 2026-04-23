@@ -1452,6 +1452,19 @@ impl Db {
             });
         }
 
+        // Synchronously revalidate affected (S,G) routes against the
+        // updated unicast RIB. The poptrie rebuild triggered above is
+        // async, so without this the MRIB update would depend on
+        // the rebuild thread completing first. The linear-scan fallback
+        // in rpf_table's lookup is sufficient here.
+        for prefix in &pcn.changed {
+            let event = match prefix {
+                Prefix::V4(p) => crate::mrib::rpf::RebuildEvent::V4(Some(*p)),
+                Prefix::V6(p) => crate::mrib::rpf::RebuildEvent::V6(Some(*p)),
+            };
+            self.revalidate_mrib(Some(event));
+        }
+
         self.notify(pcn);
         Ok(())
     }
@@ -2020,14 +2033,14 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        AddressFamily, DEFAULT_MULTICAST_VNI, DEFAULT_RIB_PRIORITY_STATIC,
-        Path, Prefix, Prefix4, Prefix6, StaticRouteKey,
+        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
+        Prefix6, StaticRouteKey,
         db::Db,
         test::{TEST_WAIT_ITERATIONS, TestDb},
         types::{
             MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
             MulticastRouteKey, MulticastSourceProtocol, PrefixDbKey,
-            UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
+            UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6, Vni,
             test_helpers::path_vecs_equal,
         },
     };
@@ -2385,7 +2398,7 @@ mod test {
             let key = MulticastRouteKey::new(
                 Some(s_ip),
                 group,
-                DEFAULT_MULTICAST_VNI,
+                Vni::DEFAULT_MULTICAST_VNI,
             )
             .expect("AF match");
             let route = MulticastRoute::new(

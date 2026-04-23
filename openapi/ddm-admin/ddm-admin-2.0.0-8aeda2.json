@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "1.0.0"
+    "version": "2.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -51,6 +51,94 @@
         }
       }
     },
+    "/multicast_group": {
+      "put": {
+        "operationId": "advertise_multicast_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_MulticastOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MulticastOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdraw_multicast_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_MulticastOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MulticastOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/multicast_groups": {
+      "get": {
+        "operationId": "get_multicast_groups",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/originated": {
       "get": {
         "operationId": "get_originated",
@@ -64,6 +152,34 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/Ipv6Net"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/originated_multicast_groups": {
+      "get": {
+        "operationId": "get_originated_multicast_groups",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_MulticastOrigin",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastOrigin"
                   },
                   "uniqueItems": true
                 }
@@ -444,6 +560,106 @@
         "type": "string",
         "pattern": "^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$"
       },
+      "MulticastOrigin": {
+        "description": "Origin information for a multicast group announcement.\n\nThis is analogous to TunnelOrigin but for multicast groups.\n\nThis represents a subscription to a multicast group that should be advertised via DDM. The overlay_group is the application-visible multicast address (e.g., 233.252.0.1 or ff0e::1), while underlay_group is the mapped admin-local scoped IPv6 address (ff04::X) used in the underlay network.",
+        "type": "object",
+        "properties": {
+          "metric": {
+            "description": "Metric for path selection (lower is better).\n\nUsed for multi-rack replication optimization. Excluded from identity (Hash/Eq) so that metric changes update an existing entry rather than creating a duplicate.",
+            "default": 0,
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "overlay_group": {
+            "description": "The overlay multicast group address (IPv4 or IPv6). This is the group address visible to applications.",
+            "type": "string",
+            "format": "ip"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Optional source address for Source-Specific Multicast (S,G) routes. None for Any-Source Multicast (*,G) routes.",
+            "default": null,
+            "type": "string",
+            "format": "ip"
+          },
+          "underlay_group": {
+            "description": "The underlay multicast group address (ff04::X). Validated at construction to be within ff04::/64.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "vni": {
+            "description": "VNI for this multicast group (identifies the VPC/network context).",
+            "default": 77,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
+          }
+        },
+        "required": [
+          "overlay_group",
+          "underlay_group"
+        ]
+      },
+      "MulticastPathHop": {
+        "description": "A single hop in the multicast path, carrying metadata needed for replication optimization.",
+        "type": "object",
+        "properties": {
+          "downstream_subscriber_count": {
+            "description": "Number of downstream subscribers reachable via this hop. Used for load-aware replication decisions in multi-rack topologies.",
+            "default": 0,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "router_id": {
+            "description": "Router identifier (hostname).",
+            "type": "string"
+          },
+          "underlay_addr": {
+            "description": "The underlay address of this router (for replication targeting).",
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "router_id",
+          "underlay_addr"
+        ]
+      },
+      "MulticastRoute": {
+        "description": "A multicast route learned via DDM.\n\nCarries a MulticastOrigin (overlay group + ff04::/64 underlay mapping) and the path vector from the originating subscriber through intermediate transit routers.",
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "description": "Underlay nexthop address (DDM peer that advertised this route). Used to associate the route with a peer for expiration.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "origin": {
+            "description": "The multicast group origin information.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastOrigin"
+              }
+            ]
+          },
+          "path": {
+            "description": "Path vector from the originating subscriber outward. Each hop records the router that redistributed this subscription announcement. Used for loop detection on pull and for future replication optimization in multi-rack topologies.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MulticastPathHop"
+            }
+          }
+        },
+        "required": [
+          "nexthop",
+          "origin"
+        ]
+      },
       "PathVector": {
         "type": "object",
         "properties": {
@@ -463,6 +679,7 @@
         ]
       },
       "PeerInfo": {
+        "description": "Peer information with an optional interface name.",
         "type": "object",
         "properties": {
           "addr": {
@@ -470,6 +687,12 @@
             "format": "ipv6"
           },
           "host": {
+            "type": "string"
+          },
+          "if_name": {
+            "nullable": true,
+            "description": "Interface name the peer was discovered on (e.g., \"tfportrear0_0\").",
+            "default": null,
             "type": "string"
           },
           "kind": {
@@ -544,6 +767,12 @@
           "nexthop",
           "origin"
         ]
+      },
+      "Vni": {
+        "description": "A Geneve Virtual Network Identifier",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
       }
     },
     "responses": {

@@ -19,8 +19,10 @@ use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
-use ddm_types::db::{RouterKind, TunnelRoute};
-use ddm_types::exchange::{PathVector, PathVectorV2};
+use ddm_types::db::{MulticastRoute, RouterKind, TunnelRoute};
+use ddm_types::exchange::{
+    MulticastPathHop, MulticastPathVector, PathVector, PathVectorV2,
+};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -74,10 +76,20 @@ pub struct UpdateV2 {
     pub tunnel: Option<TunnelUpdateV2>,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 3. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV3 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct UpdateV3 {
+    pub underlay: Option<UnderlayUpdate>,
+    pub tunnel: Option<TunnelUpdate>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
+    pub multicast: Option<MulticastUpdate>,
 }
 
 impl From<UpdateV1> for Update {
@@ -88,6 +100,7 @@ impl From<UpdateV1> for Update {
                 announce: value.announce,
                 withdraw: value.withdraw,
             }),
+            multicast: None,
         }
     }
 }
@@ -97,6 +110,8 @@ impl From<UpdateV2> for Update {
         Update {
             tunnel: value.tunnel.map(TunnelUpdate::from),
             underlay: value.underlay.map(UnderlayUpdate::from),
+            // V2 protocol doesn't support multicast
+            multicast: None,
         }
     }
 }
@@ -120,11 +135,31 @@ impl From<Update> for UpdateV2 {
     }
 }
 
+impl From<UpdateV3> for Update {
+    fn from(value: UpdateV3) -> Self {
+        Update {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+            multicast: None,
+        }
+    }
+}
+
+impl From<Update> for UpdateV3 {
+    fn from(value: Update) -> Self {
+        UpdateV3 {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+        }
+    }
+}
+
 impl From<UnderlayUpdate> for Update {
     fn from(u: UnderlayUpdate) -> Self {
         Update {
             underlay: Some(u),
             tunnel: None,
+            multicast: None,
         }
     }
 }
@@ -134,6 +169,7 @@ impl From<TunnelUpdate> for Update {
         Update {
             underlay: None,
             tunnel: Some(t),
+            multicast: None,
         }
     }
 }
@@ -143,14 +179,35 @@ impl Update {
         Self {
             underlay: pr.underlay.map(UnderlayUpdate::announce),
             tunnel: pr.tunnel.map(TunnelUpdate::announce),
+            multicast: pr.multicast.map(MulticastUpdate::announce),
         }
     }
+}
+
+impl From<MulticastUpdate> for Update {
+    fn from(m: MulticastUpdate) -> Self {
+        Update {
+            underlay: None,
+            tunnel: None,
+            multicast: Some(m),
+        }
+    }
+}
+
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 3. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV3 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct PullResponseV3 {
+    pub underlay: Option<HashSet<PathVector>>,
+    pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct PullResponse {
     pub underlay: Option<HashSet<PathVector>>,
     pub tunnel: Option<HashSet<TunnelOrigin>>,
+    pub multicast: Option<HashSet<MulticastPathVector>>,
 }
 
 /// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
@@ -171,6 +228,18 @@ impl From<PullResponseV2> for PullResponse {
             tunnel: value
                 .tunnel
                 .map(|x| x.into_iter().map(TunnelOrigin::from).collect()),
+            // V2 protocol doesn't support multicast
+            multicast: None,
+        }
+    }
+}
+
+impl From<PullResponseV3> for PullResponse {
+    fn from(value: PullResponseV3) -> Self {
+        PullResponse {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+            multicast: None,
         }
     }
 }
@@ -180,6 +249,7 @@ impl From<HashSet<PathVector>> for PullResponse {
         PullResponse {
             underlay: Some(value),
             tunnel: None,
+            multicast: None,
         }
     }
 }
@@ -334,6 +404,50 @@ impl TunnelUpdate {
     }
 }
 
+/// Multicast group subscription updates.
+///
+/// Each entry carries a [`MulticastPathVector`] containing a
+/// [`MulticastOrigin`] (overlay group + ff04::/64 underlay mapping)
+/// and the path vector for loop detection.
+///
+/// [`MulticastOrigin`]: mg_common::net::MulticastOrigin
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct MulticastUpdate {
+    pub announce: HashSet<MulticastPathVector>,
+    pub withdraw: HashSet<MulticastPathVector>,
+}
+
+impl MulticastUpdate {
+    pub fn announce(groups: HashSet<MulticastPathVector>) -> Self {
+        Self {
+            announce: groups,
+            ..Default::default()
+        }
+    }
+    pub fn withdraw(groups: HashSet<MulticastPathVector>) -> Self {
+        Self {
+            withdraw: groups,
+            ..Default::default()
+        }
+    }
+
+    /// Add a hop to all path vectors in this update.
+    pub fn with_hop(&self, hop: MulticastPathHop) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .map(|pv| pv.with_hop(hop.clone()))
+                .collect(),
+            withdraw: self
+                .withdraw
+                .iter()
+                .map(|pv| pv.with_hop(hop.clone()))
+                .collect(),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum ExchangeError {
     #[error("io error: {0}")]
@@ -404,15 +518,52 @@ pub(crate) fn withdraw_tunnel(
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
-pub(crate) fn do_pull(
+pub(crate) fn announce_multicast(
+    ctx: &SmContext,
+    config: Config,
+    groups: HashSet<MulticastPathVector>,
+    addr: Ipv6Addr,
+    version: Version,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = MulticastUpdate::announce(groups);
+    send_update(ctx, config, update.into(), addr, version, rt, log)
+}
+
+pub(crate) fn withdraw_multicast(
+    ctx: &SmContext,
+    config: Config,
+    groups: HashSet<MulticastPathVector>,
+    addr: Ipv6Addr,
+    version: Version,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = MulticastUpdate::withdraw(groups);
+    send_update(ctx, config, update.into(), addr, version, rt, log)
+}
+
+pub(crate) fn do_pull_v4(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponse, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/pull",
-        addr, ctx.config.if_index, ctx.config.exchange_port,
-    );
+    let if_index = ctx.config.if_index;
+    let port = ctx.config.exchange_port;
+    let uri = format!("http://[{addr}%{if_index}]:{port}/v4/pull");
+    let body = do_pull_common(uri, rt)?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
+pub(crate) fn do_pull_v3(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<PullResponseV3, ExchangeError> {
+    let if_index = ctx.config.if_index;
+    let port = ctx.config.exchange_port;
+    let uri = format!("http://[{addr}%{if_index}]:{port}/v3/pull");
     let body = do_pull_common(uri, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
@@ -464,7 +615,8 @@ pub(crate) fn pull(
 ) -> Result<(), ExchangeError> {
     let pr: PullResponse = match version {
         Version::V2 => do_pull_v2(&ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull(&ctx, &addr, &rt)?,
+        Version::V3 => do_pull_v3(&ctx, &addr, &rt)?.into(),
+        Version::V4 => do_pull_v4(&ctx, &addr, &rt)?,
     };
 
     let update = Update::announce(pr);
@@ -489,43 +641,14 @@ fn send_update(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
-    match version {
-        Version::V2 => {
-            send_update_v2(ctx, config, update.into(), addr, rt, log)
-        }
-        Version::V3 => send_update_v3(ctx, config, update, addr, rt, log),
-    }
-}
-
-fn send_update_v2(
-    ctx: &SmContext,
-    config: Config,
-    update: UpdateV2,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v2/push",
-        addr, config.if_index, config.exchange_port,
-    );
-    send_update_common(ctx, uri, payload, config, rt, log)
-}
-
-fn send_update_v3(
-    ctx: &SmContext,
-    config: Config,
-    update: Update,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/push",
-        addr, config.if_index, config.exchange_port,
-    );
+    let (payload, path) = match version {
+        Version::V2 => (serde_json::to_string(&UpdateV2::from(update))?, "v2"),
+        Version::V3 => (serde_json::to_string(&UpdateV3::from(update))?, "v3"),
+        Version::V4 => (serde_json::to_string(&update)?, "v4"),
+    };
+    let if_index = config.if_index;
+    let port = config.exchange_port;
+    let uri = format!("http://[{addr}%{if_index}]:{port}/{path}/push");
     send_update_common(ctx, uri, payload, config, rt, log)
 }
 
@@ -630,9 +753,11 @@ pub fn api_description() -> Result<
 > {
     let mut api = ApiDescription::new();
     api.register(push_handler_v2)?;
-    api.register(push_handler)?;
+    api.register(push_handler_v3)?;
+    api.register(push_handler_v4)?;
     api.register(pull_handler_v2)?;
-    api.register(pull_handler)?;
+    api.register(pull_handler_v3)?;
+    api.register(pull_handler_v4)?;
     Ok(api)
 }
 
@@ -647,7 +772,16 @@ async fn push_handler_v2(
 }
 
 #[endpoint { method = PUT, path = "/v3/push" }]
-async fn push_handler(
+async fn push_handler_v3(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<UpdateV3>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let update = Update::from(request.into_inner());
+    push_handler_common(ctx, update).await
+}
+
+#[endpoint { method = PUT, path = "/v4/push" }]
+async fn push_handler_v4(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -744,19 +878,15 @@ async fn pull_handler_v2(
     }))
 }
 
-#[endpoint { method = GET, path = "/v3/pull" }]
-async fn pull_handler(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
-
+/// Collect underlay and tunnel routes for pull responses (shared by V3/V4).
+fn collect_underlay_tunnel(
+    ctx: &HandlerContext,
+) -> Result<(HashSet<PathVector>, HashSet<TunnelOrigin>), HttpError> {
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
 
-    // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
-            // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
             }
@@ -771,21 +901,20 @@ async fn pull_handler(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let tv = route.origin;
-            tunnel.insert(tv);
+            tunnel.insert(route.origin);
         }
     }
+
     let originated = ctx
         .ctx
         .db
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = PathVector {
+        underlay.insert(PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
-        };
-        underlay.insert(pv);
+        });
     }
 
     let originated_tunnel = ctx
@@ -794,26 +923,83 @@ async fn pull_handler(
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated_tunnel {
-        let tv = TunnelOrigin {
+        tunnel.insert(TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
             vni: prefix.vni,
             metric: prefix.metric,
-        };
-        tunnel.insert(tv);
+        });
     }
 
+    Ok((underlay, tunnel))
+}
+
+/// Collect multicast routes for V4 pull responses.
+fn collect_multicast(
+    ctx: &HandlerContext,
+) -> Result<HashSet<MulticastPathVector>, HttpError> {
+    let mut multicast = HashSet::new();
+
+    if ctx.ctx.config.kind == RouterKind::Transit {
+        for route in &ctx.ctx.db.imported_mcast() {
+            if route.nexthop == ctx.peer {
+                continue;
+            }
+            let hop = MulticastPathHop::new(
+                ctx.ctx.hostname.clone(),
+                ctx.ctx.config.addr,
+            );
+            let mut path = route.path.clone();
+            path.push(hop);
+            multicast.insert(MulticastPathVector {
+                origin: route.origin.clone(),
+                path,
+            });
+        }
+    }
+
+    let originated_mcast = ctx
+        .ctx
+        .db
+        .originated_mcast()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for origin in &originated_mcast {
+        let hop = MulticastPathHop::new(
+            ctx.ctx.hostname.clone(),
+            ctx.ctx.config.addr,
+        );
+        multicast.insert(MulticastPathVector {
+            origin: origin.clone(),
+            path: vec![hop],
+        });
+    }
+
+    Ok(multicast)
+}
+
+#[endpoint { method = GET, path = "/v3/pull" }]
+async fn pull_handler_v3(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<PullResponseV3>, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+    let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
+    Ok(HttpResponseOk(PullResponseV3 {
+        underlay: crate::non_empty(underlay),
+        tunnel: crate::non_empty(tunnel),
+    }))
+}
+
+#[endpoint { method = GET, path = "/v4/pull" }]
+async fn pull_handler_v4(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<PullResponse>, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+    let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
+    let multicast = collect_multicast(&ctx)?;
     Ok(HttpResponseOk(PullResponse {
-        underlay: if underlay.is_empty() {
-            None
-        } else {
-            Some(underlay)
-        },
-        tunnel: if tunnel.is_empty() {
-            None
-        } else {
-            Some(tunnel)
-        },
+        underlay: crate::non_empty(underlay),
+        tunnel: crate::non_empty(tunnel),
+        multicast: crate::non_empty(multicast),
     }))
 }
 
@@ -831,6 +1017,10 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         handle_tunnel_update(tunnel_update, ctx);
     }
 
+    if let Some(multicast_update) = &update.multicast {
+        handle_multicast_update(multicast_update, ctx);
+    }
+
     // distribute updates
 
     if ctx.ctx.config.kind == RouterKind::Transit {
@@ -846,13 +1036,24 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             .as_ref()
             .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
 
-        let push = Update {
+        // Add our hop info to multicast path vectors before redistribution
+        let multicast = update.multicast.as_ref().map(|update| {
+            let hop = MulticastPathHop::new(
+                ctx.ctx.hostname.clone(),
+                ctx.ctx.config.addr,
+            );
+            update.with_hop(hop)
+        });
+
+        let push = Arc::new(Update {
             underlay,
             tunnel: update.tunnel.clone(),
-        };
+            multicast,
+        });
 
         for ec in &ctx.ctx.event_channels {
-            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+            ec.send(Event::Peer(PeerEvent::Push(Arc::clone(&push))))
+                .unwrap();
         }
     }
 }
@@ -998,4 +1199,206 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
         .stats
         .imported_underlay_prefixes
         .store(ctx.ctx.db.imported_count() as u64, Ordering::Relaxed);
+}
+
+/// Handle multicast group subscription updates from a peer.
+///
+/// Validation uses path-vector-based RPF rather than unicast-RIB RPF.
+/// DDM operates on the underlay while multicast sources are overlay
+/// addresses, so traditional (S,G) RPF against the unicast RIB does not
+/// apply at this layer. The MRIB RPF module in rdb handles that check
+/// before routes are originated into DDM. At the DDM exchange level,
+/// the path vector provides loop detection and carries topology
+/// information for replication optimization (RFD 488).
+fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
+    let db = &ctx.ctx.db;
+    let hostname = &ctx.ctx.hostname;
+
+    let mut import = HashSet::new();
+    for pv in &update.announce {
+        // Path-vector RPF: drop if our router_id appears in the path,
+        // indicating the announcement has already traversed us.
+        if pv.path.iter().any(|hop| &hop.router_id == hostname) {
+            dbg!(
+                ctx.log,
+                ctx.ctx.config.if_name,
+                "dropping multicast announce for {:?} - loop detected \
+                 (path length {})",
+                pv.origin.overlay_group,
+                pv.path.len(),
+            );
+            continue;
+        }
+
+        import.insert(MulticastRoute {
+            origin: pv.origin.clone(),
+            nexthop: ctx.peer,
+            path: pv.path.clone(),
+        });
+    }
+
+    let mut remove = HashSet::new();
+    for pv in &update.withdraw {
+        // Empty path is safe: MulticastRoute's PartialEq/Hash exclude
+        // the path field, so this matches by (origin, nexthop) only.
+        remove.insert(MulticastRoute {
+            origin: pv.origin.clone(),
+            nexthop: ctx.peer,
+            path: Vec::new(),
+        });
+    }
+
+    // Atomic import + delete + diff under a single lock.
+    //
+    // DDM stores learned multicast state, which feeds back into Omicron, as
+    // the latter owns OPTE M2P programming via sled-agent (the M2P table is
+    // global to xde).
+    // Learned state is queryable via the DDM admin API (get_multicast_groups).
+    db.update_imported_mcast(&import, &remove);
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use ddm_types::exchange::MulticastPathHop;
+    use mg_common::net::{MulticastOrigin, UnderlayMulticastIpv6, Vni};
+    use std::net::Ipv6Addr;
+
+    fn sample_multicast_update() -> MulticastUpdate {
+        let origin = MulticastOrigin {
+            overlay_group: "233.252.0.1".parse().unwrap(),
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::1".parse().unwrap(),
+            )
+            .unwrap(),
+            vni: Vni::try_from(77u32).unwrap(),
+            metric: 0,
+            source: None,
+        };
+        let pv = MulticastPathVector {
+            origin,
+            path: vec![MulticastPathHop::new(
+                "router-1".into(),
+                Ipv6Addr::LOCALHOST,
+            )],
+        };
+        MulticastUpdate::announce([pv].into_iter().collect())
+    }
+
+    #[test]
+    fn v4_update_round_trips() {
+        let update = Update {
+            underlay: None,
+            tunnel: None,
+            multicast: Some(sample_multicast_update()),
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        let back: Update = serde_json::from_str(&json).unwrap();
+        assert!(back.multicast.is_some());
+        assert_eq!(back.multicast.unwrap().announce.len(), 1,);
+    }
+
+    #[test]
+    fn v4_update_deserializes_as_v3_drops_multicast() {
+        let update = Update {
+            underlay: None,
+            tunnel: None,
+            multicast: Some(sample_multicast_update()),
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        // A V3 peer would deserialize this as UpdateV3, silently
+        // dropping the unknown multicast field.
+        let v3: UpdateV3 = serde_json::from_str(&json).unwrap();
+        assert!(v3.underlay.is_none());
+        assert!(v3.tunnel.is_none());
+    }
+
+    #[test]
+    fn v3_update_deserializes_as_v4_multicast_none() {
+        let v3 = UpdateV3 {
+            underlay: None,
+            tunnel: None,
+        };
+        let json = serde_json::to_string(&v3).unwrap();
+        // A V4 peer receiving a V3 update gets multicast: None.
+        let update: Update = serde_json::from_str(&json).unwrap();
+        assert!(update.multicast.is_none());
+    }
+
+    #[test]
+    fn v4_pull_response_round_trips() {
+        let origin = MulticastOrigin {
+            overlay_group: "ff0e::1".parse().unwrap(),
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::2".parse().unwrap(),
+            )
+            .unwrap(),
+            vni: Vni::try_from(77u32).unwrap(),
+            metric: 0,
+            source: None,
+        };
+        let pv = MulticastPathVector {
+            origin,
+            path: vec![],
+        };
+        let resp = PullResponse {
+            underlay: None,
+            tunnel: None,
+            multicast: Some([pv].into_iter().collect()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: PullResponse = serde_json::from_str(&json).unwrap();
+        assert!(back.multicast.is_some());
+    }
+
+    #[test]
+    fn v4_pull_response_deserializes_as_v3() {
+        let origin = MulticastOrigin {
+            overlay_group: "233.252.0.1".parse().unwrap(),
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::1".parse().unwrap(),
+            )
+            .unwrap(),
+            vni: Vni::try_from(77u32).unwrap(),
+            metric: 0,
+            source: None,
+        };
+        let pv = MulticastPathVector {
+            origin,
+            path: vec![],
+        };
+        let resp = PullResponse {
+            underlay: None,
+            tunnel: None,
+            multicast: Some([pv].into_iter().collect()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        // V3 peer drops the multicast field.
+        let v3: PullResponseV3 = serde_json::from_str(&json).unwrap();
+        assert!(v3.underlay.is_none());
+        assert!(v3.tunnel.is_none());
+    }
+
+    #[test]
+    fn v3_pull_response_deserializes_as_v4() {
+        let v3 = PullResponseV3 {
+            underlay: None,
+            tunnel: None,
+        };
+        let json = serde_json::to_string(&v3).unwrap();
+        let resp: PullResponse = serde_json::from_str(&json).unwrap();
+        assert!(resp.multicast.is_none());
+    }
+
+    #[test]
+    fn from_conversions_strip_multicast() {
+        let update = Update {
+            underlay: None,
+            tunnel: None,
+            multicast: Some(sample_multicast_update()),
+        };
+        let v3 = UpdateV3::from(update);
+        let back = Update::from(v3);
+        assert!(back.multicast.is_none());
+    }
 }

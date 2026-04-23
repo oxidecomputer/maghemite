@@ -11,13 +11,16 @@ pub mod admin {
 }
 
 pub mod db {
-    pub use crate::v1::db::PeerInfo;
     pub use crate::v1::db::PeerStatus;
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
+    pub use crate::v2::db::MulticastRoute;
+    pub use crate::v2::db::PeerInfo;
 }
 
 pub mod exchange {
     pub use crate::v1::exchange::PathVector;
     pub use crate::v1::exchange::PathVectorV2;
+    pub use crate::v2::exchange::MulticastPathHop;
+    pub use crate::v2::exchange::MulticastPathVector;
 }

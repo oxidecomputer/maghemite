@@ -7,7 +7,7 @@ use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_types::db::{PeerInfo, TunnelRoute};
+use ddm_types::db::{MulticastRoute, PeerInfo, TunnelRoute};
 use ddm_types::exchange::PathVector;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
@@ -21,7 +21,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
-use mg_common::net::TunnelOrigin;
+use mg_common::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info};
 use std::collections::{HashMap, HashSet};
@@ -114,6 +114,22 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         Ok(HttpResponseOk(ctx.db.peers()))
+    }
+
+    async fn get_peers_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<u32, ddm_types_versions::v1::db::PeerInfo>>,
+        HttpError,
+    > {
+        let ctx = lock!(ctx.context());
+        let peers = ctx
+            .db
+            .peers()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        Ok(HttpResponseOk(peers))
     }
 
     async fn expire_peer(
@@ -328,6 +344,71 @@ impl DdmAdminApi for DdmAdminApiImpl {
                     "failed to update originated tunel endpoints stat: {e}"
                 )
             }
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn get_originated_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastOrigin>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let originated = ctx
+            .db
+            .originated_mcast()
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        Ok(HttpResponseOk(originated))
+    }
+
+    async fn get_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastRoute>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let imported = ctx.db.imported_mcast();
+        Ok(HttpResponseOk(imported))
+    }
+
+    async fn advertise_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let groups = request.into_inner();
+        slog::info!(ctx.log, "advertise multicast groups: {groups:#?}");
+        ctx.db
+            .originate_mcast(&groups)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+        for e in &ctx.event_channels {
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Multicast(
+                groups.clone(),
+            ))))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn withdraw_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let groups = request.into_inner();
+        slog::info!(ctx.log, "withdraw multicast groups: {groups:#?}");
+        ctx.db
+            .withdraw_mcast(&groups)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+        for e in &ctx.event_channels {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Multicast(
+                groups.clone(),
+            ))))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
         }
 
         Ok(HttpResponseUpdatedNoContent())
