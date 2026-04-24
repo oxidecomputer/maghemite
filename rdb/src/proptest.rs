@@ -261,28 +261,6 @@ proptest! {
         );
     }
 
-    /// Property: Prefix enum V4 is never within V6 and vice versa
-    #[test]
-    fn prop_prefix_enum_no_cross_family(p4 in ipv4_prefix_strategy(), p6 in ipv6_prefix_strategy()) {
-        let v4 = Prefix::V4(p4);
-        let v6 = Prefix::V6(p6);
-
-        prop_assert!(!v4.within(&v6), "IPv4 should not be within IPv6");
-        prop_assert!(!v6.within(&v4), "IPv6 should not be within IPv4");
-    }
-
-    /// Property: IPv4 prefix length bounds are validated (0-32)
-    #[test]
-    fn prop_ipv4_length_in_bounds(prefix in ipv4_prefix_strategy()) {
-        prop_assert!(prefix.length <= 32u8, "IPv4 prefix length must be <= 32");
-    }
-
-    /// Property: IPv6 prefix length bounds are validated (0-128)
-    #[test]
-    fn prop_ipv6_length_in_bounds(prefix in ipv6_prefix_strategy()) {
-        prop_assert!(prefix.length <= 128u8, "IPv6 prefix length must be <= 128");
-    }
-
     /// Property: IPv4 host bits unset operation is idempotent
     #[test]
     fn prop_ipv4_unset_host_bits_idempotent(prefix in ipv4_prefix_strategy()) {

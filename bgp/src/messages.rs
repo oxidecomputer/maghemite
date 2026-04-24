@@ -8984,4 +8984,56 @@ mod tests {
             assert!(Header::from_wire(&wire).is_err());
         }
     }
+
+    /// Exhaustive test: duplicate ORIGIN attributes are deduplicated to
+    /// the first occurrence. PathOrigin has 3 variants, so 9 cases total.
+    #[test]
+    fn duplicate_origin_attrs_deduplicated() {
+        let origins =
+            [PathOrigin::Igp, PathOrigin::Egp, PathOrigin::Incomplete];
+        for origin1 in origins {
+            for origin2 in origins {
+                let mut wire = Vec::new();
+                wire.extend_from_slice(&0u16.to_be_bytes());
+
+                let attrs = vec![
+                    path_attribute_flags::TRANSITIVE,
+                    PathAttributeTypeCode::Origin as u8,
+                    1,
+                    origin1 as u8,
+                    path_attribute_flags::TRANSITIVE,
+                    PathAttributeTypeCode::Origin as u8,
+                    1,
+                    origin2 as u8,
+                ];
+
+                wire.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+                wire.extend_from_slice(&attrs);
+
+                let decoded =
+                    UpdateMessage::from_wire(&wire).expect("should decode");
+
+                let decoded_origins: Vec<_> = decoded
+                    .path_attributes
+                    .iter()
+                    .filter_map(|a| match &a.value {
+                        PathAttributeValue::Origin(o) => Some(*o),
+                        _ => None,
+                    })
+                    .collect();
+
+                assert_eq!(
+                    decoded_origins.len(),
+                    1,
+                    "origin1={origin1:?} origin2={origin2:?}: \
+                     expected exactly one ORIGIN after dedup",
+                );
+                assert_eq!(
+                    decoded_origins[0], origin1,
+                    "origin1={origin1:?} origin2={origin2:?}: \
+                     should keep first ORIGIN value",
+                );
+            }
+        }
+    }
 }
