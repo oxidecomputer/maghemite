@@ -13,8 +13,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::sleep;
-use std::thread::spawn;
+use std::thread::{Builder, sleep};
 use std::time::Duration;
 
 pub const UNIT_SESSION: &str = "session";
@@ -89,7 +88,7 @@ impl StateMachine {
     /// incoming control packets. Endpoint is a channel from a connection
     /// dispatcher that sends control packets to this state machine based
     /// on peer address and BFD discriminator.
-    pub fn run(&mut self, endpoint: BfdEndpoint, db: rdb::Db) {
+    pub fn run(&mut self, endpoint: BfdEndpoint, db: rdb::Db) -> Result<()> {
         let local = PeerInfo::with_random_discriminator(
             self.required_rx,
             self.detection_multiplier,
@@ -99,11 +98,13 @@ impl StateMachine {
         // Spawn a thread that runs the send loop for this state machine. This
         // loop is responsible for sending out unsolicited periodic control
         // packets.
-        self.send_loop(endpoint.tx.clone(), local, remote.clone());
+        self.send_loop(endpoint.tx.clone(), local, remote.clone())?;
 
         // Spawn a thread that runs the receive loop. This loop is responsible
         // for handling packets from the connection dispatcher.
-        self.recv_loop(endpoint, db, local, remote.clone());
+        self.recv_loop(endpoint, db, local, remote.clone())?;
+
+        Ok(())
     }
 
     /// Get the current state of this state machine.
@@ -121,13 +122,15 @@ impl StateMachine {
         db: rdb::Db,
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
-    ) {
+    ) -> Result<()> {
         let state = self.state.clone();
         let peer = self.peer;
         let kill_switch = self.kill_switch.clone();
         let log = self.log.clone();
         let counters = self.counters.clone();
-        spawn(move || {
+        Builder::new()
+            .name(format!("bfd-recv-{peer}"))
+            .spawn(move || {
             loop {
                 let prev = state.read().unwrap().state();
                 let (st, ep) = match state.read().unwrap().run(
@@ -170,7 +173,8 @@ impl StateMachine {
                     sm_log!(log, info, "transition -> {:?}", new; prev, peer);
                 }
             }
-        });
+        })?;
+        Ok(())
     }
 
     /// This is a send loop for a BFD peer. It takes care of sending out
@@ -182,7 +186,7 @@ impl StateMachine {
         sender: Sender<(IpAddr, packet::Control)>,
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
-    ) {
+    ) -> Result<()> {
         let state = self.state.clone();
         let peer = self.peer;
         let stop = self.kill_switch.clone();
@@ -192,54 +196,59 @@ impl StateMachine {
         // just copy it out of self for sending into the spawned thread. The
         // reason this is a dynamic method at all is to get runtime polymorphic
         // behavior over `State` trait implementors.
-        spawn(move || {
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                };
+        Builder::new()
+            .name(format!("bfd-send-{peer}"))
+            .spawn(move || {
+                loop {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    };
 
-                // Get what we need from peer info, holding the lock a briefly as
-                // possible.
-                let (_delay, demand_mode, your_discriminator) = {
-                    let r = lock!(remote);
-                    (
-                        DeferredDelay(r.required_min_rx),
-                        r.demand_mode,
-                        r.discriminator,
-                    )
-                };
+                    // Get what we need from peer info, holding the lock a
+                    // briefly as possible.
+                    let (_delay, demand_mode, your_discriminator) = {
+                        let r = lock!(remote);
+                        (
+                            DeferredDelay(r.required_min_rx),
+                            r.demand_mode,
+                            r.discriminator,
+                        )
+                    };
 
-                // Unsolicited packets are not sent in demand mode.
-                //
-                // TODO we could probably just park this thread on a signal waiting
-                // to leave demand mode instead of continuing to iterate.
-                if demand_mode {
-                    continue;
+                    // Unsolicited packets are not sent in demand mode.
+                    //
+                    // TODO we could probably just park this thread on a signal
+                    // waiting to leave demand mode instead of continuing to
+                    // iterate.
+                    if demand_mode {
+                        continue;
+                    }
+
+                    let mut pkt = packet::Control {
+                        desired_min_tx: local.desired_min_tx.as_micros() as u32,
+                        required_min_rx: local.required_min_rx.as_micros()
+                            as u32,
+                        my_discriminator: local.discriminator,
+                        your_discriminator,
+                        ..Default::default()
+                    };
+
+                    let st = state.read().unwrap().state();
+                    pkt.set_state(st);
+
+                    if let Err(e) = sender.send((peer, pkt)) {
+                        sm_log!(log, warn, "send error: {e}"; st, peer);
+                        counters
+                            .control_packet_send_failures
+                            .fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        counters
+                            .control_packets_sent
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                 }
-
-                let mut pkt = packet::Control {
-                    desired_min_tx: local.desired_min_tx.as_micros() as u32,
-                    required_min_rx: local.required_min_rx.as_micros() as u32,
-                    my_discriminator: local.discriminator,
-                    your_discriminator,
-                    ..Default::default()
-                };
-
-                let st = state.read().unwrap().state();
-                pkt.set_state(st);
-
-                if let Err(e) = sender.send((peer, pkt)) {
-                    sm_log!(log, warn, "send error: {e}"; st, peer);
-                    counters
-                        .control_packet_send_failures
-                        .fetch_add(1, Ordering::Relaxed);
-                } else {
-                    counters
-                        .control_packets_sent
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        });
+            })?;
+        Ok(())
     }
 
     pub fn required_rx(&self) -> Duration {
