@@ -45,7 +45,7 @@ use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
     ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
-use rdb_types_versions::v1::policy::ImportExportPolicy as ImportExportPolicyV1;
+use rdb_types_versions::v1::policy::ImportExportPolicy;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -852,13 +852,13 @@ pub async fn get_exported_v1(
             orig4.clone().iter().map(|p| Prefix::from(*p)).collect();
 
         // Combine per-AF export policies into legacy format for filtering
-        let allow_export = ImportExportPolicyV1::from_per_af_policies(
+        let allow_export = ImportExportPolicy::from_per_af_policies(
             &n.parameters.allow_export4,
             &n.parameters.allow_export6,
         );
         let mut exported_routes: Vec<Prefix> = match allow_export {
-            ImportExportPolicyV1::NoFiltering => orig_routes,
-            ImportExportPolicyV1::Allow(epol) => {
+            ImportExportPolicy::NoFiltering => orig_routes,
+            ImportExportPolicy::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -1859,8 +1859,10 @@ pub(crate) mod helpers {
         let (event_tx, event_rx) = channel();
 
         // V1 API is IPv4-only; extract only IPv4 policies
-        let allow_import4 = rq.parameters.allow_import.as_ipv4_policy();
-        let allow_export4 = rq.parameters.allow_export.as_ipv4_policy();
+        let allow_import4 =
+            ImportExportPolicy4::from(rq.parameters.allow_import.clone());
+        let allow_export4 =
+            ImportExportPolicy4::from(rq.parameters.allow_export.clone());
 
         let info = SessionInfo::from(&rq.parameters);
 
@@ -2541,7 +2543,7 @@ pub(crate) mod helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportExportPolicyV1, do_bgp_apply};
+    use super::{ImportExportPolicy, do_bgp_apply};
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
@@ -2610,8 +2612,8 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: ImportExportPolicyV1::NoFiltering,
-                    allow_export: ImportExportPolicyV1::NoFiltering,
+                    allow_import: ImportExportPolicy::NoFiltering,
+                    allow_export: ImportExportPolicy::NoFiltering,
                     vlan_id: None,
                 },
             }],
@@ -2636,8 +2638,8 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: ImportExportPolicyV1::NoFiltering,
-                    allow_export: ImportExportPolicyV1::NoFiltering,
+                    allow_import: ImportExportPolicy::NoFiltering,
+                    allow_export: ImportExportPolicy::NoFiltering,
                     vlan_id: None,
                 },
             }],

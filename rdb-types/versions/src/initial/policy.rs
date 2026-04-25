@@ -10,8 +10,8 @@ use std::collections::BTreeSet;
 /// Legacy import/export policy type for v1/v2 API compatibility.
 ///
 /// This type uses mixed IPv4/IPv6 prefixes and is used at the API boundary.
-/// For internal use, convert to typed variants using
-/// `as_ipv4_policy()` and `as_ipv6_policy()`.
+/// For internal use, convert to typed variants via
+/// `ImportExportPolicy4::from(...)` / `ImportExportPolicy6::from(...)`.
 #[derive(
     Default, Debug, Serialize, Deserialize, Clone, JsonSchema, Eq, PartialEq,
 )]

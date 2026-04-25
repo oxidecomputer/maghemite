@@ -991,8 +991,12 @@ impl From<&BgpPeerParametersV1> for SessionInfo {
             deterministic_collision_resolution: false,
             ipv4_unicast: Some(Ipv4UnicastConfig {
                 nexthop: None,
-                import_policy: value.allow_import.as_ipv4_policy().clone(),
-                export_policy: value.allow_export.as_ipv4_policy().clone(),
+                import_policy: ImportExportPolicy4::from(
+                    value.allow_import.clone(),
+                ),
+                export_policy: ImportExportPolicy4::from(
+                    value.allow_export.clone(),
+                ),
             }),
             ipv6_unicast: None,
         }

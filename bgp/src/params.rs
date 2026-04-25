@@ -11,7 +11,7 @@ use rdb::{
     ImportExportPolicy4, ImportExportPolicy6, PolicyAction, Prefix, Prefix4,
     Prefix6,
 };
-use rdb_types_versions::v1::policy::ImportExportPolicy as ImportExportPolicyV1;
+use rdb_types_versions::v1::policy::ImportExportPolicy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -339,11 +339,11 @@ impl NeighborV1 {
                 communities: rq.parameters.communities.clone(),
                 local_pref: rq.parameters.local_pref,
                 enforce_first_as: rq.parameters.enforce_first_as,
-                allow_import: ImportExportPolicyV1::from_per_af_policies(
+                allow_import: ImportExportPolicy::from_per_af_policies(
                     &rq.parameters.allow_import4,
                     &rq.parameters.allow_import6,
                 ),
-                allow_export: ImportExportPolicyV1::from_per_af_policies(
+                allow_export: ImportExportPolicy::from_per_af_policies(
                     &rq.parameters.allow_export4,
                     &rq.parameters.allow_export6,
                 ),
@@ -982,8 +982,8 @@ pub struct BgpPeerParametersV1 {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicyV1,
-    pub allow_export: ImportExportPolicyV1,
+    pub allow_import: ImportExportPolicy,
+    pub allow_export: ImportExportPolicy,
     pub vlan_id: Option<u16>,
 }
 
@@ -1012,8 +1012,12 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 enforce_first_as: cfg.parameters.enforce_first_as,
                 ipv4_unicast: Some(Ipv4UnicastConfig {
                     nexthop: None,
-                    import_policy: cfg.parameters.allow_import.as_ipv4_policy(),
-                    export_policy: cfg.parameters.allow_export.as_ipv4_policy(),
+                    import_policy: ImportExportPolicy4::from(
+                        cfg.parameters.allow_import,
+                    ),
+                    export_policy: ImportExportPolicy4::from(
+                        cfg.parameters.allow_export,
+                    ),
                 }),
                 ipv6_unicast: None,
                 vlan_id: cfg.parameters.vlan_id,

@@ -8,24 +8,6 @@ use crate::v4::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use std::collections::BTreeSet;
 
 impl ImportExportPolicy {
-    /// Extract IPv4 prefixes from this policy as a typed IPv4 policy.
-    ///
-    /// If this policy is `NoFiltering`, returns `ImportExportPolicy4::NoFiltering`.
-    /// If this policy is `Allow(prefixes)`, returns only the IPv4 prefixes.
-    /// If the policy has prefixes but none are IPv4, returns `NoFiltering` for IPv4.
-    pub fn as_ipv4_policy(&self) -> ImportExportPolicy4 {
-        ImportExportPolicy4::from(self.clone())
-    }
-
-    /// Extract IPv6 prefixes from this policy as a typed IPv6 policy.
-    ///
-    /// If this policy is `NoFiltering`, returns `ImportExportPolicy6::NoFiltering`.
-    /// If this policy is `Allow(prefixes)`, returns only the IPv6 prefixes.
-    /// If the policy has prefixes but none are IPv6, returns `NoFiltering` for IPv6.
-    pub fn as_ipv6_policy(&self) -> ImportExportPolicy6 {
-        ImportExportPolicy6::from(self.clone())
-    }
-
     /// Combine IPv4 and IPv6 policies into a legacy mixed-AF policy.
     ///
     /// - If both are `NoFiltering`, returns `NoFiltering`
