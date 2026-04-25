@@ -4,7 +4,7 @@
 
 use std::net::Ipv6Addr;
 
-use rdb::Prefix6;
+use rdb_types_versions::v1::prefix::Prefix6;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

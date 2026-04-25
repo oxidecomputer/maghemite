@@ -3,3 +3,13 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Re-exports of the latest versions of types.
+
+pub use crate::v1::{AddressFamily, ProtocolFilter};
+
+pub mod peer {
+    pub use crate::v1::peer::PeerId;
+}
+
+pub mod prefix {
+    pub use crate::v1::prefix::{Prefix, Prefix4, Prefix6};
+}

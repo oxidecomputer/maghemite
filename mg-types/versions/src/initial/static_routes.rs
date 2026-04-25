@@ -4,7 +4,7 @@
 
 use std::net::Ipv4Addr;
 
-use rdb::Prefix4;
+use rdb_types_versions::v1::prefix::Prefix4;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

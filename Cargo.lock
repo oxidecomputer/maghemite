@@ -370,6 +370,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bgp-types"
+version = "0.1.0"
+dependencies = [
+ "bgp-types-versions",
+]
+
+[[package]]
+name = "bgp-types-versions"
+version = "0.1.0"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
 name = "bhyve_api"
 version = "0.0.0"
 source = "git+https://github.com/oxidecomputer/propolis?rev=368a2225b79328514ce0ea9181d8f874019edaa2#368a2225b79328514ce0ea9181d8f874019edaa2"
@@ -1328,6 +1343,7 @@ dependencies = [
  "ispf",
  "libnet",
  "mg-common",
+ "mg-common-types",
  "omicron-common",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=b60decb70fe491ebdaa30c824619470b015556fc)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=b60decb70fe491ebdaa30c824619470b015556fc)",
@@ -1365,7 +1381,7 @@ dependencies = [
  "ddm-types-versions",
  "dropshot 0.17.0",
  "dropshot-api-manager-types",
- "mg-common",
+ "mg-common-types",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -1383,7 +1399,7 @@ dependencies = [
 name = "ddm-types-versions"
 version = "0.1.0"
 dependencies = [
- "mg-common",
+ "mg-common-types-versions",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -3792,6 +3808,7 @@ dependencies = [
  "clap",
  "libc",
  "libnet",
+ "mg-common-types",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -3802,6 +3819,22 @@ dependencies = [
  "slog-bunyan",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "uuid",
+]
+
+[[package]]
+name = "mg-common-types"
+version = "0.1.0"
+dependencies = [
+ "mg-common-types-versions",
+]
+
+[[package]]
+name = "mg-common-types-versions"
+version = "0.1.0"
+dependencies = [
+ "oxnet",
+ "schemars 0.8.22",
+ "serde",
 ]
 
 [[package]]
@@ -3877,6 +3910,7 @@ dependencies = [
  "bfd",
  "bgp",
  "rdb",
+ "rdb-types-versions",
  "schemars 0.8.22",
  "serde",
 ]
@@ -5953,10 +5987,7 @@ dependencies = [
 name = "rdb-types"
 version = "0.1.0"
 dependencies = [
- "clap",
- "oxnet",
- "schemars 0.8.22",
- "serde",
+ "rdb-types-versions",
 ]
 
 [[package]]
@@ -5964,6 +5995,16 @@ name = "rdb-types"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/maghemite?rev=b603c9f3dccefcf1d3e941c04505ff6bdd1826b6#b603c9f3dccefcf1d3e941c04505ff6bdd1826b6"
 dependencies = [
+ "oxnet",
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
+name = "rdb-types-versions"
+version = "0.1.0"
+dependencies = [
+ "clap",
  "oxnet",
  "schemars 0.8.22",
  "serde",

@@ -7,5 +7,6 @@ edition = "2024"
 bfd.workspace = true
 bgp.workspace = true
 rdb.workspace = true
+rdb-types-versions.workspace = true
 schemars.workspace = true
 serde.workspace = true
