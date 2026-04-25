@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Versioned types for the Maghemite Admin API.
+//! Versioned types shared by the Maghemite and DDM admin APIs.
 //!
 //! # Adding a new API version
 //!
@@ -33,17 +33,3 @@ mod impls;
 pub mod latest;
 #[path = "initial/mod.rs"]
 pub mod v1;
-#[path = "ipv6_basic/mod.rs"]
-pub mod v2;
-#[path = "switch_identifiers/mod.rs"]
-pub mod v3;
-#[path = "mp_bgp/mod.rs"]
-pub mod v4;
-#[path = "unnumbered/mod.rs"]
-pub mod v5;
-#[path = "rib_exported_string_key/mod.rs"]
-pub mod v6;
-#[path = "operation_id_cleanup/mod.rs"]
-pub mod v7;
-#[path = "bgp_src_addr/mod.rs"]
-pub mod v8;
