@@ -5,7 +5,7 @@
 use std::net::IpAddr;
 
 use bfd::BfdPeerState;
-use rdb::BfdPeerConfig;
+use rdb_types_versions::v1::bfd::BfdPeerConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
