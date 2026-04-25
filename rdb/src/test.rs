@@ -5,6 +5,7 @@
 //! Test utilities for rdb tests.
 
 use crate::{Db, error::Error};
+use mg_common::eprintln_nopipe;
 use slog::Logger;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -60,7 +61,7 @@ impl Drop for TestDb {
         if !std::thread::panicking() {
             let _ = std::fs::remove_dir_all(&self.path);
         } else {
-            eprintln!("Test failed - database left at: {}", self.path);
+            eprintln_nopipe!("Test failed - database left at: {}", self.path);
         }
     }
 }

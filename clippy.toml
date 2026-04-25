@@ -2,3 +2,23 @@
 path = "tokio::main"
 reason = "prefer `oxide_tokio_rt` for production software"
 replacement = "oxide_tokio_rt::run"
+
+[[disallowed-macros]]
+path = "std::println"
+reason = "panics on broken pipe; use `mg_common::println_nopipe!` to exit cleanly"
+replacement = "mg_common::println_nopipe"
+
+[[disallowed-macros]]
+path = "std::print"
+reason = "panics on broken pipe; use `mg_common::print_nopipe!` to exit cleanly"
+replacement = "mg_common::print_nopipe"
+
+[[disallowed-macros]]
+path = "std::eprintln"
+reason = "panics on broken pipe; use `mg_common::eprintln_nopipe!` to exit cleanly"
+replacement = "mg_common::eprintln_nopipe"
+
+[[disallowed-macros]]
+path = "std::eprint"
+reason = "panics on broken pipe; use `mg_common::eprint_nopipe!` to exit cleanly"
+replacement = "mg_common::eprint_nopipe"

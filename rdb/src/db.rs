@@ -1479,6 +1479,7 @@ mod test {
         Prefix6, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
         types::test_helpers::path_vecs_equal,
     };
+    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
@@ -1496,15 +1497,15 @@ mod test {
     ) -> bool {
         let curr_rib_in_paths = db.get_prefix_paths(prefix);
         if !path_vecs_equal(&curr_rib_in_paths, &rib_in_paths) {
-            eprintln!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
-            eprintln!("rib_in_paths: {:?}", rib_in_paths);
+            eprintln_nopipe!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
+            eprintln_nopipe!("rib_in_paths: {:?}", rib_in_paths);
             return false;
         }
 
         let curr_loc_rib_paths = db.get_selected_prefix_paths(prefix);
         if !path_vecs_equal(&curr_loc_rib_paths, &loc_rib_paths) {
-            eprintln!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
-            eprintln!("loc_rib_paths: {:?}", loc_rib_paths);
+            eprintln_nopipe!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
+            eprintln_nopipe!("loc_rib_paths: {:?}", loc_rib_paths);
             return false;
         }
         true
