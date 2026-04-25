@@ -8,8 +8,11 @@
 //! and routing information. It has minimal dependencies and can be used by clients
 //! without pulling in the full RDB implementation.
 
+pub use rdb_types_versions::latest::bfd::*;
+pub use rdb_types_versions::latest::neighbor::*;
 pub use rdb_types_versions::latest::path::*;
 pub use rdb_types_versions::latest::peer::*;
 pub use rdb_types_versions::latest::policy::*;
 pub use rdb_types_versions::latest::prefix::*;
+pub use rdb_types_versions::latest::router::*;
 pub use rdb_types_versions::latest::*;

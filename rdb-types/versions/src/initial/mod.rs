@@ -7,10 +7,12 @@ use clap::ValueEnum;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub mod bfd;
 pub mod path;
 pub mod peer;
 pub mod policy;
 pub mod prefix;
+pub mod router;
 
 /// Represents the address family (protocol version) for network routes.
 ///

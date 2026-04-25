@@ -6,6 +6,16 @@
 
 pub use crate::v1::{AddressFamily, ProtocolFilter};
 
+pub mod bfd {
+    pub use crate::v1::bfd::{BfdPeerConfig, SessionMode};
+}
+
+pub mod neighbor {
+    pub use crate::v4::neighbor::{
+        BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
+    };
+}
+
 pub mod path {
     pub use crate::v5::path::{BgpPathProperties, Path};
 }
@@ -22,4 +32,8 @@ pub mod policy {
 
 pub mod prefix {
     pub use crate::v1::prefix::{Prefix, Prefix4, Prefix6};
+}
+
+pub mod router {
+    pub use crate::v1::router::BgpRouterInfo;
 }
