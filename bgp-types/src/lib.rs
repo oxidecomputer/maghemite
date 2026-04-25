@@ -4,4 +4,5 @@
 
 //! Re-exports of the latest published BGP wire-message and session types.
 
+#[allow(unused_imports)]
 pub use bgp_types_versions::latest::*;

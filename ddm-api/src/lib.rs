@@ -10,7 +10,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
-use mg_common::net::TunnelOrigin;
+use mg_common_types::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use std::collections::{HashMap, HashSet};
 

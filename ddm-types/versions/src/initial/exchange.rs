@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use mg_common::net::Ipv6Prefix;
+use mg_common_types_versions::v1::net::Ipv6Prefix;
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -9,7 +9,7 @@ use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_types::db::RouterKind;
 use ddm_types::exchange::PathVector;
 use libnet::get_ipaddr_info;
-use mg_common::net::TunnelOrigin;
+use mg_common_types::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;

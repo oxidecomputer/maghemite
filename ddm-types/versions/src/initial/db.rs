@@ -4,7 +4,7 @@
 
 use std::net::Ipv6Addr;
 
-use mg_common::net::TunnelOrigin;
+use mg_common_types_versions::v1::net::TunnelOrigin;
 use schemars::{JsonSchema, JsonSchema_repr};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
