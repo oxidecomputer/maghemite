@@ -30,6 +30,7 @@
 //! [detailed guide]: https://github.com/oxidecomputer/dropshot-api-manager/blob/main/guides/new-version.md
 //! [RFD 619]: https://rfd.shared.oxide.computer/rfd/619
 
+pub mod error;
 mod impls;
 pub mod latest;
 #[path = "initial/mod.rs"]

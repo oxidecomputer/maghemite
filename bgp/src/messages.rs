@@ -232,52 +232,19 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
     }
 }
 
-/// BGP Message types.
-///
-/// Ref: RFC 4271 §4.1
-#[derive(
-    Clone, Copy, Debug, Eq, IntoPrimitive, PartialEq, TryFromPrimitive,
-)]
-#[repr(u8)]
-pub enum MessageType {
-    /// The first message sent by each side once a TCP connection is
-    /// established.
-    ///
-    /// RFC 4271 §4.2
-    Open = 1,
+pub use bgp_types::messages::MessageType;
 
-    /// Used to transfer routing information between BGP peers.
-    ///
-    /// RFC 4271 §4.3
-    Update = 2,
-
-    /// Sent when an error condition is detected.
-    ///
-    /// RFC 4271 §4.5
-    Notification = 3,
-
-    /// Exchanged between peers often enough not to cause the hold timer to
-    /// expire.
-    ///
-    /// RFC 4271 §4.4
-    KeepAlive = 4,
-
-    /// When this message is received from a peer, we send that peer all
-    /// current outbound routes.
-    ///
-    /// RFC 2918
-    RouteRefresh = 5,
-}
-
-impl From<&Message> for MessageType {
-    fn from(m: &Message) -> Self {
-        match m {
-            Message::Open(_) => Self::Open,
-            Message::Update(_) => Self::Update,
-            Message::Notification(_) => Self::Notification,
-            Message::KeepAlive => Self::KeepAlive,
-            Message::RouteRefresh(_) => Self::RouteRefresh,
-        }
+/// Free function replacement for `From<&Message> for MessageType`. Lives here
+/// (not in `bgp-types-versions`) because `Message` is a protocol type
+/// belonging to `bgp`. Per RFD 619 (orphan-rule + leaf-crate), the
+/// versioned-types crate cannot reference protocol types.
+pub fn message_type_of(m: &Message) -> MessageType {
+    match m {
+        Message::Open(_) => MessageType::Open,
+        Message::Update(_) => MessageType::Update,
+        Message::Notification(_) => MessageType::Notification,
+        Message::KeepAlive => MessageType::KeepAlive,
+        Message::RouteRefresh(_) => MessageType::RouteRefresh,
     }
 }
 
@@ -655,7 +622,7 @@ impl OpenMessage {
     pub fn has_capability(&self, code: CapabilityCode) -> bool {
         self.get_capabilities()
             .into_iter()
-            .any(|x| CapabilityCode::from(x) == code)
+            .any(|x| capability_code_of(x) == code)
     }
 
     pub fn asn(&self) -> u32 {
@@ -1782,7 +1749,7 @@ impl From<PathAttributeValue> for PathAttribute {
         Self {
             typ: PathAttributeType {
                 flags,
-                type_code: v.clone().into(),
+                type_code: path_attribute_type_code_of(v.clone()),
             },
             value: v,
         }
@@ -1975,77 +1942,42 @@ pub mod path_attribute_flags {
     pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
 
-/// An enumeration describing available path attribute type codes.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum PathAttributeTypeCode {
-    /// RFC 4271
-    Origin = 1,
-    AsPath = 2,
-    NextHop = 3,
-    MultiExitDisc = 4,
-    LocalPref = 5,
-    AtomicAggregate = 6,
-    Aggregator = 7,
-    Communities = 8,
+pub use bgp_types::messages::PathAttributeTypeCode;
 
-    /// RFC 4760
-    MpReachNlri = 14,
-    MpUnreachNlri = 15,
-
-    /// RFC 6793
-    As4Path = 17,
-    As4Aggregator = 18,
-}
-
-impl From<PathAttributeValue> for PathAttributeTypeCode {
-    fn from(v: PathAttributeValue) -> Self {
-        match v {
-            PathAttributeValue::Origin(_) => PathAttributeTypeCode::Origin,
-            PathAttributeValue::AsPath(_) => PathAttributeTypeCode::AsPath,
-            PathAttributeValue::NextHop(_) => PathAttributeTypeCode::NextHop,
-            PathAttributeValue::MultiExitDisc(_) => {
-                PathAttributeTypeCode::MultiExitDisc
-            }
-            PathAttributeValue::LocalPref(_) => {
-                PathAttributeTypeCode::LocalPref
-            }
-            PathAttributeValue::Aggregator(_) => {
-                PathAttributeTypeCode::Aggregator
-            }
-            PathAttributeValue::Communities(_) => {
-                PathAttributeTypeCode::Communities
-            }
-            PathAttributeValue::AtomicAggregate => {
-                PathAttributeTypeCode::AtomicAggregate
-            }
-            PathAttributeValue::MpReachNlri(_) => {
-                PathAttributeTypeCode::MpReachNlri
-            }
-            PathAttributeValue::MpUnreachNlri(_) => {
-                PathAttributeTypeCode::MpUnreachNlri
-            }
-            /* TODO according to RFC 4893 we do not have this as an explicit
-             * attribute type when 4-byte ASNs have been negotiated - but are
-             * there some circumstances when we'll need transitional mode?
-             */
-            //PathAttributeValue::As4Path(_) => PathAttributeTypeCode::As4Path,
-            PathAttributeValue::As4Path(_) => PathAttributeTypeCode::AsPath,
-            PathAttributeValue::As4Aggregator(_) => {
-                PathAttributeTypeCode::As4Aggregator
-            }
+/// Free function replacement for `From<PathAttributeValue> for
+/// PathAttributeTypeCode`. See `message_type_of` for rationale.
+pub fn path_attribute_type_code_of(
+    v: PathAttributeValue,
+) -> PathAttributeTypeCode {
+    match v {
+        PathAttributeValue::Origin(_) => PathAttributeTypeCode::Origin,
+        PathAttributeValue::AsPath(_) => PathAttributeTypeCode::AsPath,
+        PathAttributeValue::NextHop(_) => PathAttributeTypeCode::NextHop,
+        PathAttributeValue::MultiExitDisc(_) => {
+            PathAttributeTypeCode::MultiExitDisc
+        }
+        PathAttributeValue::LocalPref(_) => PathAttributeTypeCode::LocalPref,
+        PathAttributeValue::Aggregator(_) => PathAttributeTypeCode::Aggregator,
+        PathAttributeValue::Communities(_) => {
+            PathAttributeTypeCode::Communities
+        }
+        PathAttributeValue::AtomicAggregate => {
+            PathAttributeTypeCode::AtomicAggregate
+        }
+        PathAttributeValue::MpReachNlri(_) => {
+            PathAttributeTypeCode::MpReachNlri
+        }
+        PathAttributeValue::MpUnreachNlri(_) => {
+            PathAttributeTypeCode::MpUnreachNlri
+        }
+        /* TODO according to RFC 4893 we do not have this as an explicit
+         * attribute type when 4-byte ASNs have been negotiated - but are
+         * there some circumstances when we'll need transitional mode?
+         */
+        //PathAttributeValue::As4Path(_) => PathAttributeTypeCode::As4Path,
+        PathAttributeValue::As4Path(_) => PathAttributeTypeCode::AsPath,
+        PathAttributeValue::As4Aggregator(_) => {
+            PathAttributeTypeCode::As4Aggregator
         }
     }
 }
@@ -2572,38 +2504,7 @@ pub enum Community {
 }
 
 /// An enumeration indicating the origin type of a path.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum PathOrigin {
-    /// Interior gateway protocol
-    Igp = 0,
-    /// Exterior gateway protocol
-    Egp = 1,
-    /// Incomplete path origin
-    Incomplete = 2,
-}
-
-impl Display for PathOrigin {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            PathOrigin::Igp => write!(f, "igp"),
-            PathOrigin::Egp => write!(f, "egp"),
-            PathOrigin::Incomplete => write!(f, "incomplete"),
-        }
-    }
-}
+pub use bgp_types::messages::PathOrigin;
 
 // A self describing segment found in path sets and sequences.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -2698,27 +2599,7 @@ impl Display for As4PathSegment {
     }
 }
 
-/// Enumeration describes possible AS path types
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum AsPathType {
-    /// The path is to be interpreted as a set
-    AsSet = 1,
-    /// The path is to be interpreted as a sequence
-    AsSequence = 2,
-}
+pub use bgp_types::messages::AsPathType;
 
 /// IPv6 double nexthop: global unicast address + link-local address.
 /// Per RFC 2545, when advertising IPv6 routes, both addresses may be present.
@@ -3657,45 +3538,7 @@ impl Display for RouteRefreshMessage {
     }
 }
 
-/// This enumeration contains possible notification error codes.
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    IntoPrimitive,
-    TryFromPrimitive,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorCode {
-    Header = 1,
-    Open,
-    Update,
-    HoldTimerExpired,
-    Fsm,
-    Cease,
-}
-
-impl Display for ErrorCode {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val: u8 = (*self).into();
-        match self {
-            ErrorCode::Header => write!(f, "{val} (Header)"),
-            ErrorCode::Open => write!(f, "{val} (Open)"),
-            ErrorCode::Update => write!(f, "{val} (Update)"),
-            ErrorCode::HoldTimerExpired => {
-                write!(f, "{val} (HoldTimerExpired)")
-            }
-            ErrorCode::Fsm => write!(f, "{val} (FSM)"),
-            ErrorCode::Cease => write!(f, "{val} (Cease)"),
-        }
-    }
-}
+pub use bgp_types::messages::ErrorCode;
 
 /// This enumeration contains possible notification error subcodes.
 #[derive(
@@ -3769,227 +3612,13 @@ impl Display for ErrorSubcode {
     }
 }
 
-/// Header error subcode types
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    IntoPrimitive,
-    TryFromPrimitive,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum HeaderErrorSubcode {
-    Unspecific = 0,
-    ConnectionNotSynchronized,
-    BadMessageLength,
-    BadMessageType,
-}
+pub use bgp_types::messages::HeaderErrorSubcode;
 
-impl Display for HeaderErrorSubcode {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val: u8 = (*self).into();
-        match self {
-            HeaderErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
-            HeaderErrorSubcode::ConnectionNotSynchronized => {
-                write!(f, "{val} (Connection Not Synchronized)")
-            }
-            HeaderErrorSubcode::BadMessageLength => {
-                write!(f, "{val} (Bad Message Length)")
-            }
-            HeaderErrorSubcode::BadMessageType => {
-                write!(f, "{val} (Bad Message Type)")
-            }
-        }
-    }
-}
+pub use bgp_types::messages::OpenErrorSubcode;
 
-/// Open message error subcode types
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    IntoPrimitive,
-    TryFromPrimitive,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum OpenErrorSubcode {
-    Unspecific = 0,
-    UnsupportedVersionNumber,
-    BadPeerAS,
-    BadBgpIdentifier,
-    UnsupportedOptionalParameter,
-    Deprecated,
-    UnacceptableHoldTime,
-    UnsupportedCapability,
-}
+pub use bgp_types::messages::UpdateErrorSubcode;
 
-impl Display for OpenErrorSubcode {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val: u8 = (*self).into();
-        match self {
-            OpenErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
-            OpenErrorSubcode::UnsupportedVersionNumber => {
-                write!(f, "{val} (UnsupportedVersionNumber)")
-            }
-            OpenErrorSubcode::BadPeerAS => write!(f, "{val} (Bad Peer AS)"),
-            OpenErrorSubcode::BadBgpIdentifier => {
-                write!(f, "{val} (Bad BGP Identifier)")
-            }
-            OpenErrorSubcode::UnsupportedOptionalParameter => {
-                write!(f, "{val} (Unsupported Optional Parameter)")
-            }
-            OpenErrorSubcode::Deprecated => write!(f, "{val} (Deprecated)"),
-            OpenErrorSubcode::UnacceptableHoldTime => {
-                write!(f, "{val} (Unacceptable Hold Time)")
-            }
-            OpenErrorSubcode::UnsupportedCapability => {
-                write!(f, "{val} (Unsupported Capability)")
-            }
-        }
-    }
-}
-
-/// Update message error subcode types
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    IntoPrimitive,
-    TryFromPrimitive,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum UpdateErrorSubcode {
-    Unspecific = 0,
-    MalformedAttributeList,
-    UnrecognizedWellKnownAttribute,
-    MissingWellKnownAttribute,
-    AttributeFlags,
-    AttributeLength,
-    InvalidOriginAttribute,
-    Deprecated,
-    InvalidNexthopAttribute,
-    OptionalAttribute,
-    InvalidNetworkField,
-    MalformedAsPath,
-}
-
-impl Display for UpdateErrorSubcode {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val: u8 = (*self).into();
-        match self {
-            UpdateErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
-            UpdateErrorSubcode::MalformedAttributeList => {
-                write!(f, "{val} (Malformed Attribute List)")
-            }
-            UpdateErrorSubcode::UnrecognizedWellKnownAttribute => {
-                write!(f, "{val} (Unrecognized Well-Known Attribute)")
-            }
-            UpdateErrorSubcode::MissingWellKnownAttribute => {
-                write!(f, "{val} (Missing Well-Known Attribute)")
-            }
-            UpdateErrorSubcode::AttributeFlags => {
-                write!(f, "{val} (Attribute Flags)")
-            }
-            UpdateErrorSubcode::AttributeLength => {
-                write!(f, "{val} (Attribute Length)")
-            }
-            UpdateErrorSubcode::InvalidOriginAttribute => {
-                write!(f, "{val} (Invalid Origin Attribute)")
-            }
-            UpdateErrorSubcode::Deprecated => write!(f, "{val} (Deprecated)"),
-            UpdateErrorSubcode::InvalidNexthopAttribute => {
-                write!(f, "{val} (Invalid Nexthop Attribute)")
-            }
-            UpdateErrorSubcode::OptionalAttribute => {
-                write!(f, "{val} (Optional Attribute)")
-            }
-            UpdateErrorSubcode::InvalidNetworkField => {
-                write!(f, "{val} (Invalid Network Field)")
-            }
-            UpdateErrorSubcode::MalformedAsPath => {
-                write!(f, "{val} (Malformed AS Path)")
-            }
-        }
-    }
-}
-
-/// Cease error subcode types from RFC 4486
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    IntoPrimitive,
-    TryFromPrimitive,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum CeaseErrorSubcode {
-    Unspecific = 0,
-    MaximumNumberofPrefixesReached,
-    AdministrativeShutdown,
-    PeerDeconfigured,
-    AdministrativeReset,
-    ConnectionRejected,
-    OtherConfigurationChange,
-    ConnectionCollisionResolution,
-    OutOfResources,
-}
-
-impl Display for CeaseErrorSubcode {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val: u8 = (*self).into();
-        match self {
-            CeaseErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
-            CeaseErrorSubcode::MaximumNumberofPrefixesReached => {
-                write!(f, "{val} (Maximum Number of Prefixes Reached)")
-            }
-            CeaseErrorSubcode::AdministrativeShutdown => {
-                write!(f, "{val} (Administrative Shutdown)")
-            }
-            CeaseErrorSubcode::PeerDeconfigured => {
-                write!(f, "{val} (Peer Deconfigured)")
-            }
-            CeaseErrorSubcode::AdministrativeReset => {
-                write!(f, "{val} (Administratively Reset)")
-            }
-            CeaseErrorSubcode::ConnectionRejected => {
-                write!(f, "{val} (Connection Rejected)")
-            }
-            CeaseErrorSubcode::OtherConfigurationChange => {
-                write!(f, "{val} (Other Configuration Rejected)")
-            }
-            CeaseErrorSubcode::ConnectionCollisionResolution => {
-                write!(f, "{val} (Connection Collision Resolution)")
-            }
-            CeaseErrorSubcode::OutOfResources => {
-                write!(f, "{val} (Out of Resources)")
-            }
-        }
-    }
-}
+pub use bgp_types::messages::CeaseErrorSubcode;
 
 /// The IANA/IETF currently defines the following optional parameter types.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
@@ -4033,14 +3662,7 @@ impl Display for OptionalParameter {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
-#[repr(u8)]
-pub enum OptionalParameterCode {
-    Reserved = 0,
-    Authentication = 1,
-    Capabilities = 2,
-    ExtendedLength = 255,
-}
+pub use bgp_types::messages::OptionalParameterCode;
 
 impl OptionalParameter {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
@@ -4496,7 +4118,7 @@ impl Capability {
 
     /// Get the CapabilityCode for this capability variant
     pub fn code(&self) -> CapabilityCode {
-        self.clone().into()
+        capability_code_of(self.clone())
     }
 
     pub fn from_wire(input: &[u8]) -> Result<(&[u8], Capability), Error> {
@@ -4823,355 +4445,121 @@ impl Capability {
     }
 }
 
-/// The set of capability codes supported by this BGP implementation
-#[derive(
-    Clone, Copy, Debug, Eq, IntoPrimitive, PartialEq, TryFromPrimitive,
-)]
-#[repr(u8)]
-pub enum CapabilityCode {
-    /// RFC 5492
-    Reserved = 0,
+pub use bgp_types::messages::CapabilityCode;
 
-    /// RFC 2858
-    MultiprotocolExtensions = 1,
-
-    /// RFC 2918
-    RouteRefresh = 2,
-
-    /// RFC 5291
-    OutboundRouteFiltering = 3,
-
-    /// RFC 8277 (deprecated)
-    MultipleRoutesToDestination = 4,
-
-    /// RFC 8950
-    ExtendedNextHopEncoding = 5,
-
-    /// RFC 8654
-    BGPExtendedMessage = 6,
-
-    /// RFC 8205
-    BgpSec = 7,
-
-    /// RFC 8277
-    MultipleLabels = 8,
-
-    /// RFC 9234
-    BgpRole = 9,
-
-    /// RFC 4724
-    GracefulRestart = 64,
-
-    /// RFC 6793
-    FourOctetAs = 65,
-
-    /// draft-ietf-idr-dynamic-cap
-    DynamicCapability = 67,
-
-    /// draft-ietf-idr-bgp-multisession
-    MultisessionBgp = 68,
-
-    /// RFC 7911
-    AddPath = 69,
-
-    /// RFC 7313
-    EnhancedRouteRefresh = 70,
-
-    /// draft-uttaro-idr-bgp-persistence
-    LongLivedGracefulRestart = 71,
-
-    /// draft-ietf-idr-rpd-04
-    RoutingPolicyDistribution = 72,
-
-    /// draft-walton-bgp-hostname-capability
-    Fqdn = 73,
-
-    /// RFC 8810 (deprecated)
-    PrestandardRouteRefresh = 128,
-
-    /// RFC 8810 (deprecated)
-    PrestandardOrfAndPd = 129,
-
-    /// RFC 8810 (deprecated)
-    PrestandardOutboundRouteFiltering = 130,
-
-    /// RFC 8810 (deprecated)
-    PrestandardMultisession = 131,
-
-    /// RFC 8810 (deprecated)
-    PrestandardFqdn = 184,
-
-    /// RFC 8810 (deprecated)
-    PrestandardOperationalMessage = 185,
-
-    /// RFC 8810
-    Experimental0 = 186,
-    Experimental1,
-    Experimental2,
-    Experimental3,
-    Experimental4,
-    Experimental5,
-    Experimental6,
-    Experimental7,
-    Experimental8,
-    Experimental9,
-    Experimental10,
-    Experimental11,
-    Experimental12,
-    Experimental13,
-    Experimental14,
-    Experimental15,
-    Experimental16,
-    Experimental17,
-    Experimental18,
-    Experimental19,
-    Experimental20,
-    Experimental21,
-    Experimental22,
-    Experimental23,
-    Experimental24,
-    Experimental25,
-    Experimental26,
-    Experimental27,
-    Experimental28,
-    Experimental29,
-    Experimental30,
-    Experimental31,
-    Experimental32,
-    Experimental33,
-    Experimental34,
-    Experimental35,
-    Experimental36,
-    Experimental37,
-    Experimental38,
-    Experimental39,
-    Experimental40,
-    Experimental41,
-    Experimental42,
-    Experimental43,
-    Experimental44,
-    Experimental45,
-    Experimental46,
-    Experimental47,
-    Experimental48,
-    Experimental49,
-    Experimental50,
-    Experimental51,
-}
-
-impl From<Capability> for CapabilityCode {
-    fn from(value: Capability) -> Self {
-        match value {
-            Capability::MultiprotocolExtensions { afi: _, safi: _ } => {
-                CapabilityCode::MultiprotocolExtensions
-            }
-            Capability::RouteRefresh {} => CapabilityCode::RouteRefresh,
-            Capability::OutboundRouteFiltering {} => {
-                CapabilityCode::OutboundRouteFiltering
-            }
-            Capability::MultipleRoutesToDestination {} => {
-                CapabilityCode::MultipleRoutesToDestination
-            }
-            Capability::ExtendedNextHopEncoding { elements: _ } => {
-                CapabilityCode::ExtendedNextHopEncoding
-            }
-            Capability::BGPExtendedMessage {} => {
-                CapabilityCode::BGPExtendedMessage
-            }
-            Capability::BgpSec {} => CapabilityCode::BgpSec,
-            Capability::MultipleLabels {} => CapabilityCode::MultipleLabels,
-            Capability::BgpRole {} => CapabilityCode::BgpRole,
-            Capability::GracefulRestart {} => CapabilityCode::GracefulRestart,
-            Capability::FourOctetAs { asn: _ } => CapabilityCode::FourOctetAs,
-            Capability::DynamicCapability {} => {
-                CapabilityCode::DynamicCapability
-            }
-            Capability::MultisessionBgp {} => CapabilityCode::MultisessionBgp,
-            Capability::AddPath { elements: _ } => CapabilityCode::AddPath,
-            Capability::EnhancedRouteRefresh {} => {
-                CapabilityCode::EnhancedRouteRefresh
-            }
-            Capability::LongLivedGracefulRestart {} => {
-                CapabilityCode::LongLivedGracefulRestart
-            }
-            Capability::RoutingPolicyDistribution {} => {
-                CapabilityCode::RoutingPolicyDistribution
-            }
-            Capability::Fqdn {} => CapabilityCode::Fqdn,
-            Capability::PrestandardRouteRefresh {} => {
-                CapabilityCode::PrestandardRouteRefresh
-            }
-            Capability::PrestandardOrfAndPd {} => {
-                CapabilityCode::PrestandardOrfAndPd
-            }
-            Capability::PrestandardOutboundRouteFiltering {} => {
-                CapabilityCode::PrestandardOutboundRouteFiltering
-            }
-            Capability::PrestandardMultisession {} => {
-                CapabilityCode::PrestandardMultisession
-            }
-            Capability::PrestandardFqdn {} => CapabilityCode::PrestandardFqdn,
-            Capability::PrestandardOperationalMessage {} => {
-                CapabilityCode::PrestandardOperationalMessage
-            }
-            Capability::Experimental { code } => match code {
-                0 => CapabilityCode::Experimental0,
-                1 => CapabilityCode::Experimental1,
-                2 => CapabilityCode::Experimental2,
-                3 => CapabilityCode::Experimental3,
-                4 => CapabilityCode::Experimental4,
-                5 => CapabilityCode::Experimental5,
-                6 => CapabilityCode::Experimental6,
-                7 => CapabilityCode::Experimental7,
-                8 => CapabilityCode::Experimental8,
-                9 => CapabilityCode::Experimental9,
-                10 => CapabilityCode::Experimental10,
-                11 => CapabilityCode::Experimental11,
-                12 => CapabilityCode::Experimental12,
-                13 => CapabilityCode::Experimental13,
-                14 => CapabilityCode::Experimental14,
-                15 => CapabilityCode::Experimental15,
-                16 => CapabilityCode::Experimental16,
-                17 => CapabilityCode::Experimental17,
-                18 => CapabilityCode::Experimental18,
-                19 => CapabilityCode::Experimental19,
-                20 => CapabilityCode::Experimental20,
-                21 => CapabilityCode::Experimental21,
-                22 => CapabilityCode::Experimental22,
-                23 => CapabilityCode::Experimental23,
-                24 => CapabilityCode::Experimental24,
-                25 => CapabilityCode::Experimental25,
-                26 => CapabilityCode::Experimental26,
-                27 => CapabilityCode::Experimental27,
-                28 => CapabilityCode::Experimental28,
-                29 => CapabilityCode::Experimental29,
-                30 => CapabilityCode::Experimental30,
-                31 => CapabilityCode::Experimental31,
-                32 => CapabilityCode::Experimental32,
-                33 => CapabilityCode::Experimental33,
-                34 => CapabilityCode::Experimental34,
-                35 => CapabilityCode::Experimental35,
-                36 => CapabilityCode::Experimental36,
-                37 => CapabilityCode::Experimental37,
-                38 => CapabilityCode::Experimental38,
-                39 => CapabilityCode::Experimental39,
-                40 => CapabilityCode::Experimental40,
-                41 => CapabilityCode::Experimental41,
-                42 => CapabilityCode::Experimental42,
-                43 => CapabilityCode::Experimental43,
-                44 => CapabilityCode::Experimental44,
-                45 => CapabilityCode::Experimental45,
-                46 => CapabilityCode::Experimental46,
-                47 => CapabilityCode::Experimental47,
-                48 => CapabilityCode::Experimental48,
-                49 => CapabilityCode::Experimental49,
-                50 => CapabilityCode::Experimental50,
-                51 => CapabilityCode::Experimental51,
-                _ => CapabilityCode::Experimental0,
-            },
-            Capability::Unassigned { code: _ } => CapabilityCode::Reserved,
-            Capability::Reserved { code: _ } => CapabilityCode::Reserved,
+/// Free function replacement for `From<Capability> for CapabilityCode`.
+/// See `message_type_of` for rationale.
+pub fn capability_code_of(value: Capability) -> CapabilityCode {
+    match value {
+        Capability::MultiprotocolExtensions { afi: _, safi: _ } => {
+            CapabilityCode::MultiprotocolExtensions
         }
-    }
-}
-
-/// Address families supported by Maghemite BGP.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
-#[repr(u16)]
-pub enum Afi {
-    /// Internet protocol version 4
-    Ipv4 = 1,
-    /// Internet protocol version 6
-    Ipv6 = 2,
-}
-
-impl From<Afi> for AddressFamily {
-    fn from(value: Afi) -> Self {
-        match value {
-            Afi::Ipv4 => AddressFamily::Ipv4,
-            Afi::Ipv6 => AddressFamily::Ipv6,
+        Capability::RouteRefresh {} => CapabilityCode::RouteRefresh,
+        Capability::OutboundRouteFiltering {} => {
+            CapabilityCode::OutboundRouteFiltering
         }
-    }
-}
-
-impl From<AddressFamily> for Afi {
-    fn from(value: AddressFamily) -> Self {
-        match value {
-            AddressFamily::Ipv4 => Afi::Ipv4,
-            AddressFamily::Ipv6 => Afi::Ipv6,
+        Capability::MultipleRoutesToDestination {} => {
+            CapabilityCode::MultipleRoutesToDestination
         }
-    }
-}
-
-impl Display for Afi {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Afi::Ipv4 => write!(f, "IPv4"),
-            Afi::Ipv6 => write!(f, "IPv6"),
+        Capability::ExtendedNextHopEncoding { elements: _ } => {
+            CapabilityCode::ExtendedNextHopEncoding
         }
-    }
-}
-
-impl slog::Value for Afi {
-    fn serialize(
-        &self,
-        _record: &slog::Record,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_str(key, &self.to_string())
-    }
-}
-
-/// Subsequent address families supported by Maghemite BGP.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[repr(u8)]
-pub enum Safi {
-    /// Network Layer Reachability Information used for unicast forwarding
-    Unicast = 1,
-}
-
-impl Display for Safi {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Safi::Unicast => write!(f, "Unicast"),
+        Capability::BGPExtendedMessage {} => CapabilityCode::BGPExtendedMessage,
+        Capability::BgpSec {} => CapabilityCode::BgpSec,
+        Capability::MultipleLabels {} => CapabilityCode::MultipleLabels,
+        Capability::BgpRole {} => CapabilityCode::BgpRole,
+        Capability::GracefulRestart {} => CapabilityCode::GracefulRestart,
+        Capability::FourOctetAs { asn: _ } => CapabilityCode::FourOctetAs,
+        Capability::DynamicCapability {} => CapabilityCode::DynamicCapability,
+        Capability::MultisessionBgp {} => CapabilityCode::MultisessionBgp,
+        Capability::AddPath { elements: _ } => CapabilityCode::AddPath,
+        Capability::EnhancedRouteRefresh {} => {
+            CapabilityCode::EnhancedRouteRefresh
         }
+        Capability::LongLivedGracefulRestart {} => {
+            CapabilityCode::LongLivedGracefulRestart
+        }
+        Capability::RoutingPolicyDistribution {} => {
+            CapabilityCode::RoutingPolicyDistribution
+        }
+        Capability::Fqdn {} => CapabilityCode::Fqdn,
+        Capability::PrestandardRouteRefresh {} => {
+            CapabilityCode::PrestandardRouteRefresh
+        }
+        Capability::PrestandardOrfAndPd {} => {
+            CapabilityCode::PrestandardOrfAndPd
+        }
+        Capability::PrestandardOutboundRouteFiltering {} => {
+            CapabilityCode::PrestandardOutboundRouteFiltering
+        }
+        Capability::PrestandardMultisession {} => {
+            CapabilityCode::PrestandardMultisession
+        }
+        Capability::PrestandardFqdn {} => CapabilityCode::PrestandardFqdn,
+        Capability::PrestandardOperationalMessage {} => {
+            CapabilityCode::PrestandardOperationalMessage
+        }
+        Capability::Experimental { code } => match code {
+            0 => CapabilityCode::Experimental0,
+            1 => CapabilityCode::Experimental1,
+            2 => CapabilityCode::Experimental2,
+            3 => CapabilityCode::Experimental3,
+            4 => CapabilityCode::Experimental4,
+            5 => CapabilityCode::Experimental5,
+            6 => CapabilityCode::Experimental6,
+            7 => CapabilityCode::Experimental7,
+            8 => CapabilityCode::Experimental8,
+            9 => CapabilityCode::Experimental9,
+            10 => CapabilityCode::Experimental10,
+            11 => CapabilityCode::Experimental11,
+            12 => CapabilityCode::Experimental12,
+            13 => CapabilityCode::Experimental13,
+            14 => CapabilityCode::Experimental14,
+            15 => CapabilityCode::Experimental15,
+            16 => CapabilityCode::Experimental16,
+            17 => CapabilityCode::Experimental17,
+            18 => CapabilityCode::Experimental18,
+            19 => CapabilityCode::Experimental19,
+            20 => CapabilityCode::Experimental20,
+            21 => CapabilityCode::Experimental21,
+            22 => CapabilityCode::Experimental22,
+            23 => CapabilityCode::Experimental23,
+            24 => CapabilityCode::Experimental24,
+            25 => CapabilityCode::Experimental25,
+            26 => CapabilityCode::Experimental26,
+            27 => CapabilityCode::Experimental27,
+            28 => CapabilityCode::Experimental28,
+            29 => CapabilityCode::Experimental29,
+            30 => CapabilityCode::Experimental30,
+            31 => CapabilityCode::Experimental31,
+            32 => CapabilityCode::Experimental32,
+            33 => CapabilityCode::Experimental33,
+            34 => CapabilityCode::Experimental34,
+            35 => CapabilityCode::Experimental35,
+            36 => CapabilityCode::Experimental36,
+            37 => CapabilityCode::Experimental37,
+            38 => CapabilityCode::Experimental38,
+            39 => CapabilityCode::Experimental39,
+            40 => CapabilityCode::Experimental40,
+            41 => CapabilityCode::Experimental41,
+            42 => CapabilityCode::Experimental42,
+            43 => CapabilityCode::Experimental43,
+            44 => CapabilityCode::Experimental44,
+            45 => CapabilityCode::Experimental45,
+            46 => CapabilityCode::Experimental46,
+            47 => CapabilityCode::Experimental47,
+            48 => CapabilityCode::Experimental48,
+            49 => CapabilityCode::Experimental49,
+            50 => CapabilityCode::Experimental50,
+            51 => CapabilityCode::Experimental51,
+            _ => CapabilityCode::Experimental0,
+        },
+        Capability::Unassigned { code: _ } => CapabilityCode::Reserved,
+        Capability::Reserved { code: _ } => CapabilityCode::Reserved,
     }
 }
 
-impl slog::Value for Safi {
-    fn serialize(
-        &self,
-        _record: &slog::Record,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_str(key, &self.to_string())
-    }
-}
+pub use bgp_types::messages::{Afi, Safi};
 
 // ============================================================================
 // BGP Message Parse Error Types

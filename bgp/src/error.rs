@@ -213,6 +213,9 @@ pub enum Error {
 
     #[error("Malformed attribute list: {0}")]
     MalformedAttributeList(String),
+
+    #[error("Wire error: {0}")]
+    Wire(#[from] bgp_types_versions::error::WireError),
 }
 
 #[derive(Debug)]

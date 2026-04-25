@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bfd.workspace = true
 bgp.workspace = true
+bgp-types-versions.workspace = true
 rdb.workspace = true
 rdb-types-versions.workspace = true
 schemars.workspace = true

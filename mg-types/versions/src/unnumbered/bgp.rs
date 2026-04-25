@@ -4,9 +4,9 @@
 
 use std::collections::HashMap;
 
-use bgp::messages::Afi;
 use bgp::params::NeighborResetOp;
 use bgp::session::{FsmEventRecord, MessageHistory, PeerId};
+use bgp_types_versions::v4::messages::Afi;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

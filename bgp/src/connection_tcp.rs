@@ -1027,7 +1027,7 @@ impl BgpConnectionTcp {
                     )
                 },
             )?,
-            typ: MessageType::from(&msg),
+            typ: crate::messages::message_type_of(&msg),
         };
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
