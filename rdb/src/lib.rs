@@ -2,10 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 pub mod db;
+pub mod mrib;
 pub mod types;
 
 pub use db::Db;
+pub use mrib::Mrib;
 pub use types::*;
 pub mod bestpath;
 pub mod error;

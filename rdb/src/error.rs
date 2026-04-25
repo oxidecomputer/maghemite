@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("datastore error {0}")]
@@ -24,4 +26,10 @@ pub enum Error {
 
     #[error("Parsing error {0}")]
     Parsing(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
