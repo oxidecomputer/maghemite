@@ -39,10 +39,10 @@ pub mod ndp {
 pub mod rib {
     pub use crate::v1::rib::BestpathFanoutRequest;
     pub use crate::v1::rib::BestpathFanoutResponse;
-    pub use crate::v1::rib::GetRibResult;
 
     pub use crate::v2::rib::RibQuery;
 
+    pub use crate::v5::rib::GetRibResult;
     pub use crate::v5::rib::Rib;
 }
 

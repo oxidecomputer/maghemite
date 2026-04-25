@@ -684,10 +684,31 @@ pub trait MgAdminApi {
         request: TypedBody<latest::static_routes::DeleteStaticRoute4Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route4" }]
+    #[endpoint {
+        method = GET,
+        path = "/static/route4",
+        operation_id = "static_list_v4_routes",
+        versions = VERSION_UNNUMBERED..,
+    }]
     async fn static_list_v4_routes(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::rib::GetRibResult>, HttpError>;
+
+    // Pre-UNNUMBERED shim: paths use the v1 BgpPathProperties shape
+    // (peer is IpAddr rather than PeerId). Operation ID matches the
+    // latest endpoint so a single client method covers all versions.
+    #[endpoint {
+        method = GET,
+        path = "/static/route4",
+        operation_id = "static_list_v4_routes",
+        versions = ..VERSION_UNNUMBERED,
+    }]
+    async fn static_list_v4_routes_v1(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<v1::rib::GetRibResult>, HttpError> {
+        let latest = Self::static_list_v4_routes(rqctx).await?.0;
+        Ok(HttpResponseOk(v5::rib::get_rib_result_into_v1(latest)))
+    }
 
     // IPv6 static routes introduced in VERSION_IPV6_BASIC
     #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
@@ -702,10 +723,31 @@ pub trait MgAdminApi {
         request: TypedBody<latest::static_routes::DeleteStaticRoute6Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint {
+        method = GET,
+        path = "/static/route6",
+        operation_id = "static_list_v6_routes",
+        versions = VERSION_UNNUMBERED..,
+    }]
     async fn static_list_v6_routes(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::rib::GetRibResult>, HttpError>;
+
+    // Shim for IPV6_BASIC..UNNUMBERED: same v1-shaped Path/BgpPathProperties
+    // as the v4 list. Operation-id matches the latest endpoint so the
+    // generated client has a single method covering both versions.
+    #[endpoint {
+        method = GET,
+        path = "/static/route6",
+        operation_id = "static_list_v6_routes",
+        versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED,
+    }]
+    async fn static_list_v6_routes_v2(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<v1::rib::GetRibResult>, HttpError> {
+        let latest = Self::static_list_v6_routes(ctx).await?.0;
+        Ok(HttpResponseOk(v5::rib::get_rib_result_into_v1(latest)))
+    }
 
     #[endpoint { method = GET, path = "/switch/identifiers", versions = VERSION_SWITCH_IDENTIFIERS.. }]
     async fn switch_identifiers(

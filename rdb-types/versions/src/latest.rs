@@ -6,6 +6,10 @@
 
 pub use crate::v1::{AddressFamily, ProtocolFilter};
 
+pub mod path {
+    pub use crate::v5::path::{BgpPathProperties, Path};
+}
+
 pub mod peer {
     pub use crate::v1::peer::PeerId;
 }

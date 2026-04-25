@@ -6004,6 +6004,7 @@ dependencies = [
 name = "rdb-types-versions"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "oxnet",
  "schemars 0.8.22",
