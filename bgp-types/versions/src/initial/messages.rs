@@ -6,9 +6,12 @@
 //! version. These types encode IANA-assigned numeric codes used in BGP
 //! protocol messages.
 
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Maximum BGP message size in octets per RFC 4271 §4.
+pub const MAX_MESSAGE_SIZE: usize = 4096;
 
 /// BGP Message types.
 ///
@@ -419,4 +422,118 @@ pub enum PathOrigin {
     Egp = 1,
     /// Incomplete path origin
     Incomplete = 2,
+}
+
+/// A BGP message header.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// +                                                               +
+/// |                                                               |
+/// +                                                               +
+/// |                           Marker                              |
+/// +                                                               +
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |          Length               |      Type     |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// This object contains the length and type fields. The marker is automatically
+/// generated when [`to_wire`] is called, and consumed when [`from_wire`] is
+/// called.
+///
+/// Ref: RFC 4271 §4.1
+#[derive(Debug, PartialEq, Eq)]
+pub struct Header {
+    /// Total length of the message, including the header. May be no larger than
+    /// 4096.
+    pub length: u16,
+
+    /// Indicates the type of message.
+    pub typ: MessageType,
+}
+
+impl Header {
+    pub const WIRE_SIZE: usize = 19;
+}
+
+/// A type-length-value object. The length is implicit in the length of the
+/// value tracked by Vec.
+pub struct Tlv {
+    pub typ: u8,
+    pub value: Vec<u8>,
+}
+
+/// BGP community value
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    FromPrimitive,
+    IntoPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[repr(u32)]
+#[serde(rename_all = "snake_case")]
+pub enum Community {
+    /// All routes received carrying a communities attribute
+    /// containing this value MUST NOT be advertised outside a BGP
+    /// confederation boundary (a stand-alone autonomous system that
+    /// is not part of a confederation should be considered a
+    /// confederation itself)
+    NoExport = 0xFFFFFF01,
+
+    /// All routes received carrying a communities attribute
+    /// containing this value MUST NOT be advertised to other BGP
+    /// peers.
+    NoAdvertise = 0xFFFFFF02,
+
+    /// All routes received carrying a communities attribute
+    /// containing this value MUST NOT be advertised to external BGP
+    /// peers (this includes peers in other members autonomous
+    /// systems inside a BGP confederation).
+    NoExportSubConfed = 0xFFFFFF03,
+
+    /// All routes received carrying a communities attribute
+    /// containing this value must set the local preference for
+    /// the received routes to a low value, preferably zero.
+    GracefulShutdown = 0xFFFF0000,
+
+    /// A user defined community
+    #[num_enum(catch_all)]
+    UserDefined(u32),
+}
+
+/// The add path element comes as a BGP capability extension as described in
+/// RFC 7911.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
+pub struct AddPathElement {
+    /// Address family identifier.
+    /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
+    pub afi: u16,
+    /// Subsequent address family identifier. There are a large pile of these
+    /// <https://www.iana.org/assignments/safi-namespace/safi-namespace.xhtml>
+    pub safi: u8,
+    /// This field indicates whether the sender is (a) able to receive multiple
+    /// paths from its peer (value 1), (b) able to send multiple paths to its
+    /// peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.
+    pub send_receive: u8,
 }

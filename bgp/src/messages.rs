@@ -4,11 +4,9 @@
 
 use crate::{BGP_VERSION, error::Error};
 use nom::{
-    bytes::complete::{tag, take},
+    bytes::complete::take,
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
-use num_enum::FromPrimitive;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
 use path_attribute_flags::*;
 pub use rdb::types::Prefix;
 use rdb::types::{AddressFamily, Prefix4, Prefix6};
@@ -20,7 +18,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
-pub const MAX_MESSAGE_SIZE: usize = 4096;
+pub use bgp_types::messages::MAX_MESSAGE_SIZE;
 
 /// Trait for encoding/decoding values to/from BGP wire format.
 ///
@@ -422,74 +420,7 @@ impl TryFrom<Message> for RouteRefreshMessage {
     }
 }
 
-/// Each BGP message has a fixed sized header.
-///
-/// ```text
-/// 0                   1                   2                   3
-/// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                                                               |
-///   +                                                               +
-///   |                                                               |
-///   +                                                               +
-///   |                           Marker                              |
-///   +                                                               +
-///   |                                                               |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |          Length               |      Type     |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// ```
-///
-/// This object contains the length and type fields. The marker is automatically
-/// generated when [`to_wire`] is called, and consumed with [`from_wire`] is
-/// called.
-///
-/// Ref: RFC 4271 §4.1
-#[derive(Debug, PartialEq, Eq)]
-pub struct Header {
-    /// Total length of the message, including the header. May be no larger than
-    /// 4096.
-    pub length: u16,
-
-    /// Indicates the type of message.
-    pub typ: MessageType,
-}
-
-/// According to RFC 4271 §4.1 the header marker is all ones.
-const MARKER: [u8; 16] = [0xFFu8; 16];
-
-impl Header {
-    pub const WIRE_SIZE: usize = 19;
-
-    /// Create a new BGP message header. Length must be between 19 and 4096 per
-    /// RFC 4271 §4.1.
-    pub fn new(length: u16, typ: MessageType) -> Result<Header, Error> {
-        if usize::from(length) < Header::WIRE_SIZE {
-            return Err(Error::TooSmall("message header length".into()));
-        }
-        if usize::from(length) > MAX_MESSAGE_SIZE {
-            return Err(Error::TooLarge("message header length".into()));
-        }
-        Ok(Header { length, typ })
-    }
-
-    /// Serialize the header to wire format.
-    pub fn to_wire(&self) -> Vec<u8> {
-        let mut buf = MARKER.to_vec();
-        buf.extend_from_slice(&self.length.to_be_bytes());
-        buf.push(self.typ.into());
-        buf
-    }
-
-    /// Deserialize a header from wire format.
-    pub fn from_wire(input: &[u8]) -> Result<Header, Error> {
-        let (input, _) = tag(&MARKER[..])(input)?;
-        let (input, length) = be_u16(input)?;
-        let (_, typ) = parse_u8(input)?;
-        let typ = MessageType::try_from(typ)?;
-        Ok(Header { length, typ })
-    }
-}
+pub use bgp_types::messages::Header;
 
 /// The autonomous system number used in OPEN messages when 4-byte ASNs are in
 /// use.
@@ -748,12 +679,7 @@ impl Display for OpenMessage {
     }
 }
 
-/// A type-length-value object. The length is implicit in the length of the
-/// value tracked by Vec.
-pub struct Tlv {
-    pub typ: u8,
-    pub value: Vec<u8>,
-}
+pub use bgp_types::messages::Tlv;
 
 /// An update message is used to advertise feasible routes that share common
 /// path attributes to a peer, or to withdraw multiple unfeasible routes from
@@ -2459,49 +2385,7 @@ impl Display for PathAttributeValue {
     }
 }
 
-/// BGP community value
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    FromPrimitive,
-    IntoPrimitive,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[repr(u32)]
-#[serde(rename_all = "snake_case")]
-pub enum Community {
-    /// All routes received carrying a communities attribute
-    /// containing this value MUST NOT be advertised outside a BGP
-    /// confederation boundary (a stand-alone autonomous system that
-    /// is not part of a confederation should be considered a
-    /// confederation itself)
-    NoExport = 0xFFFFFF01,
-
-    /// All routes received carrying a communities attribute
-    /// containing this value MUST NOT be advertised to other BGP
-    /// peers.
-    NoAdvertise = 0xFFFFFF02,
-
-    /// All routes received carrying a communities attribute
-    /// containing this value MUST NOT be advertised to external BGP
-    /// peers (this includes peers in other members autonomous
-    /// systems inside a BGP confederation).
-    NoExportSubConfed = 0xFFFFFF03,
-
-    /// All routes received carrying a communities attribute
-    /// containing this value must set the local preference for
-    /// the received routes to a low value, preferably zero.
-    GracefulShutdown = 0xFFFF0000,
-
-    /// A user defined community
-    #[num_enum(catch_all)]
-    UserDefined(u32),
-}
+pub use bgp_types::messages::Community;
 
 /// An enumeration indicating the origin type of a path.
 pub use bgp_types::messages::PathOrigin;
@@ -2601,222 +2485,9 @@ impl Display for As4PathSegment {
 
 pub use bgp_types::messages::AsPathType;
 
-/// IPv6 double nexthop: global unicast address + link-local address.
-/// Per RFC 2545, when advertising IPv6 routes, both addresses may be present.
-#[derive(
-    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Ipv6DoubleNexthop {
-    /// Global unicast address
-    pub global: Ipv6Addr,
-    /// Link-local address
-    pub link_local: Ipv6Addr,
-}
+pub use bgp_types::messages::Ipv6DoubleNexthop;
 
-/// BGP next-hops can come in multiple forms, defined in several different RFCs.
-/// This enum represents the forms supported by this implementation.
-///
-/// In the case of IPv6, RFC 2545 defined the use of either:
-/// 1) A single non-link-local next-hop (length=16)
-/// 2) A non-link-local plus a link-local next-hop (length=32)
-///
-/// This does not account for only a link-local address as the sole next-hop.
-/// As such, many different implementations decided they would encode this in a
-/// variety of ways (since there was no canonical source of truth):
-/// a) Single-address encoding just the link-local (length=16)
-/// b) Double-address encoding the link-local in both positions (length=32)
-/// c) Double-address encoding the link-local in its normal position, but 0's in
-///    the non-link-local position (length=32)
-/// etc.
-/// This led to `draft-ietf-idr-linklocal-capability` which specifies more
-/// detailed encoding and error handling standards, signaled via a new
-/// Link-Local Next Hop Capability.
-///
-/// In addition to this, RFC 8950 (formerly RFC 5549) specified the
-/// advertisement of IPv4 NLRI via an IPv6 next-hop, enabled via the Extended
-/// Next Hop capability. This excerpt contains the encoding logic from RFC 8950:
-/// ```text
-///    Specifically, this document allows advertising the MP_REACH_NLRI
-///    attribute [RFC4760] with this content:
-///
-///    *  AFI = 1
-///
-///    *  SAFI = 1, 2, or 4
-///
-///    *  Length of Next Hop Address = 16 or 32
-///
-///    *  Next Hop Address = IPv6 address of a next hop (potentially
-///       followed by the link-local IPv6 address of the next hop).  This
-///       field is to be constructed as per Section 3 of [RFC2545].
-///
-///    *  NLRI = NLRI as per the AFI/SAFI definition
-///
-///    [..]
-///
-///    This is in addition to the existing mode of operation allowing
-///    advertisement of NLRI for <AFI/SAFI> of <1/1>, <1/2>, and <1/4> with
-///    a next-hop address of an IPv4 type and advertisement of NLRI for an
-///    <AFI/SAFI> of <1/128> and <1/129> with a next-hop address of a VPN-
-///    IPv4 type.
-///
-///    The BGP speaker receiving the advertisement MUST use the Length of
-///    Next Hop Address field to determine which network-layer protocol the
-///    next-hop address belongs to.
-///
-///    *  When the AFI/SAFI is <1/1>, <1/2>, or <1/4> and when the Length of
-///       Next Hop Address field is equal to 16 or 32, the next-hop address
-///       is of type IPv6.
-///
-///    *  When the AFI/SAFI is <1/128> or <1/129> and when the Length of
-///       Next Hop Address field is equal to 24 or 48, the next-hop address
-///       is of type VPN-IPv6.
-/// ```
-///
-/// RFC 8950 also goes on to state that Extended Next Hop is not specified for
-/// any AFI/SAFI other than IPv4 {Unicast, Multicast, Labeled Unicast,
-/// Unicast VPN, Multicast VPN}, because IPv4 next-hops can already be signaled
-/// within IPv6 or VPN-IPv6 encoding (via IPv4-mapped IPv6 addresses).
-///
-/// So for our purposes, IPv4 Unicast NLRI may have Next-hops in the form of:
-/// a) IPv4 nexthop
-/// b) IPv6 single GUA (w/ Extended Next-Hop)
-/// c) IPv6 single LL (w/ Extended Next-Hop + Link-Local Next Hop)
-/// d) IPv6 double (w/ Extended Next-Hop)
-///
-/// and IPv6 Unicast NLRI may have Next-hops in the form of:
-/// a) IPv6 single (IPv4-mapped)
-/// b) IPv6 single GUA
-/// c) IPv6 single LL (w/ Link-Local Next Hop)
-/// d) IPv6 double
-#[derive(
-    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
-)]
-#[schemars(
-    description = "A BGP next-hop address in one of three formats: IPv4, IPv6 single, or IPv6 double."
-)]
-pub enum BgpNexthop {
-    Ipv4(Ipv4Addr),
-    Ipv6Single(Ipv6Addr),
-    Ipv6Double(Ipv6DoubleNexthop),
-}
-
-impl BgpNexthop {
-    /// Parse next-hop from raw bytes based on AFI and length.
-    ///
-    /// Per RFC 4760 and RFC 2545:
-    /// - IPv4: 4 bytes (single IPv4 address)
-    /// - IPv6: 16 bytes (single global unicast) or 32 bytes (global + link-local)
-    ///
-    /// # Arguments
-    /// * `nh_bytes` - Raw next-hop bytes
-    /// * `nh_len` - Next-hop length field
-    /// * `afi` - Validated AFI (determines expected format)
-    ///
-    /// # Returns
-    /// Parsed BgpNexthop or error if length is invalid for the AFI
-    pub fn from_bytes(
-        nh_bytes: &[u8],
-        nh_len: u8,
-        afi: Afi,
-    ) -> Result<Self, Error> {
-        if nh_bytes.len() != usize::from(nh_len) {
-            return Err(Error::InvalidAddress(format!(
-                "next-hop bytes length {} doesn't match nh_len {}",
-                nh_bytes.len(),
-                nh_len
-            )));
-        }
-
-        // SAFETY: The length check above guarantees nh_bytes.len() == nh_len.
-        // Each match arm below only matches when nh_len equals the exact size
-        // needed for copy_from_slice, so all slice operations are bounds-safe.
-        match (afi, nh_len) {
-            (Afi::Ipv4, 4) => {
-                let mut bytes = [0u8; 4];
-                bytes.copy_from_slice(nh_bytes);
-                Ok(BgpNexthop::Ipv4(Ipv4Addr::from(bytes)))
-            }
-            (Afi::Ipv4 | Afi::Ipv6, 16) => {
-                let mut bytes = [0u8; 16];
-                bytes.copy_from_slice(nh_bytes);
-                Ok(BgpNexthop::Ipv6Single(Ipv6Addr::from(bytes)))
-            }
-            (Afi::Ipv4 | Afi::Ipv6, 32) => {
-                let mut bytes1 = [0u8; 16];
-                let mut bytes2 = [0u8; 16];
-                bytes1.copy_from_slice(&nh_bytes[..16]);
-                bytes2.copy_from_slice(&nh_bytes[16..32]);
-                Ok(BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
-                    global: Ipv6Addr::from(bytes1),
-                    link_local: Ipv6Addr::from(bytes2),
-                }))
-            }
-            _ => Err(Error::InvalidAddress(format!(
-                "invalid next-hop length {} for AFI {:?}",
-                nh_len, afi
-            ))),
-        }
-    }
-
-    /// Get byte length of this next-hop
-    pub fn byte_len(&self) -> u8 {
-        match self {
-            // 4 bytes
-            BgpNexthop::Ipv4(_) => (Ipv4Addr::BITS / 8) as u8,
-            // 16 bytes
-            BgpNexthop::Ipv6Single(_) => (Ipv6Addr::BITS / 8) as u8,
-            // 32 bytes
-            BgpNexthop::Ipv6Double(_) => ((Ipv6Addr::BITS * 2) / 8) as u8,
-        }
-    }
-
-    /// Serialize next-hop to wire format bytes
-    pub fn to_bytes(&self) -> Vec<u8> {
-        match self {
-            BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Double(addrs) => addrs
-                .global
-                .octets()
-                .into_iter()
-                .chain(addrs.link_local.octets())
-                .collect(),
-        }
-    }
-}
-
-impl Display for BgpNexthop {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BgpNexthop::Ipv4(a4) => write!(f, "{a4}"),
-            BgpNexthop::Ipv6Single(a6) => write!(f, "{a6}"),
-            BgpNexthop::Ipv6Double(addrs) => {
-                write!(f, "({}, {})", addrs.global, addrs.link_local)
-            }
-        }
-    }
-}
-
-impl From<Ipv4Addr> for BgpNexthop {
-    fn from(value: Ipv4Addr) -> Self {
-        BgpNexthop::Ipv4(value)
-    }
-}
-
-impl From<Ipv6Addr> for BgpNexthop {
-    fn from(value: Ipv6Addr) -> Self {
-        BgpNexthop::Ipv6Single(value)
-    }
-}
-
-impl From<IpAddr> for BgpNexthop {
-    fn from(value: IpAddr) -> Self {
-        match value {
-            IpAddr::V4(ip4) => BgpNexthop::Ipv4(ip4),
-            IpAddr::V6(ip6) => BgpNexthop::Ipv6Single(ip6),
-        }
-    }
-}
+pub use bgp_types::messages::BgpNexthop;
 
 /// Parse IPv4 prefixes from wire format
 fn prefixes4_from_wire(
@@ -3711,94 +3382,7 @@ impl OptionalParameter {
     }
 }
 
-/// The add path element comes as a BGP capability extension as described in
-/// RFC 7911.
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    PartialOrd,
-    Ord,
-)]
-pub struct AddPathElement {
-    /// Address family identifier.
-    /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
-    pub afi: u16,
-    /// Subsequent address family identifier. There are a large pile of these
-    /// <https://www.iana.org/assignments/safi-namespace/safi-namespace.xhtml>
-    pub safi: u8,
-    /// This field indicates whether the sender is (a) able to receive multiple
-    /// paths from its peer (value 1), (b) able to send multiple paths to its
-    /// peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.
-    pub send_receive: u8,
-}
-
-impl Display for AddPathElement {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "AddPathElement {{ afi: {}, safi: {}, send_receive: {} }}",
-            match Afi::try_from_primitive(self.afi) {
-                Ok(x) => x.to_string(),
-                _ => self.afi.to_string(),
-            },
-            match Safi::try_from_primitive(self.safi) {
-                Ok(x) => x.to_string(),
-                _ => self.safi.to_string(),
-            },
-            self.send_receive
-        )
-    }
-}
-
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    PartialOrd,
-    Ord,
-)]
-pub struct ExtendedNexthopElement {
-    pub afi: u16,
-    pub safi: u16,
-    pub nh_afi: u16,
-}
-
-impl ExtendedNexthopElement {
-    fn is_v4_over_v6(&self) -> bool {
-        self == &ExtendedNexthopElement {
-            afi: Afi::Ipv4.into(),
-            safi: u8::from(Safi::Unicast).into(),
-            nh_afi: Afi::Ipv6.into(),
-        }
-    }
-    fn is_v6_over_v4(&self) -> bool {
-        self == &ExtendedNexthopElement {
-            afi: Afi::Ipv6.into(),
-            safi: u8::from(Safi::Unicast).into(),
-            nh_afi: Afi::Ipv4.into(),
-        }
-    }
-}
-
-impl Display for ExtendedNexthopElement {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "safi={}/afi={}/nh_afi={}",
-            self.afi, self.safi, self.nh_afi
-        )
-    }
-}
+pub use bgp_types::messages::{AddPathElement, ExtendedNexthopElement};
 
 // An issue tracking the TODOs below is here
 // <https://github.com/oxidecomputer/maghemite/issues/80>

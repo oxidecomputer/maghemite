@@ -110,6 +110,9 @@ pub enum WireError {
 
     #[error("Invalid prefix length {0}, max is {1}")]
     InvalidPrefixLength(u8, u8),
+
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for WireError {
