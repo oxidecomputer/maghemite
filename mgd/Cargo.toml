@@ -12,6 +12,7 @@ mg-common.workspace = true
 bfd.workspace = true
 bgp.workspace = true
 rdb.workspace = true
+rdb-types-versions.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 slog.workspace = true

@@ -8,9 +8,10 @@ use crate::{
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
-    ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
-    PolicyAction, Prefix, Prefix4, Prefix6,
+    ImportExportPolicy4, ImportExportPolicy6, PolicyAction, Prefix, Prefix4,
+    Prefix6,
 };
+use rdb_types_versions::v1::policy::ImportExportPolicy as ImportExportPolicyV1;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{

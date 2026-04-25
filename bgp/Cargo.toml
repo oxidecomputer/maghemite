@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 rdb = { path = "../rdb" }
+rdb-types-versions.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true

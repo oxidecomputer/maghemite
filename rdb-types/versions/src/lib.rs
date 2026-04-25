@@ -33,5 +33,7 @@ mod impls;
 pub mod latest;
 #[path = "initial/mod.rs"]
 pub mod v1;
+#[path = "mp_bgp/mod.rs"]
+pub mod v4;
 #[path = "unnumbered/mod.rs"]
 pub mod v5;

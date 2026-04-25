@@ -14,6 +14,12 @@ pub mod peer {
     pub use crate::v1::peer::PeerId;
 }
 
+pub mod policy {
+    pub use crate::v4::policy::{
+        ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
+    };
+}
+
 pub mod prefix {
     pub use crate::v1::prefix::{Prefix, Prefix4, Prefix6};
 }

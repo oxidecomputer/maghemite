@@ -43,8 +43,9 @@ use mg_types::ndp::{
 use mg_types_versions::{v1, v2, v5};
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
-    ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
+    ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
+use rdb_types_versions::v1::policy::ImportExportPolicy as ImportExportPolicyV1;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -2540,7 +2541,7 @@ pub(crate) mod helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::do_bgp_apply;
+    use super::{ImportExportPolicyV1, do_bgp_apply};
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
@@ -2609,8 +2610,8 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: rdb::ImportExportPolicyV1::NoFiltering,
-                    allow_export: rdb::ImportExportPolicyV1::NoFiltering,
+                    allow_import: ImportExportPolicyV1::NoFiltering,
+                    allow_export: ImportExportPolicyV1::NoFiltering,
                     vlan_id: None,
                 },
             }],
@@ -2635,8 +2636,8 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: rdb::ImportExportPolicyV1::NoFiltering,
-                    allow_export: rdb::ImportExportPolicyV1::NoFiltering,
+                    allow_import: ImportExportPolicyV1::NoFiltering,
+                    allow_export: ImportExportPolicyV1::NoFiltering,
                     vlan_id: None,
                 },
             }],

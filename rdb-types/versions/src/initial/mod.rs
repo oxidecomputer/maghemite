@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod path;
 pub mod peer;
+pub mod policy;
 pub mod prefix;
 
 /// Represents the address family (protocol version) for network routes.
