@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashSet},
     fmt::{Display, Formatter},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr},
 };
 
 pub use bgp_types::messages::MAX_MESSAGE_SIZE;
@@ -815,7 +815,8 @@ impl UpdateMessage {
                 PathAttributeValue::MpReachNlri(_)
                     | PathAttributeValue::MpUnreachNlri(_)
             ) {
-                buf.extend_from_slice(&p.to_wire(
+                buf.extend_from_slice(&path_attribute_to_wire(
+                    p,
                     p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
                 )?);
             }
@@ -828,7 +829,8 @@ impl UpdateMessage {
                 PathAttributeValue::MpReachNlri(_)
                     | PathAttributeValue::MpUnreachNlri(_)
             ) {
-                buf.extend_from_slice(&p.to_wire(
+                buf.extend_from_slice(&path_attribute_to_wire(
+                    p,
                     p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
                 )?);
             }
@@ -1384,7 +1386,7 @@ impl UpdateMessage {
             }
 
             // ===== VALUE PARSING: Parse the attribute value =====
-            match PathAttribute::from_bytes(typ.clone(), value_bytes) {
+            match path_attribute_from_bytes(typ.clone(), value_bytes) {
                 Ok(pa) => {
                     // ===== DUPLICATE DETECTION =====
                     let is_mp_reach =
@@ -1440,7 +1442,7 @@ impl UpdateMessage {
                 }
                 Err(reason) => {
                     // Value parsing failed - determine action based on attribute type
-                    let action = typ.error_action();
+                    let action = path_attribute_type_error_action(&typ);
 
                     match action {
                         AttributeAction::SessionReset => {
@@ -1647,76 +1649,47 @@ impl Display for UpdateMessage {
 }
 
 /// A self-describing BGP path attribute
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PathAttribute {
-    /// Type encoding for the attribute
-    pub typ: PathAttributeType,
+pub use bgp_types::messages::PathAttribute;
 
-    /// Value of the attribute
-    pub value: PathAttributeValue,
+/// Free-fn replacement for `PathAttribute::to_wire`. Lives here because the
+/// `bgp::error::Error` return type prevents this from being an inherent
+/// method on the migrated type.
+pub fn path_attribute_to_wire(
+    attr: &PathAttribute,
+    extended_length: bool,
+) -> Result<Vec<u8>, Error> {
+    let mut buf = path_attribute_type_to_wire(&attr.typ);
+    let val = &path_attribute_value_to_wire(&attr.value)?;
+    if extended_length {
+        if val.len() > u16::MAX as usize {
+            return Err(Error::TooLarge("extended path attribute".into()));
+        }
+        let len = val.len() as u16;
+        buf.extend_from_slice(&len.to_be_bytes())
+    } else {
+        if val.len() > u8::MAX as usize {
+            return Err(Error::TooLarge("pathattribute".into()));
+        }
+        buf.push(val.len() as u8);
+    }
+    buf.extend_from_slice(val);
+    Ok(buf)
 }
 
-impl From<PathAttributeValue> for PathAttribute {
-    fn from(v: PathAttributeValue) -> Self {
-        let flags = match v {
-            PathAttributeValue::Origin(_) => path_attribute_flags::TRANSITIVE,
-            PathAttributeValue::AsPath(_) => path_attribute_flags::TRANSITIVE,
-            PathAttributeValue::As4Path(_) => path_attribute_flags::TRANSITIVE,
-            PathAttributeValue::NextHop(_) => path_attribute_flags::TRANSITIVE,
-            PathAttributeValue::LocalPref(_) => {
-                path_attribute_flags::TRANSITIVE
-            }
-            PathAttributeValue::Communities(_) => {
-                path_attribute_flags::OPTIONAL
-                    | path_attribute_flags::TRANSITIVE
-            }
-            _ => path_attribute_flags::OPTIONAL,
-        };
-        Self {
-            typ: PathAttributeType {
-                flags,
-                type_code: path_attribute_type_code_of(v.clone()),
-            },
-            value: v,
-        }
-    }
-}
-
-impl PathAttribute {
-    pub fn to_wire(&self, extended_length: bool) -> Result<Vec<u8>, Error> {
-        let mut buf = self.typ.to_wire();
-        let val = &self.value.to_wire()?;
-        if extended_length {
-            if val.len() > u16::MAX as usize {
-                return Err(Error::TooLarge("extended path attribute".into()));
-            }
-            let len = val.len() as u16;
-            buf.extend_from_slice(&len.to_be_bytes())
-        } else {
-            if val.len() > u8::MAX as usize {
-                return Err(Error::TooLarge("pathattribute".into()));
-            }
-            buf.push(val.len() as u8);
-        }
-        buf.extend_from_slice(val);
-        Ok(buf)
-    }
-
-    /// Parse a path attribute from bounded value bytes.
-    ///
-    /// The caller has already:
-    /// 1. Parsed the 2-byte type header (flags + type code)
-    /// 2. Validated the attribute flags via `validate_attribute_flags()`
-    /// 3. Parsed the length and extracted exactly `len` bytes
-    ///
-    /// This function parses only the attribute value from the bounded slice.
-    fn from_bytes(
-        typ: PathAttributeType,
-        value_bytes: &[u8],
-    ) -> Result<PathAttribute, UpdateParseErrorReason> {
-        let value = PathAttributeValue::from_wire(value_bytes, typ.type_code)?;
-        Ok(PathAttribute { typ, value })
-    }
+/// Parse a path attribute from bounded value bytes.
+///
+/// The caller has already:
+/// 1. Parsed the 2-byte type header (flags + type code)
+/// 2. Validated the attribute flags via `validate_attribute_flags()`
+/// 3. Parsed the length and extracted exactly `len` bytes
+///
+/// This function parses only the attribute value from the bounded slice.
+fn path_attribute_from_bytes(
+    typ: PathAttributeType,
+    value_bytes: &[u8],
+) -> Result<PathAttribute, UpdateParseErrorReason> {
+    let value = path_attribute_value_from_wire(value_bytes, typ.type_code)?;
+    Ok(PathAttribute { typ, value })
 }
 
 /// RFC 7606 Section 3(c): Validate attribute flags match expected values.
@@ -1780,607 +1753,343 @@ fn validate_attribute_flags(
     Ok(())
 }
 
-/// Type encoding for a path attribute.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PathAttributeType {
-    /// Flags may include, Optional, Transitive, Partial and Extended Length.
-    pub flags: u8,
+pub use bgp_types::messages::PathAttributeType;
 
-    /// Type code for the path attribute.
-    pub type_code: PathAttributeTypeCode,
+/// Free-fn replacement for the inherent `PathAttributeType::to_wire`. The
+/// matching `from_wire` is inlined in `UpdateMessage::path_attrs_from_wire`
+/// (which produces `UpdateParseError`, not `bgp::error::Error`).
+fn path_attribute_type_to_wire(typ: &PathAttributeType) -> Vec<u8> {
+    vec![typ.flags, typ.type_code.into()]
 }
 
-impl PathAttributeType {
-    pub fn to_wire(&self) -> Vec<u8> {
-        vec![self.flags, self.type_code.into()]
-    }
+/// Determine RFC 7606 action for errors on this attribute type.
+///
+/// RFC 7606 specifies different error handling actions for different
+/// attribute types:
+/// - Session Reset: Critical errors that prevent reliable parsing
+/// - Treat-as-withdraw: Errors in route-affecting attributes
+/// - Attribute Discard: Errors in informational-only attributes
+pub fn path_attribute_type_error_action(
+    typ: &PathAttributeType,
+) -> AttributeAction {
+    match typ.type_code {
+        // Well-known mandatory attributes (RFC 7606 Section 7.1-7.3)
+        PathAttributeTypeCode::Origin
+        | PathAttributeTypeCode::AsPath
+        | PathAttributeTypeCode::NextHop => AttributeAction::TreatAsWithdraw,
 
-    pub fn from_wire(input: &[u8]) -> Result<PathAttributeType, Error> {
-        let (input, flags) = parse_u8(input)?;
-        let (_, type_code) = parse_u8(input)?;
-        let type_code = PathAttributeTypeCode::try_from(type_code)?;
-        Ok(PathAttributeType { flags, type_code })
-    }
+        // MP-BGP attributes: SessionReset on any error because we never
+        // negotiate AFI/SAFIs we don't support, so receiving one we can't
+        // parse is a protocol violation.
+        PathAttributeTypeCode::MpReachNlri
+        | PathAttributeTypeCode::MpUnreachNlri => AttributeAction::SessionReset,
 
-    /// Determine RFC 7606 action for errors on this attribute type.
-    ///
-    /// RFC 7606 specifies different error handling actions for different attribute types:
-    /// - Session Reset: Critical errors that prevent reliable parsing
-    /// - Treat-as-withdraw: Errors in route-affecting attributes
-    /// - Attribute Discard: Errors in informational-only attributes
-    pub fn error_action(&self) -> AttributeAction {
-        match self.type_code {
-            // Well-known mandatory attributes (RFC 7606 Section 7.1-7.3)
-            PathAttributeTypeCode::Origin
-            | PathAttributeTypeCode::AsPath
-            | PathAttributeTypeCode::NextHop => {
-                AttributeAction::TreatAsWithdraw
-            }
-
-            // MP-BGP attributes: SessionReset on any error because we never
-            // negotiate AFI/SAFIs we don't support, so receiving one we can't
-            // parse is a protocol violation
-            PathAttributeTypeCode::MpReachNlri
-            | PathAttributeTypeCode::MpUnreachNlri => {
-                AttributeAction::SessionReset
-            }
-
-            // MULTI_EXIT_DISC (RFC 7606 Section 7.4): affects route selection
-            PathAttributeTypeCode::MultiExitDisc => {
-                AttributeAction::TreatAsWithdraw
-            }
-
-            // LOCAL_PREF (RFC 7606 Section 7.5): affects route selection
-            // Note: From eBGP peers this should be discarded, but that requires
-            // session context. For now, treat as withdraw for safety.
-            PathAttributeTypeCode::LocalPref => {
-                AttributeAction::TreatAsWithdraw
-            }
-
-            // Communities (RFC 7606 Section 7.8): affects policy/route selection
-            PathAttributeTypeCode::Communities => {
-                AttributeAction::TreatAsWithdraw
-            }
-
-            // AS4_PATH: Same as AS_PATH, affects loop detection and route selection
-            PathAttributeTypeCode::As4Path => AttributeAction::TreatAsWithdraw,
-
-            // ATOMIC_AGGREGATE (RFC 7606 Section 7.6): informational only
-            // AGGREGATOR (RFC 7606 Section 7.7): informational only
-            // AS4_AGGREGATOR: Same as AGGREGATOR
-            // These don't affect route selection, so discard is safe
-            PathAttributeTypeCode::AtomicAggregate
-            | PathAttributeTypeCode::Aggregator
-            | PathAttributeTypeCode::As4Aggregator => AttributeAction::Discard,
+        // MULTI_EXIT_DISC (RFC 7606 Section 7.4): affects route selection
+        PathAttributeTypeCode::MultiExitDisc => {
+            AttributeAction::TreatAsWithdraw
         }
+
+        // LOCAL_PREF (RFC 7606 Section 7.5): affects route selection.
+        // Note: From eBGP peers this should be discarded, but that requires
+        // session context. For now, treat as withdraw for safety.
+        PathAttributeTypeCode::LocalPref => AttributeAction::TreatAsWithdraw,
+
+        // Communities (RFC 7606 Section 7.8): affects policy/route selection
+        PathAttributeTypeCode::Communities => AttributeAction::TreatAsWithdraw,
+
+        // AS4_PATH: same as AS_PATH, affects loop detection and route
+        // selection.
+        PathAttributeTypeCode::As4Path => AttributeAction::TreatAsWithdraw,
+
+        // ATOMIC_AGGREGATE (RFC 7606 Section 7.6): informational only.
+        // AGGREGATOR (RFC 7606 Section 7.7): informational only.
+        // AS4_AGGREGATOR: same as AGGREGATOR.
+        // These don't affect route selection, so discard is safe.
+        PathAttributeTypeCode::AtomicAggregate
+        | PathAttributeTypeCode::Aggregator
+        | PathAttributeTypeCode::As4Aggregator => AttributeAction::Discard,
     }
 }
 
-pub mod path_attribute_flags {
-    /// Treat a path attribute as optional
-    pub const OPTIONAL: u8 = 0b10000000;
-    /// Path attribute must be redistributed
-    pub const TRANSITIVE: u8 = 0b01000000;
-    /// Treat path attribute as partial
-    pub const PARTIAL: u8 = 0b00100000;
-    /// If set the path attribute length is encoded in two octets instead of
-    /// one
-    pub const EXTENDED_LENGTH: u8 = 0b00010000;
-}
+pub use bgp_types::messages::path_attribute_flags;
 
 pub use bgp_types::messages::PathAttributeTypeCode;
 
-/// Free function replacement for `From<PathAttributeValue> for
-/// PathAttributeTypeCode`. See `message_type_of` for rationale.
-pub fn path_attribute_type_code_of(
-    v: PathAttributeValue,
-) -> PathAttributeTypeCode {
-    match v {
-        PathAttributeValue::Origin(_) => PathAttributeTypeCode::Origin,
-        PathAttributeValue::AsPath(_) => PathAttributeTypeCode::AsPath,
-        PathAttributeValue::NextHop(_) => PathAttributeTypeCode::NextHop,
-        PathAttributeValue::MultiExitDisc(_) => {
-            PathAttributeTypeCode::MultiExitDisc
-        }
-        PathAttributeValue::LocalPref(_) => PathAttributeTypeCode::LocalPref,
-        PathAttributeValue::Aggregator(_) => PathAttributeTypeCode::Aggregator,
-        PathAttributeValue::Communities(_) => {
-            PathAttributeTypeCode::Communities
-        }
-        PathAttributeValue::AtomicAggregate => {
-            PathAttributeTypeCode::AtomicAggregate
-        }
-        PathAttributeValue::MpReachNlri(_) => {
-            PathAttributeTypeCode::MpReachNlri
-        }
-        PathAttributeValue::MpUnreachNlri(_) => {
-            PathAttributeTypeCode::MpUnreachNlri
-        }
-        /* TODO according to RFC 4893 we do not have this as an explicit
-         * attribute type when 4-byte ASNs have been negotiated - but are
-         * there some circumstances when we'll need transitional mode?
-         */
-        //PathAttributeValue::As4Path(_) => PathAttributeTypeCode::As4Path,
-        PathAttributeValue::As4Path(_) => PathAttributeTypeCode::AsPath,
-        PathAttributeValue::As4Aggregator(_) => {
-            PathAttributeTypeCode::As4Aggregator
-        }
-    }
-}
+pub use bgp_types::messages::{Aggregator, As4Aggregator};
 
-/// AGGREGATOR path attribute (RFC 4271 §5.1.8)
-///
-/// The AGGREGATOR attribute is an optional transitive attribute that contains
-/// the AS number and IP address of the last BGP speaker that formed the aggregate route.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Aggregator {
-    /// Autonomous System Number that formed the aggregate (2-octet)
-    pub asn: u16,
-    /// IP address of the BGP speaker that formed the aggregate
-    pub address: Ipv4Addr,
-}
+pub use bgp_types::messages::PathAttributeValue;
 
-impl Display for Aggregator {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "AS{} ({})", self.asn, self.address)
-    }
-}
-
-impl Aggregator {
-    /// Parse AGGREGATOR from wire format (6 bytes: 2-byte ASN + 4-byte IP)
-    pub fn from_wire(input: &[u8]) -> Result<Self, String> {
-        if input.len() != 6 {
-            return Err(format!(
-                "AGGREGATOR attribute length must be 6, got {}",
-                input.len()
-            ));
-        }
-        let asn = u16::from_be_bytes([input[0], input[1]]);
-        let address = Ipv4Addr::new(input[2], input[3], input[4], input[5]);
-        Ok(Aggregator { asn, address })
-    }
-
-    /// Serialize AGGREGATOR to wire format
-    pub fn to_wire(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(6);
-        buf.extend_from_slice(&self.asn.to_be_bytes());
-        buf.extend_from_slice(&self.address.octets());
-        buf
-    }
-
-    /// Serialize AGGREGATOR to fixed-size byte array
-    pub fn to_bytes(&self) -> [u8; 6] {
-        let asn_bytes = self.asn.to_be_bytes();
-        let addr_bytes = self.address.octets();
-        [
-            asn_bytes[0],
-            asn_bytes[1],
-            addr_bytes[0],
-            addr_bytes[1],
-            addr_bytes[2],
-            addr_bytes[3],
-        ]
-    }
-}
-
-/// AS4_AGGREGATOR path attribute (RFC 6793)
-///
-/// The AS4_AGGREGATOR attribute is an optional transitive attribute with the same
-/// semantics as AGGREGATOR, but carries a 4-octet AS number instead of 2-octet.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-pub struct As4Aggregator {
-    /// Autonomous System Number that formed the aggregate (4-octet)
-    pub asn: u32,
-    /// IP address of the BGP speaker that formed the aggregate
-    pub address: Ipv4Addr,
-}
-
-impl Display for As4Aggregator {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "AS{} ({})", self.asn, self.address)
-    }
-}
-
-impl As4Aggregator {
-    /// Parse AS4_AGGREGATOR from wire format (8 bytes: 4-byte ASN + 4-byte IP)
-    pub fn from_wire(input: &[u8]) -> Result<Self, String> {
-        if input.len() != 8 {
-            return Err(format!(
-                "AS4_AGGREGATOR attribute length must be 8, got {}",
-                input.len()
-            ));
-        }
-        let asn = u32::from_be_bytes([input[0], input[1], input[2], input[3]]);
-        let address = Ipv4Addr::new(input[4], input[5], input[6], input[7]);
-        Ok(As4Aggregator { asn, address })
-    }
-
-    /// Serialize AS4_AGGREGATOR to wire format
-    pub fn to_wire(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(8);
-        buf.extend_from_slice(&self.asn.to_be_bytes());
-        buf.extend_from_slice(&self.address.octets());
-        buf
-    }
-
-    /// Serialize AS4_AGGREGATOR to fixed-size byte array
-    pub fn to_bytes(&self) -> [u8; 8] {
-        let asn_bytes = self.asn.to_be_bytes();
-        let addr_bytes = self.address.octets();
-        [
-            asn_bytes[0],
-            asn_bytes[1],
-            asn_bytes[2],
-            asn_bytes[3],
-            addr_bytes[0],
-            addr_bytes[1],
-            addr_bytes[2],
-            addr_bytes[3],
-        ]
-    }
-}
-
-/// The value encoding of a path attribute.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PathAttributeValue {
-    /// The type of origin associated with a path
-    Origin(PathOrigin),
-    /* TODO according to RFC 4893 we do not have this as an explicit attribute
-     * type when 4-byte ASNs have been negotiated - but are there some
-     * circumstances when we'll need transitional mode?
-     */
-    /// The AS set associated with a path
-    AsPath(Vec<As4PathSegment>),
-    /// The nexthop associated with a path (IPv4 only for traditional BGP)
-    NextHop(Ipv4Addr),
-    /// A metric used for external (inter-AS) links to discriminate among
-    /// multiple entry or exit points.
-    MultiExitDisc(u32),
-    /// Local pref is included in update messages sent to internal peers and
-    /// indicates a degree of preference.
-    LocalPref(u32),
-    /// AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (2-octet ASN)
-    Aggregator(Aggregator),
-    /// Indicates communities associated with a path.
-    Communities(Vec<Community>),
-    /// Indicates this route was formed via aggregation (RFC 4271 §5.1.7)
-    AtomicAggregate,
-    /// The 4-byte encoded AS set associated with a path
-    As4Path(Vec<As4PathSegment>),
-    /// AS4_AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (4-octet ASN)
-    As4Aggregator(As4Aggregator),
-    /// Carries reachable MP-BGP NLRI and Next-hop (advertisement).
-    MpReachNlri(MpReachNlri),
-    /// Carries unreachable MP-BGP NLRI (withdrawal).
-    MpUnreachNlri(MpUnreachNlri),
-}
-
-impl PathAttributeValue {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        match self {
-            Self::Origin(x) => Ok(vec![(*x).into()]),
-            Self::AsPath(segments) => {
-                let mut buf = Vec::new();
-                for s in segments {
-                    buf.push(s.typ.into());
-                    buf.push(s.value.len() as u8);
-                    for v in &s.value {
-                        buf.extend_from_slice(&v.to_be_bytes());
-                    }
-                }
-                Ok(buf)
-            }
-            Self::NextHop(addr) => Ok(addr.octets().into()),
-            Self::As4Path(segments) => {
-                let mut buf = Vec::new();
-                for s in segments {
-                    buf.extend_from_slice(&s.to_wire()?);
-                }
-                Ok(buf)
-            }
-            Self::Communities(communities) => {
-                let mut buf = Vec::new();
-                for community in communities {
-                    buf.extend_from_slice(&u32::from(*community).to_be_bytes());
-                }
-                Ok(buf)
-            }
-            Self::LocalPref(value) => Ok(value.to_be_bytes().into()),
-            Self::MultiExitDisc(value) => Ok(value.to_be_bytes().into()),
-            Self::Aggregator(agg) => Ok(agg.to_wire()),
-            Self::As4Aggregator(agg) => Ok(agg.to_wire()),
-            Self::AtomicAggregate => Ok(Vec::new()), // Zero-length attribute
-            Self::MpReachNlri(mp) => Ok(mp.to_wire()),
-            Self::MpUnreachNlri(mp) => mp.to_wire(),
-        }
-    }
-
-    pub fn from_wire(
-        mut input: &[u8],
-        type_code: PathAttributeTypeCode,
-    ) -> Result<PathAttributeValue, UpdateParseErrorReason> {
-        // Helper type aliases and functions for nom parsers
-        type NomErr<'a> = nom::error::Error<&'a [u8]>;
-        type ParseRes<'a, T> =
-            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
-
-        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
-            be_u8(input)
-        }
-
-        fn parse_u32<'a>(input: &'a [u8]) -> ParseRes<'a, u32> {
-            be_u32(input)
-        }
-
-        fn take_bytes<'a>(input: &'a [u8], n: usize) -> ParseRes<'a, &'a [u8]> {
-            take(n)(input)
-        }
-
-        // RFC 7606 §3: Zero-length attributes only valid for AS_PATH and ATOMIC_AGGREGATE
-        if input.is_empty() {
-            match type_code {
-                PathAttributeTypeCode::AsPath
-                | PathAttributeTypeCode::AtomicAggregate => {
-                    // These attributes are allowed to be zero-length
-                }
-                _ => {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code,
-                        expected: 1, // Most attributes require at least 1 byte
-                        got: 0,
-                    });
+/// Free-fn replacement for `PathAttributeValue::to_wire`. Lives here because
+/// some sub-cases (`As4PathSegment::to_wire`, `MpUnreachNlri::to_wire`) emit
+/// `bgp::error::Error`, which is bgp-local.
+pub fn path_attribute_value_to_wire(
+    value: &PathAttributeValue,
+) -> Result<Vec<u8>, Error> {
+    match value {
+        PathAttributeValue::Origin(x) => Ok(vec![(*x).into()]),
+        PathAttributeValue::AsPath(segments) => {
+            let mut buf = Vec::new();
+            for s in segments {
+                buf.push(s.typ.into());
+                buf.push(s.value.len() as u8);
+                for v in &s.value {
+                    buf.extend_from_slice(&v.to_be_bytes());
                 }
             }
+            Ok(buf)
         }
+        PathAttributeValue::NextHop(addr) => Ok(addr.octets().into()),
+        PathAttributeValue::As4Path(segments) => {
+            let mut buf = Vec::new();
+            for s in segments {
+                buf.extend_from_slice(&as4_path_segment_to_wire(s)?);
+            }
+            Ok(buf)
+        }
+        PathAttributeValue::Communities(communities) => {
+            let mut buf = Vec::new();
+            for community in communities {
+                buf.extend_from_slice(&u32::from(*community).to_be_bytes());
+            }
+            Ok(buf)
+        }
+        PathAttributeValue::LocalPref(v) => Ok(v.to_be_bytes().into()),
+        PathAttributeValue::MultiExitDisc(v) => Ok(v.to_be_bytes().into()),
+        PathAttributeValue::Aggregator(agg) => Ok(agg.to_wire()),
+        PathAttributeValue::As4Aggregator(agg) => Ok(agg.to_wire()),
+        PathAttributeValue::AtomicAggregate => Ok(Vec::new()),
+        PathAttributeValue::MpReachNlri(mp) => Ok(mp_reach_nlri_to_wire(mp)),
+        PathAttributeValue::MpUnreachNlri(mp) => mp_unreach_nlri_to_wire(mp),
+    }
+}
 
+pub fn path_attribute_value_from_wire(
+    mut input: &[u8],
+    type_code: PathAttributeTypeCode,
+) -> Result<PathAttributeValue, UpdateParseErrorReason> {
+    // Helper type aliases and functions for nom parsers
+    type NomErr<'a> = nom::error::Error<&'a [u8]>;
+    type ParseRes<'a, T> =
+        std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
+
+    fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+        be_u8(input)
+    }
+
+    fn parse_u32<'a>(input: &'a [u8]) -> ParseRes<'a, u32> {
+        be_u32(input)
+    }
+
+    fn take_bytes<'a>(input: &'a [u8], n: usize) -> ParseRes<'a, &'a [u8]> {
+        take(n)(input)
+    }
+
+    // RFC 7606 §3: Zero-length attributes only valid for AS_PATH and ATOMIC_AGGREGATE
+    if input.is_empty() {
         match type_code {
-            PathAttributeTypeCode::Origin => {
-                // RFC 4271 §5.1.2: ORIGIN must be exactly 1 octet
-                if input.len() != 1 {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code: PathAttributeTypeCode::Origin,
-                        expected: 1,
-                        got: input.len(),
-                    });
-                }
-                let (_input, origin) = parse_u8(input).map_err(|e| {
-                    UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code.into()),
-                        detail: format!("{e}"),
-                    }
-                })?;
-                PathOrigin::try_from(origin)
-                    .map(PathAttributeValue::Origin)
-                    .map_err(|_| UpdateParseErrorReason::InvalidOriginValue {
-                        value: origin,
-                    })
+            PathAttributeTypeCode::AsPath
+            | PathAttributeTypeCode::AtomicAggregate => {
+                // These attributes are allowed to be zero-length
             }
-            PathAttributeTypeCode::AsPath => {
-                let mut segments = Vec::new();
-                loop {
-                    if input.is_empty() {
-                        break;
-                    }
-                    let (out, seg) =
-                        As4PathSegment::from_wire(input).map_err(|e| {
-                            UpdateParseErrorReason::MalformedAsPath {
-                                detail: format!("{e}"),
-                            }
-                        })?;
-                    segments.push(seg);
-                    input = out;
-                }
-                Ok(PathAttributeValue::As4Path(segments))
-            }
-            PathAttributeTypeCode::NextHop => {
-                // For IPv4 unicast, the length of this attribute MUST be 4 octets.
-                if input.len() != 4 {
-                    return Err(UpdateParseErrorReason::MalformedNextHop {
-                        expected: 4,
-                        got: input.len(),
-                    });
-                }
-                let (_input, b) = take_bytes(input, 4).map_err(|e| {
-                    UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code.into()),
-                        detail: format!("{e}"),
-                    }
-                })?;
-                Ok(PathAttributeValue::NextHop(Ipv4Addr::new(
-                    b[0], b[1], b[2], b[3],
-                )))
-            }
-            PathAttributeTypeCode::MultiExitDisc => {
-                // RFC 4271 §5.1.5: MULTI_EXIT_DISC must be exactly 4 octets
-                if input.len() != 4 {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code: PathAttributeTypeCode::MultiExitDisc,
-                        expected: 4,
-                        got: input.len(),
-                    });
-                }
-                let (_input, v) = parse_u32(input).map_err(|e| {
-                    UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code.into()),
-                        detail: format!("{e}"),
-                    }
-                })?;
-                Ok(PathAttributeValue::MultiExitDisc(v))
-            }
-            PathAttributeTypeCode::As4Path => {
-                let mut segments = Vec::new();
-                loop {
-                    if input.is_empty() {
-                        break;
-                    }
-                    let (out, seg) =
-                        As4PathSegment::from_wire(input).map_err(|e| {
-                            UpdateParseErrorReason::MalformedAsPath {
-                                detail: format!("{e}"),
-                            }
-                        })?;
-                    segments.push(seg);
-                    input = out;
-                }
-                Ok(PathAttributeValue::As4Path(segments))
-            }
-            PathAttributeTypeCode::Communities => {
-                // RFC 4271 §5.1.9 (via RFC 1997): COMMUNITIES length must be multiple of 4
-                if !input.len().is_multiple_of(4) {
-                    return Err(UpdateParseErrorReason::Other {
-                        detail: format!(
-                            "COMMUNITIES attribute length must be multiple of 4, got {}",
-                            input.len()
-                        ),
-                    });
-                }
-                let mut communities = Vec::new();
-                loop {
-                    if input.is_empty() {
-                        break;
-                    }
-                    let (out, v) =
-                        be_u32::<_, NomErr<'_>>(input).map_err(|e| {
-                            UpdateParseErrorReason::AttributeParseError {
-                                type_code: Some(type_code.into()),
-                                detail: format!("{e}"),
-                            }
-                        })?;
-                    communities.push(Community::from(v));
-                    input = out;
-                }
-                Ok(PathAttributeValue::Communities(communities))
-            }
-            PathAttributeTypeCode::LocalPref => {
-                // RFC 4271 §5.1.6: LOCAL_PREF must be exactly 4 octets
-                if input.len() != 4 {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code: PathAttributeTypeCode::LocalPref,
-                        expected: 4,
-                        got: input.len(),
-                    });
-                }
-                let (_input, v) = parse_u32(input).map_err(|e| {
-                    UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code.into()),
-                        detail: format!("{e}"),
-                    }
-                })?;
-                Ok(PathAttributeValue::LocalPref(v))
-            }
-            PathAttributeTypeCode::MpReachNlri => {
-                let (_remaining, mp_reach) = MpReachNlri::from_wire(input)?;
-                Ok(PathAttributeValue::MpReachNlri(mp_reach))
-            }
-            PathAttributeTypeCode::MpUnreachNlri => {
-                let (_remaining, mp_unreach) = MpUnreachNlri::from_wire(input)?;
-                Ok(PathAttributeValue::MpUnreachNlri(mp_unreach))
-            }
-            PathAttributeTypeCode::AtomicAggregate => {
-                // RFC 4271 §5.1.7: ATOMIC_AGGREGATE must be zero-length
-                // (This is also checked earlier at function entry for zero-length validation)
-                if !input.is_empty() {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code: PathAttributeTypeCode::AtomicAggregate,
-                        expected: 0,
-                        got: input.len(),
-                    });
-                }
-                Ok(PathAttributeValue::AtomicAggregate)
-            }
-            PathAttributeTypeCode::Aggregator => {
-                // RFC 4271 §5.1.8: AGGREGATOR must be exactly 6 octets
-                // (2 octets AS number + 4 octets IP address)
-                if input.len() != 6 {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code: PathAttributeTypeCode::Aggregator,
-                        expected: 6,
-                        got: input.len(),
-                    });
-                }
-                let agg = Aggregator::from_wire(input).map_err(|e| {
-                    UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code.into()),
-                        detail: e,
-                    }
-                })?;
-                Ok(PathAttributeValue::Aggregator(agg))
-            }
-            PathAttributeTypeCode::As4Aggregator => {
-                // RFC 6793: AS4_AGGREGATOR must be exactly 8 octets
-                // (4 octets AS number + 4 octets IP address)
-                if input.len() != 8 {
-                    return Err(UpdateParseErrorReason::AttributeLengthError {
-                        type_code: PathAttributeTypeCode::As4Aggregator,
-                        expected: 8,
-                        got: input.len(),
-                    });
-                }
-                let agg = As4Aggregator::from_wire(input).map_err(|e| {
-                    UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code.into()),
-                        detail: e,
-                    }
-                })?;
-                Ok(PathAttributeValue::As4Aggregator(agg))
+            _ => {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code,
+                    expected: 1, // Most attributes require at least 1 byte
+                    got: 0,
+                });
             }
         }
     }
-}
 
-impl Display for PathAttributeValue {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            PathAttributeValue::Origin(po) => write!(f, "origin: {po}"),
-            PathAttributeValue::AsPath(path_segs) => {
-                let path = path_segs
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                write!(f, "as-path: [{path}]")
+    match type_code {
+        PathAttributeTypeCode::Origin => {
+            // RFC 4271 §5.1.2: ORIGIN must be exactly 1 octet
+            if input.len() != 1 {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code: PathAttributeTypeCode::Origin,
+                    expected: 1,
+                    got: input.len(),
+                });
             }
-            PathAttributeValue::NextHop(nh) => write!(f, "next-hop: {nh}"),
-            PathAttributeValue::MultiExitDisc(med) => write!(f, "med: {med}"),
-            PathAttributeValue::LocalPref(pref) => {
-                write!(f, "local-pref: {pref}")
+            let (_input, origin) = parse_u8(input).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: format!("{e}"),
+                }
+            })?;
+            PathOrigin::try_from(origin)
+                .map(PathAttributeValue::Origin)
+                .map_err(|_| UpdateParseErrorReason::InvalidOriginValue {
+                    value: origin,
+                })
+        }
+        PathAttributeTypeCode::AsPath => {
+            let mut segments = Vec::new();
+            loop {
+                if input.is_empty() {
+                    break;
+                }
+                let (out, seg) =
+                    as4_path_segment_from_wire(input).map_err(|e| {
+                        UpdateParseErrorReason::MalformedAsPath {
+                            detail: format!("{e}"),
+                        }
+                    })?;
+                segments.push(seg);
+                input = out;
             }
-            PathAttributeValue::Aggregator(agg) => {
-                write!(f, "aggregator: {}", agg)
+            Ok(PathAttributeValue::As4Path(segments))
+        }
+        PathAttributeTypeCode::NextHop => {
+            // For IPv4 unicast, the length of this attribute MUST be 4 octets.
+            if input.len() != 4 {
+                return Err(UpdateParseErrorReason::MalformedNextHop {
+                    expected: 4,
+                    got: input.len(),
+                });
             }
-            PathAttributeValue::Communities(comms) => {
-                let comms = comms
-                    .iter()
-                    .map(|c| u32::from(*c).to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                write!(f, "communities: [{comms}]")
+            let (_input, b) = take_bytes(input, 4).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: format!("{e}"),
+                }
+            })?;
+            Ok(PathAttributeValue::NextHop(Ipv4Addr::new(
+                b[0], b[1], b[2], b[3],
+            )))
+        }
+        PathAttributeTypeCode::MultiExitDisc => {
+            // RFC 4271 §5.1.5: MULTI_EXIT_DISC must be exactly 4 octets
+            if input.len() != 4 {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code: PathAttributeTypeCode::MultiExitDisc,
+                    expected: 4,
+                    got: input.len(),
+                });
             }
-            PathAttributeValue::AtomicAggregate => {
-                write!(f, "atomic-aggregate")
+            let (_input, v) = parse_u32(input).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: format!("{e}"),
+                }
+            })?;
+            Ok(PathAttributeValue::MultiExitDisc(v))
+        }
+        PathAttributeTypeCode::As4Path => {
+            let mut segments = Vec::new();
+            loop {
+                if input.is_empty() {
+                    break;
+                }
+                let (out, seg) =
+                    as4_path_segment_from_wire(input).map_err(|e| {
+                        UpdateParseErrorReason::MalformedAsPath {
+                            detail: format!("{e}"),
+                        }
+                    })?;
+                segments.push(seg);
+                input = out;
             }
-            PathAttributeValue::MpReachNlri(reach) => {
-                write!(f, "mp-reach-nlri: {}", reach)
+            Ok(PathAttributeValue::As4Path(segments))
+        }
+        PathAttributeTypeCode::Communities => {
+            // RFC 4271 §5.1.9 (via RFC 1997): COMMUNITIES length must be multiple of 4
+            if !input.len().is_multiple_of(4) {
+                return Err(UpdateParseErrorReason::Other {
+                    detail: format!(
+                        "COMMUNITIES attribute length must be multiple of 4, got {}",
+                        input.len()
+                    ),
+                });
             }
-            PathAttributeValue::MpUnreachNlri(unreach) => {
-                write!(f, "mp-unreach-nlri: {}", unreach)
+            let mut communities = Vec::new();
+            loop {
+                if input.is_empty() {
+                    break;
+                }
+                let (out, v) = be_u32::<_, NomErr<'_>>(input).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code.into()),
+                        detail: format!("{e}"),
+                    }
+                })?;
+                communities.push(Community::from(v));
+                input = out;
             }
-            PathAttributeValue::As4Path(path_segs) => {
-                let path = path_segs
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                write!(f, "as4-path: [{path}]")
+            Ok(PathAttributeValue::Communities(communities))
+        }
+        PathAttributeTypeCode::LocalPref => {
+            // RFC 4271 §5.1.6: LOCAL_PREF must be exactly 4 octets
+            if input.len() != 4 {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code: PathAttributeTypeCode::LocalPref,
+                    expected: 4,
+                    got: input.len(),
+                });
             }
-            PathAttributeValue::As4Aggregator(agg) => {
-                write!(f, "as4-aggregator: {}", agg)
+            let (_input, v) = parse_u32(input).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: format!("{e}"),
+                }
+            })?;
+            Ok(PathAttributeValue::LocalPref(v))
+        }
+        PathAttributeTypeCode::MpReachNlri => {
+            let (_remaining, mp_reach) = mp_reach_nlri_from_wire(input)?;
+            Ok(PathAttributeValue::MpReachNlri(mp_reach))
+        }
+        PathAttributeTypeCode::MpUnreachNlri => {
+            let (_remaining, mp_unreach) = mp_unreach_nlri_from_wire(input)?;
+            Ok(PathAttributeValue::MpUnreachNlri(mp_unreach))
+        }
+        PathAttributeTypeCode::AtomicAggregate => {
+            // RFC 4271 §5.1.7: ATOMIC_AGGREGATE must be zero-length
+            // (This is also checked earlier at function entry for zero-length validation)
+            if !input.is_empty() {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code: PathAttributeTypeCode::AtomicAggregate,
+                    expected: 0,
+                    got: input.len(),
+                });
             }
+            Ok(PathAttributeValue::AtomicAggregate)
+        }
+        PathAttributeTypeCode::Aggregator => {
+            // RFC 4271 §5.1.8: AGGREGATOR must be exactly 6 octets
+            // (2 octets AS number + 4 octets IP address)
+            if input.len() != 6 {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code: PathAttributeTypeCode::Aggregator,
+                    expected: 6,
+                    got: input.len(),
+                });
+            }
+            let agg = Aggregator::from_wire(input).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: e,
+                }
+            })?;
+            Ok(PathAttributeValue::Aggregator(agg))
+        }
+        PathAttributeTypeCode::As4Aggregator => {
+            // RFC 6793: AS4_AGGREGATOR must be exactly 8 octets
+            // (4 octets AS number + 4 octets IP address)
+            if input.len() != 8 {
+                return Err(UpdateParseErrorReason::AttributeLengthError {
+                    type_code: PathAttributeTypeCode::As4Aggregator,
+                    expected: 8,
+                    got: input.len(),
+                });
+            }
+            let agg = As4Aggregator::from_wire(input).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: e,
+                }
+            })?;
+            Ok(PathAttributeValue::As4Aggregator(agg))
         }
     }
 }
@@ -2399,88 +2108,57 @@ pub struct AsPathSegment {
     pub value: Vec<u16>,
 }
 
-// A self describing segment found in path sets and sequences of 4-byte ASNs.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct As4PathSegment {
-    // Indicates if this segment is a part of a set or sequence.
-    pub typ: AsPathType,
-    // 4 byte AS numbers in the segment.
-    pub value: Vec<u32>,
+pub use bgp_types::messages::As4PathSegment;
+
+/// Free-fn replacement for `As4PathSegment::to_wire`. Returns
+/// `bgp::error::Error` (specifically `Error::TooLarge`).
+pub fn as4_path_segment_to_wire(
+    seg: &As4PathSegment,
+) -> Result<Vec<u8>, Error> {
+    if seg.value.len() > u8::MAX as usize {
+        return Err(Error::TooLarge("AS4 path segment".into()));
+    }
+    let mut buf = vec![seg.typ.into(), seg.value.len() as u8];
+    for v in &seg.value {
+        buf.extend_from_slice(&v.to_be_bytes());
+    }
+    Ok(buf)
 }
 
-impl As4PathSegment {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        if self.value.len() > u8::MAX as usize {
-            return Err(Error::TooLarge("AS4 path segment".into()));
-        }
-        let mut buf = vec![self.typ.into(), self.value.len() as u8];
-        for v in &self.value {
-            buf.extend_from_slice(&v.to_be_bytes());
-        }
-        Ok(buf)
+pub fn as4_path_segment_from_wire(
+    input: &[u8],
+) -> Result<(&[u8], As4PathSegment), Error> {
+    let (input, typ) = parse_u8(input)?;
+    let typ = AsPathType::try_from(typ)?;
+
+    let (input, len_u8) = parse_u8(input)?;
+
+    // RFC 4271 §5.1.3: check for overflow when calculating byte length from
+    // segment count. Each AS number is 4 bytes, so byte_len = len_u8 * 4.
+    // Note: this is technically safe (max 255 * 4 = 1020), but we validate
+    // for defense-in-depth.
+    let byte_len = usize::from(len_u8).checked_mul(4).ok_or_else(|| {
+        Error::TooLarge("AS path segment length calculation overflow".into())
+    })?;
+
+    let mut segment = As4PathSegment {
+        typ,
+        value: Vec::new(),
+    };
+    if byte_len == 0 {
+        return Ok((input, segment));
     }
 
-    pub fn from_wire(input: &[u8]) -> Result<(&[u8], As4PathSegment), Error> {
-        let (input, typ) = parse_u8(input)?;
-        let typ = AsPathType::try_from(typ)?;
-
-        let (input, len_u8) = parse_u8(input)?;
-
-        // RFC 4271 §5.1.3: Check for overflow when calculating byte length from segment count
-        // Each AS number is 4 bytes, so byte_len = len_u8 * 4
-        // Note: This is technically safe (max 255 * 4 = 1020), but we validate for defense-in-depth
-        let byte_len = usize::from(len_u8).checked_mul(4).ok_or_else(|| {
-            Error::TooLarge(
-                "AS path segment length calculation overflow".into(),
-            )
-        })?;
-
-        let mut segment = As4PathSegment {
-            typ,
-            value: Vec::new(),
-        };
-        if byte_len == 0 {
-            return Ok((input, segment));
+    let (input, mut value_input) = take(byte_len)(input)?;
+    loop {
+        if value_input.is_empty() {
+            break;
         }
-
-        let (input, mut value_input) = take(byte_len)(input)?;
-        loop {
-            if value_input.is_empty() {
-                break;
-            }
-            let (out, value) = be_u32(value_input)?;
-            segment.value.push(value);
-            value_input = out;
-        }
-        Ok((input, segment))
+        let (out, value) = be_u32(value_input)?;
+        segment.value.push(value);
+        value_input = out;
     }
-}
-
-impl Display for As4PathSegment {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.typ {
-            // Wrap an AS-SET in curly braces
-            AsPathType::AsSet => {
-                let set = self
-                    .value
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                write!(f, "{{ {set} }}")
-            }
-            // Wrap an AS-SEQUENCE in nothing
-            AsPathType::AsSequence => {
-                let seq = self
-                    .value
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                write!(f, "{seq}")
-            }
-        }
-    }
+    Ok((input, segment))
 }
 
 pub use bgp_types::messages::AsPathType;
@@ -2515,509 +2193,265 @@ fn prefixes6_from_wire(
     Ok(result)
 }
 
-/// MP_REACH_NLRI path attribute
-///
-/// Each variant represents a specific AFI+SAFI combination, providing
-/// compile-time guarantees about the address family of routes being announced.
-///
-/// ```text
-/// 3.  Multiprotocol Reachable NLRI - MP_REACH_NLRI (Type Code 14):
-///
-///    This is an optional non-transitive attribute that can be used for the
-///    following purposes:
-///
-///    (a) to advertise a feasible route to a peer
-///
-///    (b) to permit a router to advertise the Network Layer address of the
-///        router that should be used as the next hop to the destinations
-///        listed in the Network Layer Reachability Information field of the
-///        MP_NLRI attribute.
-///
-///    The attribute is encoded as shown below:
-///
-///    +---------------------------------------------------------+
-///    | Address Family Identifier (2 octets)                    |
-///    +---------------------------------------------------------+
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "afi_safi", rename_all = "snake_case")]
-pub enum MpReachNlri {
-    /// IPv4 Unicast routes (AFI=1, SAFI=1)
-    Ipv4Unicast(MpReachIpv4Unicast),
-    /// IPv6 Unicast routes (AFI=2, SAFI=1)
-    Ipv6Unicast(MpReachIpv6Unicast),
+pub use bgp_types::messages::{
+    MpReachIpv4Unicast, MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
+    MpUnreachIpv6Unicast, MpUnreachNlri,
+};
+
+/// Free-fn replacement for `MpReachNlri::to_wire`. Stays in `bgp` because it
+/// calls the bgp-local `BgpWireFormat<Prefix4>` impl on `Prefix4`/`Prefix6`.
+pub fn mp_reach_nlri_to_wire(mp: &MpReachNlri) -> Vec<u8> {
+    let mut buf = Vec::new();
+
+    // AFI (2 bytes)
+    buf.extend_from_slice(&u16::from(mp.afi()).to_be_bytes());
+
+    // SAFI (1 byte)
+    buf.push(mp.safi().into());
+
+    // Next-hop
+    let nh = mp.nexthop();
+    buf.push(nh.byte_len()); // Next-hop length
+    buf.extend_from_slice(&nh.to_bytes());
+
+    // Reserved (1 byte from RFC 4760 §3, historically "Number of SNPAs")
+    let reserved = match mp {
+        MpReachNlri::Ipv4Unicast(inner) => inner.reserved,
+        MpReachNlri::Ipv6Unicast(inner) => inner.reserved,
+    };
+    buf.push(reserved);
+
+    // NLRI
+    match mp {
+        MpReachNlri::Ipv4Unicast(inner) => {
+            for prefix in &inner.nlri {
+                buf.extend_from_slice(&prefix.to_wire());
+            }
+        }
+        MpReachNlri::Ipv6Unicast(inner) => {
+            for prefix in &inner.nlri {
+                buf.extend_from_slice(&prefix.to_wire());
+            }
+        }
+    }
+
+    buf
 }
 
-/// IPv4 Unicast MP_REACH_NLRI contents.
-///
-/// Contains the next-hop and NLRI for IPv4 unicast route announcements
-/// carried via MP-BGP (RFC 4760).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct MpReachIpv4Unicast {
-    /// Next-hop for IPv4 routes.
-    ///
-    /// Currently must be `BgpNexthop::Ipv4`, but will support IPv6 nexthops
-    /// when extended next-hop capability (RFC 8950) is implemented.
-    pub nexthop: BgpNexthop,
-    /// Reserved byte from RFC 4760 §3 (historically "Number of SNPAs" in RFC 2858).
-    /// MUST be 0 per RFC 4760, but MUST be ignored by receiver.
-    /// Stored for validation logging in session layer.
-    /// This field is positioned before NLRI to match the wire format encoding.
-    pub reserved: u8,
-    /// IPv4 prefixes being announced
-    pub nlri: Vec<Prefix4>,
-}
+/// Free-fn replacement for `MpReachNlri::from_wire`. Stays in `bgp` because
+/// it produces `UpdateParseErrorReason`.
+pub fn mp_reach_nlri_from_wire(
+    input: &[u8],
+) -> Result<(&[u8], MpReachNlri), UpdateParseErrorReason> {
+    type NomErr<'a> = nom::error::Error<&'a [u8]>;
+    type ParseRes<'a, T> =
+        std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
 
-/// IPv6 Unicast MP_REACH_NLRI contents.
-///
-/// Contains the next-hop and NLRI for IPv6 unicast route announcements
-/// carried via MP-BGP (RFC 4760).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct MpReachIpv6Unicast {
-    /// Next-hop for IPv6 routes.
-    ///
-    /// Can be `BgpNexthop::Ipv6Single` (16 bytes) or `BgpNexthop::Ipv6Double`
-    /// (32 bytes with link-local address).
-    pub nexthop: BgpNexthop,
-    /// Reserved byte from RFC 4760 §3 (historically "Number of SNPAs" in RFC 2858).
-    /// MUST be 0 per RFC 4760, but MUST be ignored by receiver.
-    /// Stored for validation logging in session layer.
-    /// This field is positioned before NLRI to match the wire format encoding.
-    pub reserved: u8,
-    /// IPv6 prefixes being announced
-    pub nlri: Vec<Prefix6>,
-}
+    fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
+        be_u16(input)
+    }
 
-impl MpReachNlri {
-    /// Returns the AFI for this MP_REACH_NLRI.
-    pub fn afi(&self) -> Afi {
-        match self {
-            Self::Ipv4Unicast(_) => Afi::Ipv4,
-            Self::Ipv6Unicast(_) => Afi::Ipv6,
+    fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+        be_u8(input)
+    }
+
+    // Parse AFI (2 bytes)
+    let (input, afi_raw) = parse_u16(input).map_err(|e| {
+        UpdateParseErrorReason::AttributeParseError {
+            type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
+            detail: format!("failed to parse AFI: {e}"),
         }
-    }
-
-    /// Returns the SAFI for this MP_REACH_NLRI (always Unicast).
-    pub fn safi(&self) -> Safi {
-        Safi::Unicast
-    }
-
-    /// Returns the next-hop for this MP_REACH_NLRI.
-    pub fn nexthop(&self) -> &BgpNexthop {
-        match self {
-            Self::Ipv4Unicast(inner) => &inner.nexthop,
-            Self::Ipv6Unicast(inner) => &inner.nexthop,
+    })?;
+    let afi = Afi::try_from(afi_raw).map_err(|_| {
+        UpdateParseErrorReason::UnsupportedAfiSafi {
+            afi: afi_raw,
+            safi: 0,
         }
-    }
+    })?;
 
-    /// Returns true if there are no prefixes in this MP_REACH_NLRI.
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Ipv4Unicast(inner) => inner.nlri.is_empty(),
-            Self::Ipv6Unicast(inner) => inner.nlri.is_empty(),
+    // Parse SAFI (1 byte)
+    let (input, safi_raw) = parse_u8(input).map_err(|e| {
+        UpdateParseErrorReason::AttributeParseError {
+            type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
+            detail: format!("failed to parse SAFI: {e}"),
         }
+    })?;
+    if Safi::try_from(safi_raw).is_err() {
+        return Err(UpdateParseErrorReason::UnsupportedAfiSafi {
+            afi: afi_raw,
+            safi: safi_raw,
+        });
     }
 
-    /// Returns the number of prefixes in this MP_REACH_NLRI.
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Ipv4Unicast(inner) => inner.nlri.len(),
-            Self::Ipv6Unicast(inner) => inner.nlri.len(),
+    // Parse Next-hop Length (1 byte)
+    let (input, nh_len) = parse_u8(input).map_err(|e| {
+        UpdateParseErrorReason::AttributeParseError {
+            type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
+            detail: format!("failed to parse next-hop length: {e}"),
         }
-    }
+    })?;
 
-    /// Create an IPv4 Unicast MP_REACH_NLRI.
-    pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix4>) -> Self {
-        Self::Ipv4Unicast(MpReachIpv4Unicast {
-            nexthop,
-            reserved: 0, // Always send 0 per RFC 4760
-            nlri,
-        })
-    }
-
-    /// Create an IPv6 Unicast MP_REACH_NLRI.
-    pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix6>) -> Self {
-        Self::Ipv6Unicast(MpReachIpv6Unicast {
-            nexthop,
-            reserved: 0, // Always send 0 per RFC 4760
-            nlri,
-        })
-    }
-
-    /// Serialize to wire format.
-    pub fn to_wire(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-
-        // AFI (2 bytes)
-        buf.extend_from_slice(&u16::from(self.afi()).to_be_bytes());
-
-        // SAFI (1 byte)
-        buf.push(self.safi().into());
-
-        // Next-hop
-        let nh = self.nexthop();
-        buf.push(nh.byte_len()); // Next-hop length
-        buf.extend_from_slice(&nh.to_bytes());
-
-        // Reserved (1 byte from RFC 4760 §3, historically "Number of SNPAs")
-        let reserved = match self {
-            Self::Ipv4Unicast(inner) => inner.reserved,
-            Self::Ipv6Unicast(inner) => inner.reserved,
+    // Extract next-hop bytes
+    if input.len() < usize::from(nh_len) {
+        let expected = match afi {
+            Afi::Ipv4 => "4",
+            Afi::Ipv6 => "16 or 32",
         };
-        buf.push(reserved);
-
-        // NLRI
-        match self {
-            Self::Ipv4Unicast(inner) => {
-                for prefix in &inner.nlri {
-                    buf.extend_from_slice(&prefix.to_wire());
-                }
-            }
-            Self::Ipv6Unicast(inner) => {
-                for prefix in &inner.nlri {
-                    buf.extend_from_slice(&prefix.to_wire());
-                }
-            }
-        }
-
-        buf
+        return Err(UpdateParseErrorReason::InvalidMpNextHopLength {
+            afi: afi_raw,
+            expected,
+            got: input.len(),
+        });
     }
+    let nh_bytes = &input[..usize::from(nh_len)];
+    let input = &input[usize::from(nh_len)..];
 
-    /// Parse from wire format.
-    ///
-    /// This validates the AFI/SAFI and parses the next-hop and NLRI into
-    /// their proper typed representations.
-    ///
-    /// Returns an error if:
-    /// - The AFI/SAFI combination is unsupported
-    /// - The next-hop length is invalid for the AFI
-    /// - The NLRI is malformed
-    pub fn from_wire(
-        input: &[u8],
-    ) -> Result<(&[u8], Self), UpdateParseErrorReason> {
-        type NomErr<'a> = nom::error::Error<&'a [u8]>;
-        type ParseRes<'a, T> =
-            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
-
-        fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
-            be_u16(input)
-        }
-
-        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
-            be_u8(input)
-        }
-
-        // Parse AFI (2 bytes)
-        let (input, afi_raw) = parse_u16(input).map_err(|e| {
-            UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
-                detail: format!("failed to parse AFI: {e}"),
-            }
-        })?;
-        let afi = Afi::try_from(afi_raw).map_err(|_| {
-            UpdateParseErrorReason::UnsupportedAfiSafi {
-                afi: afi_raw,
-                safi: 0,
-            }
-        })?;
-
-        // Parse SAFI (1 byte)
-        let (input, safi_raw) = parse_u8(input).map_err(|e| {
-            UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
-                detail: format!("failed to parse SAFI: {e}"),
-            }
-        })?;
-        if Safi::try_from(safi_raw).is_err() {
-            return Err(UpdateParseErrorReason::UnsupportedAfiSafi {
-                afi: afi_raw,
-                safi: safi_raw,
-            });
-        }
-
-        // Parse Next-hop Length (1 byte)
-        let (input, nh_len) = parse_u8(input).map_err(|e| {
-            UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
-                detail: format!("failed to parse next-hop length: {e}"),
-            }
-        })?;
-
-        // Extract next-hop bytes
-        if input.len() < usize::from(nh_len) {
+    // Parse next-hop
+    let nexthop =
+        BgpNexthop::from_bytes(nh_bytes, nh_len, afi).map_err(|_| {
             let expected = match afi {
                 Afi::Ipv4 => "4",
                 Afi::Ipv6 => "16 or 32",
             };
-            return Err(UpdateParseErrorReason::InvalidMpNextHopLength {
+            UpdateParseErrorReason::InvalidMpNextHopLength {
                 afi: afi_raw,
                 expected,
-                got: input.len(),
-            });
-        }
-        let nh_bytes = &input[..usize::from(nh_len)];
-        let input = &input[usize::from(nh_len)..];
-
-        // Parse next-hop
-        let nexthop =
-            BgpNexthop::from_bytes(nh_bytes, nh_len, afi).map_err(|_| {
-                let expected = match afi {
-                    Afi::Ipv4 => "4",
-                    Afi::Ipv6 => "16 or 32",
-                };
-                UpdateParseErrorReason::InvalidMpNextHopLength {
-                    afi: afi_raw,
-                    expected,
-                    got: usize::from(nh_len),
-                }
-            })?;
-
-        // Parse Reserved byte (1 byte from RFC 4760 §3)
-        // RFC 4760 §3: "This field is reserved for future use. It MUST be set to 0 by
-        // the sender and MUST be ignored by the receiver."
-        // Historical note: In RFC 2858 (obsoleted by RFC 4760), this was "Number of SNPAs".
-        // Store the value for session layer validation/logging, but don't error here.
-        let (input, reserved) = parse_u8(input).map_err(|e| {
-            UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
-                detail: format!("failed to parse reserved byte: {e}"),
+                got: usize::from(nh_len),
             }
         })?;
 
-        // Parse NLRI based on AFI
-        match afi {
-            Afi::Ipv4 => {
-                let nlri = prefixes4_from_wire(input)
-                    .map_err(|e| e.into_reason(NlriSection::MpReach))?;
-                Ok((
-                    &[],
-                    Self::Ipv4Unicast(MpReachIpv4Unicast {
-                        nexthop,
-                        reserved,
-                        nlri,
-                    }),
-                ))
-            }
-            Afi::Ipv6 => {
-                let nlri = prefixes6_from_wire(input)
-                    .map_err(|e| e.into_reason(NlriSection::MpReach))?;
-                Ok((
-                    &[],
-                    Self::Ipv6Unicast(MpReachIpv6Unicast {
-                        nexthop,
-                        reserved,
-                        nlri,
-                    }),
-                ))
-            }
+    // Parse Reserved byte (1 byte from RFC 4760 §3).
+    // RFC 4760 §3: "This field is reserved for future use. It MUST be set to
+    // 0 by the sender and MUST be ignored by the receiver."
+    // Historical note: in RFC 2858 (obsoleted by RFC 4760), this was
+    // "Number of SNPAs". Store the value for session layer validation /
+    // logging, but don't error here.
+    let (input, reserved) = parse_u8(input).map_err(|e| {
+        UpdateParseErrorReason::AttributeParseError {
+            type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
+            detail: format!("failed to parse reserved byte: {e}"),
+        }
+    })?;
+
+    // Parse NLRI based on AFI
+    match afi {
+        Afi::Ipv4 => {
+            let nlri = prefixes4_from_wire(input)
+                .map_err(|e| e.into_reason(NlriSection::MpReach))?;
+            Ok((
+                &[],
+                MpReachNlri::Ipv4Unicast(MpReachIpv4Unicast {
+                    nexthop,
+                    reserved,
+                    nlri,
+                }),
+            ))
+        }
+        Afi::Ipv6 => {
+            let nlri = prefixes6_from_wire(input)
+                .map_err(|e| e.into_reason(NlriSection::MpReach))?;
+            Ok((
+                &[],
+                MpReachNlri::Ipv6Unicast(MpReachIpv6Unicast {
+                    nexthop,
+                    reserved,
+                    nlri,
+                }),
+            ))
         }
     }
 }
 
-impl Display for MpReachNlri {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Ipv4Unicast(inner) => write!(
-                f,
-                "MpReachNlri::Ipv4Unicast[nh={}, nlri={}]",
-                inner.nexthop,
-                inner.nlri.len()
-            ),
-            Self::Ipv6Unicast(inner) => write!(
-                f,
-                "MpReachNlri::Ipv6Unicast[nh={}, nlri={}]",
-                inner.nexthop,
-                inner.nlri.len()
-            ),
+/// Free-fn replacement for `MpUnreachNlri::to_wire`. Returns
+/// `bgp::error::Error` (signature retained for source compatibility; the
+/// function body is currently infallible).
+pub fn mp_unreach_nlri_to_wire(mp: &MpUnreachNlri) -> Result<Vec<u8>, Error> {
+    let mut buf = Vec::new();
+
+    // AFI (2 bytes)
+    buf.extend_from_slice(&u16::from(mp.afi()).to_be_bytes());
+
+    // SAFI (1 byte)
+    buf.push(mp.safi().into());
+
+    // Withdrawn routes
+    match mp {
+        MpUnreachNlri::Ipv4Unicast(inner) => {
+            for prefix in &inner.withdrawn {
+                buf.extend_from_slice(&prefix.to_wire());
+            }
+        }
+        MpUnreachNlri::Ipv6Unicast(inner) => {
+            for prefix in &inner.withdrawn {
+                buf.extend_from_slice(&prefix.to_wire());
+            }
         }
     }
+
+    Ok(buf)
 }
 
-/// MP_UNREACH_NLRI path attribute
-///
-/// Each variant represents a specific AFI+SAFI combination, providing
-/// compile-time guarantees about the address family of routes being withdrawn.
-///
-/// ```text
-/// 4.  Multiprotocol Unreachable NLRI - MP_UNREACH_NLRI (Type Code 15):
-///
-///    This is an optional non-transitive attribute that can be used for the
-///    purpose of withdrawing multiple unfeasible routes from service.
-///
-///    The attribute is encoded as shown below:
-///
-///         +---------------------------------------------------------+
-///         | Address Family Identifier (2 octets)                    |
-///         +---------------------------------------------------------+
-///         | Subsequent Address Family Identifier (1 octet)          |
-///         +---------------------------------------------------------+
-///         | Withdrawn Routes (variable)                             |
-///         +---------------------------------------------------------+
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "afi_safi", rename_all = "snake_case")]
-pub enum MpUnreachNlri {
-    /// IPv4 Unicast routes being withdrawn (AFI=1, SAFI=1)
-    Ipv4Unicast(MpUnreachIpv4Unicast),
-    /// IPv6 Unicast routes being withdrawn (AFI=2, SAFI=1)
-    Ipv6Unicast(MpUnreachIpv6Unicast),
-}
+/// Free-fn replacement for `MpUnreachNlri::from_wire`.
+pub fn mp_unreach_nlri_from_wire(
+    input: &[u8],
+) -> Result<(&[u8], MpUnreachNlri), UpdateParseErrorReason> {
+    type NomErr<'a> = nom::error::Error<&'a [u8]>;
+    type ParseRes<'a, T> =
+        std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
 
-/// IPv4 Unicast MP_UNREACH_NLRI contents.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct MpUnreachIpv4Unicast {
-    pub withdrawn: Vec<Prefix4>,
-}
+    fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
+        be_u16(input)
+    }
 
-/// IPv6 Unicast MP_UNREACH_NLRI contents.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct MpUnreachIpv6Unicast {
-    pub withdrawn: Vec<Prefix6>,
-}
+    fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+        be_u8(input)
+    }
 
-impl MpUnreachNlri {
-    pub fn afi(&self) -> Afi {
-        match self {
-            Self::Ipv4Unicast(_) => Afi::Ipv4,
-            Self::Ipv6Unicast(_) => Afi::Ipv6,
+    // Parse AFI (2 bytes)
+    let (input, afi_raw) = parse_u16(input).map_err(|e| {
+        UpdateParseErrorReason::AttributeParseError {
+            type_code: Some(PathAttributeTypeCode::MpUnreachNlri.into()),
+            detail: format!("failed to parse AFI: {e}"),
         }
-    }
-
-    pub fn safi(&self) -> Safi {
-        Safi::Unicast
-    }
-
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Ipv4Unicast(inner) => inner.withdrawn.is_empty(),
-            Self::Ipv6Unicast(inner) => inner.withdrawn.is_empty(),
+    })?;
+    let afi = Afi::try_from(afi_raw).map_err(|_| {
+        UpdateParseErrorReason::UnsupportedAfiSafi {
+            afi: afi_raw,
+            safi: 0,
         }
-    }
+    })?;
 
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Ipv4Unicast(inner) => inner.withdrawn.len(),
-            Self::Ipv6Unicast(inner) => inner.withdrawn.len(),
+    // Parse SAFI (1 byte)
+    let (input, safi_raw) = parse_u8(input).map_err(|e| {
+        UpdateParseErrorReason::AttributeParseError {
+            type_code: Some(PathAttributeTypeCode::MpUnreachNlri.into()),
+            detail: format!("failed to parse SAFI: {e}"),
         }
-    }
-
-    /// Create an IPv4 Unicast MP_UNREACH_NLRI.
-    pub fn ipv4_unicast(withdrawn: Vec<Prefix4>) -> Self {
-        Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })
-    }
-
-    /// Create an IPv6 Unicast MP_UNREACH_NLRI.
-    pub fn ipv6_unicast(withdrawn: Vec<Prefix6>) -> Self {
-        Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
-    }
-
-    /// Serialize to wire format.
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        let mut buf = Vec::new();
-
-        // AFI (2 bytes)
-        buf.extend_from_slice(&u16::from(self.afi()).to_be_bytes());
-
-        // SAFI (1 byte)
-        buf.push(self.safi().into());
-
-        // Withdrawn routes
-        match self {
-            Self::Ipv4Unicast(inner) => {
-                for prefix in &inner.withdrawn {
-                    buf.extend_from_slice(&prefix.to_wire());
-                }
-            }
-            Self::Ipv6Unicast(inner) => {
-                for prefix in &inner.withdrawn {
-                    buf.extend_from_slice(&prefix.to_wire());
-                }
-            }
+    })?;
+    let _safi = Safi::try_from(safi_raw).map_err(|_| {
+        UpdateParseErrorReason::UnsupportedAfiSafi {
+            afi: afi_raw,
+            safi: safi_raw,
         }
+    })?;
 
-        Ok(buf)
-    }
-
-    /// Parse from wire format.
-    ///
-    /// This validates the AFI/SAFI and parses the withdrawn routes into
-    /// their proper typed representations.
-    ///
-    /// Returns an error if:
-    /// - The AFI/SAFI combination is unsupported
-    /// - The withdrawn routes are malformed
-    pub fn from_wire(
-        input: &[u8],
-    ) -> Result<(&[u8], Self), UpdateParseErrorReason> {
-        type NomErr<'a> = nom::error::Error<&'a [u8]>;
-        type ParseRes<'a, T> =
-            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
-
-        fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
-            be_u16(input)
+    // Parse withdrawn routes based on AFI
+    match afi {
+        Afi::Ipv4 => {
+            let withdrawn = prefixes4_from_wire(input)
+                .map_err(|e| e.into_reason(NlriSection::MpUnreach))?;
+            Ok((
+                &[],
+                MpUnreachNlri::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn }),
+            ))
         }
-
-        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
-            be_u8(input)
-        }
-
-        // Parse AFI (2 bytes)
-        let (input, afi_raw) = parse_u16(input).map_err(|e| {
-            UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpUnreachNlri.into()),
-                detail: format!("failed to parse AFI: {e}"),
-            }
-        })?;
-        let afi = Afi::try_from(afi_raw).map_err(|_| {
-            UpdateParseErrorReason::UnsupportedAfiSafi {
-                afi: afi_raw,
-                safi: 0,
-            }
-        })?;
-
-        // Parse SAFI (1 byte)
-        let (input, safi_raw) = parse_u8(input).map_err(|e| {
-            UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpUnreachNlri.into()),
-                detail: format!("failed to parse SAFI: {e}"),
-            }
-        })?;
-        let _safi = Safi::try_from(safi_raw).map_err(|_| {
-            UpdateParseErrorReason::UnsupportedAfiSafi {
-                afi: afi_raw,
-                safi: safi_raw,
-            }
-        })?;
-
-        // Parse withdrawn routes based on AFI
-        match afi {
-            Afi::Ipv4 => {
-                let withdrawn = prefixes4_from_wire(input)
-                    .map_err(|e| e.into_reason(NlriSection::MpUnreach))?;
-                Ok((&[], Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })))
-            }
-            Afi::Ipv6 => {
-                let withdrawn = prefixes6_from_wire(input)
-                    .map_err(|e| e.into_reason(NlriSection::MpUnreach))?;
-                Ok((&[], Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })))
-            }
-        }
-    }
-}
-
-impl Display for MpUnreachNlri {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Ipv4Unicast(inner) => write!(
-                f,
-                "MpUnreachNlri::Ipv4Unicast[withdrawn={}]",
-                inner.withdrawn.len()
-            ),
-            Self::Ipv6Unicast(inner) => write!(
-                f,
-                "MpUnreachNlri::Ipv6Unicast[withdrawn={}]",
-                inner.withdrawn.len()
-            ),
+        Afi::Ipv6 => {
+            let withdrawn = prefixes6_from_wire(input)
+                .map_err(|e| e.into_reason(NlriSection::MpUnreach))?;
+            Ok((
+                &[],
+                MpUnreachNlri::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn }),
+            ))
         }
     }
 }
@@ -4645,41 +4079,21 @@ pub enum AttributeAction {
 // API Compatibility Types (VERSION_INITIAL / v1.0.0)
 // ============================================================================
 // These types maintain backward compatibility with the INITIAL API version.
-// They support IPv4-only prefixes as the INITIAL release predates IPv6 support.
-// Used exclusively for API responses via /bgp/message-history endpoint (v1).
-// Never used internally - always convert from current types at API boundary.
-//
-// Delete these types when VERSION_INITIAL is retired (MGD_API_VERSION_INITIAL
-// is no longer supported by dropping support for v1.0.0 API clients).
+// They are now defined in `bgp_types_versions::v1::messages` and re-exported
+// here under their historical `*V1` names. The `From<current> for *V1` impls
+// live alongside the type definitions in `bgp_types_versions::impls::messages`.
 
-/// V1 Prefix type for API compatibility (/bgp/message-history)
-/// Maintains the old serialization format: {"length": u8, "value": Vec<u8>}
-#[derive(
-    Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
-)]
-pub struct PrefixV1 {
-    pub length: u8,
-    pub value: Vec<u8>,
-}
+pub use bgp_types_versions::v1::messages::{
+    PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
+    PathAttributeTypeCode as PathAttributeTypeCodeV1,
+    PathAttributeValue as PathAttributeValueV1, Prefix as PrefixV1,
+};
 
-impl From<Prefix> for PrefixV1 {
-    fn from(prefix: Prefix) -> Self {
-        // Convert new Prefix enum to old struct format using wire format:
-        // length byte followed by prefix octets.
-        let wire_bytes = match &prefix {
-            Prefix::V4(p) => p.to_wire(),
-            Prefix::V6(p) => p.to_wire(),
-        };
-
-        // First byte is length, remaining bytes are the address octets
-        let length = wire_bytes[0];
-        let value = wire_bytes[1..].to_vec();
-        Self { length, value }
-    }
-}
-
-/// V1 UpdateMessage type for API compatibility
-/// Uses PrefixV1 for NLRI and withdrawn prefixes, PathAttributeV1 for attributes
+/// V1 UpdateMessage type for API compatibility.
+///
+/// Uses PrefixV1 for NLRI and withdrawn prefixes, PathAttributeV1 for
+/// attributes. Lives in `bgp` because UpdateMessage itself has not yet
+/// migrated.
 #[derive(
     Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
 )]
@@ -4697,7 +4111,8 @@ impl From<UpdateMessage> for UpdateMessageV1 {
                 .into_iter()
                 .map(|p| PrefixV1::from(Prefix::V4(p)))
                 .collect(),
-            // Filter out attributes that don't have V1 equivalents (MP-BGP, AtomicAggregate)
+            // Filter out attributes that don't have v1 equivalents (MP-BGP,
+            // AtomicAggregate).
             path_attributes: msg
                 .path_attributes
                 .into_iter()
@@ -4712,8 +4127,8 @@ impl From<UpdateMessage> for UpdateMessageV1 {
     }
 }
 
-/// V1 Message enum for API compatibility
-/// Uses V1 types for Message variants
+/// V1 Message enum for API compatibility. Lives in `bgp` because Message
+/// itself has not yet migrated.
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum MessageV1 {
@@ -4735,186 +4150,6 @@ impl From<Message> for MessageV1 {
             Message::KeepAlive => Self::KeepAlive,
             Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
         }
-    }
-}
-
-// ============================================================================
-// V1 API Compatibility Types for PathAttribute
-// ============================================================================
-// These types maintain backward compatibility with the v1/v2 API.
-// - PathAttributeValueV1: Without AtomicAggregate, MpReachNlri, MpUnreachNlri
-// - PathAttributeTypeCodeV1: Without MpReachNlri, MpUnreachNlri type codes
-// - PathAttributeV1: Uses PathAttributeValueV1
-// - Aggregator is [u8; 6], NextHop is IpAddr (matching v1/v2 schema)
-
-/// An enumeration describing available path attribute type codes.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-#[schemars(rename = "PathAttributeTypeCode")]
-#[serde(rename_all = "snake_case")]
-pub enum PathAttributeTypeCodeV1 {
-    /// RFC 4271
-    Origin = 1,
-    AsPath = 2,
-    NextHop = 3,
-    MultiExitDisc = 4,
-    LocalPref = 5,
-    AtomicAggregate = 6,
-    Aggregator = 7,
-    Communities = 8,
-    /// RFC 6793
-    As4Path = 17,
-    As4Aggregator = 18,
-}
-
-impl From<PathAttributeTypeCode> for PathAttributeTypeCodeV1 {
-    fn from(code: PathAttributeTypeCode) -> Self {
-        match code {
-            PathAttributeTypeCode::Origin => PathAttributeTypeCodeV1::Origin,
-            PathAttributeTypeCode::AsPath => PathAttributeTypeCodeV1::AsPath,
-            PathAttributeTypeCode::NextHop => PathAttributeTypeCodeV1::NextHop,
-            PathAttributeTypeCode::MultiExitDisc => {
-                PathAttributeTypeCodeV1::MultiExitDisc
-            }
-            PathAttributeTypeCode::LocalPref => {
-                PathAttributeTypeCodeV1::LocalPref
-            }
-            PathAttributeTypeCode::AtomicAggregate => {
-                PathAttributeTypeCodeV1::AtomicAggregate
-            }
-            PathAttributeTypeCode::Aggregator => {
-                PathAttributeTypeCodeV1::Aggregator
-            }
-            PathAttributeTypeCode::Communities => {
-                PathAttributeTypeCodeV1::Communities
-            }
-            // MP-BGP type codes map to As4Path as a fallback (they won't appear in V1)
-            PathAttributeTypeCode::MpReachNlri => {
-                PathAttributeTypeCodeV1::As4Path
-            }
-            PathAttributeTypeCode::MpUnreachNlri => {
-                PathAttributeTypeCodeV1::As4Path
-            }
-            PathAttributeTypeCode::As4Path => PathAttributeTypeCodeV1::As4Path,
-            PathAttributeTypeCode::As4Aggregator => {
-                PathAttributeTypeCodeV1::As4Aggregator
-            }
-        }
-    }
-}
-
-/// The value encoding of a path attribute.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(rename = "PathAttributeValue")]
-#[serde(rename_all = "snake_case")]
-pub enum PathAttributeValueV1 {
-    /// The type of origin associated with a path
-    Origin(PathOrigin),
-    /// The AS set associated with a path
-    AsPath(Vec<As4PathSegment>),
-    /// The nexthop associated with a path
-    NextHop(IpAddr),
-    /// A metric used for external (inter-AS) links to discriminate among
-    /// multiple entry or exit points.
-    MultiExitDisc(u32),
-    /// Local pref is included in update messages sent to internal peers and
-    /// indicates a degree of preference.
-    LocalPref(u32),
-    /// This attribute is included in routes that are formed by aggregation.
-    Aggregator([u8; 6]),
-    /// Indicates communities associated with a path.
-    Communities(Vec<Community>),
-    /// The 4-byte encoded AS set associated with a path
-    As4Path(Vec<As4PathSegment>),
-    /// This attribute is included in routes that are formed by aggregation.
-    As4Aggregator([u8; 8]),
-}
-
-impl From<PathAttributeValue> for Option<PathAttributeValueV1> {
-    fn from(val: PathAttributeValue) -> Self {
-        match val {
-            PathAttributeValue::Origin(o) => {
-                Some(PathAttributeValueV1::Origin(o))
-            }
-            PathAttributeValue::AsPath(p) => {
-                Some(PathAttributeValueV1::AsPath(p))
-            }
-            PathAttributeValue::NextHop(nh) => {
-                Some(PathAttributeValueV1::NextHop(IpAddr::V4(nh)))
-            }
-            PathAttributeValue::MultiExitDisc(m) => {
-                Some(PathAttributeValueV1::MultiExitDisc(m))
-            }
-            PathAttributeValue::LocalPref(l) => {
-                Some(PathAttributeValueV1::LocalPref(l))
-            }
-            PathAttributeValue::Aggregator(a) => {
-                Some(PathAttributeValueV1::Aggregator(a.to_bytes()))
-            }
-            PathAttributeValue::Communities(c) => {
-                Some(PathAttributeValueV1::Communities(c))
-            }
-            PathAttributeValue::AtomicAggregate => {
-                // AtomicAggregate was not in v1/v2 API
-                None
-            }
-            PathAttributeValue::As4Path(p) => {
-                Some(PathAttributeValueV1::As4Path(p))
-            }
-            PathAttributeValue::As4Aggregator(a) => {
-                Some(PathAttributeValueV1::As4Aggregator(a.to_bytes()))
-            }
-            PathAttributeValue::MpReachNlri(_) => {
-                // MP-BGP attributes not in v1/v2 API
-                None
-            }
-            PathAttributeValue::MpUnreachNlri(_) => {
-                // MP-BGP attributes not in v1/v2 API
-                None
-            }
-        }
-    }
-}
-
-/// Type encoding for a path attribute.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-#[schemars(rename = "PathAttributeType")]
-pub struct PathAttributeTypeV1 {
-    /// Flags may include, Optional, Transitive, Partial and Extended Length.
-    pub flags: u8,
-    /// Type code for the path attribute.
-    pub type_code: PathAttributeTypeCodeV1,
-}
-
-impl From<PathAttributeType> for PathAttributeTypeV1 {
-    fn from(t: PathAttributeType) -> Self {
-        Self {
-            flags: t.flags,
-            type_code: PathAttributeTypeCodeV1::from(t.type_code),
-        }
-    }
-}
-
-/// A self-describing BGP path attribute
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(rename = "PathAttribute")]
-pub struct PathAttributeV1 {
-    /// Type encoding for the attribute
-    pub typ: PathAttributeTypeV1,
-    /// Value of the attribute
-    pub value: PathAttributeValueV1,
-}
-
-impl From<PathAttribute> for Option<PathAttributeV1> {
-    fn from(attr: PathAttribute) -> Self {
-        let value_opt: Option<PathAttributeValueV1> = attr.value.into();
-        value_opt.map(|value| PathAttributeV1 {
-            typ: PathAttributeTypeV1::from(attr.typ),
-            value,
-        })
     }
 }
 
@@ -5676,9 +4911,9 @@ mod tests {
         )];
 
         let original = MpReachNlri::ipv6_unicast(nh, nlri.clone());
-        let wire = original.to_wire();
+        let wire = mp_reach_nlri_to_wire(&original);
         let (remaining, parsed) =
-            MpReachNlri::from_wire(&wire).expect("from_wire should succeed");
+            mp_reach_nlri_from_wire(&wire).expect("from_wire should succeed");
 
         assert!(remaining.is_empty(), "all bytes should be consumed");
         assert_eq!(original.afi(), parsed.afi());
@@ -5751,9 +4986,10 @@ mod tests {
         )];
 
         let original = MpUnreachNlri::ipv6_unicast(withdrawn.clone());
-        let wire = original.to_wire().expect("to_wire should succeed");
+        let wire =
+            mp_unreach_nlri_to_wire(&original).expect("to_wire should succeed");
         let (remaining, parsed) =
-            MpUnreachNlri::from_wire(&wire).expect("from_wire should succeed");
+            mp_unreach_nlri_from_wire(&wire).expect("from_wire should succeed");
 
         assert!(remaining.is_empty(), "all bytes should be consumed");
         assert_eq!(original.afi(), parsed.afi());
@@ -6190,7 +5426,7 @@ mod tests {
     mod rfc7606_attribute_actions {
         use crate::messages::{
             AttributeAction, PathAttributeType, PathAttributeTypeCode,
-            path_attribute_flags,
+            path_attribute_flags, path_attribute_type_error_action,
         };
 
         /// Helper to construct PathAttributeType for testing
@@ -6208,20 +5444,26 @@ mod tests {
             let well_known_flags = path_attribute_flags::TRANSITIVE;
 
             assert_eq!(
-                make_typ(PathAttributeTypeCode::Origin, well_known_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::Origin,
+                    well_known_flags
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "ORIGIN errors should treat-as-withdraw"
             );
             assert_eq!(
-                make_typ(PathAttributeTypeCode::AsPath, well_known_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::AsPath,
+                    well_known_flags
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "AS_PATH errors should treat-as-withdraw"
             );
             assert_eq!(
-                make_typ(PathAttributeTypeCode::NextHop, well_known_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::NextHop,
+                    well_known_flags
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "NEXT_HOP errors should treat-as-withdraw"
             );
@@ -6233,8 +5475,10 @@ mod tests {
             let optional_flags = path_attribute_flags::OPTIONAL;
 
             assert_eq!(
-                make_typ(PathAttributeTypeCode::MultiExitDisc, optional_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::MultiExitDisc,
+                    optional_flags
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "MULTI_EXIT_DISC errors should treat-as-withdraw"
             );
@@ -6246,8 +5490,10 @@ mod tests {
             let well_known_flags = path_attribute_flags::TRANSITIVE;
 
             assert_eq!(
-                make_typ(PathAttributeTypeCode::LocalPref, well_known_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::LocalPref,
+                    well_known_flags
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "LOCAL_PREF errors should treat-as-withdraw"
             );
@@ -6260,11 +5506,10 @@ mod tests {
                 | path_attribute_flags::TRANSITIVE;
 
             assert_eq!(
-                make_typ(
+                path_attribute_type_error_action(&make_typ(
                     PathAttributeTypeCode::Communities,
                     optional_transitive_flags
-                )
-                .error_action(),
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "Communities errors should treat-as-withdraw"
             );
@@ -6277,11 +5522,10 @@ mod tests {
                 | path_attribute_flags::TRANSITIVE;
 
             assert_eq!(
-                make_typ(
+                path_attribute_type_error_action(&make_typ(
                     PathAttributeTypeCode::As4Path,
                     optional_transitive_flags
-                )
-                .error_action(),
+                )),
                 AttributeAction::TreatAsWithdraw,
                 "AS4_PATH errors should treat-as-withdraw"
             );
@@ -6293,11 +5537,10 @@ mod tests {
             let well_known_flags = path_attribute_flags::TRANSITIVE;
 
             assert_eq!(
-                make_typ(
+                path_attribute_type_error_action(&make_typ(
                     PathAttributeTypeCode::AtomicAggregate,
                     well_known_flags
-                )
-                .error_action(),
+                )),
                 AttributeAction::Discard,
                 "ATOMIC_AGGREGATE errors should be discarded"
             );
@@ -6310,20 +5553,18 @@ mod tests {
                 | path_attribute_flags::TRANSITIVE;
 
             assert_eq!(
-                make_typ(
+                path_attribute_type_error_action(&make_typ(
                     PathAttributeTypeCode::Aggregator,
                     optional_transitive_flags
-                )
-                .error_action(),
+                )),
                 AttributeAction::Discard,
                 "AGGREGATOR errors should be discarded"
             );
             assert_eq!(
-                make_typ(
+                path_attribute_type_error_action(&make_typ(
                     PathAttributeTypeCode::As4Aggregator,
                     optional_transitive_flags
-                )
-                .error_action(),
+                )),
                 AttributeAction::Discard,
                 "AS4_AGGREGATOR errors should be discarded"
             );
@@ -6336,14 +5577,18 @@ mod tests {
             let optional_flags = path_attribute_flags::OPTIONAL;
 
             assert_eq!(
-                make_typ(PathAttributeTypeCode::MpReachNlri, optional_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::MpReachNlri,
+                    optional_flags
+                )),
                 AttributeAction::SessionReset,
                 "MP_REACH_NLRI errors should cause session reset"
             );
             assert_eq!(
-                make_typ(PathAttributeTypeCode::MpUnreachNlri, optional_flags)
-                    .error_action(),
+                path_attribute_type_error_action(&make_typ(
+                    PathAttributeTypeCode::MpUnreachNlri,
+                    optional_flags
+                )),
                 AttributeAction::SessionReset,
                 "MP_UNREACH_NLRI errors should cause session reset"
             );
@@ -7051,7 +6296,9 @@ mod tests {
             Aggregator, As4Aggregator, BgpNexthop, Error, MpReachNlri,
             MpUnreachNlri, NotificationMessage, OpenMessage,
             PathAttributeTypeCode, PathAttributeValue, UpdateMessage,
-            UpdateParseErrorReason, path_attribute_flags,
+            UpdateParseErrorReason, mp_reach_nlri_to_wire,
+            mp_unreach_nlri_to_wire, path_attribute_flags,
+            path_attribute_value_from_wire, path_attribute_value_to_wire,
         };
 
         /// Build an UPDATE message wire format with the given path attributes bytes.
@@ -7106,7 +6353,7 @@ mod tests {
                     48,
                 )],
             );
-            let value_bytes = mp_reach.to_wire();
+            let value_bytes = mp_reach_nlri_to_wire(&mp_reach);
 
             let mut attr = vec![
                 path_attribute_flags::OPTIONAL,
@@ -7208,8 +6455,8 @@ mod tests {
                     Ipv6Addr::from_str("2001:db8:1::").unwrap(),
                     48,
                 )]);
-            let value_bytes =
-                mp_unreach.to_wire().expect("MP_UNREACH_NLRI encoding");
+            let value_bytes = mp_unreach_nlri_to_wire(&mp_unreach)
+                .expect("MP_UNREACH_NLRI encoding");
 
             let mut attrs = vec![
                 path_attribute_flags::OPTIONAL,
@@ -7626,7 +6873,7 @@ mod tests {
         fn atomic_aggregate_zero_length() {
             // ATOMIC_AGGREGATE must be exactly zero bytes
             let input: &[u8] = &[];
-            let result = PathAttributeValue::from_wire(
+            let result = path_attribute_value_from_wire(
                 input,
                 PathAttributeTypeCode::AtomicAggregate,
             );
@@ -7645,7 +6892,7 @@ mod tests {
         fn atomic_aggregate_non_zero_length_error() {
             // ATOMIC_AGGREGATE with any data should fail
             let input = vec![1u8];
-            let result = PathAttributeValue::from_wire(
+            let result = path_attribute_value_from_wire(
                 &input,
                 PathAttributeTypeCode::AtomicAggregate,
             );
@@ -7671,7 +6918,8 @@ mod tests {
         #[test]
         fn atomic_aggregate_to_wire() {
             let attr = PathAttributeValue::AtomicAggregate;
-            let wire = attr.to_wire().expect("Should serialize");
+            let wire =
+                path_attribute_value_to_wire(&attr).expect("Should serialize");
             assert_eq!(
                 wire.len(),
                 0,

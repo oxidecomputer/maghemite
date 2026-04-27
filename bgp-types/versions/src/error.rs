@@ -16,8 +16,9 @@ use num_enum::TryFromPrimitiveError;
 use crate::v1::messages::{
     AsPathType, CapabilityCode, CeaseErrorSubcode, ErrorCode,
     HeaderErrorSubcode, MessageType, OpenErrorSubcode, OptionalParameterCode,
-    PathAttributeTypeCode, PathOrigin, UpdateErrorSubcode,
+    PathOrigin, UpdateErrorSubcode,
 };
+use crate::v4::messages::PathAttributeTypeCode;
 
 #[derive(thiserror::Error, Debug)]
 pub enum WireError {

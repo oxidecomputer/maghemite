@@ -8,11 +8,15 @@ pub mod messages {
     pub use crate::v1::messages::{
         AddPathElement, AsPathType, CapabilityCode, CeaseErrorSubcode,
         Community, ErrorCode, Header, HeaderErrorSubcode, MAX_MESSAGE_SIZE,
-        MessageType, OpenErrorSubcode, OptionalParameterCode,
-        PathAttributeTypeCode, PathOrigin, Safi, Tlv, UpdateErrorSubcode,
+        MessageType, OpenErrorSubcode, OptionalParameterCode, PathOrigin, Safi,
+        Tlv, UpdateErrorSubcode,
     };
 
     pub use crate::v4::messages::{
-        Afi, BgpNexthop, ExtendedNexthopElement, Ipv6DoubleNexthop,
+        Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
+        ExtendedNexthopElement, Ipv6DoubleNexthop, MpReachIpv4Unicast,
+        MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
+        MpUnreachIpv6Unicast, MpUnreachNlri, PathAttribute, PathAttributeType,
+        PathAttributeTypeCode, PathAttributeValue, path_attribute_flags,
     };
 }

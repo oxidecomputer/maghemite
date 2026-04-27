@@ -6,6 +6,8 @@
 //! version. These types encode IANA-assigned numeric codes used in BGP
 //! protocol messages.
 
+use std::net::IpAddr;
+
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -214,7 +216,12 @@ pub enum Safi {
     Unicast = 1,
 }
 
-/// An enumeration describing available path attribute type codes.
+/// An enumeration describing available path attribute type codes (initial
+/// API version, prior to MP-BGP).
+///
+/// The schema-published name is `PathAttributeTypeCode` (preserved via
+/// `#[schemars(rename = ...)]`); the in-source name disambiguates from the
+/// 12-variant MP-BGP form at [`crate::v4::messages::PathAttributeTypeCode`].
 #[derive(
     Clone,
     Copy,
@@ -229,6 +236,7 @@ pub enum Safi {
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "PathAttributeTypeCode")]
 pub enum PathAttributeTypeCode {
     /// RFC 4271
     Origin = 1,
@@ -239,10 +247,6 @@ pub enum PathAttributeTypeCode {
     AtomicAggregate = 6,
     Aggregator = 7,
     Communities = 8,
-
-    /// RFC 4760
-    MpReachNlri = 14,
-    MpUnreachNlri = 15,
 
     /// RFC 6793
     As4Path = 17,
@@ -536,4 +540,70 @@ pub struct AddPathElement {
     /// paths from its peer (value 1), (b) able to send multiple paths to its
     /// peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.
     pub send_receive: u8,
+}
+
+// ============================================================================
+// v1 wire-shape Prefix and PathAttribute compatibility types.
+//
+// These match the initial API schema. They have the same source name as the
+// MP-BGP-aware versions in [`crate::v4::messages`], disambiguated by the
+// `v1::messages` module path. The schemars name matches the in-source name
+// (`Prefix`, `PathAttribute`, `PathAttributeType`, `PathAttributeValue`),
+// since the schema name is "PathAttribute" in v1 and "PathAttribute" in v4
+// — but each version generates its own schema document.
+// ============================================================================
+
+/// V1 Prefix wire-shape (length + raw octets), used by the v1 admin API.
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
+)]
+pub struct Prefix {
+    pub length: u8,
+    pub value: Vec<u8>,
+}
+
+/// The value encoding of a path attribute (v1, pre-MP-BGP).
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PathAttributeValue {
+    /// The type of origin associated with a path
+    Origin(PathOrigin),
+    /// The AS set associated with a path
+    AsPath(Vec<crate::v4::messages::As4PathSegment>),
+    /// The nexthop associated with a path
+    NextHop(IpAddr),
+    /// A metric used for external (inter-AS) links to discriminate among
+    /// multiple entry or exit points.
+    MultiExitDisc(u32),
+    /// Local pref is included in update messages sent to internal peers and
+    /// indicates a degree of preference.
+    LocalPref(u32),
+    /// This attribute is included in routes that are formed by aggregation.
+    Aggregator([u8; 6]),
+    /// Indicates communities associated with a path.
+    Communities(Vec<Community>),
+    /// The 4-byte encoded AS set associated with a path
+    As4Path(Vec<crate::v4::messages::As4PathSegment>),
+    /// This attribute is included in routes that are formed by aggregation.
+    As4Aggregator([u8; 8]),
+}
+
+/// Type encoding for a path attribute (v1).
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+pub struct PathAttributeType {
+    /// Flags may include, Optional, Transitive, Partial and Extended Length.
+    pub flags: u8,
+    /// Type code for the path attribute.
+    pub type_code: PathAttributeTypeCode,
+}
+
+/// A self-describing BGP path attribute (v1, pre-MP-BGP).
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PathAttribute {
+    /// Type encoding for the attribute
+    pub typ: PathAttributeType,
+    /// Value of the attribute
+    pub value: PathAttributeValue,
 }
