@@ -15,9 +15,11 @@ use crate::{
         ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, HeaderParseError,
         MAX_MESSAGE_SIZE, Message, MessageParseError, MessageType,
         NotificationMessage, NotificationParseError,
-        NotificationParseErrorReason, OpenErrorSubcode, OpenMessage,
-        OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
-        RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
+        NotificationParseErrorReason, OpenErrorSubcode, OpenParseError,
+        OpenParseErrorReason, RouteRefreshParseError,
+        RouteRefreshParseErrorReason, UpdateMessage,
+        notification_message_from_wire, open_message_from_wire,
+        route_refresh_message_from_wire,
     },
     session::{
         ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
@@ -839,7 +841,7 @@ impl BgpConnectionTcp {
         }
 
         let msg = match hdr.typ {
-            MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
+            MessageType::Open => match open_message_from_wire(&msgbuf) {
                 Ok(m) => m.into(),
                 Err(e) => {
                     connection_log_lite!(log,
@@ -921,7 +923,7 @@ impl BgpConnectionTcp {
                 }
             },
             MessageType::Notification => {
-                match NotificationMessage::from_wire(&msgbuf) {
+                match notification_message_from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(e) => {
                         connection_log_lite!(log,
@@ -975,7 +977,7 @@ impl BgpConnectionTcp {
                 return Ok(Message::KeepAlive);
             }
             MessageType::RouteRefresh => {
-                match RouteRefreshMessage::from_wire(&msgbuf) {
+                match route_refresh_message_from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(e) => {
                         connection_log_lite!(log,

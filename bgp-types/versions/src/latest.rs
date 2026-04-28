@@ -6,11 +6,12 @@
 
 pub mod messages {
     pub use crate::v1::messages::{
-        AddPathElement, AsPathType, Capability, CapabilityCode,
+        AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
         CeaseErrorSubcode, Community, ErrorCode, ErrorSubcode, Header,
         HeaderErrorSubcode, MAX_MESSAGE_SIZE, MessageKind, MessageType,
-        OpenErrorSubcode, OptionalParameter, OptionalParameterCode, PathOrigin,
-        Safi, Tlv, UpdateErrorSubcode,
+        NotificationMessage, OpenErrorSubcode, OpenMessage, OptionalParameter,
+        OptionalParameterCode, PathOrigin, RouteRefreshMessage, Safi, Tlv,
+        UpdateErrorSubcode,
     };
 
     pub use crate::v4::messages::{

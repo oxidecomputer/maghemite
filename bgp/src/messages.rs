@@ -261,11 +261,11 @@ pub enum Message {
 impl Message {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
-            Self::Open(m) => m.to_wire(),
+            Self::Open(m) => open_message_to_wire(m),
             Self::Update(m) => m.to_wire(),
-            Self::Notification(m) => m.to_wire(),
+            Self::Notification(m) => notification_message_to_wire(m),
             Self::KeepAlive => Ok(Vec::new()),
-            Self::RouteRefresh(m) => Ok(m.to_wire()),
+            Self::RouteRefresh(m) => Ok(route_refresh_message_to_wire(m)),
         }
     }
 
@@ -375,261 +375,94 @@ impl TryFrom<Message> for RouteRefreshMessage {
 
 pub use bgp_types::messages::Header;
 
-/// The autonomous system number used in OPEN messages when 4-byte ASNs are in
-/// use.
-///
-/// Ref: RFC 4893 §7
-pub const AS_TRANS: u16 = 23456;
+pub use bgp_types::messages::{AS_TRANS, BGP4, OpenMessage};
 
-/// The version number for BGP-4
-pub const BGP4: u8 = 4;
+/// Serialize an open message to wire format.
+pub fn open_message_to_wire(om: &OpenMessage) -> Result<Vec<u8>, Error> {
+    let mut buf = Vec::new();
 
-/// The first message sent by each side once a TCP connection is established.
-///
-/// ```text
-///  0                   1                   2                   3
-///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// |    Version    |     My Autonomous System      |   Hold Time   :
-/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// :               |                BGP Identifier                 :
-/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// :               | Opt Parm Len  |     Optional Parameters       :
-/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// :                                                               :
-/// :             Optional Parameters (cont, variable)              :
-/// :                                                               |
-/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// ```
-///
-/// Ref: RFC 4271 §4.2
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct OpenMessage {
-    /// BGP protocol version.
-    pub version: u8,
+    // version
+    buf.push(om.version);
 
-    /// Autonomous system number of the sender. When 4-byte ASNs are in use this
-    /// value is set to AS_TRANS which has a value of 23456.
-    ///
-    /// Ref: RFC 4893 §7
-    pub asn: u16,
+    // as
+    buf.extend_from_slice(&om.asn.to_be_bytes());
 
-    /// Number of seconds the sender proposes for the hold timer.
-    pub hold_time: u16,
+    // hold time
+    buf.extend_from_slice(&om.hold_time.to_be_bytes());
 
-    /// BGP identifier of the sender
-    pub id: u32,
+    // id
+    buf.extend_from_slice(&om.id.to_be_bytes());
 
-    /// A list of optional parameters.
-    pub parameters: Vec<OptionalParameter>,
+    // opt param len
+    let opt_buf = open_message_parameters_to_wire(om)?;
+    if opt_buf.len() > u8::MAX as usize {
+        return Err(Error::TooLarge("open message optional parameters".into()));
+    }
+    buf.push(opt_buf.len() as u8);
+    buf.extend_from_slice(&opt_buf);
+
+    Ok(buf)
 }
 
-impl OpenMessage {
-    /// Create a new open message for a sender with a 2-byte ASN
-    pub fn new2(
-        asn: u16,
-        hold_time: u16,
-        id: u32,
-        extended_nexthop: bool,
-    ) -> OpenMessage {
-        let parameters = if extended_nexthop {
-            let caps = BTreeSet::from([Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
-            }]);
-            vec![OptionalParameter::Capabilities(caps)]
-        } else {
-            Vec::default()
-        };
-        OpenMessage {
-            version: BGP4,
-            asn,
-            hold_time,
-            id,
-            parameters,
-        }
+fn open_message_parameters_to_wire(om: &OpenMessage) -> Result<Vec<u8>, Error> {
+    let mut buf = Vec::new();
+    for p in &om.parameters {
+        buf.extend_from_slice(&optional_parameter_to_wire(p)?);
     }
-
-    /// Create a new open message for a sender with a 4-byte ASN
-    pub fn new4(
-        asn: u32,
-        hold_time: u16,
-        id: u32,
-        extended_nexthop: bool,
-    ) -> OpenMessage {
-        let mut params = BTreeSet::from([Capability::FourOctetAs { asn }]);
-        if extended_nexthop {
-            params.insert(Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
-            });
-        }
-        OpenMessage {
-            version: BGP4,
-            asn: u16::try_from(asn).unwrap_or(AS_TRANS),
-            hold_time,
-            id,
-            parameters: vec![OptionalParameter::Capabilities(params)],
-        }
-    }
-
-    pub fn add_capabilities(&mut self, capabilities: &BTreeSet<Capability>) {
-        if capabilities.is_empty() {
-            return;
-        }
-        for p in &mut self.parameters {
-            if let OptionalParameter::Capabilities(cs) = p {
-                cs.extend(capabilities.iter().cloned());
-                return;
-            }
-        }
-        self.parameters
-            .push(OptionalParameter::Capabilities(capabilities.clone()));
-    }
-
-    pub fn get_capabilities(&self) -> BTreeSet<Capability> {
-        let mut result = BTreeSet::new();
-        for p in self.parameters.iter() {
-            if let OptionalParameter::Capabilities(caps) = p {
-                result.extend(caps.clone().into_iter());
-            }
-        }
-        result
-    }
-
-    pub fn has_capability(&self, code: CapabilityCode) -> bool {
-        self.get_capabilities()
-            .into_iter()
-            .any(|x| CapabilityCode::from(x) == code)
-    }
-
-    pub fn asn(&self) -> u32 {
-        let mut remote_asn = u32::from(self.asn);
-        for p in &self.parameters {
-            if let OptionalParameter::Capabilities(caps) = p {
-                for c in caps {
-                    if let Capability::FourOctetAs { asn } = c {
-                        remote_asn = *asn;
-                    }
-                }
-            }
-        }
-        remote_asn
-    }
-
-    /// Serialize an open message to wire format.
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        let mut buf = Vec::new();
-
-        // version
-        buf.push(self.version);
-
-        // as
-        buf.extend_from_slice(&self.asn.to_be_bytes());
-
-        // hold time
-        buf.extend_from_slice(&self.hold_time.to_be_bytes());
-
-        // id
-        buf.extend_from_slice(&self.id.to_be_bytes());
-
-        // opt param len
-        let opt_buf = self.parameters_to_wire()?;
-        if opt_buf.len() > u8::MAX as usize {
-            return Err(Error::TooLarge(
-                "open message optional parameters".into(),
-            ));
-        }
-        buf.push(opt_buf.len() as u8);
-        buf.extend_from_slice(&opt_buf);
-
-        Ok(buf)
-    }
-
-    fn parameters_to_wire(&self) -> Result<Vec<u8>, Error> {
-        let mut buf = Vec::new();
-        for p in &self.parameters {
-            buf.extend_from_slice(&optional_parameter_to_wire(p)?);
-        }
-        Ok(buf)
-    }
-
-    /// Deserialize an open message from wire format.
-    pub fn from_wire(input: &[u8]) -> Result<OpenMessage, Error> {
-        // RFC 4271 §4.2: OPEN minimum 10 bytes body
-        // (1 version + 2 ASN + 2 hold_time + 4 ID + 1 opt_param_len)
-        if input.len() < 10 {
-            return Err(Error::TooSmall("open message body".into()));
-        }
-
-        let (input, version) = parse_u8(input)?;
-        if version != BGP_VERSION {
-            return Err(Error::BadVersion(version));
-        }
-
-        let (input, asn) = be_u16(input)?;
-        let (input, hold_time) = be_u16(input)?;
-
-        let (input, id) = be_u32(input)?;
-        if id == 0 {
-            return Err(Error::BadBgpIdentifier(Ipv4Addr::from_bits(id)));
-        }
-
-        let (input, param_len) = parse_u8(input)?;
-        let param_len = usize::from(param_len);
-
-        if input.len() < param_len {
-            return Err(Error::TooSmall(
-                "open message optional parameters".into(),
-            ));
-        }
-
-        let parameters = Self::parameters_from_wire(&input[..param_len])?;
-
-        Ok(OpenMessage {
-            version,
-            asn,
-            hold_time,
-            id,
-            parameters,
-        })
-    }
-
-    pub fn parameters_from_wire(
-        mut buf: &[u8],
-    ) -> Result<Vec<OptionalParameter>, Error> {
-        let mut result = Vec::new();
-
-        while !buf.is_empty() {
-            let (out, param) = optional_parameter_from_wire(buf)?;
-            result.push(param);
-            buf = out;
-        }
-
-        Ok(result)
-    }
+    Ok(buf)
 }
 
-impl Display for OpenMessage {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let param_string = self
-            .parameters
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(
-            f,
-            "Open [ version: {}, asn: {}, hold_time: {}, id: {}, parameters: [ {param_string}] ]",
-            self.version, self.asn, self.hold_time, self.id
-        )
+/// Deserialize an open message from wire format.
+pub fn open_message_from_wire(input: &[u8]) -> Result<OpenMessage, Error> {
+    // RFC 4271 §4.2: OPEN minimum 10 bytes body
+    // (1 version + 2 ASN + 2 hold_time + 4 ID + 1 opt_param_len)
+    if input.len() < 10 {
+        return Err(Error::TooSmall("open message body".into()));
     }
+
+    let (input, version) = parse_u8(input)?;
+    if version != BGP_VERSION {
+        return Err(Error::BadVersion(version));
+    }
+
+    let (input, asn) = be_u16(input)?;
+    let (input, hold_time) = be_u16(input)?;
+
+    let (input, id) = be_u32(input)?;
+    if id == 0 {
+        return Err(Error::BadBgpIdentifier(Ipv4Addr::from_bits(id)));
+    }
+
+    let (input, param_len) = parse_u8(input)?;
+    let param_len = usize::from(param_len);
+
+    if input.len() < param_len {
+        return Err(Error::TooSmall("open message optional parameters".into()));
+    }
+
+    let parameters = open_message_parameters_from_wire(&input[..param_len])?;
+
+    Ok(OpenMessage {
+        version,
+        asn,
+        hold_time,
+        id,
+        parameters,
+    })
+}
+
+pub fn open_message_parameters_from_wire(
+    mut buf: &[u8],
+) -> Result<Vec<OptionalParameter>, Error> {
+    let mut result = Vec::new();
+
+    while !buf.is_empty() {
+        let (out, param) = optional_parameter_from_wire(buf)?;
+        result.push(param);
+        buf = out;
+    }
+
+    Ok(result)
 }
 
 pub use bgp_types::messages::Tlv;
@@ -2409,194 +2242,64 @@ pub fn mp_unreach_nlri_from_wire(
     }
 }
 
-/// Notification messages are exchanged between BGP peers when an exceptional
-/// event has occurred.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct NotificationMessage {
-    /// Error code associated with the notification
-    pub error_code: ErrorCode,
+pub use bgp_types::messages::{NotificationMessage, RouteRefreshMessage};
 
-    /// Error subcode associated with the notification
-    pub error_subcode: ErrorSubcode,
-
-    /*
-     * Implementation notes for later on the data field ...
-     *
-     * What follows is verbatim from RFC 4271
-     * <https://datatracker.ietf.org/doc/html/rfc4271>
-     *
-     * §6.1 Message Header Error Handling
-     * ==================================
-     *
-     *   If at least one of the following is true:
-     *
-     *    - if the Length field of the message header is less than 19 or
-     *      greater than 4096, or
-     *
-     *    - if the Length field of an OPEN message is less than the minimum
-     *      length of the OPEN message, or
-     *
-     *    - if the Length field of an UPDATE message is less than the
-     *      minimum length of the UPDATE message, or
-     *
-     *    - if the Length field of a KEEPALIVE message is not equal to 19,
-     *      or
-     *
-     *    - if the Length field of a NOTIFICATION message is less than the
-     *      minimum length of the NOTIFICATION message,
-     *
-     *     then the Error Subcode MUST be set to Bad Message Length.  The Data
-     *     field MUST contain the erroneous Length field.
-     *
-     *     If the Type field of the message header is not recognized, then the
-     *     Error Subcode MUST be set to Bad Message Type.  The Data field MUST
-     *     contain the erroneous Type field.
-     *
-     * §6.2 Open Message Error Handling
-     * ================================
-     *
-     *     If the version number in the Version field of the received OPEN
-     *     message is not supported, then the Error Subcode MUST be set to
-     *     Unsupported Version Number.  The Data field is a 2-octet unsigned
-     *     integer, which indicates the largest, locally-supported version
-     *     number less than the version the remote BGP peer bid
-     *
-     * §6.3 Update Message Error Handling
-     * ==================================
-     *
-     *     If any recognized attribute has Attribute Flags that conflict with
-     *     the Attribute Type Code, then the Error Subcode MUST be set to
-     *     Attribute Flags Error.  The Data field MUST contain the erroneous
-     *     attribute (type, length, and value).
-     *
-     *     If any recognized attribute has an Attribute Length that conflicts
-     *     with the expected length (based on the attribute type code), then the
-     *     Error Subcode MUST be set to Attribute Length Error.  The Data field
-     *     MUST contain the erroneous attribute (type, length, and value).
-     *
-     *     If any of the well-known mandatory attributes are not present, then
-     *     the Error Subcode MUST be set to Missing Well-known Attribute.  The
-     *     Data field MUST contain the Attribute Type Code of the missing,
-     *     well-known attribute.
-     *
-     *     If any of the well-known mandatory attributes are not recognized,
-     *     then the Error Subcode MUST be set to Unrecognized Well-known
-     *     Attribute.  The Data field MUST contain the unrecognized attribute
-     *     (type, length, and value).
-     *
-     *     If the ORIGIN attribute has an undefined value, then the Error Sub-
-     *     code MUST be set to Invalid Origin Attribute.  The Data field MUST
-     *     contain the unrecognized attribute (type, length, and value).
-     *
-     *     If the NEXT_HOP attribute field is syntactically incorrect, then the
-     *     Error Subcode MUST be set to Invalid NEXT_HOP Attribute.  The Data
-     *     field MUST contain the incorrect attribute (type, length, and value).
-     *     Syntactic correctness means that the NEXT_HOP attribute represents a
-     *     valid IP host address.
-     *
-     *     If an optional attribute is recognized, then the value of this
-     *     attribute MUST be checked.  If an error is detected, the attribute
-     *     MUST be discarded, and the Error Subcode MUST be set to Optional
-     *     Attribute Error.  The Data field MUST contain the attribute (type,
-     *     length, and value).
-     *
-     */
-    pub data: Vec<u8>,
+pub fn notification_message_to_wire(
+    nm: &NotificationMessage,
+) -> Result<Vec<u8>, Error> {
+    let buf =
+        vec![nm.error_code.into(), error_subcode_as_u8(&nm.error_subcode)];
+    //TODO data, see comment above on data field
+    Ok(buf)
 }
 
-impl NotificationMessage {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        let buf = vec![
-            self.error_code.into(),
-            error_subcode_as_u8(&self.error_subcode),
-        ];
-        //TODO data, see comment above on data field
-        Ok(buf)
+pub fn notification_message_from_wire(
+    input: &[u8],
+) -> Result<NotificationMessage, Error> {
+    // RFC 4271 §4.5: NOTIFICATION minimum 2 bytes body
+    // (1 error code + 1 error subcode, plus 0 or more bytes of data)
+    if input.len() < 2 {
+        return Err(Error::TooSmall("notification message body".to_string()));
     }
 
-    pub fn from_wire(input: &[u8]) -> Result<NotificationMessage, Error> {
-        // RFC 4271 §4.5: NOTIFICATION minimum 2 bytes body
-        // (1 error code + 1 error subcode, plus 0 or more bytes of data)
-        if input.len() < 2 {
-            return Err(Error::TooSmall(
-                "notification message body".to_string(),
-            ));
+    let (input, error_code) = parse_u8(input)?;
+    let error_code = ErrorCode::try_from(error_code)?;
+
+    let (input, error_subcode) = parse_u8(input)?;
+    let error_subcode = match error_code {
+        ErrorCode::Header => {
+            HeaderErrorSubcode::try_from(error_subcode)?.into()
         }
-
-        let (input, error_code) = parse_u8(input)?;
-        let error_code = ErrorCode::try_from(error_code)?;
-
-        let (input, error_subcode) = parse_u8(input)?;
-        let error_subcode = match error_code {
-            ErrorCode::Header => {
-                HeaderErrorSubcode::try_from(error_subcode)?.into()
-            }
-            ErrorCode::Open => {
-                OpenErrorSubcode::try_from(error_subcode)?.into()
-            }
-            ErrorCode::Update => {
-                UpdateErrorSubcode::try_from(error_subcode)?.into()
-            }
-            ErrorCode::HoldTimerExpired => {
-                ErrorSubcode::HoldTime(error_subcode)
-            }
-            ErrorCode::Fsm => ErrorSubcode::Fsm(error_subcode),
-            ErrorCode::Cease => {
-                CeaseErrorSubcode::try_from(error_subcode)?.into()
-            }
-        };
-        Ok(NotificationMessage {
-            error_code,
-            error_subcode,
-            data: input.to_owned(),
-        })
-    }
+        ErrorCode::Open => OpenErrorSubcode::try_from(error_subcode)?.into(),
+        ErrorCode::Update => {
+            UpdateErrorSubcode::try_from(error_subcode)?.into()
+        }
+        ErrorCode::HoldTimerExpired => ErrorSubcode::HoldTime(error_subcode),
+        ErrorCode::Fsm => ErrorSubcode::Fsm(error_subcode),
+        ErrorCode::Cease => CeaseErrorSubcode::try_from(error_subcode)?.into(),
+    };
+    Ok(NotificationMessage {
+        error_code,
+        error_subcode,
+        data: input.to_owned(),
+    })
 }
 
-impl Display for NotificationMessage {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "Notification [ error_code: {}, error_subcode: {}, data: {:?} ]",
-            self.error_code, self.error_subcode, self.data
-        )
-    }
+pub fn route_refresh_message_to_wire(rr: &RouteRefreshMessage) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&rr.afi.to_be_bytes());
+    buf.push(0); // reserved
+    buf.push(rr.safi);
+    buf
 }
 
-// A message sent between peers to ask for re-advertisement of all outbound
-// routes. Defined in RFC 2918.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RouteRefreshMessage {
-    /// Address family identifier.
-    pub afi: u16,
-    /// Subsequent address family identifier.
-    pub safi: u8,
-}
-
-impl RouteRefreshMessage {
-    pub fn to_wire(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&self.afi.to_be_bytes());
-        buf.push(0); // reserved
-        buf.push(self.safi);
-        buf
-    }
-    pub fn from_wire(input: &[u8]) -> Result<RouteRefreshMessage, Error> {
-        let (input, afi) = be_u16(input)?;
-        let (input, _reserved) = parse_u8(input)?;
-        let (_, safi) = parse_u8(input)?;
-        Ok(RouteRefreshMessage { afi, safi })
-    }
-}
-
-impl Display for RouteRefreshMessage {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "Route Refresh [ afi: {}, safi: {} ]",
-            self.afi, self.safi
-        )
-    }
+pub fn route_refresh_message_from_wire(
+    input: &[u8],
+) -> Result<RouteRefreshMessage, Error> {
+    let (input, afi) = be_u16(input)?;
+    let (input, _reserved) = parse_u8(input)?;
+    let (_, safi) = parse_u8(input)?;
+    Ok(RouteRefreshMessage { afi, safi })
 }
 
 pub use bgp_types::messages::ErrorCode;
@@ -3596,10 +3299,10 @@ mod tests {
     fn open_round_trip() {
         let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, false);
 
-        let buf = om0.to_wire().expect("open message to wire");
+        let buf = open_message_to_wire(&om0).expect("open message to wire");
         println!("buf: {}", buf.hex_dump());
 
-        let om1 = OpenMessage::from_wire(&buf).expect("open message from wire");
+        let om1 = open_message_from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
     }
 
@@ -3607,10 +3310,10 @@ mod tests {
     fn open_round_trip_extended_nexthop() {
         let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, true);
 
-        let buf = om0.to_wire().expect("open message to wire");
+        let buf = open_message_to_wire(&om0).expect("open message to wire");
         println!("buf: {}", buf.hex_dump());
 
-        let om1 = OpenMessage::from_wire(&buf).expect("open message from wire");
+        let om1 = open_message_from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
     }
 
@@ -3676,8 +3379,9 @@ mod tests {
             data: vec![],
         };
 
-        let buf = nm0.to_wire().expect("notification message to wire");
-        let nm1 = NotificationMessage::from_wire(&buf)
+        let buf = notification_message_to_wire(&nm0)
+            .expect("notification message to wire");
+        let nm1 = notification_message_from_wire(&buf)
             .expect("notification message from wire");
 
         assert_eq!(nm0.error_code, nm1.error_code);
@@ -3693,8 +3397,8 @@ mod tests {
             safi: Safi::Unicast.into(),
         };
 
-        let buf = rr0.to_wire();
-        let rr1 = RouteRefreshMessage::from_wire(&buf)
+        let buf = route_refresh_message_to_wire(&rr0);
+        let rr1 = route_refresh_message_from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr0, rr1);
 
@@ -3704,8 +3408,8 @@ mod tests {
             safi: Safi::Unicast.into(),
         };
 
-        let buf = rr2.to_wire();
-        let rr3 = RouteRefreshMessage::from_wire(&buf)
+        let buf = route_refresh_message_to_wire(&rr2);
+        let rr3 = route_refresh_message_from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr2, rr3);
     }
@@ -5659,10 +5363,10 @@ mod tests {
 
         use crate::messages::{
             Aggregator, As4Aggregator, BgpNexthop, Error, MpReachNlri,
-            MpUnreachNlri, NotificationMessage, OpenMessage,
-            PathAttributeTypeCode, PathAttributeValue, UpdateMessage,
-            UpdateParseErrorReason, mp_reach_nlri_to_wire,
-            mp_unreach_nlri_to_wire, path_attribute_flags,
+            MpUnreachNlri, PathAttributeTypeCode, PathAttributeValue,
+            UpdateMessage, UpdateParseErrorReason, mp_reach_nlri_to_wire,
+            mp_unreach_nlri_to_wire, notification_message_from_wire,
+            open_message_from_wire, path_attribute_flags,
             path_attribute_value_from_wire, path_attribute_value_to_wire,
         };
 
@@ -6068,7 +5772,7 @@ mod tests {
         fn open_message_too_short() {
             // OPEN message with insufficient body (< 10 bytes)
             let input = vec![1, 0, 0]; // Only 3 bytes (need 10 minimum)
-            let result = OpenMessage::from_wire(&input);
+            let result = open_message_from_wire(&input);
             assert!(result.is_err(), "OPEN with too short body should fail");
             match result {
                 Err(Error::TooSmall(msg)) => {
@@ -6112,7 +5816,7 @@ mod tests {
         fn notification_message_minimum_length() {
             // NOTIFICATION message with exactly 2 bytes (error code + subcode)
             let input = vec![1, 1]; // Error code 1, subcode 1
-            let result = NotificationMessage::from_wire(&input);
+            let result = notification_message_from_wire(&input);
             assert!(
                 result.is_ok(),
                 "NOTIFICATION with minimum 2 bytes should succeed"
@@ -6123,7 +5827,7 @@ mod tests {
         fn notification_message_too_short() {
             // NOTIFICATION message with only 1 byte (< 2 minimum)
             let input = vec![1u8];
-            let result = NotificationMessage::from_wire(&input);
+            let result = notification_message_from_wire(&input);
             assert!(result.is_err(), "NOTIFICATION with < 2 bytes should fail");
         }
 

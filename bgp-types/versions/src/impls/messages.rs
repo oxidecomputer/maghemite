@@ -15,14 +15,17 @@ use num_enum::TryFromPrimitive;
 use rdb_types_versions::v1::AddressFamily;
 
 use crate::error::WireError;
+use std::collections::BTreeSet;
+
 use crate::v1::messages::{
-    AddPathElement, AsPathType, Capability, CapabilityCode, CeaseErrorSubcode,
-    ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, MAX_MESSAGE_SIZE,
-    MessageKind, MessageType, OpenErrorSubcode, OptionalParameter,
+    AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
+    CeaseErrorSubcode, ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode,
+    MAX_MESSAGE_SIZE, MessageKind, MessageType, NotificationMessage,
+    OpenErrorSubcode, OpenMessage, OptionalParameter,
     PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
     PathAttributeTypeCode as PathAttributeTypeCodeV1,
-    PathAttributeValue as PathAttributeValueV1, PathOrigin, Safi,
-    UpdateErrorSubcode,
+    PathAttributeValue as PathAttributeValueV1, PathOrigin,
+    RouteRefreshMessage, Safi, UpdateErrorSubcode,
 };
 use crate::v4::messages::{
     Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
@@ -1260,5 +1263,141 @@ impl From<Capability> for CapabilityCode {
             Capability::Unassigned { code: _ } => CapabilityCode::Reserved,
             Capability::Reserved { code: _ } => CapabilityCode::Reserved,
         }
+    }
+}
+
+impl OpenMessage {
+    /// Create a new open message for a sender with a 2-byte ASN
+    pub fn new2(
+        asn: u16,
+        hold_time: u16,
+        id: u32,
+        extended_nexthop: bool,
+    ) -> OpenMessage {
+        let parameters = if extended_nexthop {
+            let caps = BTreeSet::from([Capability::ExtendedNextHopEncoding {
+                elements: vec![ExtendedNexthopElement {
+                    afi: Afi::Ipv4.into(),
+                    safi: u8::from(Safi::Unicast).into(),
+                    nh_afi: Afi::Ipv6.into(),
+                }],
+            }]);
+            vec![OptionalParameter::Capabilities(caps)]
+        } else {
+            Vec::default()
+        };
+        OpenMessage {
+            version: BGP4,
+            asn,
+            hold_time,
+            id,
+            parameters,
+        }
+    }
+
+    /// Create a new open message for a sender with a 4-byte ASN
+    pub fn new4(
+        asn: u32,
+        hold_time: u16,
+        id: u32,
+        extended_nexthop: bool,
+    ) -> OpenMessage {
+        let mut params = BTreeSet::from([Capability::FourOctetAs { asn }]);
+        if extended_nexthop {
+            params.insert(Capability::ExtendedNextHopEncoding {
+                elements: vec![ExtendedNexthopElement {
+                    afi: Afi::Ipv4.into(),
+                    safi: u8::from(Safi::Unicast).into(),
+                    nh_afi: Afi::Ipv6.into(),
+                }],
+            });
+        }
+        OpenMessage {
+            version: BGP4,
+            asn: u16::try_from(asn).unwrap_or(AS_TRANS),
+            hold_time,
+            id,
+            parameters: vec![OptionalParameter::Capabilities(params)],
+        }
+    }
+
+    pub fn add_capabilities(&mut self, capabilities: &BTreeSet<Capability>) {
+        if capabilities.is_empty() {
+            return;
+        }
+        for p in &mut self.parameters {
+            if let OptionalParameter::Capabilities(cs) = p {
+                cs.extend(capabilities.iter().cloned());
+                return;
+            }
+        }
+        self.parameters
+            .push(OptionalParameter::Capabilities(capabilities.clone()));
+    }
+
+    pub fn get_capabilities(&self) -> BTreeSet<Capability> {
+        let mut result = BTreeSet::new();
+        for p in self.parameters.iter() {
+            if let OptionalParameter::Capabilities(caps) = p {
+                result.extend(caps.clone().into_iter());
+            }
+        }
+        result
+    }
+
+    pub fn has_capability(&self, code: CapabilityCode) -> bool {
+        self.get_capabilities()
+            .into_iter()
+            .any(|x| CapabilityCode::from(x) == code)
+    }
+
+    pub fn asn(&self) -> u32 {
+        let mut remote_asn = u32::from(self.asn);
+        for p in &self.parameters {
+            if let OptionalParameter::Capabilities(caps) = p {
+                for c in caps {
+                    if let Capability::FourOctetAs { asn } = c {
+                        remote_asn = *asn;
+                    }
+                }
+            }
+        }
+        remote_asn
+    }
+}
+
+impl Display for OpenMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let param_string = self
+            .parameters
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "Open [ version: {}, asn: {}, hold_time: {}, id: {}, parameters: [ {param_string}] ]",
+            self.version, self.asn, self.hold_time, self.id
+        )
+    }
+}
+
+impl Display for NotificationMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Notification [ error_code: {}, error_subcode: {}, data: {:?} ]",
+            self.error_code, self.error_subcode, self.data
+        )
+    }
+}
+
+impl Display for RouteRefreshMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Route Refresh [ afi: {}, safi: {} ]",
+            self.afi, self.safi
+        )
     }
 }

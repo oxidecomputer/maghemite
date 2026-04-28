@@ -60,24 +60,30 @@ create_enum_module! {
 }
 
 // Rhai needs methods to be &mut self and not just &self, so the following
-// methods are to accomplish that and a bit of type translation in cases
-// where complex rust types would be difficult to deal with in rhai.
-impl OpenMessage {
-    pub fn rhai_has_capability(&mut self, code: CapabilityCode) -> bool {
-        self.has_capability(code)
-    }
-    pub fn add_four_octet_as(&mut self, asn: i64) {
-        let asn = match asn.try_into() {
-            Ok(asn) => asn,
-            Err(_) => return, //TODO something better?
-        };
-        self.add_capabilities(&BTreeSet::from([Capability::FourOctetAs {
-            asn,
-        }]));
-    }
-    pub fn emit(&mut self) -> ShaperResult {
-        ShaperResult::Emit(Message::Open(self.clone()))
-    }
+// functions accomplish that and a bit of type translation in cases where
+// complex rust types would be difficult to deal with in rhai. These were
+// previously inherent methods on `OpenMessage`/`UpdateMessage`; once those
+// types moved to `bgp-types-versions`, the orphan rule forbids defining
+// inherent methods on them in this crate, so they're free fns here. Rhai's
+// `Engine::register_fn` accepts free fns and preserves dotted-call syntax in
+// rhai scripts.
+pub fn rhai_open_message_has_capability(
+    om: &mut OpenMessage,
+    code: CapabilityCode,
+) -> bool {
+    om.has_capability(code)
+}
+
+pub fn rhai_open_message_add_four_octet_as(om: &mut OpenMessage, asn: i64) {
+    let asn = match asn.try_into() {
+        Ok(asn) => asn,
+        Err(_) => return, //TODO something better?
+    };
+    om.add_capabilities(&BTreeSet::from([Capability::FourOctetAs { asn }]));
+}
+
+pub fn rhai_open_message_emit(om: &mut OpenMessage) -> ShaperResult {
+    ShaperResult::Emit(Message::Open(om.clone()))
 }
 
 impl UpdateMessage {

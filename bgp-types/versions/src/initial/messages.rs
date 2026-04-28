@@ -809,3 +809,157 @@ pub enum Capability {
         code: u8,
     },
 }
+
+/// The autonomous system number used in OPEN messages when 4-byte ASNs are in
+/// use.
+///
+/// Ref: RFC 4893 §7
+pub const AS_TRANS: u16 = 23456;
+
+/// The version number for BGP-4
+pub const BGP4: u8 = 4;
+
+/// The first message sent by each side once a TCP connection is established.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |    Version    |     My Autonomous System      |   Hold Time   :
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :               |                BGP Identifier                 :
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :               | Opt Parm Len  |     Optional Parameters       :
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :                                                               :
+/// :             Optional Parameters (cont, variable)              :
+/// :                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// Ref: RFC 4271 §4.2
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OpenMessage {
+    /// BGP protocol version.
+    pub version: u8,
+
+    /// Autonomous system number of the sender. When 4-byte ASNs are in use this
+    /// value is set to AS_TRANS which has a value of 23456.
+    ///
+    /// Ref: RFC 4893 §7
+    pub asn: u16,
+
+    /// Number of seconds the sender proposes for the hold timer.
+    pub hold_time: u16,
+
+    /// BGP identifier of the sender
+    pub id: u32,
+
+    /// A list of optional parameters.
+    pub parameters: Vec<OptionalParameter>,
+}
+
+/// Notification messages are exchanged between BGP peers when an exceptional
+/// event has occurred.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotificationMessage {
+    /// Error code associated with the notification
+    pub error_code: ErrorCode,
+
+    /// Error subcode associated with the notification
+    pub error_subcode: ErrorSubcode,
+
+    /*
+     * Implementation notes for later on the data field ...
+     *
+     * What follows is verbatim from RFC 4271
+     * <https://datatracker.ietf.org/doc/html/rfc4271>
+     *
+     * §6.1 Message Header Error Handling
+     * ==================================
+     *
+     *   If at least one of the following is true:
+     *
+     *    - if the Length field of the message header is less than 19 or
+     *      greater than 4096, or
+     *
+     *    - if the Length field of an OPEN message is less than the minimum
+     *      length of the OPEN message, or
+     *
+     *    - if the Length field of an UPDATE message is less than the
+     *      minimum length of the UPDATE message, or
+     *
+     *    - if the Length field of a KEEPALIVE message is not equal to 19,
+     *      or
+     *
+     *    - if the Length field of a NOTIFICATION message is less than the
+     *      minimum length of the NOTIFICATION message,
+     *
+     *     then the Error Subcode MUST be set to Bad Message Length.  The Data
+     *     field MUST contain the erroneous Length field.
+     *
+     *     If the Type field of the message header is not recognized, then the
+     *     Error Subcode MUST be set to Bad Message Type.  The Data field MUST
+     *     contain the erroneous Type field.
+     *
+     * §6.2 Open Message Error Handling
+     * ================================
+     *
+     *     If the version number in the Version field of the received OPEN
+     *     message is not supported, then the Error Subcode MUST be set to
+     *     Unsupported Version Number.  The Data field is a 2-octet unsigned
+     *     integer, which indicates the largest, locally-supported version
+     *     number less than the version the remote BGP peer bid
+     *
+     * §6.3 Update Message Error Handling
+     * ==================================
+     *
+     *     If any recognized attribute has Attribute Flags that conflict with
+     *     the Attribute Type Code, then the Error Subcode MUST be set to
+     *     Attribute Flags Error.  The Data field MUST contain the erroneous
+     *     attribute (type, length, and value).
+     *
+     *     If any recognized attribute has an Attribute Length that conflicts
+     *     with the expected length (based on the attribute type code), then the
+     *     Error Subcode MUST be set to Attribute Length Error.  The Data field
+     *     MUST contain the erroneous attribute (type, length, and value).
+     *
+     *     If any of the well-known mandatory attributes are not present, then
+     *     the Error Subcode MUST be set to Missing Well-known Attribute.  The
+     *     Data field MUST contain the Attribute Type Code of the missing,
+     *     well-known attribute.
+     *
+     *     If any of the well-known mandatory attributes are not recognized,
+     *     then the Error Subcode MUST be set to Unrecognized Well-known
+     *     Attribute.  The Data field MUST contain the unrecognized attribute
+     *     (type, length, and value).
+     *
+     *     If the ORIGIN attribute has an undefined value, then the Error Sub-
+     *     code MUST be set to Invalid Origin Attribute.  The Data field MUST
+     *     contain the unrecognized attribute (type, length, and value).
+     *
+     *     If the NEXT_HOP attribute field is syntactically incorrect, then the
+     *     Error Subcode MUST be set to Invalid NEXT_HOP Attribute.  The Data
+     *     field MUST contain the incorrect attribute (type, length, and value).
+     *     Syntactic correctness means that the NEXT_HOP attribute represents a
+     *     valid IP host address.
+     *
+     *     If an optional attribute is recognized, then the value of this
+     *     attribute MUST be checked.  If an error is detected, the attribute
+     *     MUST be discarded, and the Error Subcode MUST be set to Optional
+     *     Attribute Error.  The Data field MUST contain the attribute (type,
+     *     length, and value).
+     *
+     */
+    pub data: Vec<u8>,
+}
+
+// A message sent between peers to ask for re-advertisement of all outbound
+// routes. Defined in RFC 2918.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RouteRefreshMessage {
+    /// Address family identifier.
+    pub afi: u16,
+    /// Subsequent address family identifier.
+    pub safi: u8,
+}
