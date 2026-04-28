@@ -17,9 +17,8 @@ use crate::{
         NotificationMessage, NotificationParseError,
         NotificationParseErrorReason, OpenErrorSubcode, OpenParseError,
         OpenParseErrorReason, RouteRefreshParseError,
-        RouteRefreshParseErrorReason, UpdateMessage,
-        notification_message_from_wire, open_message_from_wire,
-        route_refresh_message_from_wire,
+        RouteRefreshParseErrorReason, notification_message_from_wire,
+        open_message_from_wire, route_refresh_message_from_wire,
     },
     session::{
         ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
@@ -907,21 +906,23 @@ impl BgpConnectionTcp {
                     )));
                 }
             },
-            MessageType::Update => match UpdateMessage::from_wire(&msgbuf) {
-                Ok(m) => m.into(),
-                Err(update_err) => {
-                    connection_log_lite!(log,
-                        error,
-                        "UPDATE parse error: {}", update_err;
-                        "direction" => direction,
-                        "connection" => format!("{stream:?}"),
-                        "error" => format!("{update_err}")
-                    );
-                    return Err(RecvError::Parse(MessageParseError::Update(
-                        update_err,
-                    )));
+            MessageType::Update => {
+                match crate::messages::update_message_from_wire(&msgbuf) {
+                    Ok((m, _errs)) => Message::from(m),
+                    Err(update_err) => {
+                        connection_log_lite!(log,
+                            error,
+                            "UPDATE parse error: {}", update_err;
+                            "direction" => direction,
+                            "connection" => format!("{stream:?}"),
+                            "error" => format!("{update_err}")
+                        );
+                        return Err(RecvError::Parse(
+                            MessageParseError::Update(update_err),
+                        ));
+                    }
                 }
-            },
+            }
             MessageType::Notification => {
                 match notification_message_from_wire(&msgbuf) {
                     Ok(m) => m.into(),
@@ -1020,7 +1021,7 @@ impl BgpConnectionTcp {
             "message" => msg.title(),
             "message_contents" => format!("{msg}")
         );
-        let msg_buf = msg.to_wire()?;
+        let msg_buf = crate::messages::message_to_wire(&msg)?;
         let header = Header {
             length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
                 |_| {
@@ -1029,7 +1030,7 @@ impl BgpConnectionTcp {
                     )
                 },
             )?,
-            typ: crate::messages::message_type_of(&msg),
+            typ: MessageType::from(&msg),
         };
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);

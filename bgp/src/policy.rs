@@ -209,9 +209,15 @@ pub fn new_rhai_engine() -> Engine {
 
     engine
         .register_type_with_name::<UpdateMessage>("UpdateMessage")
-        .register_fn("has_community", UpdateMessage::rhai_has_community)
-        .register_fn("add_community", UpdateMessage::rhai_add_community)
-        .register_fn("emit", UpdateMessage::emit)
+        .register_fn(
+            "has_community",
+            crate::rhai_integration::rhai_update_message_has_community,
+        )
+        .register_fn(
+            "add_community",
+            crate::rhai_integration::rhai_update_message_add_community,
+        )
+        .register_fn("emit", crate::rhai_integration::rhai_update_message_emit)
         .register_raw_fn(
             "prefix_filter",
             [
@@ -222,11 +228,14 @@ pub fn new_rhai_engine() -> Engine {
                 // get the passed in function
                 let fp = args[1].take().cast::<FnPtr>();
                 let mut msg = args[0].write_lock::<UpdateMessage>().unwrap();
-                msg.prefix_filter(|p| {
-                    fp.call_raw(&context, None, [Dynamic::from(*p)])
-                        .unwrap()
-                        .cast::<bool>()
-                });
+                crate::rhai_integration::rhai_update_message_prefix_filter(
+                    &mut msg,
+                    |p: &Prefix4| {
+                        fp.call_raw(&context, None, [Dynamic::from(*p)])
+                            .unwrap()
+                            .cast::<bool>()
+                    },
+                );
                 Ok(())
             },
         );

@@ -16,9 +16,10 @@ pub mod messages {
 
     pub use crate::v4::messages::{
         Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
-        ExtendedNexthopElement, Ipv6DoubleNexthop, MpReachIpv4Unicast,
+        ExtendedNexthopElement, Ipv6DoubleNexthop, Message, MpReachIpv4Unicast,
         MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
         MpUnreachIpv6Unicast, MpUnreachNlri, PathAttribute, PathAttributeType,
-        PathAttributeTypeCode, PathAttributeValue, path_attribute_flags,
+        PathAttributeTypeCode, PathAttributeValue, UpdateMessage,
+        path_attribute_flags,
     };
 }

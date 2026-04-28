@@ -359,3 +359,51 @@ pub struct PathAttribute {
     /// Value of the attribute
     pub value: PathAttributeValue,
 }
+
+/// An update message is used to advertise feasible routes that share common
+/// path attributes to a peer, or to withdraw multiple unfeasible routes from
+/// service.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |        Witdrawn Length        |       Withdrawn Routes        :
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :                                                               :
+/// :                Withdrawn Routes (cont, variable)              :
+/// :                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |    Path Attribute Length      |       Path Attributes         :
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :                                                               :
+/// :                Path Attributes (cont, variable)               :
+/// :                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :                                                               :
+/// :       Network Layer Reachability Information (variable)       :
+/// :                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// Ref: RFC 4271 §4.3
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
+pub struct UpdateMessage {
+    pub withdrawn: Vec<Prefix4>,
+    pub path_attributes: Vec<PathAttribute>, // XXX: use map for O(1) lookups?
+    pub nlri: Vec<Prefix4>,
+}
+
+/// Holds a BGP message. May be an Open, Update, Notification or Keep Alive
+/// message.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum Message {
+    Open(crate::v1::messages::OpenMessage),
+    Update(UpdateMessage),
+    Notification(crate::v1::messages::NotificationMessage),
+    KeepAlive,
+    RouteRefresh(crate::v1::messages::RouteRefreshMessage),
+}

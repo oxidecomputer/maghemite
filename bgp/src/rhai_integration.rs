@@ -86,44 +86,53 @@ pub fn rhai_open_message_emit(om: &mut OpenMessage) -> ShaperResult {
     ShaperResult::Emit(Message::Open(om.clone()))
 }
 
-impl UpdateMessage {
-    pub fn rhai_has_community(&mut self, community: i64) -> bool {
-        // rhai integers are of type i64, so if we get something bigger, the
-        // answer is no, as communities out of the 32 bit range are not defined
-        let c: u32 = match community.try_into() {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        self.has_community(Community::from(c))
-    }
+pub fn rhai_update_message_has_community(
+    um: &mut UpdateMessage,
+    community: i64,
+) -> bool {
+    // rhai integers are of type i64, so if we get something bigger, the
+    // answer is no, as communities out of the 32 bit range are not defined
+    let c: u32 = match community.try_into() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    um.has_community(Community::from(c))
+}
 
-    pub fn rhai_add_community(&mut self, community: i64) {
-        let c: u32 = match community.try_into() {
-            Ok(c) => c,
-            Err(_) => return, //TODO something better
-        };
-        self.add_community(Community::from(c));
-    }
+pub fn rhai_update_message_add_community(
+    um: &mut UpdateMessage,
+    community: i64,
+) {
+    let c: u32 = match community.try_into() {
+        Ok(c) => c,
+        Err(_) => return, //TODO something better
+    };
+    um.add_community(Community::from(c));
+}
 
-    pub fn emit(&mut self) -> ShaperResult {
-        ShaperResult::Emit(Message::Update(self.clone()))
-    }
+pub fn rhai_update_message_emit(um: &mut UpdateMessage) -> ShaperResult {
+    ShaperResult::Emit(Message::Update(um.clone()))
+}
 
-    pub fn prefix_filter<F>(&mut self, f: F)
-    where
-        F: Clone + Fn(&Prefix4) -> bool,
-    {
-        self.withdrawn.retain(f.clone());
-        self.nlri.retain(f);
-    }
+pub fn rhai_update_message_prefix_filter<F>(um: &mut UpdateMessage, f: F)
+where
+    F: Clone + Fn(&Prefix4) -> bool,
+{
+    um.withdrawn.retain(f.clone());
+    um.nlri.retain(f);
+}
 
-    pub fn get_nlri(&mut self) -> Vec<Prefix4> {
-        self.nlri.clone()
-    }
+#[allow(dead_code)]
+pub fn rhai_update_message_get_nlri(um: &mut UpdateMessage) -> Vec<Prefix4> {
+    um.nlri.clone()
+}
 
-    pub fn set_nlri(&mut self, value: Vec<Prefix4>) {
-        self.nlri = value;
-    }
+#[allow(dead_code)]
+pub fn rhai_update_message_set_nlri(
+    um: &mut UpdateMessage,
+    value: Vec<Prefix4>,
+) {
+    um.nlri = value;
 }
 
 // Create a plugin module with functions constructing the 'ShaperResult' variants

@@ -17,6 +17,7 @@ use rdb_types_versions::v1::AddressFamily;
 use crate::error::WireError;
 use std::collections::BTreeSet;
 
+use crate::error::MessageConvertError;
 use crate::v1::messages::{
     AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
     CeaseErrorSubcode, ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode,
@@ -29,10 +30,11 @@ use crate::v1::messages::{
 };
 use crate::v4::messages::{
     Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
-    ExtendedNexthopElement, Ipv6DoubleNexthop, MpReachIpv4Unicast,
+    ExtendedNexthopElement, Ipv6DoubleNexthop, Message, MpReachIpv4Unicast,
     MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
     MpUnreachIpv6Unicast, MpUnreachNlri, PathAttribute, PathAttributeType,
-    PathAttributeTypeCode, PathAttributeValue, path_attribute_flags,
+    PathAttributeTypeCode, PathAttributeValue, UpdateMessage,
+    path_attribute_flags,
 };
 
 /// According to RFC 4271 §4.1 the header marker is all ones.
@@ -1399,5 +1401,326 @@ impl Display for RouteRefreshMessage {
             "Route Refresh [ afi: {}, safi: {} ]",
             self.afi, self.safi
         )
+    }
+}
+
+// ============================================================================
+// v4 Message and UpdateMessage: inherent methods, conversions, Display.
+// ============================================================================
+
+impl Message {
+    pub fn title(&self) -> &'static str {
+        match self {
+            Message::Open(_) => "open message",
+            Message::Update(_) => "update message",
+            Message::Notification(_) => "notification message",
+            Message::KeepAlive => "keepalive message",
+            Message::RouteRefresh(_) => "route refresh message",
+        }
+    }
+
+    pub fn kind(&self) -> MessageKind {
+        match self {
+            Message::Open(_) => MessageKind::Open,
+            Message::Update(_) => MessageKind::Update,
+            Message::Notification(_) => MessageKind::Notification,
+            Message::KeepAlive => MessageKind::KeepAlive,
+            Message::RouteRefresh(_) => MessageKind::RouteRefresh,
+        }
+    }
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Message::Open(o) => write!(f, "{o}"),
+            Message::Update(u) => write!(f, "{u}"),
+            Message::Notification(n) => write!(f, "{n}"),
+            Message::KeepAlive => write!(f, "Keepalive"),
+            Message::RouteRefresh(r) => write!(f, "{r}"),
+        }
+    }
+}
+
+impl From<OpenMessage> for Message {
+    fn from(m: OpenMessage) -> Message {
+        Message::Open(m)
+    }
+}
+
+impl From<UpdateMessage> for Message {
+    fn from(m: UpdateMessage) -> Message {
+        Message::Update(m)
+    }
+}
+
+impl From<NotificationMessage> for Message {
+    fn from(m: NotificationMessage) -> Message {
+        Message::Notification(m)
+    }
+}
+
+impl From<RouteRefreshMessage> for Message {
+    fn from(m: RouteRefreshMessage) -> Message {
+        Message::RouteRefresh(m)
+    }
+}
+
+impl TryFrom<Message> for OpenMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Open(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotAnOpen)
+        }
+    }
+}
+
+impl TryFrom<Message> for UpdateMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Update(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotAnUpdate)
+        }
+    }
+}
+
+impl TryFrom<Message> for NotificationMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Notification(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotANotification)
+        }
+    }
+}
+
+impl TryFrom<Message> for RouteRefreshMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::RouteRefresh(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotARouteRefresh)
+        }
+    }
+}
+
+impl From<&Message> for MessageType {
+    fn from(m: &Message) -> MessageType {
+        match m {
+            Message::Open(_) => MessageType::Open,
+            Message::Update(_) => MessageType::Update,
+            Message::Notification(_) => MessageType::Notification,
+            Message::KeepAlive => MessageType::KeepAlive,
+            Message::RouteRefresh(_) => MessageType::RouteRefresh,
+        }
+    }
+}
+
+impl UpdateMessage {
+    pub fn multi_exit_discriminator(&self) -> Option<u32> {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::MultiExitDisc(med) = &a.value {
+                return Some(*med);
+            }
+        }
+        None
+    }
+
+    pub fn local_pref(&self) -> Option<u32> {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::LocalPref(value) = &a.value {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    pub fn set_local_pref(&mut self, value: u32) {
+        for a in &mut self.path_attributes {
+            if let PathAttributeValue::LocalPref(current) = &mut a.value {
+                *current = value;
+                return;
+            }
+        }
+        self.path_attributes
+            .push(PathAttributeValue::LocalPref(value).into());
+    }
+
+    pub fn clear_local_pref(&mut self) {
+        self.path_attributes
+            .retain(|a| a.typ.type_code != PathAttributeTypeCode::LocalPref);
+    }
+
+    pub fn as_path(&self) -> Option<Vec<As4PathSegment>> {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::AsPath(path) = &a.value {
+                return Some(path.clone());
+            }
+            if let PathAttributeValue::As4Path(path) = &a.value {
+                return Some(path.clone());
+            }
+        }
+        None
+    }
+
+    pub fn path_len(&self) -> Option<usize> {
+        self.as_path()
+            .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
+    }
+
+    pub fn has_community(
+        &self,
+        community: crate::v1::messages::Community,
+    ) -> bool {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::Communities(communities) = &a.value {
+                for c in communities {
+                    if *c == community {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn add_community(&mut self, community: crate::v1::messages::Community) {
+        for a in &mut self.path_attributes {
+            if let PathAttributeValue::Communities(communities) = &mut a.value {
+                communities.push(community);
+                return;
+            }
+        }
+        self.path_attributes
+            .push(PathAttributeValue::Communities(vec![community]).into());
+    }
+
+    pub fn graceful_shutdown(&self) -> bool {
+        self.has_community(crate::v1::messages::Community::GracefulShutdown)
+    }
+
+    pub fn mp_reach(&self) -> Option<&MpReachNlri> {
+        self.path_attributes.iter().find_map(|a| match &a.value {
+            PathAttributeValue::MpReachNlri(mp) => Some(mp),
+            _ => None,
+        })
+    }
+
+    pub fn mp_reach_mut(&mut self) -> Option<&mut MpReachNlri> {
+        self.path_attributes
+            .iter_mut()
+            .find_map(|a| match &mut a.value {
+                PathAttributeValue::MpReachNlri(mp) => Some(mp),
+                _ => None,
+            })
+    }
+
+    pub fn mp_unreach(&self) -> Option<&MpUnreachNlri> {
+        self.path_attributes.iter().find_map(|a| match &a.value {
+            PathAttributeValue::MpUnreachNlri(mp) => Some(mp),
+            _ => None,
+        })
+    }
+
+    pub fn mp_unreach_mut(&mut self) -> Option<&mut MpUnreachNlri> {
+        self.path_attributes
+            .iter_mut()
+            .find_map(|a| match &mut a.value {
+                PathAttributeValue::MpUnreachNlri(mp) => Some(mp),
+                _ => None,
+            })
+    }
+
+    pub fn nexthop4(&self) -> Option<Ipv4Addr> {
+        self.path_attributes.iter().find_map(|a| match a.value {
+            PathAttributeValue::NextHop(addr) => Some(addr),
+            _ => None,
+        })
+    }
+}
+
+impl Display for UpdateMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let w_str = self
+            .withdrawn
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let n_str = self
+            .nlri
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let p_str = self
+            .path_attributes
+            .iter()
+            .map(|pa| pa.value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        write!(
+            f,
+            "Update[ withdrawn({}) path_attributes: ({p_str}) nlri({}) ]",
+            if !w_str.is_empty() { &w_str } else { "empty" },
+            if !n_str.is_empty() { &n_str } else { "empty" }
+        )
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Cross-version conversions: v4 (current) Message/UpdateMessage → v1 (compat).
+// ----------------------------------------------------------------------------
+
+impl From<UpdateMessage> for crate::v1::messages::UpdateMessage {
+    fn from(msg: UpdateMessage) -> Self {
+        Self {
+            withdrawn: msg
+                .withdrawn
+                .into_iter()
+                .map(|p| {
+                    crate::v1::messages::Prefix::from(
+                        rdb_types_versions::v1::prefix::Prefix::V4(p),
+                    )
+                })
+                .collect(),
+            // Filter out attributes that don't have v1 equivalents (MP-BGP,
+            // AtomicAggregate).
+            path_attributes: msg
+                .path_attributes
+                .into_iter()
+                .filter_map(Option::<PathAttributeV1>::from)
+                .collect(),
+            nlri: msg
+                .nlri
+                .into_iter()
+                .map(|p| {
+                    crate::v1::messages::Prefix::from(
+                        rdb_types_versions::v1::prefix::Prefix::V4(p),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<Message> for crate::v1::messages::Message {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Open(open) => Self::Open(open),
+            Message::Update(update) => Self::Update(update.into()),
+            Message::Notification(notif) => Self::Notification(notif),
+            Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
+        }
     }
 }

@@ -16,7 +16,7 @@ use crate::messages::{
     As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Ipv6DoubleNexthop,
     MpReachNlri, MpUnreachNlri, PathAttribute, PathAttributeType,
     PathAttributeTypeCode, PathAttributeValue, PathOrigin, UpdateMessage,
-    path_attribute_flags,
+    path_attribute_flags, update_message_from_wire, update_message_to_wire,
 };
 use proptest::prelude::*;
 use rdb::types::{Prefix4, Prefix6};
@@ -200,7 +200,6 @@ fn update_traditional_strategy() -> impl Strategy<Value = UpdateMessage> {
             withdrawn,
             path_attributes,
             nlri,
-            errors: vec![],
         })
 }
 
@@ -219,7 +218,6 @@ fn update_mp_reach_strategy() -> impl Strategy<Value = UpdateMessage> {
                 withdrawn: vec![],
                 path_attributes: attrs,
                 nlri: vec![],
-                errors: vec![],
             }
         },
     )
@@ -237,7 +235,6 @@ fn update_mp_unreach_strategy() -> impl Strategy<Value = UpdateMessage> {
             value: PathAttributeValue::MpUnreachNlri(mp_unreach),
         }],
         nlri: vec![],
-        errors: vec![],
     })
 }
 
@@ -293,11 +290,10 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![],
             nlri: prefixes.clone(),
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         prop_assert_eq!(decoded.nlri, prefixes, "NLRI prefixes should round-trip");
     }
@@ -309,11 +305,10 @@ proptest! {
             withdrawn: prefixes.clone(),
             path_attributes: vec![],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         prop_assert_eq!(decoded.withdrawn, prefixes, "Withdrawn prefixes should round-trip");
     }
@@ -336,11 +331,10 @@ proptest! {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Extract MP_REACH_NLRI and verify prefixes
         let decoded_prefixes = decoded.path_attributes.iter()
@@ -370,11 +364,10 @@ proptest! {
                 value: PathAttributeValue::MpUnreachNlri(mp_unreach),
             }],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Extract MP_UNREACH_NLRI and verify prefixes
         let decoded_prefixes = decoded.path_attributes.iter()
@@ -407,11 +400,10 @@ proptest! {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Extract MP_REACH_NLRI and verify prefixes
         let decoded_prefixes = decoded.path_attributes.iter()
@@ -441,11 +433,10 @@ proptest! {
                 value: PathAttributeValue::MpUnreachNlri(mp_unreach),
             }],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Extract MP_UNREACH_NLRI and verify prefixes
         let decoded_prefixes = decoded.path_attributes.iter()
@@ -480,14 +471,13 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Extract and verify the next-hop
-        let decoded_nexthop = decoded.nexthop().expect("should have nexthop");
+        let decoded_nexthop = crate::messages::update_message_nexthop(&decoded).expect("should have nexthop");
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv4 nexthop should round-trip");
     }
 
@@ -507,13 +497,12 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
-        let decoded_nexthop = decoded.nexthop().expect("should have nexthop");
+        let decoded_nexthop = crate::messages::update_message_nexthop(&decoded).expect("should have nexthop");
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv6 single nexthop should round-trip");
     }
 
@@ -533,13 +522,12 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
-            errors: vec![],
         };
 
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
-        let decoded_nexthop = decoded.nexthop().expect("should have nexthop");
+        let decoded_nexthop = crate::messages::update_message_nexthop(&decoded).expect("should have nexthop");
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv6 double nexthop should round-trip");
     }
 
@@ -550,8 +538,8 @@ proptest! {
     /// Property: Traditional UpdateMessage round-trip preserves structure
     #[test]
     fn prop_update_traditional_roundtrip(update in update_traditional_strategy()) {
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         prop_assert_eq!(decoded.withdrawn, update.withdrawn);
         prop_assert_eq!(decoded.nlri, update.nlri);
@@ -566,8 +554,8 @@ proptest! {
     /// Property: MP-BGP UpdateMessage with MP_REACH_NLRI round-trip works
     #[test]
     fn prop_update_mp_reach_roundtrip(update in update_mp_reach_strategy()) {
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Should have MP_REACH_NLRI attribute
         let has_mp_reach = decoded.path_attributes.iter().any(|a| {
@@ -579,8 +567,8 @@ proptest! {
     /// Property: MP-BGP UpdateMessage with MP_UNREACH_NLRI round-trip works
     #[test]
     fn prop_update_mp_unreach_roundtrip(update in update_mp_unreach_strategy()) {
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Should have MP_UNREACH_NLRI attribute
         let has_mp_unreach = decoded.path_attributes.iter().any(|a| {
@@ -596,7 +584,7 @@ proptest! {
     /// Property: MP-BGP attributes are always encoded first (RFC 7606 Section 5.1)
     #[test]
     fn prop_mp_bgp_attrs_encoded_first(update in update_mp_reach_strategy()) {
-        let wire = update.to_wire().expect("should encode");
+        let wire = update_message_to_wire(&update).expect("should encode");
 
         // Skip to path attributes section
         // Wire format: 2 bytes withdrawn len + withdrawn + 2 bytes attrs len + attrs + nlri
@@ -619,8 +607,8 @@ proptest! {
     /// Property: Encoding then decoding produces semantically equivalent message
     #[test]
     fn prop_encode_decode_semantic_equivalence(update in update_strategy()) {
-        let wire = update.to_wire().expect("should encode");
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
+        let wire = update_message_to_wire(&update).expect("should encode");
+        let (decoded, _) = update_message_from_wire(&wire).expect("should decode");
 
         // Withdrawn and NLRI should be identical
         prop_assert_eq!(decoded.withdrawn, update.withdrawn);
@@ -681,7 +669,6 @@ proptest! {
                 )),
             ],
             nlri: nlri_prefixes.clone(),
-            errors: vec![],
         };
 
         // Create UPDATE using MP-BGP encoding
@@ -715,16 +702,15 @@ proptest! {
             withdrawn: vec![],
             path_attributes: mp_attrs,
             nlri: vec![],
-            errors: vec![],
         };
 
         // Encode and decode both
-        let traditional_wire = traditional_update.to_wire().expect("traditional encode");
-        let mp_bgp_wire = mp_bgp_update.to_wire().expect("mp-bgp encode");
+        let traditional_wire = update_message_to_wire(&traditional_update).expect("traditional encode");
+        let mp_bgp_wire = update_message_to_wire(&mp_bgp_update).expect("mp-bgp encode");
 
-        let traditional_decoded = UpdateMessage::from_wire(&traditional_wire)
+        let (traditional_decoded, _) = update_message_from_wire(&traditional_wire)
             .expect("traditional decode");
-        let mp_bgp_decoded = UpdateMessage::from_wire(&mp_bgp_wire)
+        let (mp_bgp_decoded, _) = update_message_from_wire(&mp_bgp_wire)
             .expect("mp-bgp decode");
 
         // Extract the effective NLRI from both (traditional uses nlri field,

@@ -963,3 +963,29 @@ pub struct RouteRefreshMessage {
     /// Subsequent address family identifier.
     pub safi: u8,
 }
+
+/// V1 UpdateMessage type for API compatibility.
+///
+/// Uses [`Prefix`] for NLRI and withdrawn prefixes, [`PathAttribute`] for
+/// attributes (the v1, pre-MP-BGP shape).
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
+#[schemars(rename = "UpdateMessage")]
+pub struct UpdateMessage {
+    pub withdrawn: Vec<Prefix>,
+    pub path_attributes: Vec<PathAttribute>,
+    pub nlri: Vec<Prefix>,
+}
+
+/// V1 Message enum for API compatibility.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[schemars(rename = "Message")]
+pub enum Message {
+    Open(OpenMessage),
+    Update(UpdateMessage),
+    Notification(NotificationMessage),
+    KeepAlive,
+    RouteRefresh(RouteRefreshMessage),
+}
