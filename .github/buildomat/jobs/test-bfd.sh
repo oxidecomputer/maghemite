@@ -16,4 +16,4 @@ set -o pipefail
 
 source .github/buildomat/test-common.sh
 banner bfd
-cargo nextest run -p bfd --nocapture
+cargo nextest run -p bfd -p bfd-types -p bfd-types-versions --nocapture

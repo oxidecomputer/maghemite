@@ -197,15 +197,15 @@ pub fn new_rhai_engine() -> Engine {
 
     engine
         .register_type_with_name::<OpenMessage>("OpenMessage")
-        .register_fn("has_capability", OpenMessage::rhai_has_capability)
-        .register_fn("add_four_octet_as", OpenMessage::add_four_octet_as)
-        .register_fn("emit", OpenMessage::emit);
+        .register_fn("has_capability", rhai_open_message_has_capability)
+        .register_fn("add_four_octet_as", rhai_open_message_add_four_octet_as)
+        .register_fn("emit", rhai_open_message_emit);
 
     engine
         .register_type_with_name::<UpdateMessage>("UpdateMessage")
-        .register_fn("has_community", UpdateMessage::rhai_has_community)
-        .register_fn("add_community", UpdateMessage::rhai_add_community)
-        .register_fn("emit", UpdateMessage::emit)
+        .register_fn("has_community", rhai_update_message_has_community)
+        .register_fn("add_community", rhai_update_message_add_community)
+        .register_fn("emit", rhai_update_message_emit)
         .register_raw_fn(
             "prefix_filter",
             [
@@ -216,7 +216,7 @@ pub fn new_rhai_engine() -> Engine {
                 // get the passed in function
                 let fp = args[1].take().cast::<FnPtr>();
                 let mut msg = args[0].write_lock::<UpdateMessage>().unwrap();
-                msg.prefix_filter(|p| {
+                rhai_update_message_prefix_filter(&mut msg, |p: &Prefix4| {
                     fp.call_raw(&context, None, [Dynamic::from(*p)])
                         .unwrap()
                         .cast::<bool>()
@@ -488,7 +488,7 @@ mod test {
             init_logger(),
         )
         .unwrap();
-        m.add_four_octet_as(74);
+        rhai_open_message_add_four_octet_as(&mut m, 74);
         assert_eq!(result, ShaperResult::Emit(m.into()));
     }
 

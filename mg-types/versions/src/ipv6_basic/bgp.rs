@@ -5,9 +5,14 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use bgp::session::{FsmEventRecord, MessageHistory};
+use bgp_types_versions::v2::session::{
+    FsmEventRecord, FsmStateKind, MessageHistory,
+};
+use rdb_types_versions::v1::prefix::Prefix6;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::v1::bgp::PeerTimers;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -55,4 +60,22 @@ pub struct FsmHistoryResponse {
     /// Events organized by peer address Each peer's value contains only
     /// the events from the requested buffer
     pub by_peer: HashMap<IpAddr, Vec<FsmEventRecord>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
+pub struct PeerInfo {
+    pub state: FsmStateKind,
+    pub asn: Option<u32>,
+    pub duration_millis: u64,
+    pub timers: PeerTimers,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Origin6 {
+    /// ASN of the router to originate from.
+    pub asn: u32,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix6>,
 }

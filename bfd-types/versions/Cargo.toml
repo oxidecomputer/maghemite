@@ -1,0 +1,9 @@
+[package]
+name = "bfd-types-versions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+num_enum.workspace = true
+schemars.workspace = true
+serde.workspace = true

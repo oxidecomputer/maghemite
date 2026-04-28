@@ -27,6 +27,7 @@ opte-ioctl.workspace = true
 oxide-vpc.workspace = true
 sled.workspace = true
 mg-common.workspace = true
+mg-common-types.workspace = true
 chrono.workspace = true
 omicron-common.workspace = true
 oximeter.workspace = true

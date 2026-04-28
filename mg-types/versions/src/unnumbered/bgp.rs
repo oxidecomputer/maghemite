@@ -3,14 +3,23 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::time::Duration;
 
-use bgp::messages::Afi;
-use bgp::params::NeighborResetOp;
-use bgp::session::{FsmEventRecord, MessageHistory, PeerId};
+use bgp_types_versions::v2::session::{
+    FsmEventRecord, FsmStateKind, MessageHistory,
+};
+use bgp_types_versions::v4::messages::Afi;
+use rdb_types_versions::v1::peer::PeerId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::v2::bgp::{FsmEventBuffer, MessageDirection};
+use crate::v4::bgp::{
+    BgpCapability, BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig,
+    Ipv6UnicastConfig, JitterRange, NeighborResetOp, PeerCounters,
+    StaticTimerInfo,
+};
 
 /// Unified neighbor selector supporting both numbered and unnumbered peers.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -92,4 +101,47 @@ pub struct FsmHistoryResponse {
     /// Events organized by peer identifier
     /// Each peer's value contains only the events from the requested buffer
     pub by_peer: HashMap<String, Vec<FsmEventRecord>>,
+}
+
+/// Unnumbered neighbor configuration for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedNeighbor")]
+pub struct UnnumberedNeighbor {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub act_as_a_default_ipv6_router: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerTimers {
+    pub hold: DynamicTimerInfo,
+    pub keepalive: DynamicTimerInfo,
+    pub connect_retry: StaticTimerInfo,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold: StaticTimerInfo,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub delay_open: StaticTimerInfo,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerInfo {
+    pub name: String,
+    pub peer_group: String,
+    pub fsm_state: FsmStateKind,
+    pub fsm_state_duration: Duration,
+    pub asn: Option<u32>,
+    pub id: Option<u32>,
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_tcp_port: u16,
+    pub remote_tcp_port: u16,
+    pub received_capabilities: Vec<BgpCapability>,
+    pub timers: PeerTimers,
+    pub counters: PeerCounters,
+    pub ipv4_unicast: Ipv4UnicastConfig,
+    pub ipv6_unicast: Ipv6UnicastConfig,
 }

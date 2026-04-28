@@ -21,7 +21,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
-use mg_common::net::TunnelOrigin;
+use mg_common_types::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info};
 use std::collections::{HashMap, HashSet};

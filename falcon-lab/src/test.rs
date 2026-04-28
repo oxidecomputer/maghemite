@@ -218,7 +218,7 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create router")?;
 
-    mgd.create_unnumbered_neighbor_v2(&basic_unnumbered_neighbor(
+    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
         "cr1",
         "test",
         "tfportqsfp0_0",
@@ -228,7 +228,7 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create cr1 unnumbered neighbor")?;
 
-    mgd.create_unnumbered_neighbor_v2(&basic_unnumbered_neighbor(
+    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
         "cr2",
         "test",
         "tfportqsfp1_0",

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 clap.workspace = true
 anyhow.workspace = true
+mg-common-types.workspace = true
 anstyle.workspace = true
 serde.workspace = true
 schemars.workspace = true

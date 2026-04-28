@@ -11,12 +11,17 @@ default-members = [
     "ddm-types/versions",
     "dropshot-apis",
     "bfd",
+    "bfd-types",
+    "bfd-types/versions",
     "util",
     "mg-ddm-verify",
     "tests",
     "rdb",
     "rdb-types",
+    "rdb-types/versions",
     "bgp",
+    "bgp-types",
+    "bgp-types/versions",
     "mg-api",
     "mg-types",
     "mg-types/versions",
@@ -25,6 +30,8 @@ default-members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "mg-common-types",
+    "mg-common-types/versions",
     "ndp",
     "xtask",
     "falcon-lab",
@@ -41,6 +48,8 @@ members = [
     "ddm-types/versions",
     "dropshot-apis",
     "bfd",
+    "bfd-types",
+    "bfd-types/versions",
     "package",
     "util",
     "mg-ddm-verify",
@@ -51,6 +60,11 @@ members = [
     "mgadm",
     "rdb",
     "rdb-types",
+    "rdb-types/versions",
+    "bgp-types",
+    "bgp-types/versions",
+    "mg-common-types",
+    "mg-common-types/versions",
     "mgd",
     "mg-lower",
     "mg-common",
@@ -66,9 +80,16 @@ mg-types = { path = "mg-types" }
 mg-types-versions = { path = "mg-types/versions" }
 mg-common = { path = "mg-common" }
 rdb-types = { path = "rdb-types" }
+rdb-types-versions = { path = "rdb-types/versions" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
+bgp-types = { path = "bgp-types" }
+bgp-types-versions = { path = "bgp-types/versions" }
+mg-common-types = { path = "mg-common-types" }
+mg-common-types-versions = { path = "mg-common-types/versions" }
 bfd = { path = "bfd" }
+bfd-types = { path = "bfd-types" }
+bfd-types-versions = { path = "bfd-types/versions" }
 mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }
 rdb = { path = "rdb", features = ["clap"] }

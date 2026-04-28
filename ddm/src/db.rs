@@ -4,7 +4,7 @@
 
 use ddm_types::db::{PeerInfo, TunnelRoute};
 use mg_common::lock;
-use mg_common::net::TunnelOrigin;
+use mg_common_types::net::TunnelOrigin;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -9,7 +9,7 @@ use dropshot::{
 };
 use mg_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery,
-    filter_rib_by_protocol,
+    filter_rib_by_protocol, rib_latest_from_rdb, rib_v1_from_rdb,
 };
 use mg_types_versions::{v1, v2};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ pub async fn get_rib_imported_v2(
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
     let filtered = filter_rib_by_protocol(imported, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    Ok(HttpResponseOk(rib_v1_from_rdb(filtered)))
 }
 
 pub async fn get_rib_selected_v2(
@@ -35,7 +35,7 @@ pub async fn get_rib_selected_v2(
     let query = query.into_inner();
     let selected = ctx.db.loc_rib(query.address_family);
     let filtered = filter_rib_by_protocol(selected, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    Ok(HttpResponseOk(rib_v1_from_rdb(filtered)))
 }
 
 // Latest version (VERSION_UNNUMBERED+): BgpPathProperties.peer is PeerId enum.
@@ -47,7 +47,7 @@ pub async fn get_rib_imported(
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
     let filtered = filter_rib_by_protocol(imported, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    Ok(HttpResponseOk(rib_latest_from_rdb(filtered)))
 }
 
 pub async fn get_rib_selected(
@@ -58,7 +58,7 @@ pub async fn get_rib_selected(
     let query = query.into_inner();
     let selected = ctx.db.loc_rib(query.address_family);
     let filtered = filter_rib_by_protocol(selected, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    Ok(HttpResponseOk(rib_latest_from_rdb(filtered)))
 }
 
 pub async fn read_bestpath_fanout(

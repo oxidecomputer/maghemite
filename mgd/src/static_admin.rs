@@ -11,11 +11,33 @@ use dropshot::{
 use mg_types::rib::GetRibResult;
 use mg_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
-    DeleteStaticRoute6Request,
+    DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
 use mg_types::switch::SwitchIdentifiers;
 use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
+
+// `From<StaticRouteN>` impls cannot live in `mg-types-versions` (would
+// force a `rdb` dep) nor in `rdb` (would force an `mg-types-versions` dep).
+// Both source and target types are foreign to `mgd`, so we expose the
+// conversion as free fns here at the call site.
+fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
+    StaticRouteKey {
+        prefix: v.prefix.into(),
+        nexthop: v.nexthop.into(),
+        vlan_id: v.vlan_id,
+        rib_priority: v.rib_priority,
+    }
+}
+
+fn static_route_key_from_v6(v: StaticRoute6) -> StaticRouteKey {
+    StaticRouteKey {
+        prefix: v.prefix.into(),
+        nexthop: v.nexthop.into(),
+        vlan_id: v.vlan_id,
+        rib_priority: v.rib_priority,
+    }
+}
 
 pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -26,7 +48,7 @@ pub async fn static_add_v4_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v4)
         .collect();
 
     // Validate that all prefixes have host bits unset
@@ -49,7 +71,7 @@ pub async fn static_remove_v4_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v4)
         .collect();
     ctx.context()
         .db
@@ -86,7 +108,7 @@ pub async fn static_add_v6_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v6)
         .collect();
 
     // Validate that all prefixes have host bits unset
@@ -109,7 +131,7 @@ pub async fn static_remove_v6_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v6)
         .collect();
     ctx.context()
         .db

@@ -60,64 +60,79 @@ create_enum_module! {
 }
 
 // Rhai needs methods to be &mut self and not just &self, so the following
-// methods are to accomplish that and a bit of type translation in cases
-// where complex rust types would be difficult to deal with in rhai.
-impl OpenMessage {
-    pub fn rhai_has_capability(&mut self, code: CapabilityCode) -> bool {
-        self.has_capability(code)
-    }
-    pub fn add_four_octet_as(&mut self, asn: i64) {
-        let asn = match asn.try_into() {
-            Ok(asn) => asn,
-            Err(_) => return, //TODO something better?
-        };
-        self.add_capabilities(&BTreeSet::from([Capability::FourOctetAs {
-            asn,
-        }]));
-    }
-    pub fn emit(&mut self) -> ShaperResult {
-        ShaperResult::Emit(Message::Open(self.clone()))
-    }
+// functions accomplish that and a bit of type translation in cases where
+// complex rust types would be difficult to deal with in rhai. These were
+// previously inherent methods on `OpenMessage`/`UpdateMessage`; once those
+// types moved to `bgp-types-versions`, the orphan rule forbids defining
+// inherent methods on them in this crate, so they're free fns here. Rhai's
+// `Engine::register_fn` accepts free fns and preserves dotted-call syntax in
+// rhai scripts.
+pub fn rhai_open_message_has_capability(
+    om: &mut OpenMessage,
+    code: CapabilityCode,
+) -> bool {
+    om.has_capability(code)
 }
 
-impl UpdateMessage {
-    pub fn rhai_has_community(&mut self, community: i64) -> bool {
-        // rhai integers are of type i64, so if we get something bigger, the
-        // answer is no, as communities out of the 32 bit range are not defined
-        let c: u32 = match community.try_into() {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        self.has_community(Community::from(c))
-    }
+pub fn rhai_open_message_add_four_octet_as(om: &mut OpenMessage, asn: i64) {
+    let asn = match asn.try_into() {
+        Ok(asn) => asn,
+        Err(_) => return, //TODO something better?
+    };
+    om.add_capabilities(&BTreeSet::from([Capability::FourOctetAs { asn }]));
+}
 
-    pub fn rhai_add_community(&mut self, community: i64) {
-        let c: u32 = match community.try_into() {
-            Ok(c) => c,
-            Err(_) => return, //TODO something better
-        };
-        self.add_community(Community::from(c));
-    }
+pub fn rhai_open_message_emit(om: &mut OpenMessage) -> ShaperResult {
+    ShaperResult::Emit(Message::Open(om.clone()))
+}
 
-    pub fn emit(&mut self) -> ShaperResult {
-        ShaperResult::Emit(Message::Update(self.clone()))
-    }
+pub fn rhai_update_message_has_community(
+    um: &mut UpdateMessage,
+    community: i64,
+) -> bool {
+    // rhai integers are of type i64, so if we get something bigger, the
+    // answer is no, as communities out of the 32 bit range are not defined
+    let c: u32 = match community.try_into() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    um.has_community(Community::from(c))
+}
 
-    pub fn prefix_filter<F>(&mut self, f: F)
-    where
-        F: Clone + Fn(&Prefix4) -> bool,
-    {
-        self.withdrawn.retain(f.clone());
-        self.nlri.retain(f);
-    }
+pub fn rhai_update_message_add_community(
+    um: &mut UpdateMessage,
+    community: i64,
+) {
+    let c: u32 = match community.try_into() {
+        Ok(c) => c,
+        Err(_) => return, //TODO something better
+    };
+    um.add_community(Community::from(c));
+}
 
-    pub fn get_nlri(&mut self) -> Vec<Prefix4> {
-        self.nlri.clone()
-    }
+pub fn rhai_update_message_emit(um: &mut UpdateMessage) -> ShaperResult {
+    ShaperResult::Emit(Message::Update(um.clone()))
+}
 
-    pub fn set_nlri(&mut self, value: Vec<Prefix4>) {
-        self.nlri = value;
-    }
+pub fn rhai_update_message_prefix_filter<F>(um: &mut UpdateMessage, f: F)
+where
+    F: Clone + Fn(&Prefix4) -> bool,
+{
+    um.withdrawn.retain(f.clone());
+    um.nlri.retain(f);
+}
+
+#[allow(dead_code)]
+pub fn rhai_update_message_get_nlri(um: &mut UpdateMessage) -> Vec<Prefix4> {
+    um.nlri.clone()
+}
+
+#[allow(dead_code)]
+pub fn rhai_update_message_set_nlri(
+    um: &mut UpdateMessage,
+    value: Vec<Prefix4>,
+) {
+    um.nlri = value;
 }
 
 // Create a plugin module with functions constructing the 'ShaperResult' variants

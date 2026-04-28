@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 rdb = { path = "../rdb" }
+rdb-types-versions.workspace = true
+bgp-types.workspace = true
+bgp-types-versions.workspace = true
+mg-types-versions.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true
@@ -35,3 +39,4 @@ serial_test.workspace = true
 
 [features]
 default = ["libnet"]
+clap = ["dep:clap", "bgp-types-versions/clap"]

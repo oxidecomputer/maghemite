@@ -1307,7 +1307,7 @@ async fn get_exported(
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
     // Get both numbered and unnumbered neighbors
     let numbered = c.read_neighbors(asn).await?.into_inner();
-    let unnumbered = c.read_unnumbered_neighbors_v2(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
 
     if numbered.is_empty() && unnumbered.is_empty() {
         println!("No neighbors configured for ASN {}", asn);
@@ -1353,7 +1353,7 @@ async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
             c.create_neighbor(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.create_unnumbered_neighbor_v2(&n).await?;
+            c.create_unnumbered_neighbor(&n).await?;
         }
     }
     Ok(())
@@ -1368,7 +1368,7 @@ async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
         }
         PeerType::Unnumbered(interface) => {
             let nbr = c
-                .read_unnumbered_neighbor_v2(asn, &interface)
+                .read_unnumbered_neighbor(asn, &interface)
                 .await?
                 .into_inner();
             println!("{nbr:#?}");
@@ -1383,7 +1383,7 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
             c.update_neighbor(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.update_unnumbered_neighbor_v2(&n).await?;
+            c.update_unnumbered_neighbor(&n).await?;
         }
     }
     Ok(())
@@ -1395,7 +1395,7 @@ async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
             c.delete_neighbor(asn, &addr.to_string()).await?;
         }
         PeerType::Unnumbered(interface) => {
-            c.delete_unnumbered_neighbor_v2(asn, &interface).await?;
+            c.delete_unnumbered_neighbor(asn, &interface).await?;
         }
     }
     Ok(())
@@ -1511,7 +1511,7 @@ async fn read_origin6(asn: u32, c: Client) -> Result<()> {
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
-    c.bgp_apply_v2(&request).await?;
+    c.bgp_apply(&request).await?;
     Ok(())
 }
 

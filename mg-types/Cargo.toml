@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 mg-types-versions.workspace = true
 rdb.workspace = true
+rdb-types-versions.workspace = true

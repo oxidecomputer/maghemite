@@ -12,7 +12,7 @@ use crate::validation::{
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
-    config::RouterConfig,
+    config::{PeerConfig, RouterConfig},
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     messages::Afi,
@@ -43,8 +43,9 @@ use mg_types::ndp::{
 use mg_types_versions::{v1, v2, v5};
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
-    ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
+    ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
+use rdb_types_versions::v1::policy::ImportExportPolicy;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -851,13 +852,13 @@ pub async fn get_exported_v1(
             orig4.clone().iter().map(|p| Prefix::from(*p)).collect();
 
         // Combine per-AF export policies into legacy format for filtering
-        let allow_export = ImportExportPolicyV1::from_per_af_policies(
+        let allow_export = ImportExportPolicy::from_per_af_policies(
             &n.parameters.allow_export4,
             &n.parameters.allow_export6,
         );
         let mut exported_routes: Vec<Prefix> = match allow_export {
-            ImportExportPolicyV1::NoFiltering => orig_routes,
-            ImportExportPolicyV1::Allow(epol) => {
+            ImportExportPolicy::NoFiltering => orig_routes,
+            ImportExportPolicy::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -997,7 +998,7 @@ pub async fn get_imported_v1(
     let imported = get_router!(ctx, rq.asn)?
         .db
         .full_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(imported.into()))
+    Ok(HttpResponseOk(mg_types::rib::rib_v1_from_rdb(imported)))
 }
 
 pub async fn get_selected_v1(
@@ -1009,7 +1010,7 @@ pub async fn get_selected_v1(
     let selected = get_router!(ctx, rq.asn)?
         .db
         .loc_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(selected.into()))
+    Ok(HttpResponseOk(mg_types::rib::rib_v1_from_rdb(selected)))
 }
 
 pub async fn get_neighbors_v1(
@@ -1858,8 +1859,10 @@ pub(crate) mod helpers {
         let (event_tx, event_rx) = channel();
 
         // V1 API is IPv4-only; extract only IPv4 policies
-        let allow_import4 = rq.parameters.allow_import.as_ipv4_policy();
-        let allow_export4 = rq.parameters.allow_export.as_ipv4_policy();
+        let allow_import4 =
+            ImportExportPolicy4::from(rq.parameters.allow_import.clone());
+        let allow_export4 =
+            ImportExportPolicy4::from(rq.parameters.allow_export.clone());
 
         let info = SessionInfo::from(&rq.parameters);
 
@@ -2070,7 +2073,7 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
                 rq.interface.clone(),
-                rq.to_peer_config(placeholder_host),
+                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
                 None,
                 event_tx.clone(),
                 event_rx,
@@ -2083,7 +2086,7 @@ pub(crate) mod helpers {
         } else {
             get_router!(&ctx, rq.asn)?.new_unnumbered_session(
                 rq.interface.clone(),
-                rq.to_peer_config(placeholder_host),
+                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
                 None,
                 event_tx.clone(),
                 event_rx,
@@ -2481,7 +2484,7 @@ pub(crate) mod helpers {
             && let Some(ref ipv4_config) = session_info.ipv4_unicast
         {
             let mut v4_routes: Vec<Prefix> =
-                orig4.iter().map(|p| rdb::Prefix::from(*p)).collect();
+                orig4.iter().map(|p| Prefix::from(*p)).collect();
 
             // Apply export policy
             match &ipv4_config.export_policy {
@@ -2507,7 +2510,7 @@ pub(crate) mod helpers {
             && let Some(ref ipv6_config) = session_info.ipv6_unicast
         {
             let mut v6_routes: Vec<Prefix> =
-                orig6.iter().map(|p| rdb::Prefix::from(*p)).collect();
+                orig6.iter().map(|p| Prefix::from(*p)).collect();
 
             // Apply export policy
             match &ipv6_config.export_policy {
@@ -2540,7 +2543,7 @@ pub(crate) mod helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::do_bgp_apply;
+    use super::{ImportExportPolicy, do_bgp_apply};
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
@@ -2609,8 +2612,8 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: rdb::ImportExportPolicyV1::NoFiltering,
-                    allow_export: rdb::ImportExportPolicyV1::NoFiltering,
+                    allow_import: ImportExportPolicy::NoFiltering,
+                    allow_export: ImportExportPolicy::NoFiltering,
                     vlan_id: None,
                 },
             }],
@@ -2635,8 +2638,8 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: rdb::ImportExportPolicyV1::NoFiltering,
-                    allow_export: rdb::ImportExportPolicyV1::NoFiltering,
+                    allow_import: ImportExportPolicy::NoFiltering,
+                    allow_export: ImportExportPolicy::NoFiltering,
                     vlan_id: None,
                 },
             }],

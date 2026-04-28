@@ -4,6 +4,7 @@
 
 use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
+use bfd_types::BfdPeerInfo;
 use bgp::params::*;
 use bgp_admin::BgpContext;
 use dropshot::{
@@ -13,7 +14,7 @@ use dropshot::{
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
 use mg_common::stats::MgLowerStats;
-use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
+use mg_types::bfd::DeleteBfdPeerPathParams;
 use mg_types::bgp::{
     AsnSelector, ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
     MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,
@@ -252,45 +253,45 @@ impl MgAdminApi for MgAdminApiImpl {
 
     // Latest (VERSION_BGP_SRC_ADDR..)
 
-    async fn read_unnumbered_neighbors_v2(
+    async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
         bgp_admin::read_unnumbered_neighbors(rqctx, request).await
     }
 
-    async fn create_unnumbered_neighbor_v2(
+    async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn read_unnumbered_neighbor_v2(
+    async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError> {
         bgp_admin::read_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn update_unnumbered_neighbor_v2(
+    async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn delete_unnumbered_neighbor_v2(
+    async fn delete_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
     }
 
-    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - read_unnumbered_neighbors,
-    // create_unnumbered_neighbor, read_unnumbered_neighbor,
-    // update_unnumbered_neighbor, and delete_unnumbered_neighbor are provided
-    // methods.
+    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) -
+    // read_unnumbered_neighbors_v5, create_unnumbered_neighbor_v5,
+    // read_unnumbered_neighbor_v5, update_unnumbered_neighbor_v5, and
+    // delete_unnumbered_neighbor_v5 are provided methods.
 
     async fn clear_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -448,14 +449,14 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::get_neighbors_v1(ctx, request).await
     }
 
-    async fn bgp_apply_v2(
+    async fn bgp_apply(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::bgp_apply(ctx, request).await
     }
 
-    // bgp_apply and bgp_apply_v1 are provided methods.
+    // bgp_apply_v4 and bgp_apply_v1 are provided methods.
 
     async fn message_history(
         ctx: RequestContext<Self::Context>,

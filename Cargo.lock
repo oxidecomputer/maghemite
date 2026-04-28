@@ -326,6 +326,8 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bfd-types",
+ "bfd-types-versions",
  "mg-common",
  "num_enum 0.7.6",
  "pretty_assertions",
@@ -340,10 +342,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "bfd-types"
+version = "0.1.0"
+dependencies = [
+ "bfd-types-versions",
+]
+
+[[package]]
+name = "bfd-types-versions"
+version = "0.1.0"
+dependencies = [
+ "num_enum 0.7.6",
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
 name = "bgp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bgp-types",
+ "bgp-types-versions",
  "chrono",
  "clap",
  "itertools 0.14.0",
@@ -351,6 +371,7 @@ dependencies = [
  "libc",
  "libnet",
  "mg-common",
+ "mg-types-versions",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
@@ -359,12 +380,36 @@ dependencies = [
  "proptest",
  "rand 0.10.1",
  "rdb",
+ "rdb-types-versions",
  "rhai",
  "schemars 0.8.22",
  "serde",
  "serial_test",
  "slog",
  "socket2",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "bgp-types"
+version = "0.1.0"
+dependencies = [
+ "bgp-types-versions",
+]
+
+[[package]]
+name = "bgp-types-versions"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "nom 8.0.0",
+ "num_enum 0.7.6",
+ "rdb-types-versions",
+ "schemars 0.8.22",
+ "serde",
+ "slog",
  "thiserror 2.0.18",
  "uuid",
 ]
@@ -1328,6 +1373,7 @@ dependencies = [
  "ispf",
  "libnet",
  "mg-common",
+ "mg-common-types",
  "omicron-common",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=b60decb70fe491ebdaa30c824619470b015556fc)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=b60decb70fe491ebdaa30c824619470b015556fc)",
@@ -1365,7 +1411,7 @@ dependencies = [
  "ddm-types-versions",
  "dropshot 0.17.0",
  "dropshot-api-manager-types",
- "mg-common",
+ "mg-common-types",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -1383,7 +1429,7 @@ dependencies = [
 name = "ddm-types-versions"
 version = "0.1.0"
 dependencies = [
- "mg-common",
+ "mg-common-types-versions",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -3779,6 +3825,7 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
+ "bfd-types",
  "bgp",
  "dropshot 0.17.0",
  "dropshot-api-manager-types",
@@ -3798,6 +3845,7 @@ dependencies = [
  "clap",
  "libc",
  "libnet",
+ "mg-common-types",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -3808,6 +3856,22 @@ dependencies = [
  "slog-bunyan",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "uuid",
+]
+
+[[package]]
+name = "mg-common-types"
+version = "0.1.0"
+dependencies = [
+ "mg-common-types-versions",
+]
+
+[[package]]
+name = "mg-common-types-versions"
+version = "0.1.0"
+dependencies = [
+ "oxnet",
+ "schemars 0.8.22",
+ "serde",
 ]
 
 [[package]]
@@ -3874,15 +3938,15 @@ version = "0.1.0"
 dependencies = [
  "mg-types-versions",
  "rdb",
+ "rdb-types-versions",
 ]
 
 [[package]]
 name = "mg-types-versions"
 version = "0.1.0"
 dependencies = [
- "bfd",
- "bgp",
- "rdb",
+ "bgp-types-versions",
+ "rdb-types-versions",
  "schemars 0.8.22",
  "serde",
 ]
@@ -3915,6 +3979,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bfd",
+ "bfd-types",
  "bgp",
  "chrono",
  "clap",
@@ -3936,6 +4001,7 @@ dependencies = [
  "proptest",
  "rand 0.10.1",
  "rdb",
+ "rdb-types-versions",
  "slog",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "socket2",
@@ -6004,6 +6070,7 @@ name = "rdb"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bfd-types",
  "chrono",
  "ciborium",
  "clap",
@@ -6025,10 +6092,7 @@ dependencies = [
 name = "rdb-types"
 version = "0.1.0"
 dependencies = [
- "clap",
- "oxnet",
- "schemars 0.8.22",
- "serde",
+ "rdb-types-versions",
 ]
 
 [[package]]
@@ -6036,6 +6100,17 @@ name = "rdb-types"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/maghemite?rev=b603c9f3dccefcf1d3e941c04505ff6bdd1826b6#b603c9f3dccefcf1d3e941c04505ff6bdd1826b6"
 dependencies = [
+ "oxnet",
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
+name = "rdb-types-versions"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
  "oxnet",
  "schemars 0.8.22",
  "serde",

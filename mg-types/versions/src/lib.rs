@@ -41,3 +41,9 @@ pub mod v3;
 pub mod v4;
 #[path = "unnumbered/mod.rs"]
 pub mod v5;
+#[path = "rib_exported_string_key/mod.rs"]
+pub mod v6;
+#[path = "operation_id_cleanup/mod.rs"]
+pub mod v7;
+#[path = "bgp_src_addr/mod.rs"]
+pub mod v8;

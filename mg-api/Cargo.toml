@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bfd-types.workspace = true
 bgp.workspace = true
 dropshot.workspace = true
 dropshot-api-manager-types.workspace = true
