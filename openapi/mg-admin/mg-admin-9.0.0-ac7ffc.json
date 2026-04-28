@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "8.0.0"
+    "version": "9.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -899,7 +899,7 @@
     },
     "/bgp/config/unnumbered-neighbor": {
       "get": {
-        "operationId": "read_unnumbered_neighbor_v2",
+        "operationId": "read_unnumbered_neighbor",
         "parameters": [
           {
             "in": "query",
@@ -940,7 +940,7 @@
         }
       },
       "put": {
-        "operationId": "create_unnumbered_neighbor_v2",
+        "operationId": "create_unnumbered_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -964,7 +964,7 @@
         }
       },
       "post": {
-        "operationId": "update_unnumbered_neighbor_v2",
+        "operationId": "update_unnumbered_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -988,7 +988,7 @@
         }
       },
       "delete": {
-        "operationId": "delete_unnumbered_neighbor_v2",
+        "operationId": "delete_unnumbered_neighbor",
         "parameters": [
           {
             "in": "query",
@@ -1024,7 +1024,7 @@
     },
     "/bgp/config/unnumbered-neighbors": {
       "get": {
-        "operationId": "read_unnumbered_neighbors_v2",
+        "operationId": "read_unnumbered_neighbors",
         "parameters": [
           {
             "in": "query",
@@ -1130,7 +1130,7 @@
     },
     "/bgp/omicron/apply": {
       "post": {
-        "operationId": "bgp_apply_v2",
+        "operationId": "bgp_apply",
         "requestBody": {
           "content": {
             "application/json": {
