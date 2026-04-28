@@ -12,7 +12,7 @@ use crate::validation::{
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
-    config::RouterConfig,
+    config::{PeerConfig, RouterConfig},
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     messages::Afi,
@@ -2073,10 +2073,7 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
                 rq.interface.clone(),
-                bgp::config::PeerConfig::from_unnumbered_neighbor(
-                    &rq,
-                    placeholder_host,
-                ),
+                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
                 None,
                 event_tx.clone(),
                 event_rx,
@@ -2089,10 +2086,7 @@ pub(crate) mod helpers {
         } else {
             get_router!(&ctx, rq.asn)?.new_unnumbered_session(
                 rq.interface.clone(),
-                bgp::config::PeerConfig::from_unnumbered_neighbor(
-                    &rq,
-                    placeholder_host,
-                ),
+                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
                 None,
                 event_tx.clone(),
                 event_rx,
@@ -2490,7 +2484,7 @@ pub(crate) mod helpers {
             && let Some(ref ipv4_config) = session_info.ipv4_unicast
         {
             let mut v4_routes: Vec<Prefix> =
-                orig4.iter().map(|p| rdb::Prefix::from(*p)).collect();
+                orig4.iter().map(|p| Prefix::from(*p)).collect();
 
             // Apply export policy
             match &ipv4_config.export_policy {
@@ -2516,7 +2510,7 @@ pub(crate) mod helpers {
             && let Some(ref ipv6_config) = session_info.ipv6_unicast
         {
             let mut v6_routes: Vec<Prefix> =
-                orig6.iter().map(|p| rdb::Prefix::from(*p)).collect();
+                orig6.iter().map(|p| Prefix::from(*p)).collect();
 
             // Apply export policy
             match &ipv6_config.export_policy {

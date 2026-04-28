@@ -16,7 +16,8 @@ use crate::messages::{
     As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Ipv6DoubleNexthop,
     MpReachNlri, MpUnreachNlri, PathAttribute, PathAttributeType,
     PathAttributeTypeCode, PathAttributeValue, PathOrigin, UpdateMessage,
-    path_attribute_flags, update_message_from_wire, update_message_to_wire,
+    path_attribute_flags, update_message_from_wire, update_message_nexthop,
+    update_message_to_wire,
 };
 use proptest::prelude::*;
 use rdb::types::{Prefix4, Prefix6};
@@ -487,7 +488,7 @@ proptest! {
         let decoded = update_message_from_wire(&wire).expect("should decode");
 
         // Extract and verify the next-hop
-        let decoded_nexthop = crate::messages::update_message_nexthop(&decoded).expect("should have nexthop");
+        let decoded_nexthop = update_message_nexthop(&decoded).expect("should have nexthop");
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv4 nexthop should round-trip");
     }
 
@@ -513,7 +514,7 @@ proptest! {
         let wire = update_message_to_wire(&update).expect("should encode");
         let decoded = update_message_from_wire(&wire).expect("should decode");
 
-        let decoded_nexthop = crate::messages::update_message_nexthop(&decoded).expect("should have nexthop");
+        let decoded_nexthop = update_message_nexthop(&decoded).expect("should have nexthop");
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv6 single nexthop should round-trip");
     }
 
@@ -539,7 +540,7 @@ proptest! {
         let wire = update_message_to_wire(&update).expect("should encode");
         let decoded = update_message_from_wire(&wire).expect("should decode");
 
-        let decoded_nexthop = crate::messages::update_message_nexthop(&decoded).expect("should have nexthop");
+        let decoded_nexthop = update_message_nexthop(&decoded).expect("should have nexthop");
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv6 double nexthop should round-trip");
     }
 

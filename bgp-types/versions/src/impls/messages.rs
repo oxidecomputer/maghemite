@@ -13,6 +13,9 @@ use nom::{
 };
 use num_enum::TryFromPrimitive;
 use rdb_types_versions::v1::AddressFamily;
+use rdb_types_versions::v1::prefix::{
+    Prefix as RdbPrefix, Prefix4 as RdbPrefix4, Prefix6 as RdbPrefix6,
+};
 
 use crate::error::WireError;
 use std::collections::BTreeSet;
@@ -607,10 +610,7 @@ impl MpReachNlri {
     }
 
     /// Create an IPv4 Unicast MP_REACH_NLRI.
-    pub fn ipv4_unicast(
-        nexthop: BgpNexthop,
-        nlri: Vec<rdb_types_versions::v1::prefix::Prefix4>,
-    ) -> Self {
+    pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<RdbPrefix4>) -> Self {
         Self::Ipv4Unicast(MpReachIpv4Unicast {
             nexthop,
             reserved: 0, // Always send 0 per RFC 4760
@@ -619,10 +619,7 @@ impl MpReachNlri {
     }
 
     /// Create an IPv6 Unicast MP_REACH_NLRI.
-    pub fn ipv6_unicast(
-        nexthop: BgpNexthop,
-        nlri: Vec<rdb_types_versions::v1::prefix::Prefix6>,
-    ) -> Self {
+    pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<RdbPrefix6>) -> Self {
         Self::Ipv6Unicast(MpReachIpv6Unicast {
             nexthop,
             reserved: 0,
@@ -677,16 +674,12 @@ impl MpUnreachNlri {
     }
 
     /// Create an IPv4 Unicast MP_UNREACH_NLRI.
-    pub fn ipv4_unicast(
-        withdrawn: Vec<rdb_types_versions::v1::prefix::Prefix4>,
-    ) -> Self {
+    pub fn ipv4_unicast(withdrawn: Vec<RdbPrefix4>) -> Self {
         Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })
     }
 
     /// Create an IPv6 Unicast MP_UNREACH_NLRI.
-    pub fn ipv6_unicast(
-        withdrawn: Vec<rdb_types_versions::v1::prefix::Prefix6>,
-    ) -> Self {
+    pub fn ipv6_unicast(withdrawn: Vec<RdbPrefix6>) -> Self {
         Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
     }
 }
@@ -833,24 +826,22 @@ impl From<PathAttributeValue> for PathAttribute {
 // Cross-version conversions: v4 (current) → v1 (compat shapes).
 // ----------------------------------------------------------------------------
 
-impl From<rdb_types_versions::v1::prefix::Prefix>
-    for crate::v1::messages::Prefix
-{
-    fn from(prefix: rdb_types_versions::v1::prefix::Prefix) -> Self {
+impl From<RdbPrefix> for crate::v1::messages::Prefix {
+    fn from(prefix: RdbPrefix) -> Self {
         // Convert new Prefix enum to old struct format using wire format:
         // length byte followed by prefix octets.
         // Prefix4/Prefix6 wire format: 1-byte length + ceil(length/8) octets.
         // We use direct encoding here to avoid a circular dep on
         // bgp::messages::BgpWireFormat.
         match prefix {
-            rdb_types_versions::v1::prefix::Prefix::V4(p) => {
+            RdbPrefix::V4(p) => {
                 let length = p.length;
                 let octet_count = (length as usize).div_ceil(8);
                 let octets = p.value.octets();
                 let value = octets[..octet_count].to_vec();
                 Self { length, value }
             }
-            rdb_types_versions::v1::prefix::Prefix::V6(p) => {
+            RdbPrefix::V6(p) => {
                 let length = p.length;
                 let octet_count = (length as usize).div_ceil(8);
                 let octets = p.value.octets();
@@ -1122,7 +1113,7 @@ impl Capability {
     /// Helper function to generate an IPv4 Unicast MP-BGP capability.
     pub fn ipv4_unicast() -> Self {
         Self::MultiprotocolExtensions {
-            afi: crate::v4::messages::Afi::Ipv4.into(),
+            afi: Afi::Ipv4.into(),
             safi: Safi::Unicast.into(),
         }
     }
@@ -1130,7 +1121,7 @@ impl Capability {
     /// Helper function to generate an IPv6 Unicast MP-BGP capability.
     pub fn ipv6_unicast() -> Self {
         Self::MultiprotocolExtensions {
-            afi: crate::v4::messages::Afi::Ipv6.into(),
+            afi: Afi::Ipv6.into(),
             safi: Safi::Unicast.into(),
         }
     }
@@ -1696,11 +1687,7 @@ impl From<UpdateMessage> for crate::v1::messages::UpdateMessage {
             withdrawn: msg
                 .withdrawn
                 .into_iter()
-                .map(|p| {
-                    crate::v1::messages::Prefix::from(
-                        rdb_types_versions::v1::prefix::Prefix::V4(p),
-                    )
-                })
+                .map(|p| crate::v1::messages::Prefix::from(RdbPrefix::V4(p)))
                 .collect(),
             // Filter out attributes that don't have v1 equivalents (MP-BGP,
             // AtomicAggregate).
@@ -1712,11 +1699,7 @@ impl From<UpdateMessage> for crate::v1::messages::UpdateMessage {
             nlri: msg
                 .nlri
                 .into_iter()
-                .map(|p| {
-                    crate::v1::messages::Prefix::from(
-                        rdb_types_versions::v1::prefix::Prefix::V4(p),
-                    )
-                })
+                .map(|p| crate::v1::messages::Prefix::from(RdbPrefix::V4(p)))
                 .collect(),
         }
     }

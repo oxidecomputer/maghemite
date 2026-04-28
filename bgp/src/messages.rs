@@ -2678,6 +2678,7 @@ mod tests {
     use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
+    use rdb::Prefix;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -2771,7 +2772,7 @@ mod tests {
     #[test]
     fn update_round_trip() {
         let um0 = UpdateMessage {
-            withdrawn: vec![rdb::Prefix4::new(
+            withdrawn: vec![Prefix4::new(
                 std::net::Ipv4Addr::new(0, 23, 1, 12),
                 32,
             )],
@@ -2804,8 +2805,8 @@ mod tests {
                 },
             ],
             nlri: vec![
-                rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
-                rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
+                Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
+                Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
             ],
             errors: vec![],
         };
@@ -3056,7 +3057,7 @@ mod tests {
                 AddressFamily::Ipv4 => {
                     let mut octets = [0u8; 4];
                     octets.copy_from_slice(&test_case.input_bytes);
-                    rdb::Prefix::V4(rdb::Prefix4::new(
+                    Prefix::V4(Prefix4::new(
                         Ipv4Addr::from(octets),
                         test_case.prefix_length,
                     ))
@@ -3064,7 +3065,7 @@ mod tests {
                 AddressFamily::Ipv6 => {
                     let mut octets = [0u8; 16];
                     octets.copy_from_slice(&test_case.input_bytes);
-                    rdb::Prefix::V6(rdb::Prefix6::new(
+                    Prefix::V6(Prefix6::new(
                         Ipv6Addr::from(octets),
                         test_case.prefix_length,
                     ))
@@ -3073,7 +3074,7 @@ mod tests {
 
             match test_case.address_family {
                 AddressFamily::Ipv4 => {
-                    if let rdb::Prefix::V4(rdb_prefix4) = prefix {
+                    if let Prefix::V4(rdb_prefix4) = prefix {
                         assert_eq!(
                             rdb_prefix4.length, test_case.prefix_length,
                             "IPv4 length mismatch for {}",
@@ -3098,7 +3099,7 @@ mod tests {
                     }
                 }
                 AddressFamily::Ipv6 => {
-                    if let rdb::Prefix::V6(rdb_prefix6) = prefix {
+                    if let Prefix::V6(rdb_prefix6) = prefix {
                         assert_eq!(
                             rdb_prefix6.length, test_case.prefix_length,
                             "IPv6 length mismatch for {}",
@@ -3379,8 +3380,8 @@ mod tests {
     fn mp_reach_nlri_ipv4_unicast() {
         let nh = BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1));
         let nlri = vec![
-            rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
-            rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
+            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+            Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
         ];
 
         let mp_reach = MpReachNlri::ipv4_unicast(nh, nlri.clone());
@@ -3403,8 +3404,8 @@ mod tests {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
         let nlri = vec![
-            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
-            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
+            Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
         ];
 
         let mp_reach = MpReachNlri::ipv6_unicast(nh, nlri.clone());
@@ -3426,7 +3427,7 @@ mod tests {
     fn mp_reach_nlri_round_trip() {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
-        let nlri = vec![rdb::Prefix6::new(
+        let nlri = vec![Prefix6::new(
             Ipv6Addr::from_str("2001:db8:1::").unwrap(),
             48,
         )];
@@ -3460,8 +3461,8 @@ mod tests {
     #[test]
     fn mp_unreach_nlri_ipv4_unicast() {
         let withdrawn = vec![
-            rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
-            rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
+            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+            Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
         ];
 
         let mp_unreach = MpUnreachNlri::ipv4_unicast(withdrawn.clone());
@@ -3481,8 +3482,8 @@ mod tests {
     #[test]
     fn mp_unreach_nlri_ipv6_unicast() {
         let withdrawn = vec![
-            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
-            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
+            Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
         ];
 
         let mp_unreach = MpUnreachNlri::ipv6_unicast(withdrawn.clone());
@@ -3501,7 +3502,7 @@ mod tests {
 
     #[test]
     fn mp_unreach_nlri_round_trip() {
-        let withdrawn = vec![rdb::Prefix6::new(
+        let withdrawn = vec![Prefix6::new(
             Ipv6Addr::from_str("2001:db8:dead::").unwrap(),
             48,
         )];
@@ -3593,10 +3594,7 @@ mod tests {
         // Create an UPDATE with both traditional NLRI and MP_REACH_NLRI
         let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![rdb::Prefix6::new(
-                Ipv6Addr::from_str("2001:db8::").unwrap(),
-                32,
-            )],
+            vec![Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 32)],
         );
 
         let update = UpdateMessage {
@@ -3608,7 +3606,7 @@ mod tests {
                 },
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
-            nlri: vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
+            nlri: vec![Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
             errors: vec![],
         };
 
@@ -3639,13 +3637,13 @@ mod tests {
     fn decoding_accepts_reach_and_unreach_together() {
         let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![rdb::Prefix6::new(
+            vec![Prefix6::new(
                 Ipv6Addr::from_str("2001:db8:1::").unwrap(),
                 48,
             )],
         );
 
-        let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![rdb::Prefix6::new(
+        let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![Prefix6::new(
             Ipv6Addr::from_str("2001:db8:2::").unwrap(),
             48,
         )]);
@@ -3701,14 +3699,13 @@ mod tests {
     fn ipv4_unicast_dual_encoding() {
         // Traditional IPv4 prefixes
         let traditional_nlri =
-            vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)];
+            vec![Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)];
         let traditional_withdrawn =
-            vec![rdb::Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16)];
+            vec![Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16)];
 
         // MP-BGP IPv4 prefixes (different from traditional)
-        let mp_nlri = vec![rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
-        let mp_withdrawn =
-            vec![rdb::Prefix4::new(Ipv4Addr::new(10, 10, 0, 0), 16)];
+        let mp_nlri = vec![Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        let mp_withdrawn = vec![Prefix4::new(Ipv4Addr::new(10, 10, 0, 0), 16)];
 
         let mp_reach = MpReachNlri::ipv4_unicast(
             BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1)),
@@ -4834,6 +4831,7 @@ mod tests {
             path_attribute_value_from_wire, path_attribute_value_to_wire,
             treat_as_withdraw, update_message_from_wire,
         };
+        use rdb::Prefix6;
 
         /// Build an UPDATE message wire format with the given path attributes bytes.
         fn build_update_wire(path_attrs: &[u8], nlri: &[u8]) -> Vec<u8> {
@@ -4882,7 +4880,7 @@ mod tests {
                 BgpNexthop::Ipv6Single(
                     Ipv6Addr::from_str("2001:db8::1").unwrap(),
                 ),
-                vec![rdb::Prefix6::new(
+                vec![Prefix6::new(
                     Ipv6Addr::from_str("2001:db8:1::").unwrap(),
                     48,
                 )],
@@ -4982,11 +4980,10 @@ mod tests {
         fn mp_unreach_only_update_does_not_require_mandatory_attrs() {
             // An UPDATE that only carries MP_UNREACH_NLRI (MP-BGP withdrawals)
             // doesn't need mandatory attributes because there's no reachable NLRI.
-            let mp_unreach =
-                MpUnreachNlri::ipv6_unicast(vec![rdb::Prefix6::new(
-                    Ipv6Addr::from_str("2001:db8:1::").unwrap(),
-                    48,
-                )]);
+            let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![Prefix6::new(
+                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                48,
+            )]);
             let value_bytes = mp_unreach_nlri_to_wire(&mp_unreach)
                 .expect("MP_UNREACH_NLRI encoding");
 

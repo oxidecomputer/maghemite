@@ -9,7 +9,7 @@ use crate::{
         BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
     },
     error::{Error, ExpectationMismatch},
-    fanout::{Fanout4, Fanout6},
+    fanout::{Egress, Fanout4, Fanout6},
     log::{collision_log, session_log, session_log_lite},
     messages::{
         AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
@@ -23,7 +23,7 @@ use crate::{
         Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, PeerCounters,
         PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
     },
-    policy::{CheckerResult, ShaperResult},
+    policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
     router::Router,
     unnumbered::UnnumberedManager,
@@ -5948,7 +5948,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).add_egress(
                 peer_id.clone(),
-                crate::fanout::Egress {
+                Egress {
                     event_tx: Some(self.event_tx.clone()),
                     log: self.log.clone(),
                 },
@@ -5957,7 +5957,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if pc.ipv6_unicast.negotiated() {
             write_lock!(self.fanout6).add_egress(
                 peer_id,
-                crate::fanout::Egress {
+                Egress {
                     event_tx: Some(self.event_tx.clone()),
                     log: self.log.clone(),
                 },
@@ -7391,7 +7391,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 PeerId::Ip(ip) => ip,
                 PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             };
-            Ok(crate::policy::shape_outgoing_update(
+            Ok(shape_outgoing_update(
                 update.clone(),
                 shaper,
                 peer_as,
@@ -7415,7 +7415,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         let former = match previous {
-            Some(shaper) => crate::policy::shape_outgoing_update(
+            Some(shaper) => shape_outgoing_update(
                 update.clone(),
                 &shaper,
                 peer_as,
@@ -8087,12 +8087,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // RFC 4760 §3: Check reserved byte (must be 0, but must be ignored)
                     let reserved = match mp_reach {
-                        crate::messages::MpReachNlri::Ipv4Unicast(inner) => {
-                            inner.reserved
-                        }
-                        crate::messages::MpReachNlri::Ipv6Unicast(inner) => {
-                            inner.reserved
-                        }
+                        MpReachNlri::Ipv4Unicast(inner) => inner.reserved,
+                        MpReachNlri::Ipv6Unicast(inner) => inner.reserved,
                     };
                     if reserved != 0 {
                         session_log!(
