@@ -28,6 +28,14 @@ use crate::{
     router::Router,
     unnumbered::UnnumberedManager,
 };
+pub use bgp_types::session::{
+    FsmEventCategory, FsmEventRecord, FsmStateKind, MAX_MESSAGE_HISTORY,
+    MessageHistory, MessageHistoryEntry,
+};
+pub use bgp_types_versions::v1::session::{
+    MessageHistory as MessageHistoryV1,
+    MessageHistoryEntry as MessageHistoryEntryV1,
+};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{
     AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
@@ -347,8 +355,6 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
         write!(f, "{}", self.kind())
     }
 }
-
-pub use bgp_types::session::FsmStateKind;
 
 /// Convert an FSM state (which carries a generic connection) into the
 /// connection-free `FsmStateKind`. Free fn because the generic bound on
@@ -982,11 +988,6 @@ impl<Cnx: BgpConnection> Clone for SessionEndpoint<Cnx> {
         }
     }
 }
-
-pub use bgp_types::session::{
-    FsmEventCategory, FsmEventRecord, MAX_MESSAGE_HISTORY, MessageHistory,
-    MessageHistoryEntry,
-};
 
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
 pub const MAX_FSM_HISTORY_MAJOR: usize = 1024;
@@ -9080,17 +9081,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 }
 
-// ============================================================================
-// API Compatibility Types (VERSION_INITIAL / v1.0.0)
-// ============================================================================
-// V1 message-history shapes now live in `bgp_types_versions::v1::session`,
-// re-exported here under their historical *V1 names. The cross-version `From`
-// conversions live alongside in `bgp_types_versions::impls::session`.
-
-pub use bgp_types_versions::v1::session::{
-    MessageHistory as MessageHistoryV1,
-    MessageHistoryEntry as MessageHistoryEntryV1,
-};
+// V1 message-history shapes (`MessageHistoryV1`, `MessageHistoryEntryV1`) are
+// re-exported at the top of this module. The cross-version `From` conversions
+// live in `bgp_types_versions::impls::session`.
 
 #[cfg(test)]
 mod tests {

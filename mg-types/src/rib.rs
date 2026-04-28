@@ -6,8 +6,7 @@ pub use mg_types_versions::latest::rib::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mg_types_versions::latest;
-use mg_types_versions::v1;
+use mg_types_versions::{latest, v1};
 use rdb::types::ProtocolFilter;
 use rdb::{Path as RdbPath, Prefix};
 use rdb_types_versions::v1::path::Path as PathV1;

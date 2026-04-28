@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+pub use bfd_types::BfdPeerState;
 use bfd_types::SessionMode;
 use mg_common::thread::ManagedThread;
 use slog::{Logger, warn};
@@ -202,8 +203,6 @@ impl PeerInfo {
         }
     }
 }
-
-pub use bfd_types::BfdPeerState;
 
 pub struct Admin {}
 

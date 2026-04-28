@@ -18,7 +18,28 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-pub use bgp_types::messages::MAX_MESSAGE_SIZE;
+pub use bgp_types::messages::{
+    AS_TRANS, AddPathElement, Afi, Aggregator, As4Aggregator, As4PathSegment,
+    AsPathType, BGP4, BgpNexthop, Capability, CapabilityCode,
+    CeaseErrorSubcode, Community, ErrorCode, ErrorSubcode,
+    ExtendedNexthopElement, Header, HeaderErrorSubcode, Ipv6DoubleNexthop,
+    MAX_MESSAGE_SIZE, Message, MessageKind, MessageType, MpReachIpv4Unicast,
+    MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
+    MpUnreachIpv6Unicast, MpUnreachNlri, NotificationMessage, OpenErrorSubcode,
+    OpenMessage, OptionalParameter, OptionalParameterCode, PathAttribute,
+    PathAttributeType, PathAttributeTypeCode, PathAttributeValue, PathOrigin,
+    RouteRefreshMessage, Safi, Tlv, UpdateErrorSubcode, UpdateMessage,
+    path_attribute_flags,
+};
+pub use bgp_types_versions::error::MessageConvertError;
+pub use bgp_types_versions::parse::{
+    AttributeAction, NlriSection, UpdateParseErrorReason,
+};
+pub use bgp_types_versions::v1::messages::{
+    PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
+    PathAttributeTypeCode as PathAttributeTypeCodeV1,
+    PathAttributeValue as PathAttributeValueV1, Prefix as PrefixV1,
+};
 
 /// Trait for encoding/decoding values to/from BGP wire format.
 ///
@@ -38,10 +59,6 @@ pub trait BgpWireFormat<T>: Sized {
     /// This can fail due to malformed input (bounds checking, invalid values).
     fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
 }
-
-pub use bgp_types_versions::parse::{
-    AttributeAction, NlriSection, UpdateParseErrorReason,
-};
 
 /// Errors from parsing NLRI prefixes.
 ///
@@ -210,12 +227,6 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
     }
 }
 
-pub use bgp_types::messages::MessageType;
-
-pub use bgp_types::messages::Message;
-pub use bgp_types::messages::MessageKind;
-pub use bgp_types_versions::error::MessageConvertError;
-
 /// Free-fn replacement for `Message::to_wire`. Lives here because the
 /// `bgp::error::Error` return type prevents this from being an inherent
 /// method on the migrated type (orphan-rule case 2).
@@ -228,10 +239,6 @@ pub fn message_to_wire(m: &Message) -> Result<Vec<u8>, Error> {
         Message::RouteRefresh(rr) => Ok(route_refresh_message_to_wire(rr)),
     }
 }
-
-pub use bgp_types::messages::Header;
-
-pub use bgp_types::messages::{AS_TRANS, BGP4, OpenMessage};
 
 /// Serialize an open message to wire format.
 pub fn open_message_to_wire(om: &OpenMessage) -> Result<Vec<u8>, Error> {
@@ -320,10 +327,6 @@ pub fn open_message_parameters_from_wire(
 
     Ok(result)
 }
-
-pub use bgp_types::messages::Tlv;
-
-pub use bgp_types::messages::UpdateMessage;
 
 /// Returns true if any of the parse errors collected by [`update_message_from_wire`]
 /// indicates the message should be treated as withdrawn (RFC 7606).
@@ -1100,9 +1103,6 @@ pub fn update_message_nexthop(
     }
 }
 
-/// A self-describing BGP path attribute
-pub use bgp_types::messages::PathAttribute;
-
 /// Free-fn replacement for `PathAttribute::to_wire`. Lives here because the
 /// `bgp::error::Error` return type prevents this from being an inherent
 /// method on the migrated type.
@@ -1205,8 +1205,6 @@ fn validate_attribute_flags(
     Ok(())
 }
 
-pub use bgp_types::messages::PathAttributeType;
-
 /// Free-fn replacement for the inherent `PathAttributeType::to_wire`. The
 /// matching `from_wire` is inlined in `UpdateMessage::path_attrs_from_wire`
 /// (which produces `UpdateParseError`, not `bgp::error::Error`).
@@ -1262,14 +1260,6 @@ pub fn path_attribute_type_error_action(
         | PathAttributeTypeCode::As4Aggregator => AttributeAction::Discard,
     }
 }
-
-pub use bgp_types::messages::path_attribute_flags;
-
-pub use bgp_types::messages::PathAttributeTypeCode;
-
-pub use bgp_types::messages::{Aggregator, As4Aggregator};
-
-pub use bgp_types::messages::PathAttributeValue;
 
 /// Free-fn replacement for `PathAttributeValue::to_wire`. Lives here because
 /// some sub-cases (`As4PathSegment::to_wire`, `MpUnreachNlri::to_wire`) emit
@@ -1546,10 +1536,7 @@ pub fn path_attribute_value_from_wire(
     }
 }
 
-pub use bgp_types::messages::Community;
-
 /// An enumeration indicating the origin type of a path.
-pub use bgp_types::messages::PathOrigin;
 
 // A self describing segment found in path sets and sequences.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1559,8 +1546,6 @@ pub struct AsPathSegment {
     // AS numbers in the segment.
     pub value: Vec<u16>,
 }
-
-pub use bgp_types::messages::As4PathSegment;
 
 /// Free-fn replacement for `As4PathSegment::to_wire`. Returns
 /// `bgp::error::Error` (specifically `Error::TooLarge`).
@@ -1613,12 +1598,6 @@ pub fn as4_path_segment_from_wire(
     Ok((input, segment))
 }
 
-pub use bgp_types::messages::AsPathType;
-
-pub use bgp_types::messages::Ipv6DoubleNexthop;
-
-pub use bgp_types::messages::BgpNexthop;
-
 /// Parse IPv4 prefixes from wire format
 fn prefixes4_from_wire(
     mut buf: &[u8],
@@ -1644,11 +1623,6 @@ fn prefixes6_from_wire(
     }
     Ok(result)
 }
-
-pub use bgp_types::messages::{
-    MpReachIpv4Unicast, MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
-    MpUnreachIpv6Unicast, MpUnreachNlri,
-};
 
 /// Free-fn replacement for `MpReachNlri::to_wire`. Stays in `bgp` because it
 /// calls the bgp-local `BgpWireFormat<Prefix4>` impl on `Prefix4`/`Prefix6`.
@@ -1908,8 +1882,6 @@ pub fn mp_unreach_nlri_from_wire(
     }
 }
 
-pub use bgp_types::messages::{NotificationMessage, RouteRefreshMessage};
-
 pub fn notification_message_to_wire(
     nm: &NotificationMessage,
 ) -> Result<Vec<u8>, Error> {
@@ -1968,10 +1940,6 @@ pub fn route_refresh_message_from_wire(
     Ok(RouteRefreshMessage { afi, safi })
 }
 
-pub use bgp_types::messages::ErrorCode;
-
-pub use bgp_types::messages::ErrorSubcode;
-
 /// Free-fn replacement for the inherent `ErrorSubcode::as_u8` method (the
 /// type now lives in `bgp-types-versions`). Crate-private; used by
 /// `NotificationMessage::to_wire` here in `bgp`.
@@ -1985,17 +1953,6 @@ pub(crate) fn error_subcode_as_u8(s: &ErrorSubcode) -> u8 {
         ErrorSubcode::Cease(x) => (*x).into(),
     }
 }
-
-pub use bgp_types::messages::HeaderErrorSubcode;
-
-pub use bgp_types::messages::OpenErrorSubcode;
-
-pub use bgp_types::messages::UpdateErrorSubcode;
-
-pub use bgp_types::messages::CeaseErrorSubcode;
-
-pub use bgp_types::messages::OptionalParameter;
-pub use bgp_types::messages::OptionalParameterCode;
 
 /// Free-fn replacement for the inherent `OptionalParameter::to_wire` method.
 /// Lives here because the body returns `bgp::error::Error`, which is
@@ -2047,12 +2004,8 @@ pub fn optional_parameter_from_wire(
     }
 }
 
-pub use bgp_types::messages::{AddPathElement, ExtendedNexthopElement};
-
 // An issue tracking the TODOs below is here
 // <https://github.com/oxidecomputer/maghemite/issues/80>
-
-pub use bgp_types::messages::Capability;
 
 /// Free-fn replacement for the inherent `Capability::to_wire` method. Lives
 /// here because the body returns `bgp::error::Error`, which is bgp-local.
@@ -2308,10 +2261,6 @@ pub fn capability_from_wire(
     };
     Ok((remaining, cap))
 }
-
-pub use bgp_types::messages::CapabilityCode;
-
-pub use bgp_types::messages::{Afi, Safi};
 
 // ============================================================================
 // BGP Message Parse Error Types
@@ -2601,12 +2550,6 @@ impl Display for MessageParseError {
 // They are now defined in `bgp_types_versions::v1::messages` and re-exported
 // here under their historical `*V1` names. The `From<current> for *V1` impls
 // live alongside the type definitions in `bgp_types_versions::impls::messages`.
-
-pub use bgp_types_versions::v1::messages::{
-    PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
-    PathAttributeTypeCode as PathAttributeTypeCodeV1,
-    PathAttributeValue as PathAttributeValueV1, Prefix as PrefixV1,
-};
 
 /// V1 UpdateMessage type for API compatibility.
 ///

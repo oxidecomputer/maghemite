@@ -6,11 +6,6 @@ use crate::{
     config::PeerConfig,
     session::{SessionCounters, SessionInfo},
 };
-use mg_types_versions::v1::bgp as v1_bgp;
-use mg_types_versions::v2::bgp as v2_bgp;
-use mg_types_versions::v4::bgp as v4_bgp;
-use mg_types_versions::v5::bgp as v5_bgp;
-use mg_types_versions::v8::bgp as v8_bgp;
 use rdb::{PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,44 +21,28 @@ use std::{
 // Migrated to mg-types-versions in RFD 619 Phase 2d sub-chunk 6a. These
 // re-exports preserve the existing `bgp::params::*` public surface so
 // internal Bgp callers don't have to change.
-pub use v1_bgp::ApplyRequest as ApplyRequestV1;
-pub use v1_bgp::BgpPeerConfig as BgpPeerConfigV1;
-pub use v1_bgp::BgpPeerParameters as BgpPeerParametersV1;
-pub use v1_bgp::CheckerSource;
-pub use v1_bgp::DynamicTimerInfo as DynamicTimerInfoV1;
-pub use v1_bgp::FsmStateKind as FsmStateKindV1;
-pub use v1_bgp::Neighbor as NeighborV1;
-pub use v1_bgp::NeighborResetOp as NeighborResetOpV1;
-pub use v1_bgp::Origin4;
-pub use v1_bgp::PeerInfo as PeerInfoV1;
-pub use v1_bgp::PeerTimers as PeerTimersV1;
-pub use v1_bgp::Router;
-pub use v1_bgp::ShaperSource;
-pub use v2_bgp::Origin6;
-pub use v2_bgp::PeerInfo as PeerInfoV2;
-pub use v4_bgp::AfiSafi;
-pub use v4_bgp::ApplyRequest as ApplyRequestV6;
-pub use v4_bgp::BgpCapability;
-pub use v4_bgp::BgpPeerConfig as BgpPeerConfigV6;
-pub use v4_bgp::BgpPeerParameters as BgpPeerParametersV6;
-pub use v4_bgp::DynamicTimerInfo;
-pub use v4_bgp::Ipv4UnicastConfig;
-pub use v4_bgp::Ipv6UnicastConfig;
-pub use v4_bgp::JitterRange;
-pub use v4_bgp::Neighbor as NeighborV6;
-pub use v4_bgp::NeighborResetOp;
-pub use v4_bgp::PeerCounters;
-pub use v4_bgp::StaticTimerInfo;
-pub use v4_bgp::UnnumberedBgpPeerConfig as UnnumberedBgpPeerConfigV6;
-pub use v5_bgp::PeerInfo;
-pub use v5_bgp::PeerTimers;
-pub use v5_bgp::UnnumberedNeighbor as UnnumberedNeighborV6;
-pub use v8_bgp::ApplyRequest;
-pub use v8_bgp::BgpPeerConfig;
-pub use v8_bgp::BgpPeerParameters;
-pub use v8_bgp::Neighbor;
-pub use v8_bgp::UnnumberedBgpPeerConfig;
-pub use v8_bgp::UnnumberedNeighbor;
+pub use mg_types_versions::v1::bgp::{
+    ApplyRequest as ApplyRequestV1, BgpPeerConfig as BgpPeerConfigV1,
+    BgpPeerParameters as BgpPeerParametersV1, CheckerSource,
+    DynamicTimerInfo as DynamicTimerInfoV1, FsmStateKind as FsmStateKindV1,
+    Neighbor as NeighborV1, NeighborResetOp as NeighborResetOpV1, Origin4,
+    PeerInfo as PeerInfoV1, PeerTimers as PeerTimersV1, Router, ShaperSource,
+};
+pub use mg_types_versions::v2::bgp::{Origin6, PeerInfo as PeerInfoV2};
+pub use mg_types_versions::v4::bgp::{
+    AfiSafi, ApplyRequest as ApplyRequestV6, BgpCapability,
+    BgpPeerConfig as BgpPeerConfigV6, BgpPeerParameters as BgpPeerParametersV6,
+    DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
+    Neighbor as NeighborV6, NeighborResetOp, PeerCounters, StaticTimerInfo,
+    UnnumberedBgpPeerConfig as UnnumberedBgpPeerConfigV6,
+};
+pub use mg_types_versions::v5::bgp::{
+    PeerInfo, PeerTimers, UnnumberedNeighbor as UnnumberedNeighborV6,
+};
+pub use mg_types_versions::v8::bgp::{
+    ApplyRequest, BgpPeerConfig, BgpPeerParameters, Neighbor,
+    UnnumberedBgpPeerConfig, UnnumberedNeighbor,
+};
 
 /// Timer configuration extracted from SessionInfo.
 /// This is a lightweight value type that can be cloned and passed without locks.
