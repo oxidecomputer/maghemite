@@ -353,6 +353,7 @@ dependencies = [
  "libc",
  "libnet",
  "mg-common",
+ "mg-types-versions",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
@@ -3919,7 +3920,6 @@ name = "mg-types-versions"
 version = "0.1.0"
 dependencies = [
  "bfd",
- "bgp",
  "bgp-types-versions",
  "rdb",
  "rdb-types-versions",

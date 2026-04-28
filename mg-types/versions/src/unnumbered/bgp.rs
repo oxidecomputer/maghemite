@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-use bgp::params::NeighborResetOp;
 use bgp_types_versions::v2::session::{FsmEventRecord, MessageHistory};
 use bgp_types_versions::v4::messages::Afi;
 use rdb_types_versions::v1::peer::PeerId;
@@ -12,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::v2::bgp::{FsmEventBuffer, MessageDirection};
+use crate::v4::bgp::{BgpPeerParameters, NeighborResetOp};
 
 /// Unified neighbor selector supporting both numbered and unnumbered peers.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -93,4 +93,17 @@ pub struct FsmHistoryResponse {
     /// Events organized by peer identifier
     /// Each peer's value contains only the events from the requested buffer
     pub by_peer: HashMap<String, Vec<FsmEventRecord>>,
+}
+
+/// Unnumbered neighbor configuration for v4-v6 API (lacks src_addr/src_port).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedNeighbor")]
+pub struct UnnumberedNeighbor {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub act_as_a_default_ipv6_router: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
 }

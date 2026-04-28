@@ -11,10 +11,15 @@ pub mod bfd {
 
 pub mod bgp {
     pub use crate::v1::bgp::AsnSelector;
+    pub use crate::v1::bgp::CheckerSource;
+    pub use crate::v1::bgp::ShaperSource;
 
     pub use crate::v2::bgp::FsmEventBuffer;
     pub use crate::v2::bgp::MessageDirection;
 
+    pub use crate::v4::bgp::Ipv4UnicastConfig;
+    pub use crate::v4::bgp::Ipv6UnicastConfig;
+    pub use crate::v4::bgp::JitterRange;
     pub use crate::v4::bgp::NeighborResetRequest;
 
     pub use crate::v5::bgp::ExportedSelector;
@@ -25,6 +30,13 @@ pub mod bgp {
     pub use crate::v5::bgp::NeighborSelector;
     pub use crate::v5::bgp::UnnumberedNeighborResetRequest;
     pub use crate::v5::bgp::UnnumberedNeighborSelector;
+
+    pub use crate::v8::bgp::ApplyRequest;
+    pub use crate::v8::bgp::BgpPeerConfig;
+    pub use crate::v8::bgp::BgpPeerParameters;
+    pub use crate::v8::bgp::Neighbor;
+    pub use crate::v8::bgp::UnnumberedBgpPeerConfig;
+    pub use crate::v8::bgp::UnnumberedNeighbor;
 }
 
 pub mod ndp {

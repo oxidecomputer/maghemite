@@ -4,22 +4,54 @@
 
 use crate::{
     config::PeerConfig,
-    messages::{AddPathElement, Afi, Capability, CapabilityCode},
+    messages::{AddPathElement, Capability, CapabilityCode},
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
+use mg_types_versions::v1::bgp as v1_bgp;
+use mg_types_versions::v4::bgp as v4_bgp;
+use mg_types_versions::v5::bgp as v5_bgp;
+use mg_types_versions::v8::bgp as v8_bgp;
 use rdb::{
-    ImportExportPolicy4, ImportExportPolicy6, PolicyAction, Prefix, Prefix4,
-    Prefix6,
+    ImportExportPolicy4, ImportExportPolicy6, PolicyAction, Prefix4, Prefix6,
 };
 use rdb_types_versions::v1::policy::ImportExportPolicy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
-    net::{IpAddr, SocketAddr, SocketAddrV6},
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddrV6},
     sync::atomic::Ordering,
     time::Duration,
 };
+
+// ----- Versioned BGP-config families re-exported from mg-types-versions -----
+//
+// Migrated to mg-types-versions in RFD 619 Phase 2d sub-chunk 6a. These
+// re-exports preserve the existing `bgp::params::*` public surface so
+// internal Bgp callers don't have to change.
+pub use v1_bgp::ApplyRequest as ApplyRequestV1;
+pub use v1_bgp::BgpPeerConfig as BgpPeerConfigV1;
+pub use v1_bgp::BgpPeerParameters as BgpPeerParametersV1;
+pub use v1_bgp::CheckerSource;
+pub use v1_bgp::Neighbor as NeighborV1;
+pub use v1_bgp::NeighborResetOp as NeighborResetOpV1;
+pub use v1_bgp::ShaperSource;
+pub use v4_bgp::ApplyRequest as ApplyRequestV6;
+pub use v4_bgp::BgpPeerConfig as BgpPeerConfigV6;
+pub use v4_bgp::BgpPeerParameters as BgpPeerParametersV6;
+pub use v4_bgp::Ipv4UnicastConfig;
+pub use v4_bgp::Ipv6UnicastConfig;
+pub use v4_bgp::JitterRange;
+pub use v4_bgp::Neighbor as NeighborV6;
+pub use v4_bgp::NeighborResetOp;
+pub use v4_bgp::UnnumberedBgpPeerConfig as UnnumberedBgpPeerConfigV6;
+pub use v5_bgp::UnnumberedNeighbor as UnnumberedNeighborV6;
+pub use v8_bgp::ApplyRequest;
+pub use v8_bgp::BgpPeerConfig;
+pub use v8_bgp::BgpPeerParameters;
+pub use v8_bgp::Neighbor;
+pub use v8_bgp::UnnumberedBgpPeerConfig;
+pub use v8_bgp::UnnumberedNeighbor;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Router {
@@ -34,74 +66,6 @@ pub struct Router {
 
     /// Gracefully shut this router down.
     pub graceful_shutdown: bool,
-}
-
-/// V1 API neighbor reset operations (backwards compatibility)
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "NeighborResetOp")]
-pub enum NeighborResetOpV1 {
-    Hard,
-    SoftInbound,
-    SoftOutbound,
-}
-
-/// V2 API neighbor reset operations with per-AF support
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub enum NeighborResetOp {
-    /// Hard reset - closes TCP connection and restarts session
-    Hard,
-    /// Soft inbound reset - sends route refresh for specified AF(s)
-    /// None means all negotiated AFs
-    SoftInbound(Option<Afi>),
-    /// Soft outbound reset - re-advertises routes for specified AF(s)
-    /// None means all negotiated AFs
-    SoftOutbound(Option<Afi>),
-}
-
-impl From<NeighborResetOpV1> for NeighborResetOp {
-    fn from(op: NeighborResetOpV1) -> Self {
-        match op {
-            NeighborResetOpV1::Hard => NeighborResetOp::Hard,
-            NeighborResetOpV1::SoftInbound => {
-                NeighborResetOp::SoftInbound(Some(Afi::Ipv4))
-            }
-            NeighborResetOpV1::SoftOutbound => {
-                NeighborResetOp::SoftOutbound(Some(Afi::Ipv4))
-            }
-        }
-    }
-}
-
-/// Jitter range with minimum and maximum multiplier values.
-/// When applied to a timer, the timer duration is multiplied by a random value
-/// within [min, max] to help break synchronization patterns.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq)]
-pub struct JitterRange {
-    /// Minimum jitter multiplier (typically 0.75 or similar)
-    pub min: f64,
-    /// Maximum jitter multiplier (typically 1.0 or similar)
-    pub max: f64,
-}
-
-impl std::str::FromStr for JitterRange {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(',').collect();
-        if parts.len() != 2 {
-            return Err(
-                "jitter range must be in format 'min,max' (e.g., '0.75,1.0')"
-                    .to_string(),
-            );
-        }
-        let min = parts[0].trim().parse::<f64>().map_err(|_| {
-            format!("min value '{}' is not a valid float", parts[0].trim())
-        })?;
-        let max = parts[1].trim().parse::<f64>().map_err(|_| {
-            format!("max value '{}' is not a valid float", parts[1].trim())
-        })?;
-        Ok(JitterRange { min, max })
-    }
 }
 
 /// Timer configuration extracted from SessionInfo.
@@ -134,140 +98,10 @@ impl TimerConfig {
     }
 }
 
-/// Per-address-family configuration for IPv4 Unicast
-#[derive(
-    Debug, Default, Clone, Deserialize, Serialize, JsonSchema, PartialEq,
-)]
-pub struct Ipv4UnicastConfig {
-    pub nexthop: Option<IpAddr>,
-    pub import_policy: ImportExportPolicy4,
-    pub export_policy: ImportExportPolicy4,
-}
-
-impl Ipv4UnicastConfig {
-    fn new(
-        enabled: bool,
-        nexthop: Option<IpAddr>,
-        import_policy: ImportExportPolicy4,
-        export_policy: ImportExportPolicy4,
-    ) -> Option<Self> {
-        if enabled {
-            Some(Self {
-                nexthop,
-                import_policy,
-                export_policy,
-            })
-        } else {
-            None
-        }
-    }
-}
-
-/// Per-address-family configuration for IPv6 Unicast
-#[derive(
-    Debug, Default, Clone, Deserialize, Serialize, JsonSchema, PartialEq,
-)]
-pub struct Ipv6UnicastConfig {
-    pub nexthop: Option<IpAddr>,
-    pub import_policy: ImportExportPolicy6,
-    pub export_policy: ImportExportPolicy6,
-}
-
-impl Ipv6UnicastConfig {
-    fn new(
-        enabled: bool,
-        nexthop: Option<IpAddr>,
-        import_policy: ImportExportPolicy6,
-        export_policy: ImportExportPolicy6,
-    ) -> Option<Self> {
-        if enabled {
-            Some(Self {
-                nexthop,
-                import_policy,
-                export_policy,
-            })
-        } else {
-            None
-        }
-    }
-}
-
-/// Neighbor configuration with explicit per-address-family enablement (v3 API)
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct Neighbor {
-    pub asn: u32,
-    pub name: String,
-    pub group: String,
-    pub host: SocketAddr,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParameters,
-}
-
-impl Neighbor {
-    /// Validate that at least one address family is enabled, and that
-    /// `src_addr` (if set) is the same IP version as `host`.
-    pub fn validate_address_families(&self) -> Result<(), String> {
-        if self.parameters.ipv4_unicast.is_none()
-            && self.parameters.ipv6_unicast.is_none()
-        {
-            return Err("at least one address family must be enabled".into());
-        }
-        if let Some(src) = self.parameters.src_addr {
-            let host_is_v4 = self.host.ip().is_ipv4();
-            let src_is_v4 = src.is_ipv4();
-            if host_is_v4 != src_is_v4 {
-                return Err(format!(
-                    "src_addr ({src}) IP version does not match host ({}) IP version",
-                    self.host.ip()
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
-impl UnnumberedNeighbor {
-    /// Validate that at least one address family is enabled, and that
-    /// `src_addr` (if set) is IPv6 — unnumbered BGP uses link-local IPv6
-    /// addressing, so an IPv4 source address is never valid.
-    pub fn validate_address_families(&self) -> Result<(), String> {
-        if self.parameters.ipv4_unicast.is_none()
-            && self.parameters.ipv6_unicast.is_none()
-        {
-            return Err("at least one address family must be enabled".into());
-        }
-        if let Some(src) = self.parameters.src_addr
-            && src.is_ipv4()
-        {
-            return Err(format!(
-                "src_addr ({src}) must be IPv6 for unnumbered neighbors"
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Legacy neighbor configuration (v1/v2 API compatibility)
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct NeighborV1 {
-    pub asn: u32,
-    pub name: String,
-    pub group: String,
-    pub host: SocketAddr,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParametersV1,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct UnnumberedNeighbor {
-    pub asn: u32,
-    pub name: String,
-    pub group: String,
-    pub interface: String,
-    pub act_as_a_default_ipv6_router: u16,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParameters,
-}
+// ----- PeerConfig boundary conversions -----
+//
+// `PeerConfig` is bgp-internal (non-published). Boundary conversions live
+// here as inherent `From` impls since `PeerConfig` is local to bgp.
 
 impl From<Neighbor> for PeerConfig {
     fn from(rq: Neighbor) -> Self {
@@ -301,206 +135,243 @@ impl From<NeighborV1> for PeerConfig {
     }
 }
 
-impl NeighborV1 {
-    pub fn from_bgp_peer_config_v1(
-        asn: u32,
-        group: String,
-        rq: BgpPeerConfigV1,
-    ) -> Self {
-        Self {
-            asn,
-            group: group.clone(),
-            host: rq.host,
-            name: rq.name.clone(),
-            parameters: rq.parameters.clone(),
-        }
-    }
+// ----- Boundary helpers (free fns; non-published rdb input types) -----
 
-    pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
-        Self {
-            asn,
-            group: rq.group.clone(),
-            name: rq.name.clone(),
-            host: rq.host,
-            parameters: BgpPeerParametersV1 {
-                remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
-                hold_time: rq.parameters.hold_time,
-                idle_hold_time: rq.parameters.idle_hold_time,
-                delay_open: rq.parameters.delay_open,
-                connect_retry: rq.parameters.connect_retry,
-                keepalive: rq.parameters.keepalive,
-                resolution: rq.parameters.resolution,
-                passive: rq.parameters.passive,
-                md5_auth_key: rq.parameters.md5_auth_key.clone(),
-                multi_exit_discriminator: rq
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: rq.parameters.communities.clone(),
-                local_pref: rq.parameters.local_pref,
-                enforce_first_as: rq.parameters.enforce_first_as,
-                allow_import: ImportExportPolicy::from_per_af_policies(
-                    &rq.parameters.allow_import4,
-                    &rq.parameters.allow_import6,
-                ),
-                allow_export: ImportExportPolicy::from_per_af_policies(
-                    &rq.parameters.allow_export4,
-                    &rq.parameters.allow_export6,
-                ),
-                vlan_id: rq.parameters.vlan_id,
-            },
-        }
+/// Construct a `NeighborV1` from an rdb `BgpNeighborInfo`.
+pub fn neighbor_v1_from_rdb_neighbor_info(
+    asn: u32,
+    rq: &rdb::BgpNeighborInfo,
+) -> NeighborV1 {
+    NeighborV1 {
+        asn,
+        group: rq.group.clone(),
+        name: rq.name.clone(),
+        host: rq.host,
+        parameters: BgpPeerParametersV1 {
+            remote_asn: rq.parameters.remote_asn,
+            min_ttl: rq.parameters.min_ttl,
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
+            passive: rq.parameters.passive,
+            md5_auth_key: rq.parameters.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.parameters.multi_exit_discriminator,
+            communities: rq.parameters.communities.clone(),
+            local_pref: rq.parameters.local_pref,
+            enforce_first_as: rq.parameters.enforce_first_as,
+            allow_import: ImportExportPolicy::from_per_af_policies(
+                &rq.parameters.allow_import4,
+                &rq.parameters.allow_import6,
+            ),
+            allow_export: ImportExportPolicy::from_per_af_policies(
+                &rq.parameters.allow_export4,
+                &rq.parameters.allow_export6,
+            ),
+            vlan_id: rq.parameters.vlan_id,
+        },
     }
 }
 
-impl UnnumberedNeighbor {
-    pub fn from_bgp_peer_config(
-        asn: u32,
-        group: String,
-        rq: UnnumberedBgpPeerConfig,
-    ) -> Self {
-        Self {
-            asn,
-            group: group.clone(),
-            interface: rq.interface.clone(),
-            name: rq.name.clone(),
-            act_as_a_default_ipv6_router: rq.router_lifetime,
-            parameters: rq.parameters.clone(),
-        }
-    }
-
-    pub fn to_peer_config(&self, addr: SocketAddrV6) -> PeerConfig {
-        PeerConfig {
-            name: self.name.clone(),
-            host: addr.into(),
-            group: self.group.clone(),
-            hold_time: self.parameters.hold_time,
-            idle_hold_time: self.parameters.idle_hold_time,
-            delay_open: self.parameters.delay_open,
-            connect_retry: self.parameters.connect_retry,
-            keepalive: self.parameters.keepalive,
-            resolution: self.parameters.resolution,
-        }
-    }
-
-    pub fn from_rdb_neighbor_info(
-        asn: u32,
-        rq: &rdb::BgpUnnumberedNeighborInfo,
-    ) -> Self {
-        Self {
-            asn,
-            group: rq.group.clone(),
-            name: rq.name.clone(),
-            interface: rq.interface.clone(),
-            act_as_a_default_ipv6_router: rq.router_lifetime,
-            parameters: BgpPeerParameters {
-                remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
-                hold_time: rq.parameters.hold_time,
-                idle_hold_time: rq.parameters.idle_hold_time,
-                delay_open: rq.parameters.delay_open,
-                connect_retry: rq.parameters.connect_retry,
-                keepalive: rq.parameters.keepalive,
-                resolution: rq.parameters.resolution,
-                passive: rq.parameters.passive,
-                md5_auth_key: rq.parameters.md5_auth_key.clone(),
-                multi_exit_discriminator: rq
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: rq.parameters.communities.clone(),
-                local_pref: rq.parameters.local_pref,
-                enforce_first_as: rq.parameters.enforce_first_as,
-                vlan_id: rq.parameters.vlan_id,
-                ipv4_unicast: Ipv4UnicastConfig::new(
-                    rq.parameters.ipv4_enabled,
-                    rq.parameters.nexthop4,
-                    rq.parameters.allow_import4.clone(),
-                    rq.parameters.allow_export4.clone(),
-                ),
-                ipv6_unicast: Ipv6UnicastConfig::new(
-                    rq.parameters.ipv6_enabled,
-                    rq.parameters.nexthop6,
-                    rq.parameters.allow_import6.clone(),
-                    rq.parameters.allow_export6.clone(),
-                ),
-                deterministic_collision_resolution: false,
-                idle_hold_jitter: None,
-                connect_retry_jitter: Some(JitterRange {
-                    min: 0.75,
-                    max: 1.0,
-                }),
-                src_addr: rq.parameters.src_addr,
-                src_port: rq.parameters.src_port,
-            },
-        }
+/// Construct a `NeighborV1` from a v1 `BgpPeerConfig`.
+pub fn neighbor_v1_from_bgp_peer_config_v1(
+    asn: u32,
+    group: String,
+    rq: BgpPeerConfigV1,
+) -> NeighborV1 {
+    NeighborV1 {
+        asn,
+        group: group.clone(),
+        host: rq.host,
+        name: rq.name.clone(),
+        parameters: rq.parameters.clone(),
     }
 }
 
-impl Neighbor {
-    /// Create a Neighbor from a BgpPeerConfig.
-    ///
-    /// Uses the `ipv4_enabled` and `ipv6_enabled` flags from the config to
-    /// determine which address families are enabled.
-    pub fn from_bgp_peer_config(
-        asn: u32,
-        group: String,
-        rq: BgpPeerConfig,
-    ) -> Self {
-        Self {
-            asn,
-            name: rq.name.clone(),
-            host: rq.host,
-            group: group.clone(),
-            parameters: rq.parameters.clone(),
-        }
+/// Construct a latest `Neighbor` from an rdb `BgpNeighborInfo`.
+pub fn neighbor_from_rdb_neighbor_info(
+    asn: u32,
+    rq: &rdb::BgpNeighborInfo,
+) -> Neighbor {
+    Neighbor {
+        asn,
+        name: rq.name.clone(),
+        host: rq.host,
+        group: rq.group.clone(),
+        parameters: BgpPeerParameters {
+            remote_asn: rq.parameters.remote_asn,
+            min_ttl: rq.parameters.min_ttl,
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
+            passive: rq.parameters.passive,
+            md5_auth_key: rq.parameters.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.parameters.multi_exit_discriminator,
+            communities: rq.parameters.communities.clone(),
+            local_pref: rq.parameters.local_pref,
+            enforce_first_as: rq.parameters.enforce_first_as,
+            ipv4_unicast: ipv4_unicast_config_new(
+                rq.parameters.ipv4_enabled,
+                rq.parameters.nexthop4,
+                rq.parameters.allow_import4.clone(),
+                rq.parameters.allow_export4.clone(),
+            ),
+            ipv6_unicast: ipv6_unicast_config_new(
+                rq.parameters.ipv6_enabled,
+                rq.parameters.nexthop6,
+                rq.parameters.allow_import6.clone(),
+                rq.parameters.allow_export6.clone(),
+            ),
+            vlan_id: rq.parameters.vlan_id,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            idle_hold_jitter: None,
+            deterministic_collision_resolution: false,
+            src_addr: rq.parameters.src_addr,
+            src_port: rq.parameters.src_port,
+        },
     }
+}
 
-    pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
-        Self {
-            asn,
-            name: rq.name.clone(),
-            host: rq.host,
-            group: rq.group.clone(),
-            parameters: BgpPeerParameters {
-                remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
-                hold_time: rq.parameters.hold_time,
-                idle_hold_time: rq.parameters.idle_hold_time,
-                delay_open: rq.parameters.delay_open,
-                connect_retry: rq.parameters.connect_retry,
-                keepalive: rq.parameters.keepalive,
-                resolution: rq.parameters.resolution,
-                passive: rq.parameters.passive,
-                md5_auth_key: rq.parameters.md5_auth_key.clone(),
-                multi_exit_discriminator: rq
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: rq.parameters.communities.clone(),
-                local_pref: rq.parameters.local_pref,
-                enforce_first_as: rq.parameters.enforce_first_as,
-                ipv4_unicast: Ipv4UnicastConfig::new(
-                    rq.parameters.ipv4_enabled,
-                    rq.parameters.nexthop4,
-                    rq.parameters.allow_import4.clone(),
-                    rq.parameters.allow_export4.clone(),
-                ),
-                ipv6_unicast: Ipv6UnicastConfig::new(
-                    rq.parameters.ipv6_enabled,
-                    rq.parameters.nexthop6,
-                    rq.parameters.allow_import6.clone(),
-                    rq.parameters.allow_export6.clone(),
-                ),
-                vlan_id: rq.parameters.vlan_id,
-                connect_retry_jitter: Some(JitterRange {
-                    min: 0.75,
-                    max: 1.0,
-                }),
-                idle_hold_jitter: None,
-                deterministic_collision_resolution: false,
-                src_addr: rq.parameters.src_addr,
-                src_port: rq.parameters.src_port,
-            },
-        }
+/// Construct a latest `Neighbor` from a latest `BgpPeerConfig`.
+pub fn neighbor_from_bgp_peer_config(
+    asn: u32,
+    group: String,
+    rq: BgpPeerConfig,
+) -> Neighbor {
+    Neighbor {
+        asn,
+        name: rq.name.clone(),
+        host: rq.host,
+        group: group.clone(),
+        parameters: rq.parameters.clone(),
+    }
+}
+
+/// Construct an `UnnumberedNeighbor` from a latest `UnnumberedBgpPeerConfig`.
+pub fn unnumbered_neighbor_from_bgp_peer_config(
+    asn: u32,
+    group: String,
+    rq: UnnumberedBgpPeerConfig,
+) -> UnnumberedNeighbor {
+    UnnumberedNeighbor {
+        asn,
+        group: group.clone(),
+        interface: rq.interface.clone(),
+        name: rq.name.clone(),
+        act_as_a_default_ipv6_router: rq.router_lifetime,
+        parameters: rq.parameters.clone(),
+    }
+}
+
+/// Construct a `PeerConfig` from an `UnnumberedNeighbor` (uses the supplied
+/// IPv6 link-local socket address as the connection target).
+pub fn unnumbered_neighbor_to_peer_config(
+    n: &UnnumberedNeighbor,
+    addr: SocketAddrV6,
+) -> PeerConfig {
+    PeerConfig {
+        name: n.name.clone(),
+        host: addr.into(),
+        group: n.group.clone(),
+        hold_time: n.parameters.hold_time,
+        idle_hold_time: n.parameters.idle_hold_time,
+        delay_open: n.parameters.delay_open,
+        connect_retry: n.parameters.connect_retry,
+        keepalive: n.parameters.keepalive,
+        resolution: n.parameters.resolution,
+    }
+}
+
+/// Construct an `UnnumberedNeighbor` from an rdb `BgpUnnumberedNeighborInfo`.
+pub fn unnumbered_neighbor_from_rdb_neighbor_info(
+    asn: u32,
+    rq: &rdb::BgpUnnumberedNeighborInfo,
+) -> UnnumberedNeighbor {
+    UnnumberedNeighbor {
+        asn,
+        group: rq.group.clone(),
+        name: rq.name.clone(),
+        interface: rq.interface.clone(),
+        act_as_a_default_ipv6_router: rq.router_lifetime,
+        parameters: BgpPeerParameters {
+            remote_asn: rq.parameters.remote_asn,
+            min_ttl: rq.parameters.min_ttl,
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
+            passive: rq.parameters.passive,
+            md5_auth_key: rq.parameters.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.parameters.multi_exit_discriminator,
+            communities: rq.parameters.communities.clone(),
+            local_pref: rq.parameters.local_pref,
+            enforce_first_as: rq.parameters.enforce_first_as,
+            vlan_id: rq.parameters.vlan_id,
+            ipv4_unicast: ipv4_unicast_config_new(
+                rq.parameters.ipv4_enabled,
+                rq.parameters.nexthop4,
+                rq.parameters.allow_import4.clone(),
+                rq.parameters.allow_export4.clone(),
+            ),
+            ipv6_unicast: ipv6_unicast_config_new(
+                rq.parameters.ipv6_enabled,
+                rq.parameters.nexthop6,
+                rq.parameters.allow_import6.clone(),
+                rq.parameters.allow_export6.clone(),
+            ),
+            deterministic_collision_resolution: false,
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            src_addr: rq.parameters.src_addr,
+            src_port: rq.parameters.src_port,
+        },
+    }
+}
+
+fn ipv4_unicast_config_new(
+    enabled: bool,
+    nexthop: Option<IpAddr>,
+    import_policy: ImportExportPolicy4,
+    export_policy: ImportExportPolicy4,
+) -> Option<Ipv4UnicastConfig> {
+    if enabled {
+        Some(Ipv4UnicastConfig {
+            nexthop,
+            import_policy,
+            export_policy,
+        })
+    } else {
+        None
+    }
+}
+
+fn ipv6_unicast_config_new(
+    enabled: bool,
+    nexthop: Option<IpAddr>,
+    import_policy: ImportExportPolicy6,
+    export_policy: ImportExportPolicy6,
+) -> Option<Ipv6UnicastConfig> {
+    if enabled {
+        Some(Ipv6UnicastConfig {
+            nexthop,
+            import_policy,
+            export_policy,
+        })
+    } else {
+        None
     }
 }
 
@@ -852,188 +723,6 @@ pub struct PeerInfo {
     pub ipv6_unicast: Ipv6UnicastConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct CheckerSource {
-    pub asn: u32,
-    pub code: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct ShaperSource {
-    pub asn: u32,
-    pub code: String,
-}
-
-/// Apply changes to an ASN (v1/v2 API - legacy format).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "ApplyRequest")]
-pub struct ApplyRequestV1 {
-    /// ASN to apply changes to.
-    pub asn: u32,
-    /// Complete set of prefixes to originate. Any active prefixes not in this
-    /// list will be removed. All prefixes in this list are ensured to be in
-    /// the originating set.
-    pub originate: Vec<Prefix4>,
-
-    /// Checker rhai code to apply to ingress open and update messages.
-    pub checker: Option<CheckerSource>,
-
-    /// Checker rhai code to apply to egress open and update messages.
-    pub shaper: Option<ShaperSource>,
-
-    /// Lists of peers indexed by peer group. Set's within a peer group key are
-    /// a total set. For example, the value
-    ///
-    /// ```text
-    /// {"foo": [a, b, d]}
-    /// ```
-    /// Means that the peer group "foo" only contains the peers `a`, `b` and
-    /// `d`. If there is a peer `c` currently in the peer group "foo", it will
-    /// be removed.
-    pub peers: HashMap<String, Vec<BgpPeerConfigV1>>,
-}
-
-/// BGP peer configuration for v1/v2 API (legacy format with combined import/export).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "BgpPeerConfig")]
-pub struct BgpPeerConfigV1 {
-    pub host: SocketAddr,
-    pub name: String,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParametersV1,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct BgpPeerConfig {
-    pub host: SocketAddr,
-    pub name: String,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParameters,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct UnnumberedBgpPeerConfig {
-    pub interface: String,
-    pub name: String,
-    pub router_lifetime: u16,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParameters,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct BgpPeerParameters {
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    pub vlan_id: Option<u16>,
-
-    // new stuff after v1
-    /// IPv4 Unicast address family configuration (None = disabled)
-    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
-    /// IPv6 Unicast address family configuration (None = disabled)
-    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
-    /// Enable deterministic collision resolution in Established state.
-    /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
-    /// resolution even when one connection is already in Established state.
-    /// When false, Established connection always wins (timing-based resolution).
-    pub deterministic_collision_resolution: bool,
-    /// Jitter range for idle hold timer. When used, the idle hold timer is
-    /// multiplied by a random value within the (min, max) range supplied.
-    /// Useful to help break repeated synchronization of connection collisions.
-    pub idle_hold_jitter: Option<JitterRange>,
-    /// Jitter range for connect_retry timer. When used, the connect_retry timer
-    /// is multiplied by a random value within the (min, max) range supplied.
-    /// Useful to help break repeated synchronization of connection collisions.
-    pub connect_retry_jitter: Option<JitterRange>,
-
-    // new stuff after v6 (VERSION_BGP_SRC_ADDR)
-    /// Source IP address to bind when establishing outbound TCP connections.
-    /// None means the system selects the source address.
-    pub src_addr: Option<IpAddr>,
-    /// Source TCP port to bind when establishing outbound TCP connections.
-    /// None means the system selects the source port.
-    pub src_port: Option<u16>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct BgpPeerParametersV1 {
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicy,
-    pub allow_export: ImportExportPolicy,
-    pub vlan_id: Option<u16>,
-}
-
-impl From<BgpPeerConfigV1> for BgpPeerConfig {
-    fn from(cfg: BgpPeerConfigV1) -> Self {
-        // Legacy BgpPeerConfigV1 is IPv4-only
-        Self {
-            host: cfg.host,
-            name: cfg.name,
-            parameters: BgpPeerParameters {
-                hold_time: cfg.parameters.hold_time,
-                idle_hold_time: cfg.parameters.idle_hold_time,
-                delay_open: cfg.parameters.delay_open,
-                connect_retry: cfg.parameters.connect_retry,
-                keepalive: cfg.parameters.keepalive,
-                resolution: cfg.parameters.resolution,
-                passive: cfg.parameters.passive,
-                remote_asn: cfg.parameters.remote_asn,
-                min_ttl: cfg.parameters.min_ttl,
-                md5_auth_key: cfg.parameters.md5_auth_key,
-                multi_exit_discriminator: cfg
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: cfg.parameters.communities,
-                local_pref: cfg.parameters.local_pref,
-                enforce_first_as: cfg.parameters.enforce_first_as,
-                ipv4_unicast: Some(Ipv4UnicastConfig {
-                    nexthop: None,
-                    import_policy: ImportExportPolicy4::from(
-                        cfg.parameters.allow_import,
-                    ),
-                    export_policy: ImportExportPolicy4::from(
-                        cfg.parameters.allow_export,
-                    ),
-                }),
-                ipv6_unicast: None,
-                vlan_id: cfg.parameters.vlan_id,
-                connect_retry_jitter: Some(JitterRange {
-                    min: 0.75,
-                    max: 1.0,
-                }),
-                idle_hold_jitter: None,
-                deterministic_collision_resolution: false,
-                src_addr: None,
-                src_port: None,
-            },
-        }
-    }
-}
-
 pub enum PolicySource {
     Checker(String),
     Shaper(String),
@@ -1140,320 +829,4 @@ pub struct PeerInfoV2 {
 pub struct PeerTimersV1 {
     pub hold: DynamicTimerInfoV1,
     pub keepalive: DynamicTimerInfoV1,
-}
-
-// ============================================================================
-// API Types for VERSION_MP_BGP / v3.0.0
-// ============================================================================
-// These types are for the v3+ API with per-address-family import/export policies.
-
-/// Apply changes to an ASN (current version with per-AF policies).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct ApplyRequest {
-    /// ASN to apply changes to.
-    pub asn: u32,
-    /// Complete set of prefixes to originate.
-    pub originate: Vec<Prefix>,
-    /// Checker rhai code to apply to ingress open and update messages.
-    pub checker: Option<CheckerSource>,
-    /// Checker rhai code to apply to egress open and update messages.
-    pub shaper: Option<ShaperSource>,
-    /// Lists of peers indexed by peer group.
-    pub peers: HashMap<String, Vec<BgpPeerConfig>>,
-    /// Lists of unnumbered peers indexed by peer group.
-    #[serde(default)]
-    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
-}
-
-impl From<ApplyRequestV1> for ApplyRequest {
-    fn from(req: ApplyRequestV1) -> Self {
-        Self {
-            asn: req.asn,
-            originate: req.originate.iter().map(|p| Prefix::V4(*p)).collect(),
-            checker: req.checker,
-            shaper: req.shaper,
-            peers: req
-                .peers
-                .into_iter()
-                .map(|(k, v)| {
-                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
-                })
-                .collect(),
-            unnumbered_peers: HashMap::default(),
-        }
-    }
-}
-
-impl From<ApplyRequestV6> for ApplyRequest {
-    fn from(req: ApplyRequestV6) -> Self {
-        Self {
-            asn: req.asn,
-            originate: req.originate,
-            checker: req.checker,
-            shaper: req.shaper,
-            peers: req
-                .peers
-                .into_iter()
-                .map(|(k, v)| {
-                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
-                })
-                .collect(),
-            unnumbered_peers: req
-                .unnumbered_peers
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        v.into_iter()
-                            .map(UnnumberedBgpPeerConfig::from)
-                            .collect(),
-                    )
-                })
-                .collect(),
-        }
-    }
-}
-
-// ============================================================================
-// API Compatibility Types (VERSION_MP_BGP through VERSION_RIB_EXPORTED_STRING_KEY / v4.0.0 - v6.0.0)
-// ============================================================================
-// These types maintain backward compatibility for API versions 4-6.
-// They lack the src_addr and src_port fields added in VERSION_BGP_SRC_ADDR.
-// Never used internally - always convert to/from current types at API boundary.
-//
-// Delete these types when all clients have migrated to VERSION_BGP_SRC_ADDR+.
-
-/// BGP peer parameters for v4-v6 API (lacks src_addr/src_port).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "BgpPeerParameters")]
-pub struct BgpPeerParametersV6 {
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    pub vlan_id: Option<u16>,
-    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
-    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
-    pub deterministic_collision_resolution: bool,
-    pub idle_hold_jitter: Option<JitterRange>,
-    pub connect_retry_jitter: Option<JitterRange>,
-}
-
-impl From<BgpPeerParameters> for BgpPeerParametersV6 {
-    fn from(p: BgpPeerParameters) -> Self {
-        Self {
-            hold_time: p.hold_time,
-            idle_hold_time: p.idle_hold_time,
-            delay_open: p.delay_open,
-            connect_retry: p.connect_retry,
-            keepalive: p.keepalive,
-            resolution: p.resolution,
-            passive: p.passive,
-            remote_asn: p.remote_asn,
-            min_ttl: p.min_ttl,
-            md5_auth_key: p.md5_auth_key,
-            multi_exit_discriminator: p.multi_exit_discriminator,
-            communities: p.communities,
-            local_pref: p.local_pref,
-            enforce_first_as: p.enforce_first_as,
-            vlan_id: p.vlan_id,
-            ipv4_unicast: p.ipv4_unicast,
-            ipv6_unicast: p.ipv6_unicast,
-            deterministic_collision_resolution: p
-                .deterministic_collision_resolution,
-            idle_hold_jitter: p.idle_hold_jitter,
-            connect_retry_jitter: p.connect_retry_jitter,
-        }
-    }
-}
-
-impl From<BgpPeerParametersV6> for BgpPeerParameters {
-    fn from(p: BgpPeerParametersV6) -> Self {
-        Self {
-            hold_time: p.hold_time,
-            idle_hold_time: p.idle_hold_time,
-            delay_open: p.delay_open,
-            connect_retry: p.connect_retry,
-            keepalive: p.keepalive,
-            resolution: p.resolution,
-            passive: p.passive,
-            remote_asn: p.remote_asn,
-            min_ttl: p.min_ttl,
-            md5_auth_key: p.md5_auth_key,
-            multi_exit_discriminator: p.multi_exit_discriminator,
-            communities: p.communities,
-            local_pref: p.local_pref,
-            enforce_first_as: p.enforce_first_as,
-            vlan_id: p.vlan_id,
-            ipv4_unicast: p.ipv4_unicast,
-            ipv6_unicast: p.ipv6_unicast,
-            deterministic_collision_resolution: p
-                .deterministic_collision_resolution,
-            idle_hold_jitter: p.idle_hold_jitter,
-            connect_retry_jitter: p.connect_retry_jitter,
-            src_addr: None,
-            src_port: None,
-        }
-    }
-}
-
-/// BGP peer config for v4-v6 API (lacks src_addr/src_port).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "BgpPeerConfig")]
-pub struct BgpPeerConfigV6 {
-    pub host: SocketAddr,
-    pub name: String,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParametersV6,
-}
-
-impl From<BgpPeerConfig> for BgpPeerConfigV6 {
-    fn from(cfg: BgpPeerConfig) -> Self {
-        Self {
-            host: cfg.host,
-            name: cfg.name,
-            parameters: BgpPeerParametersV6::from(cfg.parameters),
-        }
-    }
-}
-
-impl From<BgpPeerConfigV6> for BgpPeerConfig {
-    fn from(cfg: BgpPeerConfigV6) -> Self {
-        Self {
-            host: cfg.host,
-            name: cfg.name,
-            parameters: BgpPeerParameters::from(cfg.parameters),
-        }
-    }
-}
-
-/// Unnumbered BGP peer config for v4-v6 API (lacks src_addr/src_port).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "UnnumberedBgpPeerConfig")]
-pub struct UnnumberedBgpPeerConfigV6 {
-    pub interface: String,
-    pub name: String,
-    pub router_lifetime: u16,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParametersV6,
-}
-
-impl From<UnnumberedBgpPeerConfig> for UnnumberedBgpPeerConfigV6 {
-    fn from(cfg: UnnumberedBgpPeerConfig) -> Self {
-        Self {
-            interface: cfg.interface,
-            name: cfg.name,
-            router_lifetime: cfg.router_lifetime,
-            parameters: BgpPeerParametersV6::from(cfg.parameters),
-        }
-    }
-}
-
-impl From<UnnumberedBgpPeerConfigV6> for UnnumberedBgpPeerConfig {
-    fn from(cfg: UnnumberedBgpPeerConfigV6) -> Self {
-        Self {
-            interface: cfg.interface,
-            name: cfg.name,
-            router_lifetime: cfg.router_lifetime,
-            parameters: BgpPeerParameters::from(cfg.parameters),
-        }
-    }
-}
-
-/// Neighbor configuration for v4-v6 API (lacks src_addr/src_port).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "Neighbor")]
-pub struct NeighborV6 {
-    pub asn: u32,
-    pub name: String,
-    pub group: String,
-    pub host: SocketAddr,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParametersV6,
-}
-
-impl From<Neighbor> for NeighborV6 {
-    fn from(n: Neighbor) -> Self {
-        Self {
-            asn: n.asn,
-            name: n.name,
-            group: n.group,
-            host: n.host,
-            parameters: BgpPeerParametersV6::from(n.parameters),
-        }
-    }
-}
-
-impl From<NeighborV6> for Neighbor {
-    fn from(n: NeighborV6) -> Self {
-        Self {
-            asn: n.asn,
-            name: n.name,
-            group: n.group,
-            host: n.host,
-            parameters: BgpPeerParameters::from(n.parameters),
-        }
-    }
-}
-
-/// Unnumbered neighbor configuration for v4-v6 API (lacks src_addr/src_port).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "UnnumberedNeighbor")]
-pub struct UnnumberedNeighborV6 {
-    pub asn: u32,
-    pub name: String,
-    pub group: String,
-    pub interface: String,
-    pub act_as_a_default_ipv6_router: u16,
-    #[serde(flatten)]
-    pub parameters: BgpPeerParametersV6,
-}
-
-impl From<UnnumberedNeighbor> for UnnumberedNeighborV6 {
-    fn from(n: UnnumberedNeighbor) -> Self {
-        Self {
-            asn: n.asn,
-            name: n.name,
-            group: n.group,
-            interface: n.interface,
-            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
-            parameters: BgpPeerParametersV6::from(n.parameters),
-        }
-    }
-}
-
-impl From<UnnumberedNeighborV6> for UnnumberedNeighbor {
-    fn from(n: UnnumberedNeighborV6) -> Self {
-        Self {
-            asn: n.asn,
-            name: n.name,
-            group: n.group,
-            interface: n.interface,
-            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
-            parameters: BgpPeerParameters::from(n.parameters),
-        }
-    }
-}
-
-/// Apply request for v4-v6 API (lacks src_addr/src_port in peer configs).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "ApplyRequest")]
-pub struct ApplyRequestV6 {
-    pub asn: u32,
-    pub originate: Vec<Prefix>,
-    pub checker: Option<CheckerSource>,
-    pub shaper: Option<ShaperSource>,
-    pub peers: HashMap<String, Vec<BgpPeerConfigV6>>,
-    #[serde(default)]
-    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfigV6>>,
 }

@@ -203,7 +203,7 @@ pub async fn read_neighbors_v1(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| NeighborV1::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| bgp::params::neighbor_v1_from_rdb_neighbor_info(rq.asn, &x))
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -235,7 +235,8 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result = NeighborV1::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let result =
+        bgp::params::neighbor_v1_from_rdb_neighbor_info(rq.asn, neighbor_info);
     Ok(HttpResponseOk(result))
 }
 
@@ -293,8 +294,10 @@ pub async fn read_neighbor(
                     None,
                     format!("neighbor {} not found in db", addr),
                 ))?;
-            let result =
-                Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+            let result = bgp::params::neighbor_from_rdb_neighbor_info(
+                rq.asn,
+                neighbor_info,
+            );
             Ok(HttpResponseOk(result))
         }
         PeerId::Interface(ref iface) => {
@@ -314,10 +317,11 @@ pub async fn read_neighbor(
                     None,
                     format!("neighbor {} not found in db", iface),
                 ))?;
-            let result = UnnumberedNeighbor::from_rdb_neighbor_info(
-                rq.asn,
-                neighbor_info,
-            );
+            let result =
+                bgp::params::unnumbered_neighbor_from_rdb_neighbor_info(
+                    rq.asn,
+                    neighbor_info,
+                );
             // Convert UnnumberedNeighbor to Neighbor
             Ok(HttpResponseOk(Neighbor {
                 asn: result.asn,
@@ -348,7 +352,7 @@ pub async fn read_neighbors(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| bgp::params::neighbor_from_rdb_neighbor_info(rq.asn, &x))
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -400,7 +404,9 @@ pub async fn read_unnumbered_neighbors(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| {
+            bgp::params::unnumbered_neighbor_from_rdb_neighbor_info(rq.asn, &x)
+        })
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -436,8 +442,10 @@ pub async fn read_unnumbered_neighbor(
             format!("neighbor {} not found in db", rq.interface),
         ))?;
 
-    let result =
-        UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let result = bgp::params::unnumbered_neighbor_from_rdb_neighbor_info(
+        rq.asn,
+        neighbor_info,
+    );
     Ok(HttpResponseOk(result))
 }
 
@@ -1338,13 +1346,13 @@ async fn do_bgp_apply(
                 .find(|x| x.interface == nbr.interface)
                 .ok_or(Error::NotFound(nbr.interface.clone()))?;
 
-            let tgt = UnnumberedNeighbor::from_bgp_peer_config(
+            let tgt = bgp::params::unnumbered_neighbor_from_bgp_peer_config(
                 nbr.asn,
                 group.clone(),
                 spec.clone(),
             );
 
-            let curr = UnnumberedNeighbor::from_rdb_neighbor_info(
+            let curr = bgp::params::unnumbered_neighbor_from_rdb_neighbor_info(
                 nbr.asn,
                 current
                     .iter()
@@ -1360,7 +1368,7 @@ async fn do_bgp_apply(
         for (nbr, cfg) in nbr_config {
             helpers::add_unnumbered_neighbor(
                 ctx.clone(),
-                UnnumberedNeighbor::from_bgp_peer_config(
+                bgp::params::unnumbered_neighbor_from_bgp_peer_config(
                     nbr.asn,
                     group.clone(),
                     cfg.clone(),
@@ -1436,13 +1444,13 @@ async fn do_bgp_apply(
                 .find(|x| x.host.ip() == nbr.addr)
                 .ok_or(Error::NotFound(nbr.addr.to_string()))?;
 
-            let tgt = Neighbor::from_bgp_peer_config(
+            let tgt = bgp::params::neighbor_from_bgp_peer_config(
                 nbr.asn,
                 group.clone(),
                 spec.clone(),
             );
 
-            let curr = Neighbor::from_rdb_neighbor_info(
+            let curr = bgp::params::neighbor_from_rdb_neighbor_info(
                 nbr.asn,
                 current
                     .iter()
@@ -1461,7 +1469,7 @@ async fn do_bgp_apply(
         for (nbr, cfg) in nbr_config {
             helpers::add_neighbor(
                 ctx.clone(),
-                Neighbor::from_bgp_peer_config(
+                bgp::params::neighbor_from_bgp_peer_config(
                     nbr.asn,
                     group.clone(),
                     cfg.clone(),
@@ -2073,7 +2081,10 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
                 rq.interface.clone(),
-                rq.to_peer_config(placeholder_host),
+                bgp::params::unnumbered_neighbor_to_peer_config(
+                    &rq,
+                    placeholder_host,
+                ),
                 None,
                 event_tx.clone(),
                 event_rx,
@@ -2086,7 +2097,10 @@ pub(crate) mod helpers {
         } else {
             get_router!(&ctx, rq.asn)?.new_unnumbered_session(
                 rq.interface.clone(),
-                rq.to_peer_config(placeholder_host),
+                bgp::params::unnumbered_neighbor_to_peer_config(
+                    &rq,
+                    placeholder_host,
+                ),
                 None,
                 event_tx.clone(),
                 event_rx,
