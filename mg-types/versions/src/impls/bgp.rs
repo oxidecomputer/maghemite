@@ -4,11 +4,18 @@
 
 use std::collections::HashMap;
 
+use rdb_types_versions::v1::policy::ImportExportPolicy as ImportExportPolicyV1;
 use rdb_types_versions::v1::prefix::Prefix;
-use rdb_types_versions::v4::policy::ImportExportPolicy4;
+use rdb_types_versions::v4::neighbor::{
+    BgpNeighborInfo, BgpUnnumberedNeighborInfo,
+};
+use rdb_types_versions::v4::policy::{
+    ImportExportPolicy4, ImportExportPolicy6,
+};
 
-use crate::v4::bgp::JitterRange;
+use crate::v4::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
 use crate::{latest, v1, v4, v5};
+use std::net::IpAddr;
 
 impl std::fmt::Display for latest::bgp::NeighborResetRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -49,6 +56,124 @@ impl latest::bgp::Neighbor {
         }
         Ok(())
     }
+
+    /// Construct a latest `Neighbor` from an rdb `BgpNeighborInfo`.
+    pub fn from_rdb_neighbor_info(asn: u32, rq: &BgpNeighborInfo) -> Self {
+        Self {
+            asn,
+            name: rq.name.clone(),
+            host: rq.host,
+            group: rq.group.clone(),
+            parameters: latest::bgp::BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                ipv4_unicast: ipv4_unicast_config_new(
+                    rq.parameters.ipv4_enabled,
+                    rq.parameters.nexthop4,
+                    rq.parameters.allow_import4.clone(),
+                    rq.parameters.allow_export4.clone(),
+                ),
+                ipv6_unicast: ipv6_unicast_config_new(
+                    rq.parameters.ipv6_enabled,
+                    rq.parameters.nexthop6,
+                    rq.parameters.allow_import6.clone(),
+                    rq.parameters.allow_export6.clone(),
+                ),
+                vlan_id: rq.parameters.vlan_id,
+                connect_retry_jitter: Some(JitterRange {
+                    min: 0.75,
+                    max: 1.0,
+                }),
+                idle_hold_jitter: None,
+                deterministic_collision_resolution: false,
+                src_addr: rq.parameters.src_addr,
+                src_port: rq.parameters.src_port,
+            },
+        }
+    }
+
+    /// Construct a latest `Neighbor` from a latest `BgpPeerConfig`.
+    pub fn from_bgp_peer_config(
+        asn: u32,
+        group: String,
+        rq: latest::bgp::BgpPeerConfig,
+    ) -> Self {
+        Self {
+            asn,
+            name: rq.name.clone(),
+            host: rq.host,
+            group,
+            parameters: rq.parameters,
+        }
+    }
+}
+
+impl v1::bgp::Neighbor {
+    /// Construct a v1 `Neighbor` from an rdb `BgpNeighborInfo`.
+    pub fn from_rdb_neighbor_info(asn: u32, rq: &BgpNeighborInfo) -> Self {
+        Self {
+            asn,
+            group: rq.group.clone(),
+            name: rq.name.clone(),
+            host: rq.host,
+            parameters: v1::bgp::BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                allow_import: ImportExportPolicyV1::from_per_af_policies(
+                    &rq.parameters.allow_import4,
+                    &rq.parameters.allow_import6,
+                ),
+                allow_export: ImportExportPolicyV1::from_per_af_policies(
+                    &rq.parameters.allow_export4,
+                    &rq.parameters.allow_export6,
+                ),
+                vlan_id: rq.parameters.vlan_id,
+            },
+        }
+    }
+
+    /// Construct a v1 `Neighbor` from a v1 `BgpPeerConfig`.
+    pub fn from_bgp_peer_config(
+        asn: u32,
+        group: String,
+        rq: v1::bgp::BgpPeerConfig,
+    ) -> Self {
+        Self {
+            asn,
+            group,
+            host: rq.host,
+            name: rq.name.clone(),
+            parameters: rq.parameters,
+        }
+    }
 }
 
 impl latest::bgp::UnnumberedNeighbor {
@@ -69,6 +194,109 @@ impl latest::bgp::UnnumberedNeighbor {
             ));
         }
         Ok(())
+    }
+
+    /// Construct an `UnnumberedNeighbor` from a latest `UnnumberedBgpPeerConfig`.
+    pub fn from_bgp_peer_config(
+        asn: u32,
+        group: String,
+        rq: latest::bgp::UnnumberedBgpPeerConfig,
+    ) -> Self {
+        Self {
+            asn,
+            group,
+            interface: rq.interface,
+            name: rq.name,
+            act_as_a_default_ipv6_router: rq.router_lifetime,
+            parameters: rq.parameters,
+        }
+    }
+
+    /// Construct an `UnnumberedNeighbor` from an rdb `BgpUnnumberedNeighborInfo`.
+    pub fn from_rdb_neighbor_info(
+        asn: u32,
+        rq: &BgpUnnumberedNeighborInfo,
+    ) -> Self {
+        Self {
+            asn,
+            group: rq.group.clone(),
+            name: rq.name.clone(),
+            interface: rq.interface.clone(),
+            act_as_a_default_ipv6_router: rq.router_lifetime,
+            parameters: latest::bgp::BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                vlan_id: rq.parameters.vlan_id,
+                ipv4_unicast: ipv4_unicast_config_new(
+                    rq.parameters.ipv4_enabled,
+                    rq.parameters.nexthop4,
+                    rq.parameters.allow_import4.clone(),
+                    rq.parameters.allow_export4.clone(),
+                ),
+                ipv6_unicast: ipv6_unicast_config_new(
+                    rq.parameters.ipv6_enabled,
+                    rq.parameters.nexthop6,
+                    rq.parameters.allow_import6.clone(),
+                    rq.parameters.allow_export6.clone(),
+                ),
+                deterministic_collision_resolution: false,
+                idle_hold_jitter: None,
+                connect_retry_jitter: Some(JitterRange {
+                    min: 0.75,
+                    max: 1.0,
+                }),
+                src_addr: rq.parameters.src_addr,
+                src_port: rq.parameters.src_port,
+            },
+        }
+    }
+}
+
+fn ipv4_unicast_config_new(
+    enabled: bool,
+    nexthop: Option<IpAddr>,
+    import_policy: ImportExportPolicy4,
+    export_policy: ImportExportPolicy4,
+) -> Option<Ipv4UnicastConfig> {
+    if enabled {
+        Some(Ipv4UnicastConfig {
+            nexthop,
+            import_policy,
+            export_policy,
+        })
+    } else {
+        None
+    }
+}
+
+fn ipv6_unicast_config_new(
+    enabled: bool,
+    nexthop: Option<IpAddr>,
+    import_policy: ImportExportPolicy6,
+    export_policy: ImportExportPolicy6,
+) -> Option<Ipv6UnicastConfig> {
+    if enabled {
+        Some(Ipv6UnicastConfig {
+            nexthop,
+            import_policy,
+            export_policy,
+        })
+    } else {
+        None
     }
 }
 
