@@ -52,6 +52,16 @@ pub enum MessageType {
     RouteRefresh = 5,
 }
 
+/// Tag identifying which BGP message variant is held by `Message`.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum MessageKind {
+    Open,
+    Update,
+    Notification,
+    KeepAlive,
+    RouteRefresh,
+}
+
 #[derive(Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum OptionalParameterCode {

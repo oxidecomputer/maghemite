@@ -326,55 +326,8 @@ impl From<RouteRefreshMessage> for Message {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum MessageKind {
-    Open,
-    Update,
-    Notification,
-    KeepAlive,
-    RouteRefresh,
-}
-
-impl Display for MessageKind {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            MessageKind::Open => write!(f, "open"),
-            MessageKind::Update => write!(f, "update"),
-            MessageKind::Notification => write!(f, "notification"),
-            MessageKind::KeepAlive => write!(f, "keepalive"),
-            MessageKind::RouteRefresh => write!(f, "route_refresh"),
-        }
-    }
-}
-
-impl slog::Value for MessageKind {
-    fn serialize(
-        &self,
-        _record: &slog::Record,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_str(key, &self.to_string())
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum MessageConvertError {
-    #[error("not an update")]
-    NotAnUpdate,
-
-    #[error("not a notification")]
-    NotANotification,
-
-    #[error("not an open")]
-    NotAnOpen,
-
-    #[error("not a keepalive")]
-    NotAKeepalive,
-
-    #[error("not a route refresh")]
-    NotARouteRefresh,
-}
+pub use bgp_types::messages::MessageKind;
+pub use bgp_types_versions::error::MessageConvertError;
 
 impl TryFrom<Message> for OpenMessage {
     type Error = MessageConvertError;

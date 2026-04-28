@@ -194,7 +194,7 @@ pub enum Error {
     UnsupportedOperation(String),
 
     #[error("Message conversion: {0}")]
-    MessageConversion(#[from] crate::messages::MessageConvertError),
+    MessageConversion(#[from] bgp_types_versions::error::MessageConvertError),
 
     #[error("Failed to send event: {0}")]
     EventSend(String),

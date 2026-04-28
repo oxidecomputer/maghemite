@@ -17,8 +17,9 @@ use rdb_types_versions::v1::AddressFamily;
 use crate::error::WireError;
 use crate::v1::messages::{
     AddPathElement, AsPathType, CeaseErrorSubcode, ErrorCode, Header,
-    HeaderErrorSubcode, MAX_MESSAGE_SIZE, MessageType, OpenErrorSubcode,
-    PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
+    HeaderErrorSubcode, MAX_MESSAGE_SIZE, MessageKind, MessageType,
+    OpenErrorSubcode, PathAttribute as PathAttributeV1,
+    PathAttributeType as PathAttributeTypeV1,
     PathAttributeTypeCode as PathAttributeTypeCodeV1,
     PathAttributeValue as PathAttributeValueV1, PathOrigin, Safi,
     UpdateErrorSubcode,
@@ -392,6 +393,29 @@ impl Display for Safi {
 }
 
 impl slog::Value for Safi {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
+    }
+}
+
+impl Display for MessageKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            MessageKind::Open => write!(f, "open"),
+            MessageKind::Update => write!(f, "update"),
+            MessageKind::Notification => write!(f, "notification"),
+            MessageKind::KeepAlive => write!(f, "keepalive"),
+            MessageKind::RouteRefresh => write!(f, "route_refresh"),
+        }
+    }
+}
+
+impl slog::Value for MessageKind {
     fn serialize(
         &self,
         _record: &slog::Record,

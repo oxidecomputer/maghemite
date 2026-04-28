@@ -8,8 +8,8 @@ pub mod messages {
     pub use crate::v1::messages::{
         AddPathElement, AsPathType, CapabilityCode, CeaseErrorSubcode,
         Community, ErrorCode, Header, HeaderErrorSubcode, MAX_MESSAGE_SIZE,
-        MessageType, OpenErrorSubcode, OptionalParameterCode, PathOrigin, Safi,
-        Tlv, UpdateErrorSubcode,
+        MessageKind, MessageType, OpenErrorSubcode, OptionalParameterCode,
+        PathOrigin, Safi, Tlv, UpdateErrorSubcode,
     };
 
     pub use crate::v4::messages::{

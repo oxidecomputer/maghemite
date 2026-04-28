@@ -121,3 +121,21 @@ impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for WireError {
         WireError::Parse(e.to_owned())
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum MessageConvertError {
+    #[error("not an update")]
+    NotAnUpdate,
+
+    #[error("not a notification")]
+    NotANotification,
+
+    #[error("not an open")]
+    NotAnOpen,
+
+    #[error("not a keepalive")]
+    NotAKeepalive,
+
+    #[error("not a route refresh")]
+    NotARouteRefresh,
+}
