@@ -5,8 +5,9 @@
 use std::collections::HashMap;
 
 use bgp::params::NeighborResetOp;
-use bgp::session::{FsmEventRecord, MessageHistory, PeerId};
+use bgp_types_versions::v2::session::{FsmEventRecord, MessageHistory};
 use bgp_types_versions::v4::messages::Afi;
+use rdb_types_versions::v1::peer::PeerId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

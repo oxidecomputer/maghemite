@@ -23,3 +23,10 @@ pub mod messages {
         path_attribute_flags,
     };
 }
+
+pub mod session {
+    pub use crate::v2::session::{
+        ConnectionDirection, ConnectionId, FsmEventCategory, FsmEventRecord,
+        FsmStateKind, MAX_MESSAGE_HISTORY, MessageHistory, MessageHistoryEntry,
+    };
+}

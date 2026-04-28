@@ -338,7 +338,7 @@ pub enum FsmState<Cnx: BgpConnection> {
 
 impl<Cnx: BgpConnection> FsmState<Cnx> {
     fn kind(&self) -> FsmStateKind {
-        FsmStateKind::from(self)
+        fsm_state_kind_of(self)
     }
 }
 
@@ -348,73 +348,24 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
     }
 }
 
-/// Simplified representation of a BGP state without having to carry a
-/// connection.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-pub enum FsmStateKind {
-    /// Initial state. Refuse all incomming BGP connections. No resources
-    /// allocated to peer.
-    Idle,
+pub use bgp_types::session::FsmStateKind;
 
-    /// Waiting for the TCP connection to be completed.
-    Connect,
-
-    /// Trying to acquire peer by listening for and accepting a TCP connection.
-    Active,
-
-    /// Waiting for open message from peer.
-    OpenSent,
-
-    /// Waiting for keepalive or notification from peer.
-    OpenConfirm,
-
-    /// Handler for Connection Collisions (RFC 4271 6.8)
-    ConnectionCollision,
-
-    /// Sync up with peers.
-    SessionSetup,
-
-    /// Able to exchange update, notification and keepliave messages with peers.
-    Established,
-}
-
-impl FsmStateKind {
-    fn as_str(&self) -> &str {
-        match self {
-            FsmStateKind::Idle => "idle",
-            FsmStateKind::Connect => "connect",
-            FsmStateKind::Active => "active",
-            FsmStateKind::OpenSent => "open sent",
-            FsmStateKind::OpenConfirm => "open confirm",
-            FsmStateKind::ConnectionCollision => "connection collision",
-            FsmStateKind::SessionSetup => "session setup",
-            FsmStateKind::Established => "established",
-        }
-    }
-}
-
-impl Display for FsmStateKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
-    fn from(s: &FsmState<Cnx>) -> FsmStateKind {
-        match s {
-            FsmState::Idle => FsmStateKind::Idle,
-            FsmState::Connect => FsmStateKind::Connect,
-            FsmState::Active => FsmStateKind::Active,
-            FsmState::OpenSent(_) => FsmStateKind::OpenSent,
-            FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
-            FsmState::ConnectionCollision(_) => {
-                FsmStateKind::ConnectionCollision
-            }
-            FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
-            FsmState::Established(_) => FsmStateKind::Established,
-        }
+/// Convert an FSM state (which carries a generic connection) into the
+/// connection-free `FsmStateKind`. Free fn because the generic bound on
+/// `BgpConnection` (a trait local to this crate) prevents this from living
+/// alongside `FsmStateKind` in `bgp-types-versions`.
+pub fn fsm_state_kind_of<Cnx: BgpConnection>(
+    s: &FsmState<Cnx>,
+) -> FsmStateKind {
+    match s {
+        FsmState::Idle => FsmStateKind::Idle,
+        FsmState::Connect => FsmStateKind::Connect,
+        FsmState::Active => FsmStateKind::Active,
+        FsmState::OpenSent(_) => FsmStateKind::OpenSent,
+        FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
+        FsmState::ConnectionCollision(_) => FsmStateKind::ConnectionCollision,
+        FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
+        FsmState::Established(_) => FsmStateKind::Established,
     }
 }
 
@@ -1032,83 +983,13 @@ impl<Cnx: BgpConnection> Clone for SessionEndpoint<Cnx> {
     }
 }
 
-pub const MAX_MESSAGE_HISTORY: usize = 1024;
-
-/// A message history entry is a BGP message with an associated timestamp and connection ID
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryEntry {
-    timestamp: chrono::DateTime<chrono::Utc>,
-    message: Message,
-    connection_id: ConnectionId,
-}
-
-/// Message history for a BGP session
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistory {
-    pub received: VecDeque<MessageHistoryEntry>,
-    pub sent: VecDeque<MessageHistoryEntry>,
-}
-
-impl MessageHistory {
-    fn receive(&mut self, msg: Message, connection_id: ConnectionId) {
-        if self.received.len() >= MAX_MESSAGE_HISTORY {
-            self.received.pop_back();
-        }
-        self.received.push_front(MessageHistoryEntry {
-            message: msg,
-            timestamp: chrono::Utc::now(),
-            connection_id,
-        });
-    }
-
-    fn send(&mut self, msg: Message, connection_id: ConnectionId) {
-        if self.sent.len() >= MAX_MESSAGE_HISTORY {
-            self.sent.pop_back();
-        }
-        self.sent.push_front(MessageHistoryEntry {
-            message: msg,
-            timestamp: chrono::Utc::now(),
-            connection_id,
-        });
-    }
-}
+pub use bgp_types::session::{
+    FsmEventCategory, FsmEventRecord, MAX_MESSAGE_HISTORY, MessageHistory,
+    MessageHistoryEntry,
+};
 
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
 pub const MAX_FSM_HISTORY_MAJOR: usize = 1024;
-
-/// Category of FSM event for filtering and display purposes
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub enum FsmEventCategory {
-    Admin,
-    Connection,
-    Session,
-    StateTransition,
-}
-
-/// Serializable record of an FSM event with full context
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FsmEventRecord {
-    /// UTC timestamp when event occurred
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-
-    /// High-level event category
-    pub event_category: FsmEventCategory,
-
-    /// Specific event type as string (e.g., "ManualStart", "HoldTimerExpires")
-    pub event_type: String,
-
-    /// FSM state at time of event
-    pub current_state: FsmStateKind,
-
-    /// Previous state if this caused a transition
-    pub previous_state: Option<FsmStateKind>,
-
-    /// Connection ID if event is connection-specific
-    pub connection_id: Option<ConnectionId>,
-
-    /// Additional event details (e.g., "Received OPEN", "Admin command")
-    pub details: Option<String>,
-}
 
 /// Dual-buffer FSM event history for comprehensive and strategic visibility
 ///
@@ -9201,51 +9082,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 // ============================================================================
 // API Compatibility Types (VERSION_INITIAL / v1.0.0)
 // ============================================================================
-// These types maintain backward compatibility with the INITIAL API version.
-// They support IPv4-only message history via the /bgp/message-history endpoint (v1).
-// Never used internally - always convert from current types at API boundary.
-//
-// Delete these types when VERSION_INITIAL is retired.
+// V1 message-history shapes now live in `bgp_types_versions::v1::session`,
+// re-exported here under their historical *V1 names. The cross-version `From`
+// conversions live alongside in `bgp_types_versions::impls::session`.
 
-// V1 API compatibility type for message history entry (IPv4-only with MessageV1)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryEntryV1 {
-    timestamp: chrono::DateTime<chrono::Utc>,
-    message: crate::messages::MessageV1,
-}
-
-impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
-    fn from(entry: MessageHistoryEntry) -> Self {
-        Self {
-            timestamp: entry.timestamp,
-            message: crate::messages::MessageV1::from(entry.message),
-        }
-    }
-}
-
-// V1 API compatibility type for message history collection
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryV1 {
-    pub received: VecDeque<MessageHistoryEntryV1>,
-    pub sent: VecDeque<MessageHistoryEntryV1>,
-}
-
-impl From<MessageHistory> for MessageHistoryV1 {
-    fn from(history: MessageHistory) -> Self {
-        Self {
-            received: history
-                .received
-                .into_iter()
-                .map(MessageHistoryEntryV1::from)
-                .collect(),
-            sent: history
-                .sent
-                .into_iter()
-                .map(MessageHistoryEntryV1::from)
-                .collect(),
-        }
-    }
-}
+pub use bgp_types_versions::v1::session::{
+    MessageHistory as MessageHistoryV1,
+    MessageHistoryEntry as MessageHistoryEntryV1,
+};
 
 #[cfg(test)]
 mod tests {

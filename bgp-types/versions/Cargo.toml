@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono.workspace = true
 clap = { workspace = true, optional = true }
 nom.workspace = true
 num_enum.workspace = true
@@ -12,6 +13,7 @@ schemars.workspace = true
 serde.workspace = true
 slog.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [features]
 clap = ["dep:clap"]

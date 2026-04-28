@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use bgp::params::NeighborResetOpV1;
-use bgp::session::MessageHistoryV1;
+use bgp_types_versions::v1::session::MessageHistory as MessageHistoryV1;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

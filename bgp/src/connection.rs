@@ -9,8 +9,6 @@ use crate::{
     session::{FsmEvent, PeerId, SessionEndpoint, SessionInfo},
     unnumbered::UnnumberedManager,
 };
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::{
     collections::BTreeMap,
@@ -19,7 +17,8 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-use uuid::Uuid;
+
+pub use bgp_types::session::{ConnectionDirection, ConnectionId};
 
 #[cfg(target_os = "linux")]
 pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
@@ -29,92 +28,6 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
 #[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
-
-/// Creator of a BGP connection
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub enum ConnectionDirection {
-    /// Connection was created by the dispatcher (listener)
-    Inbound,
-    /// Connection was created by the connector
-    Outbound,
-}
-
-impl ConnectionDirection {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ConnectionDirection::Inbound => "inbound",
-            ConnectionDirection::Outbound => "outbound",
-        }
-    }
-}
-
-impl std::fmt::Display for ConnectionDirection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl slog::Value for ConnectionDirection {
-    fn serialize(
-        &self,
-        _record: &slog::Record,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_str(key, &self.to_string())
-    }
-}
-
-/// Unique identifier for a BGP connection instance
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-pub struct ConnectionId {
-    /// Unique identifier for this connection instance
-    uuid: Uuid,
-    /// Local socket address for this connection
-    local: SocketAddr,
-    /// Remote socket address for this connection
-    remote: SocketAddr,
-}
-
-impl ConnectionId {
-    /// Create a new ConnectionId
-    pub fn new(local: SocketAddr, remote: SocketAddr) -> Self {
-        Self {
-            uuid: Uuid::new_v4(),
-            local,
-            remote,
-        }
-    }
-
-    /// Get a short, human-readable identifier for this connection
-    pub fn short(&self) -> String {
-        self.uuid.to_string()[0..8].to_string()
-    }
-
-    /// Get the local socket address
-    pub fn local(&self) -> SocketAddr {
-        self.local
-    }
-
-    /// Get the remote socket address
-    pub fn remote(&self) -> SocketAddr {
-        self.remote
-    }
-}
 
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {

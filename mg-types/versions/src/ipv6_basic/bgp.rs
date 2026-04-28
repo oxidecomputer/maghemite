@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use bgp::session::{FsmEventRecord, MessageHistory};
+use bgp_types_versions::v2::session::{FsmEventRecord, MessageHistory};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
