@@ -1523,6 +1523,14 @@ impl From<&Message> for MessageType {
 }
 
 impl UpdateMessage {
+    /// Returns true if a TreatAsWithdraw error occurred during parsing.
+    /// When true, all NLRI (v4 + v6) should be processed as withdrawals.
+    pub fn treat_as_withdraw(&self) -> bool {
+        self.errors.iter().any(|(_, action)| {
+            matches!(action, crate::parse::AttributeAction::TreatAsWithdraw,)
+        })
+    }
+
     pub fn multi_exit_discriminator(&self) -> Option<u32> {
         for a in &self.path_attributes {
             if let PathAttributeValue::MultiExitDisc(med) = &a.value {
@@ -1670,7 +1678,8 @@ impl Display for UpdateMessage {
 
         write!(
             f,
-            "Update[ withdrawn({}) path_attributes: ({p_str}) nlri({}) ]",
+            "Update[ treat-as-withdraw: ({}) withdrawn({}) path_attributes: ({p_str}) nlri({}) ]",
+            self.treat_as_withdraw(),
             if !w_str.is_empty() { &w_str } else { "empty" },
             if !n_str.is_empty() { &n_str } else { "empty" }
         )

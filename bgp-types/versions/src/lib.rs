@@ -33,6 +33,7 @@
 pub mod error;
 mod impls;
 pub mod latest;
+pub mod parse;
 #[path = "initial/mod.rs"]
 pub mod v1;
 #[path = "ipv6_basic/mod.rs"]

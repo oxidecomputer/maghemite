@@ -39,29 +39,9 @@ pub trait BgpWireFormat<T>: Sized {
     fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
 }
 
-/// NLRI section identifier for error context
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NlriSection {
-    /// Withdrawn routes section
-    Withdrawn,
-    /// IPv4 NLRI section (non-MP-BGP)
-    Nlri,
-    /// MP_REACH_NLRI attribute
-    MpReach,
-    /// MP_UNREACH_NLRI attribute
-    MpUnreach,
-}
-
-impl Display for NlriSection {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Withdrawn => write!(f, "withdrawn"),
-            Self::Nlri => write!(f, "nlri"),
-            Self::MpReach => write!(f, "mp_reach"),
-            Self::MpUnreach => write!(f, "mp_unreach"),
-        }
-    }
-}
+pub use bgp_types_versions::parse::{
+    AttributeAction, NlriSection, UpdateParseErrorReason,
+};
 
 /// Errors from parsing NLRI prefixes.
 ///
@@ -478,18 +458,13 @@ fn update_message_nlri_to_wire(msg: &UpdateMessage) -> Result<Vec<u8>, Error> {
 /// If an attribute error occurs, continues to parse NLRI so it can be
 /// withdrawn per RFC 7606 "treat-as-withdraw" semantics.
 ///
-/// Returns `Ok((UpdateMessage, errors))` on success (errors may be non-empty
-/// containing TreatAsWithdraw / Discard reasons), or `Err(UpdateParseError)`
-/// for fatal errors requiring session reset.
+/// Returns `Ok(UpdateMessage)` on success (errors collected on
+/// `msg.errors` may be non-empty containing TreatAsWithdraw / Discard
+/// reasons), or `Err(UpdateParseError)` for fatal errors requiring session
+/// reset.
 pub fn update_message_from_wire(
     input: &[u8],
-) -> Result<
-    (
-        UpdateMessage,
-        Vec<(UpdateParseErrorReason, AttributeAction)>,
-    ),
-    UpdateParseError,
-> {
+) -> Result<UpdateMessage, UpdateParseError> {
     // RFC 4271 §4.3: UPDATE minimum 4 bytes body
     // (2 bytes withdrawn length + 2 bytes path attributes length)
     if input.len() < 4 {
@@ -655,14 +630,12 @@ pub fn update_message_from_wire(
         }
     }
 
-    Ok((
-        UpdateMessage {
-            withdrawn,
-            path_attributes,
-            nlri,
-        },
+    Ok(UpdateMessage {
+        withdrawn,
+        path_attributes,
+        nlri,
         errors,
-    ))
+    })
 }
 
 /// Parse prefixes from wire format.
@@ -2358,212 +2331,9 @@ pub use bgp_types::messages::{Afi, Safi};
 //   during parsing. false = normal, true = process all NLRI as withdrawals.
 // - UpdateMessage.errors: Vec collecting all non-fatal parse errors encountered.
 
-/// All possible reasons for UPDATE parse errors.
-///
-/// This enum codifies error reasons instead of using strings, providing
-/// type safety and consistent error messages via the Display impl.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateParseErrorReason {
-    // Frame structure errors (fatal)
-    /// UPDATE message body is too short for frame structure parsing
-    MessageTooShort { expected_min: usize, got: usize },
-    /// Withdrawn routes length exceeds available bytes
-    InvalidWithdrawnLength { declared: u16, available: usize },
-    /// Path attributes length exceeds available bytes
-    InvalidAttributeLength { declared: u16, available: usize },
-
-    // Attribute parsing errors
-    /// Next-hop attribute has wrong length
-    MalformedNextHop { expected: usize, got: usize },
-    /// Origin attribute has invalid value
-    InvalidOriginValue { value: u8 },
-    /// AS_PATH attribute is malformed
-    MalformedAsPath { detail: String },
-    /// Attribute flags are invalid for this type
-    InvalidAttributeFlags { type_code: u8, flags: u8 },
-
-    // MP-BGP errors
-    /// Duplicate MP_REACH_NLRI attribute in UPDATE
-    DuplicateMpReachNlri,
-    /// Duplicate MP_UNREACH_NLRI attribute in UPDATE
-    DuplicateMpUnreachNlri,
-    /// Duplicate non-MP-BGP attribute (discarded per RFC 7606 3(g))
-    DuplicateAttribute { type_code: u8 },
-    /// AFI/SAFI combination not recognized (raw bytes)
-    UnsupportedAfiSafi { afi: u16, safi: u8 },
-    /// MP next-hop has invalid length for AFI
-    InvalidMpNextHopLength {
-        afi: u16,
-        expected: &'static str,
-        got: usize,
-    },
-
-    // Attribute-specific errors
-    /// Missing mandatory well-known attribute
-    MissingAttribute { type_code: PathAttributeTypeCode },
-    /// Attribute has invalid length for its type
-    AttributeLengthError {
-        type_code: PathAttributeTypeCode,
-        expected: usize,
-        got: usize,
-    },
-    /// Unrecognized mandatory attribute (not optional/transitive)
-    UnrecognizedMandatoryAttribute { type_code: u8 },
-    /// Attribute parsing failed (generic fallback for nom errors)
-    AttributeParseError {
-        type_code: Option<u8>,
-        detail: String,
-    },
-
-    // NLRI/prefix parsing errors
-    /// NLRI section is empty when prefix length byte expected
-    NlriMissingLength {
-        /// Which section the error occurred in
-        section: NlriSection,
-    },
-    /// Prefix length exceeds maximum for address family (32 for IPv4, 128 for IPv6)
-    InvalidNlriMask {
-        section: NlriSection,
-        length: u8,
-        max: u8,
-    },
-    /// Not enough bytes for declared prefix length
-    TruncatedNlri {
-        section: NlriSection,
-        needed: usize,
-        available: usize,
-    },
-
-    // Generic fallback
-    /// Other parse error (avoid if possible; prefer specific variant)
-    Other { detail: String },
-}
-
-impl Display for UpdateParseErrorReason {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MessageTooShort { expected_min, got } => {
-                write!(
-                    f,
-                    "UPDATE message too short: expected minimum {}, got {}",
-                    expected_min, got
-                )
-            }
-            Self::InvalidWithdrawnLength {
-                declared,
-                available,
-            } => {
-                write!(
-                    f,
-                    "withdrawn length {} exceeds available {}",
-                    declared, available
-                )
-            }
-            Self::InvalidAttributeLength {
-                declared,
-                available,
-            } => {
-                write!(
-                    f,
-                    "attribute length {} exceeds available {}",
-                    declared, available
-                )
-            }
-            Self::MalformedNextHop { expected, got } => {
-                write!(
-                    f,
-                    "next-hop length mismatch: expected {}, got {}",
-                    expected, got
-                )
-            }
-            Self::InvalidOriginValue { value } => {
-                write!(f, "invalid ORIGIN value: {}", value)
-            }
-            Self::MalformedAsPath { detail } => {
-                write!(f, "malformed AS_PATH: {}", detail)
-            }
-            Self::InvalidAttributeFlags { type_code, flags } => {
-                write!(
-                    f,
-                    "invalid flags 0x{:02x} for attribute type {}",
-                    flags, type_code
-                )
-            }
-            Self::DuplicateMpReachNlri => {
-                write!(f, "duplicate MP_REACH_NLRI attribute")
-            }
-            Self::DuplicateMpUnreachNlri => {
-                write!(f, "duplicate MP_UNREACH_NLRI attribute")
-            }
-            Self::DuplicateAttribute { type_code } => {
-                write!(f, "duplicate attribute type {}", type_code)
-            }
-            Self::UnsupportedAfiSafi { afi, safi } => {
-                write!(f, "unsupported AFI/SAFI: {}/{}", afi, safi)
-            }
-            Self::InvalidMpNextHopLength { afi, expected, got } => {
-                write!(
-                    f,
-                    "invalid MP next-hop length for AFI {}: expected {}, got {}",
-                    afi, expected, got
-                )
-            }
-            Self::MissingAttribute { type_code } => {
-                write!(f, "missing mandatory attribute: {:?}", type_code)
-            }
-            Self::AttributeLengthError {
-                type_code,
-                expected,
-                got,
-            } => {
-                write!(
-                    f,
-                    "attribute {:?} length error: expected {}, got {}",
-                    type_code, expected, got
-                )
-            }
-            Self::UnrecognizedMandatoryAttribute { type_code } => {
-                write!(f, "unrecognized mandatory attribute: {}", type_code)
-            }
-            Self::AttributeParseError { type_code, detail } => {
-                match type_code {
-                    Some(tc) => {
-                        write!(f, "attribute {} parse error: {}", tc, detail)
-                    }
-                    None => write!(f, "attribute parse error: {}", detail),
-                }
-            }
-            Self::NlriMissingLength { section } => {
-                write!(f, "{} NLRI missing prefix length byte", section)
-            }
-            Self::InvalidNlriMask {
-                section,
-                length,
-                max,
-            } => {
-                write!(
-                    f,
-                    "{} NLRI prefix length {} exceeds maximum {}",
-                    section, length, max
-                )
-            }
-            Self::TruncatedNlri {
-                section,
-                needed,
-                available,
-            } => {
-                write!(
-                    f,
-                    "truncated {} NLRI: need {} bytes, have {}",
-                    section, needed, available
-                )
-            }
-            Self::Other { detail } => {
-                write!(f, "{}", detail)
-            }
-        }
-    }
-}
+// `UpdateParseErrorReason`, `AttributeAction`, and `NlriSection` now live in
+// `bgp_types_versions::parse` (re-exported above). Their `Display` impls
+// live alongside the type definitions in that crate.
 
 /// Parsed path attributes from wire format.
 ///
@@ -2822,19 +2592,7 @@ impl Display for MessageParseError {
     }
 }
 
-/// RFC 7606 action classification for path attribute errors.
-///
-/// This enum carries no data - the error reason is stored separately
-/// in `UpdateParseErrorReason`. Ordered from strongest to weakest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttributeAction {
-    /// Terminate session with NOTIFICATION.
-    SessionReset,
-    /// Treat all NLRI in message as withdrawn.
-    TreatAsWithdraw,
-    /// Silently discard the attribute.
-    Discard,
-}
+// `AttributeAction` now lives in `bgp_types_versions::parse` (re-exported above).
 
 // ============================================================================
 // API Compatibility Types (VERSION_INITIAL / v1.0.0)
@@ -3049,12 +2807,13 @@ mod tests {
                 rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
                 rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
             ],
+            errors: vec![],
         };
 
         let buf = update_message_to_wire(&um0).expect("update message to wire");
         println!("buf: {}", buf.hex_dump());
 
-        let (um1, _) =
+        let um1 =
             update_message_from_wire(&buf).expect("update message from wire");
         assert_eq!(um0, um1);
     }
@@ -3420,7 +3179,8 @@ mod tests {
         let result = update_message_from_wire(&buf);
         assert!(result.is_ok(), "Expected Ok with treat_as_withdraw set");
 
-        let (msg, errs) = result.unwrap();
+        let msg = result.unwrap();
+        let errs = msg.errors.clone();
         assert!(
             treat_as_withdraw(&errs),
             "Expected treat_as_withdraw to be true for bad NEXT_HOP length"
@@ -3805,6 +3565,7 @@ mod tests {
                 },
             ],
             nlri: vec![],
+            errors: vec![],
         };
 
         // Encode to wire format
@@ -3848,6 +3609,7 @@ mod tests {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
+            errors: vec![],
         };
 
         // Encode to wire and decode back - should succeed
@@ -3859,7 +3621,7 @@ mod tests {
             "decoding mixed traditional+MP-BGP should succeed"
         );
 
-        let (decoded, _) = decoded.unwrap();
+        let decoded = decoded.unwrap();
         // Verify both encodings are present
         assert_eq!(decoded.nlri.len(), 1, "traditional NLRI should be present");
         assert!(
@@ -3907,6 +3669,7 @@ mod tests {
                 },
             ],
             nlri: vec![],
+            errors: vec![],
         };
 
         // Encode to wire and decode back - should succeed
@@ -3918,7 +3681,7 @@ mod tests {
             "decoding MP_REACH + MP_UNREACH together should succeed"
         );
 
-        let (decoded, _) = decoded.unwrap();
+        let decoded = decoded.unwrap();
         // Verify both are present
         let has_reach = decoded
             .path_attributes
@@ -3972,12 +3735,13 @@ mod tests {
                 },
             ],
             nlri: traditional_nlri.clone(),
+            errors: vec![],
         };
 
         // Round-trip through wire format
         let wire =
             update_message_to_wire(&update).expect("encoding should succeed");
-        let (decoded, _) =
+        let decoded =
             update_message_from_wire(&wire).expect("decoding should succeed");
 
         // Verify traditional encoding is preserved
@@ -4038,11 +3802,12 @@ mod tests {
             withdrawn: vec![],
             path_attributes: vec![],
             nlri: vec![],
+            errors: vec![],
         };
 
         let wire = update_message_to_wire(&empty_update)
             .expect("encoding should succeed");
-        let (decoded, _) =
+        let decoded =
             update_message_from_wire(&wire).expect("decoding should succeed");
 
         assert!(decoded.withdrawn.is_empty(), "withdrawn should be empty");
@@ -4064,11 +3829,12 @@ mod tests {
                 value: PathAttributeValue::MpUnreachNlri(mp_eor),
             }],
             nlri: vec![],
+            errors: vec![],
         };
 
         let wire = update_message_to_wire(&mp_eor_update)
             .expect("encoding should succeed");
-        let (decoded, _) =
+        let decoded =
             update_message_from_wire(&wire).expect("decoding should succeed");
 
         // Verify MP_UNREACH_NLRI is present with zero prefixes
@@ -4100,11 +3866,12 @@ mod tests {
                 value: PathAttributeValue::MpUnreachNlri(mp_eor_v4),
             }],
             nlri: vec![],
+            errors: vec![],
         };
 
         let wire = update_message_to_wire(&mp_eor_v4_update)
             .expect("encoding should succeed");
-        let (decoded, _) =
+        let decoded =
             update_message_from_wire(&wire).expect("decoding should succeed");
 
         // Verify MP_UNREACH_NLRI is present with zero prefixes and correct AFI/SAFI
@@ -4159,7 +3926,7 @@ mod tests {
         let decoded = update_message_from_wire(&wire);
         assert!(decoded.is_ok(), "decoding should succeed");
 
-        let (decoded, _) = decoded.unwrap();
+        let decoded = decoded.unwrap();
 
         // Should only have one ORIGIN attribute (the first one, IGP)
         let origins: Vec<_> = decoded
@@ -4747,7 +4514,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with errors collected"
             );
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
 
             assert!(
                 treat_as_withdraw(&errs),
@@ -4824,7 +4592,8 @@ mod tests {
             let result = update_message_from_wire(&wire);
 
             assert!(result.is_ok(), "Parsing should succeed");
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
 
             assert!(
                 !treat_as_withdraw(&errs),
@@ -4873,7 +4642,8 @@ mod tests {
             let result = update_message_from_wire(&wire);
 
             assert!(result.is_ok(), "Parsing should succeed");
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
 
             assert!(
                 treat_as_withdraw(&errs),
@@ -4933,7 +4703,8 @@ mod tests {
             let result = update_message_from_wire(&wire);
 
             assert!(result.is_ok(), "Parsing should succeed");
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
 
             assert!(
                 treat_as_withdraw(&errs),
@@ -4967,7 +4738,8 @@ mod tests {
             let result = update_message_from_wire(&wire);
 
             assert!(result.is_ok(), "Parsing should succeed");
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
 
             assert!(
                 !treat_as_withdraw(&errs),
@@ -5005,7 +4777,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with flag error collected"
             );
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
 
             assert!(
                 treat_as_withdraw(&errs),
@@ -5161,7 +4934,8 @@ mod tests {
                 "MP-BGP UPDATE without NEXT_HOP should succeed: {:?}",
                 result.err()
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 !treat_as_withdraw(&errs),
                 "Should not be treat-as-withdraw"
@@ -5186,7 +4960,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with error collected"
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 treat_as_withdraw(&errs),
                 "Missing NEXT_HOP with traditional NLRI should treat-as-withdraw"
@@ -5238,7 +5013,8 @@ mod tests {
                 "MP_UNREACH-only UPDATE should succeed: {:?}",
                 result.err()
             );
-            let (msg, errs) = result.unwrap();
+            let msg = result.unwrap();
+            let errs = msg.errors.clone();
             assert!(
                 !treat_as_withdraw(&errs),
                 "Should not be treat-as-withdraw"
@@ -5278,7 +5054,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with error collected"
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 treat_as_withdraw(&errs),
                 "Missing NEXT_HOP should trigger treat-as-withdraw"
@@ -5310,7 +5087,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with error collected"
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 treat_as_withdraw(&errs),
                 "Missing ORIGIN should trigger treat-as-withdraw"
@@ -5342,7 +5120,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with error collected"
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 treat_as_withdraw(&errs),
                 "Missing AS_PATH should trigger treat-as-withdraw"
@@ -5373,7 +5152,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with errors collected"
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 treat_as_withdraw(&errs),
                 "Missing mandatory attrs should trigger treat-as-withdraw"
@@ -5418,7 +5198,8 @@ mod tests {
                 "Withdraw-only UPDATE should succeed: {:?}",
                 result.err()
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 !treat_as_withdraw(&errs),
                 "Should not be treat-as-withdraw"
@@ -5441,7 +5222,8 @@ mod tests {
                 "Empty UPDATE should succeed: {:?}",
                 result.err()
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
             assert!(
                 !treat_as_withdraw(&errs),
                 "Should not be treat-as-withdraw"
@@ -5730,7 +5512,7 @@ mod tests {
             let result = update_message_from_wire(&wire);
 
             assert!(result.is_ok(), "Should parse UPDATE with AGGREGATOR");
-            let (msg, _errs) = result.unwrap();
+            let msg = result.unwrap();
 
             // Find AGGREGATOR attribute
             let agg_attr = msg
@@ -5795,7 +5577,7 @@ mod tests {
                 result.is_ok(),
                 "Should parse UPDATE with ATOMIC_AGGREGATE"
             );
-            let (msg, _errs) = result.unwrap();
+            let msg = result.unwrap();
 
             // Find ATOMIC_AGGREGATE attribute
             let atomic_attr = msg
@@ -5863,7 +5645,8 @@ mod tests {
                 result.is_ok(),
                 "Parsing should succeed with error collected"
             );
-            let (_msg, errs) = result.unwrap();
+            let _msg = result.unwrap();
+            let errs = _msg.errors.clone();
 
             // Should have AttributeLengthError for AGGREGATOR
             assert!(
@@ -5984,7 +5767,7 @@ mod tests {
                 wire.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
                 wire.extend_from_slice(&attrs);
 
-                let (decoded, _) =
+                let decoded =
                     update_message_from_wire(&wire).expect("should decode");
 
                 let decoded_origins: Vec<_> = decoded

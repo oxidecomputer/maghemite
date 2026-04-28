@@ -7575,6 +7575,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             withdrawn: vec![],
                             path_attributes,
                             nlri,
+                            ..Default::default()
                         }
                     }
                     nh6 @ BgpNexthop::Ipv6Single(_)
@@ -7589,6 +7590,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             withdrawn: vec![],
                             path_attributes: path_attrs,
                             nlri: vec![],
+                            ..Default::default()
                         }
                     }
                 }
@@ -7599,6 +7601,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     withdrawn,
                     path_attributes: vec![],
                     nlri: vec![],
+                    ..Default::default()
                 }
             }
             RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => {
@@ -7617,6 +7620,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     withdrawn: vec![],
                     path_attributes: path_attrs,
                     nlri: vec![],
+                    ..Default::default()
                 }
             }
             RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
@@ -7629,6 +7633,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     withdrawn: vec![],
                     path_attributes: path_attrs,
                     nlri: vec![],
+                    ..Default::default()
                 }
             }
         };

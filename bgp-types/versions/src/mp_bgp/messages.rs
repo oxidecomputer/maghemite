@@ -394,6 +394,18 @@ pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix4>,
     pub path_attributes: Vec<PathAttribute>, // XXX: use map for O(1) lookups?
     pub nlri: Vec<Prefix4>,
+
+    /// All attribute parse errors encountered during from_wire().
+    /// Includes both TreatAsWithdraw and Discard errors.
+    /// SessionReset errors cause early return and are not collected here.
+    /// Not serialized - only used for internal signaling.
+    /// Use the treat_as_withdraw() method to check if any TreatAsWithdraw errors occurred.
+    #[serde(skip, default)]
+    #[schemars(skip)]
+    pub errors: Vec<(
+        crate::parse::UpdateParseErrorReason,
+        crate::parse::AttributeAction,
+    )>,
 }
 
 /// Holds a BGP message. May be an Open, Update, Notification or Keep Alive

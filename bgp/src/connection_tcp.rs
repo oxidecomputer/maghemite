@@ -908,7 +908,7 @@ impl BgpConnectionTcp {
             },
             MessageType::Update => {
                 match crate::messages::update_message_from_wire(&msgbuf) {
-                    Ok((m, _errs)) => Message::from(m),
+                    Ok(m) => Message::from(m),
                     Err(update_err) => {
                         connection_log_lite!(log,
                             error,
