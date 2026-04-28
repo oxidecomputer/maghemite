@@ -843,7 +843,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1352,7 +1352,7 @@ version = "0.1.0"
 dependencies = [
  "oxnet",
  "progenitor 0.14.0",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "slog",
  "uuid",
@@ -1942,7 +1942,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2251,7 +2251,7 @@ dependencies = [
  "omicron-workspace-hack",
  "progenitor 0.13.0",
  "rand 0.9.2",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3181,7 +3181,7 @@ dependencies = [
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "qorb",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "slog",
  "thiserror 2.0.18",
 ]
@@ -3268,7 +3268,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3327,7 +3327,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3748,7 +3748,7 @@ dependencies = [
  "colored",
  "progenitor 0.14.0",
  "rdb-types 0.1.0",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3766,7 +3766,7 @@ dependencies = [
  "colored",
  "progenitor 0.13.0",
  "rdb-types 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=b603c9f3dccefcf1d3e941c04505ff6bdd1826b6)",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3818,7 +3818,7 @@ dependencies = [
  "ddm-types",
  "oxide-tokio-rt",
  "oxnet",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "serde_json",
 ]
@@ -3834,7 +3834,7 @@ dependencies = [
  "oxnet",
  "progenitor-client 0.14.0",
  "rdb",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "slog",
  "thiserror 2.0.18",
  "tokio",
@@ -4104,7 +4104,7 @@ dependencies = [
  "oxnet",
  "progenitor 0.13.0",
  "regress 0.10.5",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -4462,7 +4462,7 @@ dependencies = [
  "protocol",
  "rand 0.9.2",
  "regress 0.10.5",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "schemars 0.8.22",
  "semver 1.0.28",
  "serde",
@@ -4827,7 +4827,7 @@ dependencies = [
  "qorb",
  "quote",
  "regex",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -5490,7 +5490,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "percent-encoding",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -5505,7 +5505,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "percent-encoding",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -6180,9 +6180,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab3f43e3283ab1488b624b44b0e988d0acea0b3214e694730a055cb6b2efa801"
+checksum = "62e0021ea2c22aed41653bc7e1419abb2c97e038ff2c33d0e1309e49a97deec0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -6331,7 +6331,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6413,7 +6413,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7287,7 +7287,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7595,7 +7595,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7604,7 +7604,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7614,7 +7614,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9048,7 +9048,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
