@@ -17,7 +17,10 @@ progenitor::generate_api!(
     },
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
-    })
+    }),
+    replace = {
+        Duration = std::time::Duration,
+    }
 );
 
 impl std::cmp::PartialEq for types::TunnelOrigin {

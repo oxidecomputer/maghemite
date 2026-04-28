@@ -20,8 +20,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use mg_common::lock;
-use mg_common::net::TunnelOrigin;
+use mg_common::{lock, net::TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info};
 use std::collections::{HashMap, HashSet};
@@ -113,7 +112,24 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
-        Ok(HttpResponseOk(ctx.db.peers()))
+        let mut result = HashMap::new();
+        for sm in &ctx.peers {
+            let if_index = *lock!(sm.iface.if_index);
+            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
+                continue;
+            };
+            let status = sm.iface.peer_status();
+            result.insert(
+                if_index,
+                PeerInfo {
+                    status,
+                    addr: peer.addr,
+                    host: peer.hostname,
+                    kind: peer.kind,
+                },
+            );
+        }
+        Ok(HttpResponseOk(result))
     }
 
     async fn expire_peer(

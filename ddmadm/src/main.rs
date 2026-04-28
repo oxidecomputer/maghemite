@@ -109,17 +109,26 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 "Interface".dimmed(),
                 "Host".dimmed(),
                 "Address".dimmed(),
                 "Kind".dimmed(),
                 "Status".dimmed(),
+                "Duration".dimmed(),
             )?;
-            for (index, info) in &msg.into_inner() {
+            let mut peers: Vec<_> = msg.into_inner().into_iter().collect();
+            peers.sort_by_key(|(index, _)| index.clone());
+            for (index, info) in &peers {
+                let (state, duration) = match &info.status {
+                    types::PeerStatus::Init(d) => ("Init", d),
+                    types::PeerStatus::Solicit(d) => ("Solicit", d),
+                    types::PeerStatus::Exchange(d) => ("Exchange", d),
+                    types::PeerStatus::Expired(d) => ("Expired", d),
+                };
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{:?}",
+                    "{}\t{}\t{}\t{}\t{}\t{}",
                     index,
                     info.host,
                     info.addr,
@@ -128,7 +137,8 @@ async fn run() -> Result<()> {
                         1 => "Transit",
                         _ => "?",
                     },
-                    info.status,
+                    state,
+                    format_duration(duration),
                 )?;
             }
             tw.flush()?;
@@ -248,6 +258,19 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_duration(d: &std::time::Duration) -> String {
+    let secs = d.as_secs();
+    let mins = secs / 60;
+    let hours = mins / 60;
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, mins % 60, secs % 60)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
 }
 
 fn init_logger() -> Logger {

@@ -2,9 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_types::db::{PeerInfo, TunnelRoute};
-use mg_common::lock;
-use mg_common::net::TunnelOrigin;
+use ddm_types::db::TunnelRoute;
+use mg_common::{lock, net::TunnelOrigin};
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -45,7 +44,6 @@ pub struct Db {
 
 #[derive(Default, Clone)]
 pub struct DbData {
-    pub peers: HashMap<u32, PeerInfo>,
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
 }
@@ -63,10 +61,6 @@ impl Db {
     }
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
-    }
-
-    pub fn peers(&self) -> HashMap<u32, PeerInfo> {
-        lock!(self.data).peers.clone()
     }
 
     pub fn imported(&self) -> HashSet<Route> {
@@ -221,15 +215,6 @@ impl Db {
         Ok(())
     }
 
-    /// Set peer info at the given index. Returns true if peer information was
-    /// changed.
-    pub fn set_peer(&self, index: u32, info: PeerInfo) -> bool {
-        match lock!(self.data).peers.insert(index, info.clone()) {
-            Some(previous) => previous == info,
-            None => true,
-        }
-    }
-
     pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
@@ -257,10 +242,6 @@ impl Db {
             data.imported_tunnel.remove(x);
         }
         (removed, tnl_removed)
-    }
-
-    pub fn remove_peer(&self, index: u32) {
-        lock!(self.data).peers.remove(&index);
     }
 
     pub fn routes_by_vector(
