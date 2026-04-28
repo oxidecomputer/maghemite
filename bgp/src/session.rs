@@ -19,9 +19,9 @@ use crate::{
         Safi, UpdateMessage,
     },
     params::{
-        BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
-        DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
-        PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
+        BgpPeerParameters, BgpPeerParametersV1, DynamicTimerInfo,
+        Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, PeerCounters,
+        PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
     },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
@@ -9141,8 +9141,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 ConnectionKind::Full(pc) => {
                     let local = pc.conn.local();
                     let remote = pc.conn.peer();
-                    let received_capabilities =
-                        pc.caps.iter().map(BgpCapability::from).collect();
+                    let received_capabilities = pc
+                        .caps
+                        .iter()
+                        .map(crate::params::bgp_capability_from)
+                        .collect();
                     PeerInfo {
                         name,
                         peer_group: peer_group.clone(),

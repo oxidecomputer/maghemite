@@ -6,11 +6,14 @@
 //! version. These types encode IANA-assigned numeric codes used in BGP
 //! protocol messages.
 
+use std::collections::BTreeSet;
 use std::net::IpAddr;
 
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::v4::messages::ExtendedNexthopElement;
 
 /// Maximum BGP message size in octets per RFC 4271 §4.
 pub const MAX_MESSAGE_SIZE: usize = 4096;
@@ -616,4 +619,193 @@ pub struct PathAttribute {
     pub typ: PathAttributeType,
     /// Value of the attribute
     pub value: PathAttributeValue,
+}
+
+/// This enumeration contains possible notification error subcodes.
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorSubcode {
+    Header(HeaderErrorSubcode),
+    Open(OpenErrorSubcode),
+    Update(UpdateErrorSubcode),
+    HoldTime(u8),
+    Fsm(u8),
+    Cease(CeaseErrorSubcode),
+}
+
+/// The IANA/IETF currently defines the following optional parameter types.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum OptionalParameter {
+    /// Code 0
+    Reserved,
+
+    /// Code 1: RFC 4217, RFC 5492 (deprecated)
+    Authentication, //TODO
+
+    /// Code 2: RFC 5492
+    Capabilities(BTreeSet<Capability>),
+
+    /// Unassigned
+    Unassigned,
+
+    /// Code 255: RFC 9072
+    ExtendedLength, //TODO
+}
+
+// An issue tracking the TODOs below is here
+// <https://github.com/oxidecomputer/maghemite/issues/80>
+
+/// Optional capabilities supported by a BGP implementation.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    /// Multiprotocol extensions as defined in RFC 2858
+    MultiprotocolExtensions {
+        afi: u16,
+        safi: u8,
+    },
+
+    /// Route refresh capability as defined in RFC 2918.
+    RouteRefresh {},
+
+    //TODO
+    /// Outbound filtering capability as defined in RFC 5291. Note this
+    /// capability is not yet implemented.
+    OutboundRouteFiltering {},
+
+    //TODO
+    /// Multiple routes to destination capability as defined in RFC 8277
+    /// (deprecated). Note this capability is not yet implemented.
+    MultipleRoutesToDestination {},
+
+    /// Multiple nexthop encoding capability as defined in RFC 8950.
+    ExtendedNextHopEncoding {
+        //XXX trying to avoid a version bump on 86 billion data structures
+        // right now.
+        #[schemars(skip)]
+        elements: Vec<ExtendedNexthopElement>,
+    },
+
+    //TODO
+    /// Extended message capability as defined in RFC 8654. Note this
+    /// capability is not yet implemented.
+    BGPExtendedMessage {},
+
+    //TODO
+    /// BGPSec as defined in RFC 8205. Note this capability is not yet
+    /// implemented.
+    BgpSec {},
+
+    //TODO
+    /// Multiple label support as defined in RFC 8277. Note this capability
+    /// is not yet implemented.
+    MultipleLabels {},
+
+    //TODO
+    /// BGP role capability as defined in RFC 9234. Note this capability is not
+    /// yet implemented.
+    BgpRole {},
+
+    //TODO
+    /// Graceful restart as defined in RFC 4724. Note this capability is not
+    /// yet implemented.
+    GracefulRestart {},
+
+    /// Four octet AS numbers as defined in RFC 6793.
+    FourOctetAs {
+        asn: u32,
+    },
+
+    //TODO
+    /// Dynamic capabilities as defined in draft-ietf-idr-dynamic-cap. Note
+    /// this capability is not yet implemented.
+    DynamicCapability {},
+
+    //TODO
+    /// Multi session support as defined in draft-ietf-idr-bgp-multisession.
+    /// Note this capability is not yet supported.
+    MultisessionBgp {},
+
+    /// Add path capability as defined in RFC 7911.
+    AddPath {
+        elements: BTreeSet<AddPathElement>,
+    },
+
+    //TODO
+    /// Enhanced route refresh as defined in RFC 7313. Note this capability is
+    /// not yet supported.
+    EnhancedRouteRefresh {},
+
+    //TODO
+    /// Long-lived graceful restart as defined in
+    /// draft-uttaro-idr-bgp-persistence. Note this capability is not yet
+    /// supported.
+    LongLivedGracefulRestart {},
+
+    //TODO
+    /// Routing policy distribution as defined indraft-ietf-idr-rpd-04. Note
+    /// this capability is not yet supported.
+    RoutingPolicyDistribution {},
+
+    //TODO
+    /// Fully qualified domain names as defined
+    /// intdraft-walton-bgp-hostname-capability. Note this capability is not
+    /// yet supported.
+    Fqdn {},
+
+    //TODO
+    /// Pre-standard route refresh as defined in RFC 8810 (deprecated). Note
+    /// this capability is not yet supported.
+    PrestandardRouteRefresh {},
+
+    //TODO
+    /// Pre-standard prefix-based outbound route filtering as defined in
+    /// RFC 8810 (deprecated). Note this is not yet implemented.
+    PrestandardOrfAndPd {},
+
+    //TODO
+    /// Pre-standard outbound route filtering as defined in RFC 8810
+    /// (deprecated). Note this is not yet implemented.
+    PrestandardOutboundRouteFiltering {},
+
+    //TODO
+    /// Pre-standard multisession as defined in RFC 8810 (deprecated). Note
+    /// this is not yet implemented.
+    PrestandardMultisession {},
+
+    //TODO
+    /// Pre-standard fully qualified domain names as defined in RFC 8810
+    /// (deprecated). Note this is not yet implemented.
+    PrestandardFqdn {},
+
+    //TODO
+    /// Pre-standard operational messages as defined in RFC 8810 (deprecated).
+    /// Note this is not yet implemented.
+    PrestandardOperationalMessage {},
+
+    /// Experimental capability as defined in RFC 8810.
+    Experimental {
+        code: u8,
+    },
+
+    Unassigned {
+        code: u8,
+    },
+
+    Reserved {
+        code: u8,
+    },
 }

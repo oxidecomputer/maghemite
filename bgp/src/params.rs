@@ -4,7 +4,7 @@
 
 use crate::{
     config::PeerConfig,
-    messages::{AddPathElement, Afi, Capability},
+    messages::{AddPathElement, Afi, Capability, CapabilityCode},
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
@@ -812,24 +812,24 @@ pub enum BgpCapability {
     Unknown(u8),
 }
 
-impl From<&Capability> for BgpCapability {
-    fn from(value: &Capability) -> Self {
-        match value {
-            Capability::MultiprotocolExtensions { afi, safi } => {
-                BgpCapability::MultiprotocolExtensions(AfiSafi {
-                    afi: *afi,
-                    safi: *safi,
-                })
-            }
-            Capability::RouteRefresh {} => BgpCapability::RouteRefresh,
-            Capability::FourOctetAs { asn } => {
-                BgpCapability::FourOctetAsn(*asn)
-            }
-            Capability::AddPath { elements } => BgpCapability::AddPath {
-                elements: elements.iter().map(AfiSafi::from).collect(),
-            },
-            c => BgpCapability::Unknown(c.code() as u8),
+/// Free-fn replacement for `From<&Capability> for BgpCapability`. The `From`
+/// impl will be reabsorbed in mg-types-versions when `BgpCapability` migrates
+/// in Chunk 6; until then, the impl cannot live here (orphan rule, since
+/// `Capability` now lives in `bgp-types-versions`).
+pub fn bgp_capability_from(value: &Capability) -> BgpCapability {
+    match value {
+        Capability::MultiprotocolExtensions { afi, safi } => {
+            BgpCapability::MultiprotocolExtensions(AfiSafi {
+                afi: *afi,
+                safi: *safi,
+            })
         }
+        Capability::RouteRefresh {} => BgpCapability::RouteRefresh,
+        Capability::FourOctetAs { asn } => BgpCapability::FourOctetAsn(*asn),
+        Capability::AddPath { elements } => BgpCapability::AddPath {
+            elements: elements.iter().map(AfiSafi::from).collect(),
+        },
+        c => BgpCapability::Unknown(CapabilityCode::from(c.clone()) as u8),
     }
 }
 

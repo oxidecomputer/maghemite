@@ -506,7 +506,7 @@ impl OpenMessage {
     pub fn has_capability(&self, code: CapabilityCode) -> bool {
         self.get_capabilities()
             .into_iter()
-            .any(|x| capability_code_of(x) == code)
+            .any(|x| CapabilityCode::from(x) == code)
     }
 
     pub fn asn(&self) -> u32 {
@@ -555,7 +555,7 @@ impl OpenMessage {
     fn parameters_to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
         for p in &self.parameters {
-            buf.extend_from_slice(&p.to_wire()?);
+            buf.extend_from_slice(&optional_parameter_to_wire(p)?);
         }
         Ok(buf)
     }
@@ -607,7 +607,7 @@ impl OpenMessage {
         let mut result = Vec::new();
 
         while !buf.is_empty() {
-            let (out, param) = OptionalParameter::from_wire(buf)?;
+            let (out, param) = optional_parameter_from_wire(buf)?;
             result.push(param);
             buf = out;
         }
@@ -2506,7 +2506,10 @@ pub struct NotificationMessage {
 
 impl NotificationMessage {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        let buf = vec![self.error_code.into(), self.error_subcode.as_u8()];
+        let buf = vec![
+            self.error_code.into(),
+            error_subcode_as_u8(&self.error_subcode),
+        ];
         //TODO data, see comment above on data field
         Ok(buf)
     }
@@ -2598,75 +2601,19 @@ impl Display for RouteRefreshMessage {
 
 pub use bgp_types::messages::ErrorCode;
 
-/// This enumeration contains possible notification error subcodes.
-#[derive(
-    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorSubcode {
-    Header(HeaderErrorSubcode),
-    Open(OpenErrorSubcode),
-    Update(UpdateErrorSubcode),
-    HoldTime(u8),
-    Fsm(u8),
-    Cease(CeaseErrorSubcode),
-}
+pub use bgp_types::messages::ErrorSubcode;
 
-impl From<HeaderErrorSubcode> for ErrorSubcode {
-    fn from(x: HeaderErrorSubcode) -> ErrorSubcode {
-        ErrorSubcode::Header(x)
-    }
-}
-
-impl From<OpenErrorSubcode> for ErrorSubcode {
-    fn from(x: OpenErrorSubcode) -> ErrorSubcode {
-        ErrorSubcode::Open(x)
-    }
-}
-
-impl From<UpdateErrorSubcode> for ErrorSubcode {
-    fn from(x: UpdateErrorSubcode) -> ErrorSubcode {
-        ErrorSubcode::Update(x)
-    }
-}
-
-impl From<CeaseErrorSubcode> for ErrorSubcode {
-    fn from(x: CeaseErrorSubcode) -> ErrorSubcode {
-        ErrorSubcode::Cease(x)
-    }
-}
-
-impl ErrorSubcode {
-    fn as_u8(&self) -> u8 {
-        match self {
-            Self::Header(h) => (*h).into(),
-            Self::Open(o) => (*o).into(),
-            Self::Update(u) => (*u).into(),
-            Self::HoldTime(x) => *x,
-            Self::Fsm(x) => *x,
-            Self::Cease(x) => (*x).into(),
-        }
-    }
-}
-
-impl Display for ErrorSubcode {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            ErrorSubcode::Header(header_error_subcode) => {
-                write!(f, "{header_error_subcode}")
-            }
-            ErrorSubcode::Open(open_error_subcode) => {
-                write!(f, "{open_error_subcode}")
-            }
-            ErrorSubcode::Update(update_error_subcode) => {
-                write!(f, "{update_error_subcode}")
-            }
-            ErrorSubcode::HoldTime(i) => write!(f, "{i}"),
-            ErrorSubcode::Fsm(i) => write!(f, "{i}"),
-            ErrorSubcode::Cease(cease_error_subcode) => {
-                write!(f, "{cease_error_subcode}")
-            }
-        }
+/// Free-fn replacement for the inherent `ErrorSubcode::as_u8` method (the
+/// type now lives in `bgp-types-versions`). Crate-private; used by
+/// `NotificationMessage::to_wire` here in `bgp`.
+pub(crate) fn error_subcode_as_u8(s: &ErrorSubcode) -> u8 {
+    match s {
+        ErrorSubcode::Header(h) => (*h).into(),
+        ErrorSubcode::Open(o) => (*o).into(),
+        ErrorSubcode::Update(u) => (*u).into(),
+        ErrorSubcode::HoldTime(x) => *x,
+        ErrorSubcode::Fsm(x) => *x,
+        ErrorSubcode::Cease(x) => (*x).into(),
     }
 }
 
@@ -2678,94 +2625,56 @@ pub use bgp_types::messages::UpdateErrorSubcode;
 
 pub use bgp_types::messages::CeaseErrorSubcode;
 
-/// The IANA/IETF currently defines the following optional parameter types.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
-pub enum OptionalParameter {
-    /// Code 0
-    Reserved,
-
-    /// Code 1: RFC 4217, RFC 5492 (deprecated)
-    Authentication, //TODO
-
-    /// Code 2: RFC 5492
-    Capabilities(BTreeSet<Capability>),
-
-    /// Unassigned
-    Unassigned,
-
-    /// Code 255: RFC 9072
-    ExtendedLength, //TODO
-}
-
-impl Display for OptionalParameter {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            OptionalParameter::Reserved => write!(f, "Reserved (0)"),
-            OptionalParameter::Authentication => {
-                write!(f, "Authentication (1)")
-            }
-            OptionalParameter::Capabilities(caps) => {
-                let mut cap_string = String::new();
-                for cap in caps {
-                    cap_string.push_str(&format!("{cap}, "));
-                }
-                write!(f, "Capabilities [ {cap_string}]")
-            }
-            OptionalParameter::Unassigned => write!(f, "Unassigned"),
-            OptionalParameter::ExtendedLength => {
-                write!(f, "Extended Length (255)")
-            }
-        }
-    }
-}
-
+pub use bgp_types::messages::OptionalParameter;
 pub use bgp_types::messages::OptionalParameterCode;
 
-impl OptionalParameter {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        match self {
-            Self::Reserved => Err(Error::ReservedOptionalParameter),
-            Self::Unassigned => Err(Error::Unassigned(0)),
-            Self::Capabilities(cs) => {
-                let mut buf =
-                    vec![u8::from(OptionalParameterCode::Capabilities)];
-                let mut csbuf = Vec::new();
-                for c in cs {
-                    let cbuf = c.to_wire()?;
-                    csbuf.extend_from_slice(&cbuf);
-                }
-                buf.push(csbuf.len() as u8);
-                buf.extend_from_slice(&csbuf);
-                Ok(buf)
+/// Free-fn replacement for the inherent `OptionalParameter::to_wire` method.
+/// Lives here because the body returns `bgp::error::Error`, which is
+/// bgp-local; the type itself moved to `bgp-types-versions`.
+pub fn optional_parameter_to_wire(
+    p: &OptionalParameter,
+) -> Result<Vec<u8>, Error> {
+    match p {
+        OptionalParameter::Reserved => Err(Error::ReservedOptionalParameter),
+        OptionalParameter::Unassigned => Err(Error::Unassigned(0)),
+        OptionalParameter::Capabilities(cs) => {
+            let mut buf = vec![u8::from(OptionalParameterCode::Capabilities)];
+            let mut csbuf = Vec::new();
+            for c in cs {
+                let cbuf = capability_to_wire(c)?;
+                csbuf.extend_from_slice(&cbuf);
             }
-            x => Err(Error::UnsupportedOptionalParameter(x.clone())),
+            buf.push(csbuf.len() as u8);
+            buf.extend_from_slice(&csbuf);
+            Ok(buf)
         }
+        x => Err(Error::UnsupportedOptionalParameter(x.clone())),
     }
+}
 
-    pub fn from_wire(
-        input: &[u8],
-    ) -> Result<(&[u8], OptionalParameter), Error> {
-        let (input, code) = parse_u8(input)?;
-        let code = OptionalParameterCode::try_from(code)?;
-        let (input, len) = parse_u8(input)?;
-        let (input, mut cap_input) = take(len)(input)?;
+/// Free-fn replacement for the inherent `OptionalParameter::from_wire` method.
+pub fn optional_parameter_from_wire(
+    input: &[u8],
+) -> Result<(&[u8], OptionalParameter), Error> {
+    let (input, code) = parse_u8(input)?;
+    let code = OptionalParameterCode::try_from(code)?;
+    let (input, len) = parse_u8(input)?;
+    let (input, mut cap_input) = take(len)(input)?;
 
-        match code {
-            OptionalParameterCode::Reserved => {
-                Err(Error::ReservedOptionalParameter)
-            }
-            OptionalParameterCode::Capabilities => {
-                let mut result = BTreeSet::new();
-                while !cap_input.is_empty() {
-                    let (out, cap) = Capability::from_wire(cap_input)?;
-                    result.insert(cap);
-                    cap_input = out;
-                }
-                Ok((input, OptionalParameter::Capabilities(result)))
-            }
-            x => Err(Error::UnsupportedOptionalParameterCode(x)),
+    match code {
+        OptionalParameterCode::Reserved => {
+            Err(Error::ReservedOptionalParameter)
         }
+        OptionalParameterCode::Capabilities => {
+            let mut result = BTreeSet::new();
+            while !cap_input.is_empty() {
+                let (out, cap) = capability_from_wire(cap_input)?;
+                result.insert(cap);
+                cap_input = out;
+            }
+            Ok((input, OptionalParameter::Capabilities(result)))
+        }
+        x => Err(Error::UnsupportedOptionalParameterCode(x)),
     }
 }
 
@@ -2774,761 +2683,264 @@ pub use bgp_types::messages::{AddPathElement, ExtendedNexthopElement};
 // An issue tracking the TODOs below is here
 // <https://github.com/oxidecomputer/maghemite/issues/80>
 
-/// Optional capabilities supported by a BGP implementation.
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    PartialOrd,
-    Ord,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum Capability {
-    /// Multiprotocol extensions as defined in RFC 2858
-    MultiprotocolExtensions {
-        afi: u16,
-        safi: u8,
-    },
+pub use bgp_types::messages::Capability;
 
-    /// Route refresh capability as defined in RFC 2918.
-    RouteRefresh {},
-
-    //TODO
-    /// Outbound filtering capability as defined in RFC 5291. Note this
-    /// capability is not yet implemented.
-    OutboundRouteFiltering {},
-
-    //TODO
-    /// Multiple routes to destination capability as defined in RFC 8277
-    /// (deprecated). Note this capability is not yet implemented.
-    MultipleRoutesToDestination {},
-
-    /// Multiple nexthop encoding capability as defined in RFC 8950.
-    ExtendedNextHopEncoding {
-        //XXX trying to avoid a version bump on 86 billion data structures
-        // right now.
-        #[schemars(skip)]
-        elements: Vec<ExtendedNexthopElement>,
-    },
-
-    //TODO
-    /// Extended message capability as defined in RFC 8654. Note this
-    /// capability is not yet implemented.
-    BGPExtendedMessage {},
-
-    //TODO
-    /// BGPSec as defined in RFC 8205. Note this capability is not yet
-    /// implemented.
-    BgpSec {},
-
-    //TODO
-    /// Multiple label support as defined in RFC 8277. Note this capability
-    /// is not yet implemented.
-    MultipleLabels {},
-
-    //TODO
-    /// BGP role capability as defined in RFC 9234. Note this capability is not
-    /// yet implemented.
-    BgpRole {},
-
-    //TODO
-    /// Graceful restart as defined in RFC 4724. Note this capability is not
-    /// yet implemented.
-    GracefulRestart {},
-
-    /// Four octet AS numbers as defined in RFC 6793.
-    FourOctetAs {
-        asn: u32,
-    },
-
-    //TODO
-    /// Dynamic capabilities as defined in draft-ietf-idr-dynamic-cap. Note
-    /// this capability is not yet implemented.
-    DynamicCapability {},
-
-    //TODO
-    /// Multi session support as defined in draft-ietf-idr-bgp-multisession.
-    /// Note this capability is not yet supported.
-    MultisessionBgp {},
-
-    /// Add path capability as defined in RFC 7911.
-    AddPath {
-        elements: BTreeSet<AddPathElement>,
-    },
-
-    //TODO
-    /// Enhanced route refresh as defined in RFC 7313. Note this capability is
-    /// not yet supported.
-    EnhancedRouteRefresh {},
-
-    //TODO
-    /// Long-lived graceful restart as defined in
-    /// draft-uttaro-idr-bgp-persistence. Note this capability is not yet
-    /// supported.
-    LongLivedGracefulRestart {},
-
-    //TODO
-    /// Routing policy distribution as defined indraft-ietf-idr-rpd-04. Note
-    /// this capability is not yet supported.
-    RoutingPolicyDistribution {},
-
-    //TODO
-    /// Fully qualified domain names as defined
-    /// intdraft-walton-bgp-hostname-capability. Note this capability is not
-    /// yet supported.
-    Fqdn {},
-
-    //TODO
-    /// Pre-standard route refresh as defined in RFC 8810 (deprecated). Note
-    /// this capability is not yet supported.
-    PrestandardRouteRefresh {},
-
-    //TODO
-    /// Pre-standard prefix-based outbound route filtering as defined in
-    /// RFC 8810 (deprecated). Note this is not yet implemented.
-    PrestandardOrfAndPd {},
-
-    //TODO
-    /// Pre-standard outbound route filtering as defined in RFC 8810
-    /// (deprecated). Note this is not yet implemented.
-    PrestandardOutboundRouteFiltering {},
-
-    //TODO
-    /// Pre-standard multisession as defined in RFC 8810 (deprecated). Note
-    /// this is not yet implemented.
-    PrestandardMultisession {},
-
-    //TODO
-    /// Pre-standard fully qualified domain names as defined in RFC 8810
-    /// (deprecated). Note this is not yet implemented.
-    PrestandardFqdn {},
-
-    //TODO
-    /// Pre-standard operational messages as defined in RFC 8810 (deprecated).
-    /// Note this is not yet implemented.
-    PrestandardOperationalMessage {},
-
-    /// Experimental capability as defined in RFC 8810.
-    Experimental {
-        code: u8,
-    },
-
-    Unassigned {
-        code: u8,
-    },
-
-    Reserved {
-        code: u8,
-    },
-}
-
-impl Display for Capability {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            Capability::MultiprotocolExtensions { afi, safi } => {
-                write!(f, "MP-Extensions {afi}/{safi}")
-            }
-            Capability::RouteRefresh {} => {
-                write!(f, "Route Refresh")
-            }
-            Capability::OutboundRouteFiltering {} => {
-                write!(f, "ORF")
-            }
-            Capability::MultipleRoutesToDestination {} => {
-                write!(f, "Multiple Routes to Destination")
-            }
-            Capability::ExtendedNextHopEncoding { elements } => {
-                let elements = elements
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "Extended Next Hop Encoding {elements}")
-            }
-            Capability::BGPExtendedMessage {} => {
-                write!(f, "BGP Extended Message")
-            }
-            Capability::BgpSec {} => {
-                write!(f, "BGP Sec")
-            }
-            Capability::MultipleLabels {} => {
-                write!(f, "Multiple Labels")
-            }
-            Capability::BgpRole {} => {
-                write!(f, "BGP Role")
-            }
-            Capability::GracefulRestart {} => {
-                write!(f, "Graceful Restart")
-            }
-            Capability::FourOctetAs { asn } => {
-                write!(f, "Four Octet ASN {asn}")
-            }
-            Capability::DynamicCapability {} => {
-                write!(f, "Dynamic Capability")
-            }
-            Capability::MultisessionBgp {} => {
-                write!(f, "Multi-session BGP")
-            }
-            Capability::AddPath { elements } => {
-                let mut elements_string = String::new();
-                for e in elements {
-                    elements_string.push_str(&format!("{e}, "));
-                }
-                write!(f, "AddPath [ {elements_string}]")
-            }
-            Capability::EnhancedRouteRefresh {} => {
-                write!(f, "Enhanced Route Refresh")
-            }
-            Capability::LongLivedGracefulRestart {} => {
-                write!(f, "Long-Lived Graceful Restart")
-            }
-            Capability::RoutingPolicyDistribution {} => {
-                write!(f, "Routing Policy Distribution")
-            }
-            Capability::Fqdn {} => {
-                write!(f, "FQDN")
-            }
-            Capability::PrestandardRouteRefresh {} => {
-                write!(f, "Route Refresh (Prestandard)")
-            }
-            Capability::PrestandardOrfAndPd {} => {
-                write!(f, "ORF / Policy Distribution (Prestandard)")
-            }
-            Capability::PrestandardOutboundRouteFiltering {} => {
-                write!(f, "ORF (Prestandard)")
-            }
-            Capability::PrestandardMultisession {} => {
-                write!(f, "Multi-session BGP (Prestandard)")
-            }
-            Capability::PrestandardFqdn {} => {
-                write!(f, "FQDN (Prestandard)")
-            }
-            Capability::PrestandardOperationalMessage {} => {
-                write!(f, "Operational Message (Prestandard)")
-            }
-            Capability::Experimental { code } => {
-                write!(f, "Experimental ({code})")
-            }
-            Capability::Unassigned { code } => {
-                write!(f, "Unassigned ({code})")
-            }
-            Capability::Reserved { code } => {
-                write!(f, "Reserved ({code})")
-            }
+/// Free-fn replacement for the inherent `Capability::to_wire` method. Lives
+/// here because the body returns `bgp::error::Error`, which is bgp-local.
+pub fn capability_to_wire(c: &Capability) -> Result<Vec<u8>, Error> {
+    match c {
+        Capability::MultiprotocolExtensions { afi, safi } => {
+            let mut buf =
+                vec![CapabilityCode::MultiprotocolExtensions.into(), 4];
+            buf.extend_from_slice(&afi.to_be_bytes());
+            buf.push(0);
+            buf.push(*safi);
+            Ok(buf)
         }
+        Capability::RouteRefresh {} => {
+            let buf = vec![CapabilityCode::RouteRefresh.into(), 0];
+            Ok(buf)
+        }
+        Capability::GracefulRestart {} => {
+            //TODO audit
+            let buf = vec![CapabilityCode::GracefulRestart.into(), 0];
+            Ok(buf)
+        }
+        Capability::FourOctetAs { asn } => {
+            let mut buf = vec![CapabilityCode::FourOctetAs.into(), 4];
+            buf.extend_from_slice(&asn.to_be_bytes());
+            Ok(buf)
+        }
+        Capability::AddPath { elements } => {
+            let len = u8::try_from(elements.len() * 4).map_err(|_| {
+                Error::TooLarge(format!(
+                    "AddPath capability has too many elements: {} elements",
+                    elements.len()
+                ))
+            })?;
+            let mut buf = vec![CapabilityCode::AddPath.into(), len];
+            for e in elements {
+                buf.extend_from_slice(&e.afi.to_be_bytes());
+                buf.push(e.safi);
+                buf.push(e.send_receive);
+            }
+            Ok(buf)
+        }
+        Capability::EnhancedRouteRefresh {} => {
+            //TODO audit
+            let buf = vec![CapabilityCode::EnhancedRouteRefresh.into(), 0];
+            Ok(buf)
+        }
+        Capability::ExtendedNextHopEncoding { elements } => {
+            let mut buf = vec![
+                CapabilityCode::ExtendedNextHopEncoding as u8,
+                (elements.len() * 6) as u8,
+            ];
+            for e in elements {
+                buf.extend_from_slice(&e.afi.to_be_bytes());
+                buf.extend_from_slice(&e.safi.to_be_bytes());
+                buf.extend_from_slice(&e.nh_afi.to_be_bytes());
+            }
+            Ok(buf)
+        }
+        Capability::Experimental { code: _ } => Err(Error::Experimental),
+        Capability::Unassigned { code } => Err(Error::Unassigned(*code)),
+        Capability::Reserved { code: _ } => Err(Error::ReservedCapability),
+        x => Err(Error::UnsupportedCapability(x.clone())),
     }
 }
 
-impl Capability {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        match self {
-            Self::MultiprotocolExtensions { afi, safi } => {
-                let mut buf =
-                    vec![CapabilityCode::MultiprotocolExtensions.into(), 4];
-                buf.extend_from_slice(&afi.to_be_bytes());
-                buf.push(0);
-                buf.push(*safi);
-                Ok(buf)
-            }
-            Self::RouteRefresh {} => {
-                let buf = vec![CapabilityCode::RouteRefresh.into(), 0];
-                Ok(buf)
-            }
-            Self::GracefulRestart {} => {
-                //TODO audit
-                let buf = vec![CapabilityCode::GracefulRestart.into(), 0];
-                Ok(buf)
-            }
-            Self::FourOctetAs { asn } => {
-                let mut buf = vec![CapabilityCode::FourOctetAs.into(), 4];
-                buf.extend_from_slice(&asn.to_be_bytes());
-                Ok(buf)
-            }
-            Self::AddPath { elements } => {
-                let len = u8::try_from(elements.len() * 4).map_err(|_| {
-                    Error::TooLarge(format!(
-                        "AddPath capability has too many elements: {} elements",
-                        elements.len()
-                    ))
-                })?;
-                let mut buf = vec![CapabilityCode::AddPath.into(), len];
-                for e in elements {
-                    buf.extend_from_slice(&e.afi.to_be_bytes());
-                    buf.push(e.safi);
-                    buf.push(e.send_receive);
-                }
-                Ok(buf)
-            }
-            Self::EnhancedRouteRefresh {} => {
-                //TODO audit
-                let buf = vec![CapabilityCode::EnhancedRouteRefresh.into(), 0];
-                Ok(buf)
-            }
-            Self::ExtendedNextHopEncoding { elements } => {
-                let mut buf = vec![
-                    CapabilityCode::ExtendedNextHopEncoding as u8,
-                    (elements.len() * 6) as u8,
-                ];
-                for e in elements {
-                    buf.extend_from_slice(&e.afi.to_be_bytes());
-                    buf.extend_from_slice(&e.safi.to_be_bytes());
-                    buf.extend_from_slice(&e.nh_afi.to_be_bytes());
-                }
-                Ok(buf)
-            }
-            Self::Experimental { code: _ } => Err(Error::Experimental),
-            Self::Unassigned { code } => Err(Error::Unassigned(*code)),
-            Self::Reserved { code: _ } => Err(Error::ReservedCapability),
-            x => Err(Error::UnsupportedCapability(x.clone())),
+/// Free-fn replacement for the inherent `Capability::from_wire` method.
+pub fn capability_from_wire(
+    input: &[u8],
+) -> Result<(&[u8], Capability), Error> {
+    let (input, code) = parse_u8(input)?;
+    let (input, len) = parse_u8(input)?;
+    let len = usize::from(len);
+    if input.len() < len {
+        return Err(Error::Eom);
+    }
+    let code = match CapabilityCode::try_from(code) {
+        Ok(code) => code,
+        Err(_) => {
+            return Ok((&input[len..], Capability::Unassigned { code }));
         }
-    }
+    };
+    let (cap_data, remaining) = input.split_at(len);
+    let mut input = cap_data;
 
-    /// Get the CapabilityCode for this capability variant
-    pub fn code(&self) -> CapabilityCode {
-        capability_code_of(self.clone())
-    }
-
-    pub fn from_wire(input: &[u8]) -> Result<(&[u8], Capability), Error> {
-        let (input, code) = parse_u8(input)?;
-        let (input, len) = parse_u8(input)?;
-        let len = usize::from(len);
-        if input.len() < len {
-            return Err(Error::Eom);
+    let cap = match code {
+        CapabilityCode::MultiprotocolExtensions => {
+            let (input, afi) = be_u16(input)?;
+            let (input, _) = be_u8(input)?;
+            let (_, safi) = be_u8(input)?;
+            Capability::MultiprotocolExtensions { afi, safi }
         }
-        let code = match CapabilityCode::try_from(code) {
-            Ok(code) => code,
-            Err(_) => {
-                return Ok((&input[len..], Capability::Unassigned { code }));
-            }
-        };
-        let (cap_data, remaining) = input.split_at(len);
-        let mut input = cap_data;
-
-        let cap = match code {
-            CapabilityCode::MultiprotocolExtensions => {
-                let (input, afi) = be_u16(input)?;
-                let (input, _) = be_u8(input)?;
-                let (_, safi) = be_u8(input)?;
-                Capability::MultiprotocolExtensions { afi, safi }
-            }
-            CapabilityCode::RouteRefresh => Capability::RouteRefresh {},
-            CapabilityCode::GracefulRestart => {
-                //TODO handle for real
-                Capability::GracefulRestart {}
-            }
-            CapabilityCode::FourOctetAs => {
-                let (_, asn) = be_u32(input)?;
-                Capability::FourOctetAs { asn }
-            }
-            CapabilityCode::AddPath => {
-                let mut elements = BTreeSet::new();
-                while !input.is_empty() {
-                    let (rem, afi) = be_u16(input)?;
-                    let (rem, safi) = be_u8(rem)?;
-                    let (rem, send_receive) = be_u8(rem)?;
-                    elements.insert(AddPathElement {
-                        afi,
-                        safi,
-                        send_receive,
-                    });
-                    input = rem;
-                }
-                Capability::AddPath { elements }
-            }
-            CapabilityCode::EnhancedRouteRefresh => {
-                //TODO handle for real
-                Capability::EnhancedRouteRefresh {}
-            }
-            CapabilityCode::Fqdn => {
-                //TODO handle for real
-                Capability::Fqdn {}
-            }
-            CapabilityCode::PrestandardRouteRefresh => {
-                //TODO handle for real
-                Capability::PrestandardRouteRefresh {}
-            }
-            CapabilityCode::BGPExtendedMessage => {
-                //TODO handle for real
-                Capability::BGPExtendedMessage {}
-            }
-            CapabilityCode::LongLivedGracefulRestart => {
-                //TODO handle for real
-                Capability::LongLivedGracefulRestart {}
-            }
-            CapabilityCode::MultipleRoutesToDestination => {
-                //TODO handle for real
-                Capability::MultipleRoutesToDestination {}
-            }
-            CapabilityCode::ExtendedNextHopEncoding => {
-                let mut elements = Vec::new();
-                while !input.is_empty() {
-                    let (rem, afi) = be_u16(input)?;
-                    let (rem, safi) = be_u16(rem)?;
-                    let (rem, nh_afi) = be_u16(rem)?;
-                    elements.push(ExtendedNexthopElement { afi, safi, nh_afi });
-                    input = rem;
-                }
-                Capability::ExtendedNextHopEncoding { elements }
-            }
-            CapabilityCode::OutboundRouteFiltering => {
-                //TODO handle for real
-                Capability::OutboundRouteFiltering {}
-            }
-            CapabilityCode::BgpSec => {
-                //TODO handle for real
-                Capability::BgpSec {}
-            }
-            CapabilityCode::MultipleLabels => {
-                //TODO handle for real
-                Capability::MultipleLabels {}
-            }
-            CapabilityCode::BgpRole => {
-                //TODO handle for real
-                Capability::BgpRole {}
-            }
-            CapabilityCode::DynamicCapability => {
-                //TODO handle for real
-                Capability::DynamicCapability {}
-            }
-            CapabilityCode::MultisessionBgp => {
-                //TODO handle for real
-                Capability::MultisessionBgp {}
-            }
-            CapabilityCode::RoutingPolicyDistribution => {
-                //TODO handle for real
-                Capability::RoutingPolicyDistribution {}
-            }
-            CapabilityCode::PrestandardOrfAndPd => {
-                //TODO handle for real
-                Capability::PrestandardOrfAndPd {}
-            }
-            CapabilityCode::PrestandardOutboundRouteFiltering => {
-                //TODO handle for real
-                Capability::PrestandardOutboundRouteFiltering {}
-            }
-            CapabilityCode::PrestandardMultisession => {
-                //TODO handle for real
-                Capability::PrestandardMultisession {}
-            }
-            CapabilityCode::PrestandardFqdn => {
-                //TODO handle for real
-                Capability::PrestandardFqdn {}
-            }
-            CapabilityCode::PrestandardOperationalMessage => {
-                //TODO handle for real
-                Capability::PrestandardOperationalMessage {}
-            }
-            CapabilityCode::Experimental0 => {
-                Capability::Experimental { code: 0 }
-            }
-            CapabilityCode::Experimental1 => {
-                Capability::Experimental { code: 1 }
-            }
-            CapabilityCode::Experimental2 => {
-                Capability::Experimental { code: 2 }
-            }
-            CapabilityCode::Experimental3 => {
-                Capability::Experimental { code: 3 }
-            }
-            CapabilityCode::Experimental4 => {
-                Capability::Experimental { code: 4 }
-            }
-            CapabilityCode::Experimental5 => {
-                Capability::Experimental { code: 5 }
-            }
-            CapabilityCode::Experimental6 => {
-                Capability::Experimental { code: 6 }
-            }
-            CapabilityCode::Experimental7 => {
-                Capability::Experimental { code: 7 }
-            }
-            CapabilityCode::Experimental8 => {
-                Capability::Experimental { code: 8 }
-            }
-            CapabilityCode::Experimental9 => {
-                Capability::Experimental { code: 9 }
-            }
-            CapabilityCode::Experimental10 => {
-                Capability::Experimental { code: 10 }
-            }
-            CapabilityCode::Experimental11 => {
-                Capability::Experimental { code: 11 }
-            }
-            CapabilityCode::Experimental12 => {
-                Capability::Experimental { code: 12 }
-            }
-            CapabilityCode::Experimental13 => {
-                Capability::Experimental { code: 13 }
-            }
-            CapabilityCode::Experimental14 => {
-                Capability::Experimental { code: 14 }
-            }
-            CapabilityCode::Experimental15 => {
-                Capability::Experimental { code: 15 }
-            }
-            CapabilityCode::Experimental16 => {
-                Capability::Experimental { code: 16 }
-            }
-            CapabilityCode::Experimental17 => {
-                Capability::Experimental { code: 17 }
-            }
-            CapabilityCode::Experimental18 => {
-                Capability::Experimental { code: 18 }
-            }
-            CapabilityCode::Experimental19 => {
-                Capability::Experimental { code: 19 }
-            }
-            CapabilityCode::Experimental20 => {
-                Capability::Experimental { code: 20 }
-            }
-            CapabilityCode::Experimental21 => {
-                Capability::Experimental { code: 21 }
-            }
-            CapabilityCode::Experimental22 => {
-                Capability::Experimental { code: 22 }
-            }
-            CapabilityCode::Experimental23 => {
-                Capability::Experimental { code: 23 }
-            }
-            CapabilityCode::Experimental24 => {
-                Capability::Experimental { code: 24 }
-            }
-            CapabilityCode::Experimental25 => {
-                Capability::Experimental { code: 25 }
-            }
-            CapabilityCode::Experimental26 => {
-                Capability::Experimental { code: 26 }
-            }
-            CapabilityCode::Experimental27 => {
-                Capability::Experimental { code: 27 }
-            }
-            CapabilityCode::Experimental28 => {
-                Capability::Experimental { code: 28 }
-            }
-            CapabilityCode::Experimental29 => {
-                Capability::Experimental { code: 29 }
-            }
-            CapabilityCode::Experimental30 => {
-                Capability::Experimental { code: 30 }
-            }
-            CapabilityCode::Experimental31 => {
-                Capability::Experimental { code: 31 }
-            }
-            CapabilityCode::Experimental32 => {
-                Capability::Experimental { code: 32 }
-            }
-            CapabilityCode::Experimental33 => {
-                Capability::Experimental { code: 33 }
-            }
-            CapabilityCode::Experimental34 => {
-                Capability::Experimental { code: 34 }
-            }
-            CapabilityCode::Experimental35 => {
-                Capability::Experimental { code: 35 }
-            }
-            CapabilityCode::Experimental36 => {
-                Capability::Experimental { code: 36 }
-            }
-            CapabilityCode::Experimental37 => {
-                Capability::Experimental { code: 37 }
-            }
-            CapabilityCode::Experimental38 => {
-                Capability::Experimental { code: 38 }
-            }
-            CapabilityCode::Experimental39 => {
-                Capability::Experimental { code: 39 }
-            }
-            CapabilityCode::Experimental40 => {
-                Capability::Experimental { code: 40 }
-            }
-            CapabilityCode::Experimental41 => {
-                Capability::Experimental { code: 41 }
-            }
-            CapabilityCode::Experimental42 => {
-                Capability::Experimental { code: 42 }
-            }
-            CapabilityCode::Experimental43 => {
-                Capability::Experimental { code: 43 }
-            }
-            CapabilityCode::Experimental44 => {
-                Capability::Experimental { code: 44 }
-            }
-            CapabilityCode::Experimental45 => {
-                Capability::Experimental { code: 45 }
-            }
-            CapabilityCode::Experimental46 => {
-                Capability::Experimental { code: 46 }
-            }
-            CapabilityCode::Experimental47 => {
-                Capability::Experimental { code: 47 }
-            }
-            CapabilityCode::Experimental48 => {
-                Capability::Experimental { code: 48 }
-            }
-            CapabilityCode::Experimental49 => {
-                Capability::Experimental { code: 49 }
-            }
-            CapabilityCode::Experimental50 => {
-                Capability::Experimental { code: 50 }
-            }
-            CapabilityCode::Experimental51 => {
-                Capability::Experimental { code: 51 }
-            }
-            CapabilityCode::Reserved => Capability::Reserved { code: 0 },
-        };
-        Ok((remaining, cap))
-    }
-
-    /// Helper function to generate an IPv4 Unicast MP-BGP capability.
-    pub fn ipv4_unicast() -> Self {
-        Self::MultiprotocolExtensions {
-            afi: Afi::Ipv4.into(),
-            safi: Safi::Unicast.into(),
+        CapabilityCode::RouteRefresh => Capability::RouteRefresh {},
+        CapabilityCode::GracefulRestart => {
+            //TODO handle for real
+            Capability::GracefulRestart {}
         }
-    }
-
-    /// Helper function to generate an IPv6 Unicast MP-BGP capability.
-    pub fn ipv6_unicast() -> Self {
-        Self::MultiprotocolExtensions {
-            afi: Afi::Ipv6.into(),
-            safi: Safi::Unicast.into(),
+        CapabilityCode::FourOctetAs => {
+            let (_, asn) = be_u32(input)?;
+            Capability::FourOctetAs { asn }
         }
-    }
-
-    pub fn extended_nh_v4_over_v6(&self) -> bool {
-        if let Self::ExtendedNextHopEncoding { elements } = self {
-            elements.iter().any(|x| x.is_v4_over_v6())
-        } else {
-            false
+        CapabilityCode::AddPath => {
+            let mut elements = BTreeSet::new();
+            while !input.is_empty() {
+                let (rem, afi) = be_u16(input)?;
+                let (rem, safi) = be_u8(rem)?;
+                let (rem, send_receive) = be_u8(rem)?;
+                elements.insert(AddPathElement {
+                    afi,
+                    safi,
+                    send_receive,
+                });
+                input = rem;
+            }
+            Capability::AddPath { elements }
         }
-    }
-
-    pub fn extended_nh_v6_over_v4(&self) -> bool {
-        if let Self::ExtendedNextHopEncoding { elements } = self {
-            elements.iter().any(|x| x.is_v6_over_v4())
-        } else {
-            false
+        CapabilityCode::EnhancedRouteRefresh => {
+            //TODO handle for real
+            Capability::EnhancedRouteRefresh {}
         }
-    }
+        CapabilityCode::Fqdn => {
+            //TODO handle for real
+            Capability::Fqdn {}
+        }
+        CapabilityCode::PrestandardRouteRefresh => {
+            //TODO handle for real
+            Capability::PrestandardRouteRefresh {}
+        }
+        CapabilityCode::BGPExtendedMessage => {
+            //TODO handle for real
+            Capability::BGPExtendedMessage {}
+        }
+        CapabilityCode::LongLivedGracefulRestart => {
+            //TODO handle for real
+            Capability::LongLivedGracefulRestart {}
+        }
+        CapabilityCode::MultipleRoutesToDestination => {
+            //TODO handle for real
+            Capability::MultipleRoutesToDestination {}
+        }
+        CapabilityCode::ExtendedNextHopEncoding => {
+            let mut elements = Vec::new();
+            while !input.is_empty() {
+                let (rem, afi) = be_u16(input)?;
+                let (rem, safi) = be_u16(rem)?;
+                let (rem, nh_afi) = be_u16(rem)?;
+                elements.push(ExtendedNexthopElement { afi, safi, nh_afi });
+                input = rem;
+            }
+            Capability::ExtendedNextHopEncoding { elements }
+        }
+        CapabilityCode::OutboundRouteFiltering => {
+            //TODO handle for real
+            Capability::OutboundRouteFiltering {}
+        }
+        CapabilityCode::BgpSec => {
+            //TODO handle for real
+            Capability::BgpSec {}
+        }
+        CapabilityCode::MultipleLabels => {
+            //TODO handle for real
+            Capability::MultipleLabels {}
+        }
+        CapabilityCode::BgpRole => {
+            //TODO handle for real
+            Capability::BgpRole {}
+        }
+        CapabilityCode::DynamicCapability => {
+            //TODO handle for real
+            Capability::DynamicCapability {}
+        }
+        CapabilityCode::MultisessionBgp => {
+            //TODO handle for real
+            Capability::MultisessionBgp {}
+        }
+        CapabilityCode::RoutingPolicyDistribution => {
+            //TODO handle for real
+            Capability::RoutingPolicyDistribution {}
+        }
+        CapabilityCode::PrestandardOrfAndPd => {
+            //TODO handle for real
+            Capability::PrestandardOrfAndPd {}
+        }
+        CapabilityCode::PrestandardOutboundRouteFiltering => {
+            //TODO handle for real
+            Capability::PrestandardOutboundRouteFiltering {}
+        }
+        CapabilityCode::PrestandardMultisession => {
+            //TODO handle for real
+            Capability::PrestandardMultisession {}
+        }
+        CapabilityCode::PrestandardFqdn => {
+            //TODO handle for real
+            Capability::PrestandardFqdn {}
+        }
+        CapabilityCode::PrestandardOperationalMessage => {
+            //TODO handle for real
+            Capability::PrestandardOperationalMessage {}
+        }
+        CapabilityCode::Experimental0 => Capability::Experimental { code: 0 },
+        CapabilityCode::Experimental1 => Capability::Experimental { code: 1 },
+        CapabilityCode::Experimental2 => Capability::Experimental { code: 2 },
+        CapabilityCode::Experimental3 => Capability::Experimental { code: 3 },
+        CapabilityCode::Experimental4 => Capability::Experimental { code: 4 },
+        CapabilityCode::Experimental5 => Capability::Experimental { code: 5 },
+        CapabilityCode::Experimental6 => Capability::Experimental { code: 6 },
+        CapabilityCode::Experimental7 => Capability::Experimental { code: 7 },
+        CapabilityCode::Experimental8 => Capability::Experimental { code: 8 },
+        CapabilityCode::Experimental9 => Capability::Experimental { code: 9 },
+        CapabilityCode::Experimental10 => Capability::Experimental { code: 10 },
+        CapabilityCode::Experimental11 => Capability::Experimental { code: 11 },
+        CapabilityCode::Experimental12 => Capability::Experimental { code: 12 },
+        CapabilityCode::Experimental13 => Capability::Experimental { code: 13 },
+        CapabilityCode::Experimental14 => Capability::Experimental { code: 14 },
+        CapabilityCode::Experimental15 => Capability::Experimental { code: 15 },
+        CapabilityCode::Experimental16 => Capability::Experimental { code: 16 },
+        CapabilityCode::Experimental17 => Capability::Experimental { code: 17 },
+        CapabilityCode::Experimental18 => Capability::Experimental { code: 18 },
+        CapabilityCode::Experimental19 => Capability::Experimental { code: 19 },
+        CapabilityCode::Experimental20 => Capability::Experimental { code: 20 },
+        CapabilityCode::Experimental21 => Capability::Experimental { code: 21 },
+        CapabilityCode::Experimental22 => Capability::Experimental { code: 22 },
+        CapabilityCode::Experimental23 => Capability::Experimental { code: 23 },
+        CapabilityCode::Experimental24 => Capability::Experimental { code: 24 },
+        CapabilityCode::Experimental25 => Capability::Experimental { code: 25 },
+        CapabilityCode::Experimental26 => Capability::Experimental { code: 26 },
+        CapabilityCode::Experimental27 => Capability::Experimental { code: 27 },
+        CapabilityCode::Experimental28 => Capability::Experimental { code: 28 },
+        CapabilityCode::Experimental29 => Capability::Experimental { code: 29 },
+        CapabilityCode::Experimental30 => Capability::Experimental { code: 30 },
+        CapabilityCode::Experimental31 => Capability::Experimental { code: 31 },
+        CapabilityCode::Experimental32 => Capability::Experimental { code: 32 },
+        CapabilityCode::Experimental33 => Capability::Experimental { code: 33 },
+        CapabilityCode::Experimental34 => Capability::Experimental { code: 34 },
+        CapabilityCode::Experimental35 => Capability::Experimental { code: 35 },
+        CapabilityCode::Experimental36 => Capability::Experimental { code: 36 },
+        CapabilityCode::Experimental37 => Capability::Experimental { code: 37 },
+        CapabilityCode::Experimental38 => Capability::Experimental { code: 38 },
+        CapabilityCode::Experimental39 => Capability::Experimental { code: 39 },
+        CapabilityCode::Experimental40 => Capability::Experimental { code: 40 },
+        CapabilityCode::Experimental41 => Capability::Experimental { code: 41 },
+        CapabilityCode::Experimental42 => Capability::Experimental { code: 42 },
+        CapabilityCode::Experimental43 => Capability::Experimental { code: 43 },
+        CapabilityCode::Experimental44 => Capability::Experimental { code: 44 },
+        CapabilityCode::Experimental45 => Capability::Experimental { code: 45 },
+        CapabilityCode::Experimental46 => Capability::Experimental { code: 46 },
+        CapabilityCode::Experimental47 => Capability::Experimental { code: 47 },
+        CapabilityCode::Experimental48 => Capability::Experimental { code: 48 },
+        CapabilityCode::Experimental49 => Capability::Experimental { code: 49 },
+        CapabilityCode::Experimental50 => Capability::Experimental { code: 50 },
+        CapabilityCode::Experimental51 => Capability::Experimental { code: 51 },
+        CapabilityCode::Reserved => Capability::Reserved { code: 0 },
+    };
+    Ok((remaining, cap))
 }
 
 pub use bgp_types::messages::CapabilityCode;
-
-/// Free function replacement for `From<Capability> for CapabilityCode`.
-/// See `message_type_of` for rationale.
-pub fn capability_code_of(value: Capability) -> CapabilityCode {
-    match value {
-        Capability::MultiprotocolExtensions { afi: _, safi: _ } => {
-            CapabilityCode::MultiprotocolExtensions
-        }
-        Capability::RouteRefresh {} => CapabilityCode::RouteRefresh,
-        Capability::OutboundRouteFiltering {} => {
-            CapabilityCode::OutboundRouteFiltering
-        }
-        Capability::MultipleRoutesToDestination {} => {
-            CapabilityCode::MultipleRoutesToDestination
-        }
-        Capability::ExtendedNextHopEncoding { elements: _ } => {
-            CapabilityCode::ExtendedNextHopEncoding
-        }
-        Capability::BGPExtendedMessage {} => CapabilityCode::BGPExtendedMessage,
-        Capability::BgpSec {} => CapabilityCode::BgpSec,
-        Capability::MultipleLabels {} => CapabilityCode::MultipleLabels,
-        Capability::BgpRole {} => CapabilityCode::BgpRole,
-        Capability::GracefulRestart {} => CapabilityCode::GracefulRestart,
-        Capability::FourOctetAs { asn: _ } => CapabilityCode::FourOctetAs,
-        Capability::DynamicCapability {} => CapabilityCode::DynamicCapability,
-        Capability::MultisessionBgp {} => CapabilityCode::MultisessionBgp,
-        Capability::AddPath { elements: _ } => CapabilityCode::AddPath,
-        Capability::EnhancedRouteRefresh {} => {
-            CapabilityCode::EnhancedRouteRefresh
-        }
-        Capability::LongLivedGracefulRestart {} => {
-            CapabilityCode::LongLivedGracefulRestart
-        }
-        Capability::RoutingPolicyDistribution {} => {
-            CapabilityCode::RoutingPolicyDistribution
-        }
-        Capability::Fqdn {} => CapabilityCode::Fqdn,
-        Capability::PrestandardRouteRefresh {} => {
-            CapabilityCode::PrestandardRouteRefresh
-        }
-        Capability::PrestandardOrfAndPd {} => {
-            CapabilityCode::PrestandardOrfAndPd
-        }
-        Capability::PrestandardOutboundRouteFiltering {} => {
-            CapabilityCode::PrestandardOutboundRouteFiltering
-        }
-        Capability::PrestandardMultisession {} => {
-            CapabilityCode::PrestandardMultisession
-        }
-        Capability::PrestandardFqdn {} => CapabilityCode::PrestandardFqdn,
-        Capability::PrestandardOperationalMessage {} => {
-            CapabilityCode::PrestandardOperationalMessage
-        }
-        Capability::Experimental { code } => match code {
-            0 => CapabilityCode::Experimental0,
-            1 => CapabilityCode::Experimental1,
-            2 => CapabilityCode::Experimental2,
-            3 => CapabilityCode::Experimental3,
-            4 => CapabilityCode::Experimental4,
-            5 => CapabilityCode::Experimental5,
-            6 => CapabilityCode::Experimental6,
-            7 => CapabilityCode::Experimental7,
-            8 => CapabilityCode::Experimental8,
-            9 => CapabilityCode::Experimental9,
-            10 => CapabilityCode::Experimental10,
-            11 => CapabilityCode::Experimental11,
-            12 => CapabilityCode::Experimental12,
-            13 => CapabilityCode::Experimental13,
-            14 => CapabilityCode::Experimental14,
-            15 => CapabilityCode::Experimental15,
-            16 => CapabilityCode::Experimental16,
-            17 => CapabilityCode::Experimental17,
-            18 => CapabilityCode::Experimental18,
-            19 => CapabilityCode::Experimental19,
-            20 => CapabilityCode::Experimental20,
-            21 => CapabilityCode::Experimental21,
-            22 => CapabilityCode::Experimental22,
-            23 => CapabilityCode::Experimental23,
-            24 => CapabilityCode::Experimental24,
-            25 => CapabilityCode::Experimental25,
-            26 => CapabilityCode::Experimental26,
-            27 => CapabilityCode::Experimental27,
-            28 => CapabilityCode::Experimental28,
-            29 => CapabilityCode::Experimental29,
-            30 => CapabilityCode::Experimental30,
-            31 => CapabilityCode::Experimental31,
-            32 => CapabilityCode::Experimental32,
-            33 => CapabilityCode::Experimental33,
-            34 => CapabilityCode::Experimental34,
-            35 => CapabilityCode::Experimental35,
-            36 => CapabilityCode::Experimental36,
-            37 => CapabilityCode::Experimental37,
-            38 => CapabilityCode::Experimental38,
-            39 => CapabilityCode::Experimental39,
-            40 => CapabilityCode::Experimental40,
-            41 => CapabilityCode::Experimental41,
-            42 => CapabilityCode::Experimental42,
-            43 => CapabilityCode::Experimental43,
-            44 => CapabilityCode::Experimental44,
-            45 => CapabilityCode::Experimental45,
-            46 => CapabilityCode::Experimental46,
-            47 => CapabilityCode::Experimental47,
-            48 => CapabilityCode::Experimental48,
-            49 => CapabilityCode::Experimental49,
-            50 => CapabilityCode::Experimental50,
-            51 => CapabilityCode::Experimental51,
-            _ => CapabilityCode::Experimental0,
-        },
-        Capability::Unassigned { code: _ } => CapabilityCode::Reserved,
-        Capability::Reserved { code: _ } => CapabilityCode::Reserved,
-    }
-}
 
 pub use bgp_types::messages::{Afi, Safi};
 
