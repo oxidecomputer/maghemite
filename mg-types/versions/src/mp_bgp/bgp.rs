@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
 use bgp_types_versions::v4::messages::Afi;
 use rdb_types_versions::v1::prefix::Prefix;
@@ -181,4 +182,11 @@ pub struct ApplyRequest {
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
     #[serde(default)]
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct DynamicTimerInfo {
+    pub configured: Duration,
+    pub negotiated: Duration,
+    pub remaining: Duration,
 }

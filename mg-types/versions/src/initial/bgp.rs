@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
 use bgp_types_versions::v1::session::MessageHistory as MessageHistoryV1;
 use rdb_types_versions::v1::policy::ImportExportPolicy;
@@ -137,4 +138,70 @@ pub struct CheckerSource {
 pub struct ShaperSource {
     pub asn: u32,
     pub code: String,
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_INITIAL / v1.0.0)
+// ============================================================================
+// These types maintain backward compatibility with the INITIAL API version.
+// FsmStateKind here lacks the ConnectionCollision state added in
+// VERSION_IPV6_BASIC. Used exclusively for API responses via
+// /bgp/status/neighbors endpoint (v1). Never used internally - always convert
+// from current types at API boundary.
+//
+// Delete these types when VERSION_INITIAL is retired.
+
+/// Simplified representation of a BGP state without having to carry a
+/// connection. This does not include the ConnectionCollision state for
+/// backwards comptability with the initial release of the versioned dropshot
+/// API.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+#[schemars(rename = "FsmStateKind")]
+pub enum FsmStateKind {
+    /// Initial state. Refuse all incomming BGP connections. No resources
+    /// allocated to peer.
+    Idle,
+
+    /// Waiting for the TCP connection to be completed.
+    Connect,
+
+    /// Trying to acquire peer by listening for and accepting a TCP connection.
+    Active,
+
+    /// Waiting for open message from peer.
+    OpenSent,
+
+    /// Waiting for keepalive or notification from peer.
+    OpenConfirm,
+
+    /// Sync up with peers.
+    SessionSetup,
+
+    /// Able to exchange update, notification and keepliave messages with peers.
+    Established,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "DynamicTimerInfo")]
+pub struct DynamicTimerInfo {
+    pub configured: Duration,
+    pub negotiated: Duration,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerTimers")]
+pub struct PeerTimers {
+    pub hold: DynamicTimerInfo,
+    pub keepalive: DynamicTimerInfo,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
+pub struct PeerInfo {
+    pub state: FsmStateKind,
+    pub asn: Option<u32>,
+    pub duration_millis: u64,
+    pub timers: PeerTimers,
 }

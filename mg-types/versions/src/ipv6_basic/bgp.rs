@@ -5,9 +5,13 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use bgp_types_versions::v2::session::{FsmEventRecord, MessageHistory};
+use bgp_types_versions::v2::session::{
+    FsmEventRecord, FsmStateKind, MessageHistory,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::v1::bgp::PeerTimers;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -55,4 +59,13 @@ pub struct FsmHistoryResponse {
     /// Events organized by peer address Each peer's value contains only
     /// the events from the requested buffer
     pub by_peer: HashMap<IpAddr, Vec<FsmEventRecord>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
+pub struct PeerInfo {
+    pub state: FsmStateKind,
+    pub asn: Option<u32>,
+    pub duration_millis: u64,
+    pub timers: PeerTimers,
 }

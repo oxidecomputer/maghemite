@@ -17,6 +17,7 @@ pub mod bgp {
     pub use crate::v2::bgp::FsmEventBuffer;
     pub use crate::v2::bgp::MessageDirection;
 
+    pub use crate::v4::bgp::DynamicTimerInfo;
     pub use crate::v4::bgp::Ipv4UnicastConfig;
     pub use crate::v4::bgp::Ipv6UnicastConfig;
     pub use crate::v4::bgp::JitterRange;

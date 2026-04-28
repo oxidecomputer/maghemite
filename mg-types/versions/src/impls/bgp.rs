@@ -72,6 +72,42 @@ impl latest::bgp::UnnumberedNeighbor {
     }
 }
 
+// ----- v2 (ipv6_basic) <-> v1 (initial) downgrades for PeerInfo / FsmStateKind -----
+
+impl From<bgp_types_versions::v2::session::FsmStateKind>
+    for v1::bgp::FsmStateKind
+{
+    fn from(kind: bgp_types_versions::v2::session::FsmStateKind) -> Self {
+        use bgp_types_versions::v2::session::FsmStateKind as V2;
+        match kind {
+            V2::Idle => Self::Idle,
+            V2::Connect => Self::Connect,
+            V2::Active => Self::Active,
+            V2::OpenSent => Self::OpenSent,
+            V2::OpenConfirm => Self::OpenConfirm,
+            // We convert ConnectionCollision to OpenSent, because one
+            // connection is always in OpenSent for the duration of
+            // the colliison (unless we've already transitioned out of
+            // ConnectionCollision), so this is technically correct, even if
+            // it's only correct from the perspective of just one connection.
+            V2::ConnectionCollision => Self::OpenSent,
+            V2::SessionSetup => Self::SessionSetup,
+            V2::Established => Self::Established,
+        }
+    }
+}
+
+impl From<crate::v2::bgp::PeerInfo> for v1::bgp::PeerInfo {
+    fn from(info: crate::v2::bgp::PeerInfo) -> Self {
+        Self {
+            state: v1::bgp::FsmStateKind::from(info.state),
+            asn: info.asn,
+            duration_millis: info.duration_millis,
+            timers: info.timers,
+        }
+    }
+}
+
 // ----- v1 (initial) <-> v8 (bgp_src_addr) conversions -----
 
 impl From<v1::bgp::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
