@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+use bfd_types::{BfdPeerConfig, BfdPeerInfo};
 use bgp::params::{
     ApplyRequest, ApplyRequestV1, ApplyRequestV6, CheckerSource, Neighbor,
     NeighborV1, NeighborV6, Origin4, Origin6, PeerInfo, PeerInfoV1, PeerInfoV2,
@@ -17,7 +18,7 @@ use dropshot::{
 };
 use dropshot_api_manager_types::api_versions;
 use mg_types_versions::{latest, v1, v2, v5};
-use rdb::{BfdPeerConfig, Prefix};
+use rdb::Prefix;
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):
@@ -63,7 +64,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bfd/peers" }]
     async fn get_bfd_peers(
         rqctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<Vec<latest::bfd::BfdPeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError>;
 
     /// Add a new peer to the daemon. A session for the specified peer will start
     /// immediately.

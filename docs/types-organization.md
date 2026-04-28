@@ -45,10 +45,11 @@ Two structural rules from RFD 619 that drive the organization:
 
 | Facade crate        | Versions crate              | Schema-published surface                                                                 |
 |---------------------|-----------------------------|------------------------------------------------------------------------------------------|
-| `rdb-types`         | `rdb-types-versions`        | `Path`, `BgpPathProperties`, `Prefix`/`Prefix4`/`Prefix6`, `PeerId`, BFD/policy types    |
+| `rdb-types`         | `rdb-types-versions`        | `Path`, `BgpPathProperties`, `Prefix`/`Prefix4`/`Prefix6`, `PeerId`, policy types        |
+| `bfd-types`         | `bfd-types-versions`        | BFD types: `BfdPeerState`, `BfdPeerConfig`, `BfdPeerInfo`, `SessionMode`                 |
 | `bgp-types`         | `bgp-types-versions`        | BGP wire messages (`Message`, `OpenMessage`, `UpdateMessage`, ...) and session history   |
 | `mg-common-types`   | `mg-common-types-versions`  | Types shared between the Maghemite and DDM admin APIs                                    |
-| `mg-types`          | `mg-types-versions`         | Maghemite-admin types: BGP config (`Neighbor`, `BgpPeerConfig`, ...), RIB views, NDP, BFD |
+| `mg-types`          | `mg-types-versions`         | Maghemite-admin types: BGP config (`Neighbor`, `BgpPeerConfig`, ...), RIB views, NDP     |
 | `ddm-types`         | `ddm-types-versions`        | DDM-admin types (`PeerInfo`, `TunnelRoute`, ...)                                          |
 
 The facade crate of each pair is what the rest of the workspace imports.
@@ -60,6 +61,7 @@ shapes to specific API versions.
 Each versions crate maps API-version identifiers (declared by the relevant
 `api_versions!` macro) to `vN` modules via `#[path = "..."]`:
 
+- `bfd-types-versions`: `v1` (initial)
 - `bgp-types-versions`: `v1` (initial), `v2` (ipv6_basic), `v4` (mp_bgp)
 - `rdb-types-versions`: `v1` (initial), `v4` (mp_bgp), `v5` (unnumbered)
 - `mg-common-types-versions`: `v1` (initial)
@@ -132,11 +134,11 @@ exported by the paired facade crate.
 
 ### BFD
 
-- `BfdPeerInfo`, `BfdPeerConfig`
-  - `rdb_types_versions::v1::bfd::*` (the schema-published carriers)
-  - facade: `rdb_types::*`
-- `mg_types_versions::v1::bfd` re-exposes BFD shapes used by the mg admin
-  API.
+- `BfdPeerState`, `BfdPeerConfig`, `BfdPeerInfo`, `SessionMode`
+  - `bfd_types_versions::v1::*`
+  - facade: `bfd_types::*`
+- `mg_types_versions::v1::bfd` carries `DeleteBfdPeerPathParams` (an admin-API
+  path-params shape, not a BFD type proper).
 
 ### DDM admin
 

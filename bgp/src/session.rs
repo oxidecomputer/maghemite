@@ -8064,7 +8064,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ///
     /// Structural errors (duplicate attributes, malformed wire format,
     /// unsupported AFI/SAFI values) are caught during parsing in
-    /// `UpdateMessage::from_wire()` and `connection_tcp.rs`, which triggers
+    /// `update_message_from_wire()` and `connection_tcp.rs`, which triggers
     /// appropriate error handling per RFC 7606. This function only handles
     /// the negotiation state check.
     fn check_afi_safi_negotiation(

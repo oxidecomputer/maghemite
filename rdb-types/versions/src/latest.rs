@@ -6,10 +6,6 @@
 
 pub use crate::v1::{AddressFamily, ProtocolFilter};
 
-pub mod bfd {
-    pub use crate::v1::bfd::{BfdPeerConfig, SessionMode};
-}
-
 pub mod neighbor {
     pub use crate::v4::neighbor::{
         BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,

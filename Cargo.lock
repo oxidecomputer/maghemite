@@ -326,6 +326,8 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bfd-types",
+ "bfd-types-versions",
  "mg-common",
  "num_enum 0.7.6",
  "pretty_assertions",
@@ -337,6 +339,22 @@ dependencies = [
  "slog-async",
  "slog-bunyan",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "bfd-types"
+version = "0.1.0"
+dependencies = [
+ "bfd-types-versions",
+]
+
+[[package]]
+name = "bfd-types-versions"
+version = "0.1.0"
+dependencies = [
+ "num_enum 0.7.6",
+ "schemars 0.8.22",
+ "serde",
 ]
 
 [[package]]
@@ -3801,6 +3819,7 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
+ "bfd-types",
  "bgp",
  "dropshot 0.17.0",
  "dropshot-api-manager-types",
@@ -3920,7 +3939,6 @@ dependencies = [
 name = "mg-types-versions"
 version = "0.1.0"
 dependencies = [
- "bfd",
  "bgp-types-versions",
  "rdb-types-versions",
  "schemars 0.8.22",
@@ -3955,6 +3973,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bfd",
+ "bfd-types",
  "bgp",
  "chrono",
  "clap",
@@ -5979,6 +5998,7 @@ name = "rdb"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bfd-types",
  "chrono",
  "ciborium",
  "clap",

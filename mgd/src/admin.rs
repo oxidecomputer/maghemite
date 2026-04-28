@@ -4,6 +4,7 @@
 
 use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
+use bfd_types::BfdPeerInfo;
 use bgp::params::*;
 use bgp_admin::BgpContext;
 use dropshot::{
@@ -13,7 +14,7 @@ use dropshot::{
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
 use mg_common::stats::MgLowerStats;
-use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
+use mg_types::bfd::DeleteBfdPeerPathParams;
 use mg_types::bgp::{
     AsnSelector, ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
     MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,

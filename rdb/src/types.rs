@@ -15,11 +15,14 @@ use std::str::FromStr;
 
 // Re-export core types from rdb-types
 pub use rdb_types::{
-    AddressFamily, BfdPeerConfig, BgpNeighborInfo, BgpNeighborParameters,
-    BgpPathProperties, BgpRouterInfo, BgpUnnumberedNeighborInfo,
-    ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6, Path, PeerId,
-    Prefix, Prefix4, Prefix6, ProtocolFilter, SessionMode,
+    AddressFamily, BgpNeighborInfo, BgpNeighborParameters, BgpPathProperties,
+    BgpRouterInfo, BgpUnnumberedNeighborInfo, ImportExportPolicy,
+    ImportExportPolicy4, ImportExportPolicy6, Path, PeerId, Prefix, Prefix4,
+    Prefix6, ProtocolFilter,
 };
+
+// BFD types live in their own facade crate (RFD 619).
+pub use bfd_types::{BfdPeerConfig, SessionMode};
 
 // Marker types for compile-time address family discrimination.
 //

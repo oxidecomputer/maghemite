@@ -5,7 +5,6 @@
 //! Re-exports of the latest versions of types.
 
 pub mod bfd {
-    pub use crate::v1::bfd::BfdPeerInfo;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
 }
 

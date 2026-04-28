@@ -3,11 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+use bfd_types::SessionMode;
 use mg_common::thread::ManagedThread;
-use num_enum::TryFromPrimitive;
-use rdb::SessionMode;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use slog::{Logger, warn};
 use sm::StateMachine;
 use std::{
@@ -206,36 +203,7 @@ impl PeerInfo {
     }
 }
 
-/// The possible peer states. See the `State` trait implementations `Down`,
-/// `Init`, and `Up` for detailed semantics. Data representation is u8 as
-/// this enum is used as a part of the BFD wire protocol.
-#[derive(
-    Default,
-    PartialEq,
-    Debug,
-    Copy,
-    Clone,
-    TryFromPrimitive,
-    JsonSchema,
-    Serialize,
-    Deserialize,
-)]
-#[repr(u8)]
-pub enum BfdPeerState {
-    /// A stable down state. Non-responsive to incoming messages.
-    AdminDown = 0,
-
-    /// The initial state.
-    #[default]
-    Down = 1,
-
-    /// The peer has detected a remote peer in the down state.
-    Init = 2,
-
-    /// The peer has detected a remote peer in the up or init state while in the
-    /// init state.
-    Up = 3,
-}
+pub use bfd_types::BfdPeerState;
 
 pub struct Admin {}
 

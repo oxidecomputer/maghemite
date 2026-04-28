@@ -1,10 +1,9 @@
 [package]
-name = "mg-types-versions"
+name = "bfd-types-versions"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bgp-types-versions.workspace = true
-rdb-types-versions.workspace = true
+num_enum.workspace = true
 schemars.workspace = true
 serde.workspace = true
