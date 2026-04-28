@@ -12,16 +12,23 @@ pub mod bfd {
 pub mod bgp {
     pub use crate::v1::bgp::AsnSelector;
     pub use crate::v1::bgp::CheckerSource;
+    pub use crate::v1::bgp::Origin4;
+    pub use crate::v1::bgp::Router;
     pub use crate::v1::bgp::ShaperSource;
 
     pub use crate::v2::bgp::FsmEventBuffer;
     pub use crate::v2::bgp::MessageDirection;
+    pub use crate::v2::bgp::Origin6;
 
+    pub use crate::v4::bgp::AfiSafi;
+    pub use crate::v4::bgp::BgpCapability;
     pub use crate::v4::bgp::DynamicTimerInfo;
     pub use crate::v4::bgp::Ipv4UnicastConfig;
     pub use crate::v4::bgp::Ipv6UnicastConfig;
     pub use crate::v4::bgp::JitterRange;
     pub use crate::v4::bgp::NeighborResetRequest;
+    pub use crate::v4::bgp::PeerCounters;
+    pub use crate::v4::bgp::StaticTimerInfo;
 
     pub use crate::v5::bgp::ExportedSelector;
     pub use crate::v5::bgp::FsmHistoryRequest;
@@ -29,6 +36,8 @@ pub mod bgp {
     pub use crate::v5::bgp::MessageHistoryRequest;
     pub use crate::v5::bgp::MessageHistoryResponse;
     pub use crate::v5::bgp::NeighborSelector;
+    pub use crate::v5::bgp::PeerInfo;
+    pub use crate::v5::bgp::PeerTimers;
     pub use crate::v5::bgp::UnnumberedNeighborResetRequest;
     pub use crate::v5::bgp::UnnumberedNeighborSelector;
 

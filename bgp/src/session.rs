@@ -9020,7 +9020,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let received_capabilities = pc
                         .caps
                         .iter()
-                        .map(crate::params::bgp_capability_from)
+                        .map(crate::params::BgpCapability::from)
                         .collect();
                     PeerInfo {
                         name,

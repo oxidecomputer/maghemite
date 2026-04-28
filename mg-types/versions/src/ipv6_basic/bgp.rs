@@ -8,6 +8,7 @@ use std::net::IpAddr;
 use bgp_types_versions::v2::session::{
     FsmEventRecord, FsmStateKind, MessageHistory,
 };
+use rdb_types_versions::v1::prefix::Prefix6;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -68,4 +69,13 @@ pub struct PeerInfo {
     pub asn: Option<u32>,
     pub duration_millis: u64,
     pub timers: PeerTimers,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Origin6 {
+    /// ASN of the router to originate from.
+    pub asn: u32,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix6>,
 }

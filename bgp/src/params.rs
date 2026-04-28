@@ -4,17 +4,14 @@
 
 use crate::{
     config::PeerConfig,
-    messages::{AddPathElement, Capability, CapabilityCode},
-    session::{FsmStateKind, SessionCounters, SessionInfo},
+    session::{SessionCounters, SessionInfo},
 };
 use mg_types_versions::v1::bgp as v1_bgp;
 use mg_types_versions::v2::bgp as v2_bgp;
 use mg_types_versions::v4::bgp as v4_bgp;
 use mg_types_versions::v5::bgp as v5_bgp;
 use mg_types_versions::v8::bgp as v8_bgp;
-use rdb::{
-    ImportExportPolicy4, ImportExportPolicy6, PolicyAction, Prefix4, Prefix6,
-};
+use rdb::{ImportExportPolicy4, ImportExportPolicy6, PolicyAction, Prefix4};
 use rdb_types_versions::v1::policy::ImportExportPolicy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,11 +35,16 @@ pub use v1_bgp::DynamicTimerInfo as DynamicTimerInfoV1;
 pub use v1_bgp::FsmStateKind as FsmStateKindV1;
 pub use v1_bgp::Neighbor as NeighborV1;
 pub use v1_bgp::NeighborResetOp as NeighborResetOpV1;
+pub use v1_bgp::Origin4;
 pub use v1_bgp::PeerInfo as PeerInfoV1;
 pub use v1_bgp::PeerTimers as PeerTimersV1;
+pub use v1_bgp::Router;
 pub use v1_bgp::ShaperSource;
+pub use v2_bgp::Origin6;
 pub use v2_bgp::PeerInfo as PeerInfoV2;
+pub use v4_bgp::AfiSafi;
 pub use v4_bgp::ApplyRequest as ApplyRequestV6;
+pub use v4_bgp::BgpCapability;
 pub use v4_bgp::BgpPeerConfig as BgpPeerConfigV6;
 pub use v4_bgp::BgpPeerParameters as BgpPeerParametersV6;
 pub use v4_bgp::DynamicTimerInfo;
@@ -51,7 +53,11 @@ pub use v4_bgp::Ipv6UnicastConfig;
 pub use v4_bgp::JitterRange;
 pub use v4_bgp::Neighbor as NeighborV6;
 pub use v4_bgp::NeighborResetOp;
+pub use v4_bgp::PeerCounters;
+pub use v4_bgp::StaticTimerInfo;
 pub use v4_bgp::UnnumberedBgpPeerConfig as UnnumberedBgpPeerConfigV6;
+pub use v5_bgp::PeerInfo;
+pub use v5_bgp::PeerTimers;
 pub use v5_bgp::UnnumberedNeighbor as UnnumberedNeighborV6;
 pub use v8_bgp::ApplyRequest;
 pub use v8_bgp::BgpPeerConfig;
@@ -59,21 +65,6 @@ pub use v8_bgp::BgpPeerParameters;
 pub use v8_bgp::Neighbor;
 pub use v8_bgp::UnnumberedBgpPeerConfig;
 pub use v8_bgp::UnnumberedNeighbor;
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct Router {
-    /// Autonomous system number for this router
-    pub asn: u32,
-
-    /// Id for this router
-    pub id: u32,
-
-    /// Listening address <addr>:<port>
-    pub listen: String,
-
-    /// Gracefully shut this router down.
-    pub graceful_shutdown: bool,
-}
 
 /// Timer configuration extracted from SessionInfo.
 /// This is a lightweight value type that can be cloned and passed without locks.
@@ -401,24 +392,6 @@ pub struct AddExportPolicyRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct Origin4 {
-    /// ASN of the router to originate from.
-    pub asn: u32,
-
-    /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct Origin6 {
-    /// ASN of the router to originate from.
-    pub asn: u32,
-
-    /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix6>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Withdraw4Request {
     /// ASN of the router to originate from.
     pub asn: u32,
@@ -454,84 +427,6 @@ pub struct RouterInfo {
     pub asn: u32,
     pub peers: BTreeMap<IpAddr, PeerInfoV2>,
     pub graceful_shutdown: bool,
-}
-
-/// Timer information for static (non-negotiated) timers
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct StaticTimerInfo {
-    pub configured: Duration,
-    pub remaining: Duration,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerTimers {
-    pub hold: DynamicTimerInfo,
-    pub keepalive: DynamicTimerInfo,
-    pub connect_retry: StaticTimerInfo,
-    pub connect_retry_jitter: Option<JitterRange>,
-    pub idle_hold: StaticTimerInfo,
-    pub idle_hold_jitter: Option<JitterRange>,
-    pub delay_open: StaticTimerInfo,
-}
-
-/// Session-level counters that persist across connection changes
-/// These serve as aggregate counters across all connections for the session
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerCounters {
-    // FSM Counters
-    pub connection_retries: u64,
-    pub active_connections_accepted: u64,
-    pub active_connections_declined: u64,
-    pub passive_connections_accepted: u64,
-    pub passive_connections_declined: u64,
-    pub transitions_to_idle: u64,
-    pub transitions_to_connect: u64,
-    pub transitions_to_active: u64,
-    pub transitions_to_open_sent: u64,
-    pub transitions_to_open_confirm: u64,
-    pub transitions_to_connection_collision: u64,
-    pub transitions_to_session_setup: u64,
-    pub transitions_to_established: u64,
-    pub hold_timer_expirations: u64,
-    pub idle_hold_timer_expirations: u64,
-
-    // NLRI counters
-    pub prefixes_advertised: u64,
-    pub prefixes_imported: u64,
-
-    // Message counters
-    pub keepalives_sent: u64,
-    pub keepalives_received: u64,
-    pub route_refresh_sent: u64,
-    pub route_refresh_received: u64,
-    pub opens_sent: u64,
-    pub opens_received: u64,
-    pub notifications_sent: u64,
-    pub notifications_received: u64,
-    pub updates_sent: u64,
-    pub updates_received: u64,
-
-    // Message error counters
-    pub unexpected_update_message: u64,
-    pub unexpected_keepalive_message: u64,
-    pub unexpected_open_message: u64,
-    pub unexpected_route_refresh_message: u64,
-    pub unexpected_notification_message: u64,
-    pub update_nexhop_missing: u64,
-    pub open_handle_failures: u64,
-    pub unnegotiated_address_family: u64,
-
-    // Send failure counters
-    pub notification_send_failure: u64,
-    pub open_send_failure: u64,
-    pub keepalive_send_failure: u64,
-    pub route_refresh_send_failure: u64,
-    pub update_send_failure: u64,
-
-    // Connection failure counters
-    pub tcp_connection_failure: u64,
-    pub md5_auth_failures: u64,
-    pub connector_panics: u64,
 }
 
 impl From<&SessionCounters> for PeerCounters {
@@ -650,70 +545,6 @@ impl From<&SessionCounters> for PeerCounters {
             connector_panics: value.connector_panics.load(Ordering::Relaxed),
         }
     }
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AfiSafi {
-    afi: u16,
-    safi: u8,
-}
-
-impl From<&AddPathElement> for AfiSafi {
-    fn from(value: &AddPathElement) -> Self {
-        Self {
-            afi: value.afi,
-            safi: value.safi,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub enum BgpCapability {
-    MultiprotocolExtensions(AfiSafi),
-    RouteRefresh,
-    FourOctetAsn(u32),
-    AddPath { elements: Vec<AfiSafi> },
-    Unknown(u8),
-}
-
-/// Free-fn replacement for `From<&Capability> for BgpCapability`. The `From`
-/// impl will be reabsorbed in mg-types-versions when `BgpCapability` migrates
-/// in Chunk 6; until then, the impl cannot live here (orphan rule, since
-/// `Capability` now lives in `bgp-types-versions`).
-pub fn bgp_capability_from(value: &Capability) -> BgpCapability {
-    match value {
-        Capability::MultiprotocolExtensions { afi, safi } => {
-            BgpCapability::MultiprotocolExtensions(AfiSafi {
-                afi: *afi,
-                safi: *safi,
-            })
-        }
-        Capability::RouteRefresh {} => BgpCapability::RouteRefresh,
-        Capability::FourOctetAs { asn } => BgpCapability::FourOctetAsn(*asn),
-        Capability::AddPath { elements } => BgpCapability::AddPath {
-            elements: elements.iter().map(AfiSafi::from).collect(),
-        },
-        c => BgpCapability::Unknown(CapabilityCode::from(c.clone()) as u8),
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerInfo {
-    pub name: String,
-    pub peer_group: String,
-    pub fsm_state: FsmStateKind,
-    pub fsm_state_duration: Duration,
-    pub asn: Option<u32>,
-    pub id: Option<u32>,
-    pub local_ip: IpAddr,
-    pub remote_ip: IpAddr,
-    pub local_tcp_port: u16,
-    pub remote_tcp_port: u16,
-    pub received_capabilities: Vec<BgpCapability>,
-    pub timers: PeerTimers,
-    pub counters: PeerCounters,
-    pub ipv4_unicast: Ipv4UnicastConfig,
-    pub ipv6_unicast: Ipv6UnicastConfig,
 }
 
 pub enum PolicySource {

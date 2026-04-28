@@ -205,3 +205,27 @@ pub struct PeerInfo {
     pub duration_millis: u64,
     pub timers: PeerTimers,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Router {
+    /// Autonomous system number for this router
+    pub asn: u32,
+
+    /// Id for this router
+    pub id: u32,
+
+    /// Listening address <addr>:<port>
+    pub listen: String,
+
+    /// Gracefully shut this router down.
+    pub graceful_shutdown: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Origin4 {
+    /// ASN of the router to originate from.
+    pub asn: u32,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix4>,
+}

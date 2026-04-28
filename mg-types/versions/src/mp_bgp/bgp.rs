@@ -190,3 +190,85 @@ pub struct DynamicTimerInfo {
     pub negotiated: Duration,
     pub remaining: Duration,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AfiSafi {
+    pub(crate) afi: u16,
+    pub(crate) safi: u8,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub enum BgpCapability {
+    MultiprotocolExtensions(AfiSafi),
+    RouteRefresh,
+    FourOctetAsn(u32),
+    AddPath { elements: Vec<AfiSafi> },
+    Unknown(u8),
+}
+
+/// Timer information for static (non-negotiated) timers
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct StaticTimerInfo {
+    pub configured: Duration,
+    pub remaining: Duration,
+}
+
+/// Session-level counters that persist across connection changes
+/// These serve as aggregate counters across all connections for the session
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerCounters {
+    // FSM Counters
+    pub connection_retries: u64,
+    pub active_connections_accepted: u64,
+    pub active_connections_declined: u64,
+    pub passive_connections_accepted: u64,
+    pub passive_connections_declined: u64,
+    pub transitions_to_idle: u64,
+    pub transitions_to_connect: u64,
+    pub transitions_to_active: u64,
+    pub transitions_to_open_sent: u64,
+    pub transitions_to_open_confirm: u64,
+    pub transitions_to_connection_collision: u64,
+    pub transitions_to_session_setup: u64,
+    pub transitions_to_established: u64,
+    pub hold_timer_expirations: u64,
+    pub idle_hold_timer_expirations: u64,
+
+    // NLRI counters
+    pub prefixes_advertised: u64,
+    pub prefixes_imported: u64,
+
+    // Message counters
+    pub keepalives_sent: u64,
+    pub keepalives_received: u64,
+    pub route_refresh_sent: u64,
+    pub route_refresh_received: u64,
+    pub opens_sent: u64,
+    pub opens_received: u64,
+    pub notifications_sent: u64,
+    pub notifications_received: u64,
+    pub updates_sent: u64,
+    pub updates_received: u64,
+
+    // Message error counters
+    pub unexpected_update_message: u64,
+    pub unexpected_keepalive_message: u64,
+    pub unexpected_open_message: u64,
+    pub unexpected_route_refresh_message: u64,
+    pub unexpected_notification_message: u64,
+    pub update_nexhop_missing: u64,
+    pub open_handle_failures: u64,
+    pub unnegotiated_address_family: u64,
+
+    // Send failure counters
+    pub notification_send_failure: u64,
+    pub open_send_failure: u64,
+    pub keepalive_send_failure: u64,
+    pub route_refresh_send_failure: u64,
+    pub update_send_failure: u64,
+
+    // Connection failure counters
+    pub tcp_connection_failure: u64,
+    pub md5_auth_failures: u64,
+    pub connector_panics: u64,
+}

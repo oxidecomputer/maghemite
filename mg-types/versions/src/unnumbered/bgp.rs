@@ -3,15 +3,23 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::time::Duration;
 
-use bgp_types_versions::v2::session::{FsmEventRecord, MessageHistory};
+use bgp_types_versions::v2::session::{
+    FsmEventRecord, FsmStateKind, MessageHistory,
+};
 use bgp_types_versions::v4::messages::Afi;
 use rdb_types_versions::v1::peer::PeerId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::v2::bgp::{FsmEventBuffer, MessageDirection};
-use crate::v4::bgp::{BgpPeerParameters, NeighborResetOp};
+use crate::v4::bgp::{
+    BgpCapability, BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig,
+    Ipv6UnicastConfig, JitterRange, NeighborResetOp, PeerCounters,
+    StaticTimerInfo,
+};
 
 /// Unified neighbor selector supporting both numbered and unnumbered peers.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -106,4 +114,34 @@ pub struct UnnumberedNeighbor {
     pub act_as_a_default_ipv6_router: u16,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerTimers {
+    pub hold: DynamicTimerInfo,
+    pub keepalive: DynamicTimerInfo,
+    pub connect_retry: StaticTimerInfo,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold: StaticTimerInfo,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub delay_open: StaticTimerInfo,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerInfo {
+    pub name: String,
+    pub peer_group: String,
+    pub fsm_state: FsmStateKind,
+    pub fsm_state_duration: Duration,
+    pub asn: Option<u32>,
+    pub id: Option<u32>,
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_tcp_port: u16,
+    pub remote_tcp_port: u16,
+    pub received_capabilities: Vec<BgpCapability>,
+    pub timers: PeerTimers,
+    pub counters: PeerCounters,
+    pub ipv4_unicast: Ipv4UnicastConfig,
+    pub ipv6_unicast: Ipv6UnicastConfig,
 }

@@ -373,3 +373,44 @@ impl From<v5::bgp::UnnumberedNeighbor> for latest::bgp::UnnumberedNeighbor {
         }
     }
 }
+
+// ----- AfiSafi / BgpCapability conversions (reabsorbed from bgp/src/params.rs) -----
+
+impl From<&bgp_types_versions::v1::messages::AddPathElement>
+    for latest::bgp::AfiSafi
+{
+    fn from(value: &bgp_types_versions::v1::messages::AddPathElement) -> Self {
+        Self {
+            afi: value.afi,
+            safi: value.safi,
+        }
+    }
+}
+
+impl From<&bgp_types_versions::v1::messages::Capability>
+    for latest::bgp::BgpCapability
+{
+    fn from(value: &bgp_types_versions::v1::messages::Capability) -> Self {
+        use bgp_types_versions::v1::messages::{Capability, CapabilityCode};
+        match value {
+            Capability::MultiprotocolExtensions { afi, safi } => {
+                Self::MultiprotocolExtensions(latest::bgp::AfiSafi {
+                    afi: *afi,
+                    safi: *safi,
+                })
+            }
+            Capability::RouteRefresh {} => Self::RouteRefresh,
+            Capability::FourOctetAs { asn } => Self::FourOctetAsn(*asn),
+            Capability::AddPath { elements } => Self::AddPath {
+                elements: elements
+                    .iter()
+                    .map(|e| latest::bgp::AfiSafi {
+                        afi: e.afi,
+                        safi: e.safi,
+                    })
+                    .collect(),
+            },
+            c => Self::Unknown(CapabilityCode::from(c.clone()) as u8),
+        }
+    }
+}
