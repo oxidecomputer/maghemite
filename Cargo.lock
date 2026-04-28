@@ -3913,6 +3913,7 @@ version = "0.1.0"
 dependencies = [
  "mg-types-versions",
  "rdb",
+ "rdb-types-versions",
 ]
 
 [[package]]
@@ -3921,7 +3922,6 @@ version = "0.1.0"
 dependencies = [
  "bfd",
  "bgp-types-versions",
- "rdb",
  "rdb-types-versions",
  "schemars 0.8.22",
  "serde",

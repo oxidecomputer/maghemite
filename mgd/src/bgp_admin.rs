@@ -1006,7 +1006,7 @@ pub async fn get_imported_v1(
     let imported = get_router!(ctx, rq.asn)?
         .db
         .full_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(imported.into()))
+    Ok(HttpResponseOk(mg_types::rib::rib_v1_from_rdb(imported)))
 }
 
 pub async fn get_selected_v1(
@@ -1018,7 +1018,7 @@ pub async fn get_selected_v1(
     let selected = get_router!(ctx, rq.asn)?
         .db
         .loc_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(selected.into()))
+    Ok(HttpResponseOk(mg_types::rib::rib_v1_from_rdb(selected)))
 }
 
 pub async fn get_neighbors_v1(

@@ -6,4 +6,3 @@
 
 mod bgp;
 pub(crate) mod rib;
-mod static_routes;

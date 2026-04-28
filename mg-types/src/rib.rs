@@ -6,8 +6,35 @@ pub use mg_types_versions::latest::rib::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mg_types_versions::latest;
+use mg_types_versions::v1;
 use rdb::types::ProtocolFilter;
 use rdb::{Path as RdbPath, Prefix};
+use rdb_types_versions::v1::path::Path as PathV1;
+
+// `rdb::db::Rib` -> versioned `Rib` conversions live here as free
+// functions. The orphan rule prevents an `impl From<rdb::db::Rib> for
+// vN::rib::Rib` in this crate (both types are foreign), and putting the
+// impl in `mg-types-versions` would force that leaf crate to depend on
+// `rdb` (forbidden by RFD 619).
+pub fn rib_latest_from_rdb(value: rdb::db::Rib) -> latest::rib::Rib {
+    latest::rib::Rib(
+        value.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+    )
+}
+
+pub fn rib_v1_from_rdb(value: rdb::db::Rib) -> v1::rib::Rib {
+    v1::rib::Rib(
+        value
+            .into_iter()
+            .map(|(k, v)| {
+                let paths_v1: BTreeSet<PathV1> =
+                    v.into_iter().map(PathV1::from).collect();
+                (k.to_string(), paths_v1)
+            })
+            .collect(),
+    )
+}
 
 pub fn filter_rib_by_protocol(
     rib: BTreeMap<Prefix, BTreeSet<RdbPath>>,

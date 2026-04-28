@@ -13,18 +13,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct Rib(pub BTreeMap<String, BTreeSet<Path>>);
 
-impl From<rdb::db::Rib> for Rib {
-    fn from(value: rdb::db::Rib) -> Self {
-        Rib(value
-            .into_iter()
-            .map(|(k, v)| {
-                let paths_v1: BTreeSet<Path> =
-                    v.into_iter().map(Path::from).collect();
-                (k.to_string(), paths_v1)
-            })
-            .collect())
-    }
-}
+// `From<rdb::db::Rib> for Rib` lives in the `mg-types` facade crate
+// (`mg-types/src/rib.rs`) to keep `mg-types-versions` from depending on
+// the `rdb` business-logic crate (see RFD 619 leaf-crate rule).
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct BestpathFanoutRequest {
