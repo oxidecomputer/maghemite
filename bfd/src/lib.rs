@@ -2,17 +2,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use anyhow::Result;
+use mg_common::thread::ManagedThread;
 use num_enum::TryFromPrimitive;
 use rdb::SessionMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{Logger, warn};
 use sm::StateMachine;
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
 
 pub mod bidi;
 pub mod log;
@@ -49,17 +52,13 @@ impl Daemon {
         }
     }
 
-    /// Add a peer session to the deamon. Peer sessions are started immediately
-    /// when added.
+    /// Add a peer session to the daemon.
+    /// Peer sessions are started immediately when added.
     pub fn add_peer(
         &mut self,
         peer: IpAddr,
-        required_rx: Duration,
-        detection_multiplier: u8,
-        mode: SessionMode,
-        endpoint: BfdEndpoint,
-        db: rdb::Db,
-    ) {
+        rq: AddPeerRequest,
+    ) -> Result<(), AddPeerError> {
         if self.sessions.contains_key(&peer) {
             warn!(self.log, "attempt to add peer that already exists";
                 "component" => COMPONENT_BFD,
@@ -67,20 +66,11 @@ impl Daemon {
                 "unit" => UNIT_PEER,
                 "peer" => format!("{peer}")
             );
-            return;
+            return Err(AddPeerError::PeerExists(peer));
         }
-        self.sessions.insert(
-            peer,
-            Session::new(
-                peer,
-                endpoint,
-                required_rx,
-                detection_multiplier,
-                mode,
-                db,
-                self.log.clone(),
-            ),
-        );
+        self.sessions
+            .insert(peer, Session::new(peer, rq, self.log.clone())?);
+        Ok(())
     }
 
     /// Remove a peer from the daemon. The peer will be immediately shut down.
@@ -112,35 +102,47 @@ pub struct SessionCounters {
     pub unexpected_message: AtomicU64,
 }
 
+/// Parameters for adding a new BFD peer session.
+pub struct AddPeerRequest {
+    pub required_rx: Duration,
+    pub detection_multiplier: u8,
+    pub mode: SessionMode,
+    pub endpoint: BfdEndpoint,
+    pub egress_thread: Option<Arc<ManagedThread>>,
+    pub db: rdb::Db,
+}
+
 /// A session holds a BFD state machine for a particular peer.
 pub struct Session {
     pub sm: StateMachine,
     pub mode: SessionMode,
     pub counters: Arc<SessionCounters>,
+    /// Managed egress thread for UDP packet transmission. Stored here to
+    /// ensure automatic cleanup on drop — the ManagedThread's Drop impl
+    /// will signal shutdown and join the thread. None in test contexts
+    /// where egress is handled differently.
+    _egress_thread: Option<Arc<ManagedThread>>,
 }
 
 impl Session {
     /// Create a new session and start running the underlying BFD state machine
     /// immediately.
-    fn new(
-        addr: IpAddr,
-        ep: BfdEndpoint,
-        required_rx: Duration,
-        detection_multiplier: u8,
-        mode: SessionMode,
-        db: rdb::Db,
-        log: Logger,
-    ) -> Self {
+    fn new(addr: IpAddr, rq: AddPeerRequest, log: Logger) -> Result<Self> {
         let counters = Arc::new(SessionCounters::default());
         let mut sm = StateMachine::new(
             addr,
-            required_rx,
-            detection_multiplier,
+            rq.required_rx,
+            rq.detection_multiplier,
             counters.clone(),
             log,
         );
-        sm.run(ep, db);
-        Session { sm, mode, counters }
+        sm.run(rq.endpoint, rq.db)?;
+        Ok(Session {
+            sm,
+            mode: rq.mode,
+            counters,
+            _egress_thread: rq.egress_thread,
+        })
     }
 }
 
@@ -237,6 +239,15 @@ pub enum BfdPeerState {
 
 pub struct Admin {}
 
+#[derive(Debug, thiserror::Error)]
+pub enum AddPeerError {
+    #[error("BFD peer {0} already exists")]
+    PeerExists(IpAddr),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -324,17 +335,40 @@ mod test {
         let mut daemon = Daemon::new(log);
         assert_eq!(daemon.sessions.len(), 0);
 
+        // Add an IPv4 peer.
         let (a, _b) = bidi::channel();
-        let p1_addr = ip("203.0.113.10");
+        let v4_addr = ip("203.0.113.10");
         daemon.add_peer(
-            p1_addr,
-            Duration::from_secs(5),
-            3,
-            SessionMode::MultiHop,
-            a,
-            db.db().clone(),
-        );
-        assert_eq!(daemon.peer_state(p1_addr), Some(BfdPeerState::Down));
+            v4_addr,
+            AddPeerRequest {
+                required_rx: Duration::from_secs(5),
+                detection_multiplier: 3,
+                mode: SessionMode::MultiHop,
+                endpoint: a,
+                egress_thread: None,
+                db: db.db().clone(),
+            },
+        )?;
+        assert_eq!(daemon.peer_state(v4_addr), Some(BfdPeerState::Down));
+
+        // Add an IPv6 peer to the same daemon.
+        let (a, _b) = bidi::channel();
+        let v6_addr = ip("2001:db8::10");
+        daemon.add_peer(
+            v6_addr,
+            AddPeerRequest {
+                required_rx: Duration::from_secs(5),
+                detection_multiplier: 3,
+                mode: SessionMode::MultiHop,
+                endpoint: a,
+                egress_thread: None,
+                db: db.db().clone(),
+            },
+        )?;
+        assert_eq!(daemon.peer_state(v6_addr), Some(BfdPeerState::Down));
+
+        // Both peers coexist.
+        assert_eq!(daemon.sessions.len(), 2);
 
         Ok(())
     }
@@ -347,39 +381,83 @@ mod test {
 
         let mut net = Network::default();
 
-        let addr1 = ip("203.0.113.10");
-        let addr2 = ip("203.0.113.20");
+        // IPv4 peer pair.
+        let v4_addr1 = ip("203.0.113.10");
+        let v4_addr2 = ip("203.0.113.20");
 
+        // IPv6 peer pair.
+        let v6_addr1 = ip("2001:db8::10");
+        let v6_addr2 = ip("2001:db8::20");
+
+        // Daemon 1 peers with both v4 and v6 counterparts.
         let mut d1 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
         d1.add_peer(
-            addr1,
-            Duration::from_secs(5),
-            3,
-            SessionMode::MultiHop,
-            a,
-            db.db().clone(),
-        );
-        net.register(addr2, b);
+            v4_addr1,
+            AddPeerRequest {
+                required_rx: Duration::from_secs(5),
+                detection_multiplier: 3,
+                mode: SessionMode::MultiHop,
+                endpoint: a,
+                egress_thread: None,
+                db: db.db().clone(),
+            },
+        )?;
+        net.register(v4_addr2, b);
 
+        let (a, b) = bidi::channel();
+        d1.add_peer(
+            v6_addr1,
+            AddPeerRequest {
+                required_rx: Duration::from_secs(5),
+                detection_multiplier: 3,
+                mode: SessionMode::MultiHop,
+                endpoint: a,
+                egress_thread: None,
+                db: db.db().clone(),
+            },
+        )?;
+        net.register(v6_addr2, b);
+
+        // Daemon 2 peers with both v4 and v6 counterparts.
         let mut d2 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
         d2.add_peer(
-            addr2,
-            Duration::from_secs(5),
-            3,
-            SessionMode::MultiHop,
-            a,
-            db.db().clone(),
-        );
-        net.register(addr1, b);
+            v4_addr2,
+            AddPeerRequest {
+                required_rx: Duration::from_secs(5),
+                detection_multiplier: 3,
+                mode: SessionMode::MultiHop,
+                endpoint: a,
+                egress_thread: None,
+                db: db.db().clone(),
+            },
+        )?;
+        net.register(v4_addr1, b);
+
+        let (a, b) = bidi::channel();
+        d2.add_peer(
+            v6_addr2,
+            AddPeerRequest {
+                required_rx: Duration::from_secs(5),
+                detection_multiplier: 3,
+                mode: SessionMode::MultiHop,
+                endpoint: a,
+                egress_thread: None,
+                db: db.db().clone(),
+            },
+        )?;
+        net.register(v6_addr1, b);
 
         net.run();
 
         sleep(Duration::from_secs(10));
 
-        assert_eq!(d1.peer_state(addr1), Some(BfdPeerState::Up));
-        assert_eq!(d2.peer_state(addr2), Some(BfdPeerState::Up));
+        // All four sessions should reach Up.
+        assert_eq!(d1.peer_state(v4_addr1), Some(BfdPeerState::Up),);
+        assert_eq!(d1.peer_state(v6_addr1), Some(BfdPeerState::Up),);
+        assert_eq!(d2.peer_state(v4_addr2), Some(BfdPeerState::Up),);
+        assert_eq!(d2.peer_state(v6_addr2), Some(BfdPeerState::Up),);
 
         Ok(())
     }
