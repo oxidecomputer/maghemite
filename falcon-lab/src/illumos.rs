@@ -47,9 +47,22 @@ impl IllumosNode {
         Err(anyhow!("dhcp timed out"))
     }
 
+    pub async fn staticaddr(
+        &self,
+        d: &Runner,
+        addrobj: &str,
+        cidr: &str,
+    ) -> Result<IpAddr> {
+        let cmd = format!("ipadm create-addr -T static -a {cidr} {addrobj}");
+        let out = d.exec(self.0, &cmd).await?;
+        ensure_ipadm_ok(&out, &cmd)?;
+        self.ip(d, addrobj).await
+    }
+
     pub async fn addrconf(&self, d: &Runner, addrobj: &str) -> Result<IpAddr> {
-        d.exec(self.0, &format!("ipadm create-addr -T addrconf {addrobj}"))
-            .await?;
+        let cmd = format!("ipadm create-addr -T addrconf {addrobj}");
+        let out = d.exec(self.0, &cmd).await?;
+        ensure_ipadm_ok(&out, &cmd)?;
         let mut retries = 10usize;
         loop {
             match self.ip(d, addrobj).await {
@@ -97,4 +110,16 @@ impl IllumosNode {
         }
         Err(anyhow!("timeout waiting for link {name}"))
     }
+}
+
+/// Treat `ipadm` output as success unless it contains an error line and the
+/// error is not an "already assigned / already exists" idempotency case.
+/// ipadm prefixes error messages with `ipadm:` and is otherwise silent on
+/// success.
+fn ensure_ipadm_ok(output: &str, cmd: &str) -> Result<()> {
+    let lower = output.to_lowercase();
+    if lower.contains("ipadm:") && !lower.contains("already") {
+        return Err(anyhow!("'{cmd}' failed: {}", output.trim()));
+    }
+    Ok(())
 }

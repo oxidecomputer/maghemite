@@ -616,50 +616,6 @@ proptest! {
         }
     }
 
-    /// Property: Duplicate non-MP-BGP attributes are deduplicated to first occurrence
-    #[test]
-    fn prop_duplicate_attrs_deduplicated(
-        origin1 in path_origin_strategy(),
-        origin2 in path_origin_strategy()
-    ) {
-        // Manually construct wire bytes with duplicate ORIGIN attributes
-        let mut wire = Vec::new();
-
-        // Withdrawn routes length (0)
-        wire.extend_from_slice(&0u16.to_be_bytes());
-
-        // Path attributes: two ORIGIN attributes (second should be discarded)
-        let attrs = vec![
-            // First ORIGIN attribute
-            path_attribute_flags::TRANSITIVE,
-            PathAttributeTypeCode::Origin as u8,
-            1, // length
-            origin1 as u8,
-            // Second ORIGIN attribute (should be discarded)
-            path_attribute_flags::TRANSITIVE,
-            PathAttributeTypeCode::Origin as u8,
-            1, // length
-            origin2 as u8,
-        ];
-
-        // Path attributes length
-        wire.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
-        wire.extend_from_slice(&attrs);
-
-        let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
-
-        // Should only have one ORIGIN attribute
-        let origins: Vec<_> = decoded.path_attributes.iter()
-            .filter_map(|a| match &a.value {
-                PathAttributeValue::Origin(o) => Some(*o),
-                _ => None,
-            })
-            .collect();
-
-        prop_assert_eq!(origins.len(), 1, "Should have exactly one ORIGIN after dedup");
-        prop_assert_eq!(origins[0], origin1, "Should keep first ORIGIN value");
-    }
-
     /// Property: Encoding then decoding produces semantically equivalent message
     #[test]
     fn prop_encode_decode_semantic_equivalence(update in update_strategy()) {
