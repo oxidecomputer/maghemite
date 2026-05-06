@@ -142,11 +142,11 @@ natord = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "b60decb70fe491ebdaa30c824619470b015556fc"
+rev = "3d1fe6ad2df3752dd189ad462c4fdec74ebe25f8"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "b60decb70fe491ebdaa30c824619470b015556fc"
+rev = "3d1fe6ad2df3752dd189ad462c4fdec74ebe25f8"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
