@@ -1,6 +1,9 @@
 //! Falcon test lab
 
-use crate::test::{cleanup_unnumbered_test, run_trio_unnumbered_test};
+use crate::test::{
+    cleanup_bfd_static_test, cleanup_unnumbered_test, run_trio_bfd_static_test,
+    run_trio_unnumbered_test,
+};
 use clap::{Parser, Subcommand};
 
 mod bgp;
@@ -60,6 +63,7 @@ struct Serial {
 #[derive(Debug, Subcommand)]
 enum TestCommand {
     TrioUnnumbered,
+    TrioBfdStaticRouting,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -79,9 +83,21 @@ async fn run() -> anyhow::Result<()> {
                 )
                 .await?
             }
+            TestCommand::TrioBfdStaticRouting => {
+                run_trio_bfd_static_test(
+                    cmd.no_cleanup,
+                    cmd.npuvm_commit.clone(),
+                    cmd.dendrite_commit,
+                    cmd.sidecar_lite_commit,
+                )
+                .await?
+            }
         },
         Command::Cleanup(cmd) => match cmd.command {
             TestCommand::TrioUnnumbered => cleanup_unnumbered_test().await?,
+            TestCommand::TrioBfdStaticRouting => {
+                cleanup_bfd_static_test().await?
+            }
         },
         Command::Serial(cmd) => {
             libfalcon::cli::console(&cmd.node, ".falcon".into()).await?
