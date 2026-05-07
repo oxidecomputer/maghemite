@@ -40,7 +40,7 @@ use mg_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_types_versions::{v1, v2, v5};
+use mg_types_versions::{v1, v2, v4, v5};
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
     ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
@@ -1567,6 +1567,32 @@ pub async fn message_history_v1(
     }))
 }
 
+// VERSION_MP_BGP..VERSION_UNNUMBERED endpoint. Uses IpAddr keys for numbered
+// peers; the inner MessageHistory is the currently-latest BGP type (with MP-BGP
+// path attributes).
+pub async fn message_history_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<v2::bgp::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v4::bgp::MessageHistoryResponse>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    // Convert IpAddr filter to PeerId and call unified helper
+    let peer_id = rq.peer.map(PeerId::Ip);
+    let by_peer_string =
+        get_message_history_filtered(ctx, rq.asn, peer_id, rq.direction)?;
+
+    // Convert String keys back to IpAddr (filters out unnumbered peers)
+    let by_peer = by_peer_string
+        .into_iter()
+        .filter_map(|(key, history)| {
+            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+        })
+        .collect();
+
+    Ok(HttpResponseOk(v4::bgp::MessageHistoryResponse { by_peer }))
+}
+
 // Pre-UNNUMBERED API endpoint (VERSION_IPV6_BASIC..VERSION_UNNUMBERED)
 // Uses IpAddr for numbered peers only
 pub async fn message_history_v2(
@@ -1585,7 +1611,9 @@ pub async fn message_history_v2(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history)| {
-            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+            key.parse::<IpAddr>()
+                .ok()
+                .map(|addr| (addr, v2::bgp::MessageHistory::from(history)))
         })
         .collect();
 
