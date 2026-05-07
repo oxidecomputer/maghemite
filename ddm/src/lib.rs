@@ -8,10 +8,15 @@ pub mod discovery;
 pub mod exchange;
 pub mod oxstats;
 pub mod sm;
+#[cfg(all(feature = "illumos", target_os = "illumos"))]
 pub mod sys;
-mod util;
+
+pub const COMPONENT_DDM: &str = "ddm";
+pub const MOD_ADMIN: &str = "admin";
+pub const MOD_EXCHANGE: &str = "exchange";
 
 /// Returns `None` if the set is empty, otherwise `Some(s)`.
+#[cfg(all(feature = "illumos", target_os = "illumos"))]
 pub(crate) fn non_empty<T>(
     set: std::collections::HashSet<T>,
 ) -> Option<std::collections::HashSet<T>> {
