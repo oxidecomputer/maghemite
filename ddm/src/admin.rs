@@ -12,8 +12,6 @@ use ddm_types::exchange::PathVector;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
-use dropshot::ConfigLogging;
-use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -23,7 +21,7 @@ use dropshot::TypedBody;
 use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info};
+use slog::{Logger, error, info, o};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -34,6 +32,8 @@ use tokio::spawn;
 use tokio::task::JoinHandle;
 
 pub const DDM_STATS_PORT: u16 = 8001;
+
+const UNIT_API_SERVER: &str = "api_server";
 
 #[derive(Default)]
 pub struct RouterStats {
@@ -68,11 +68,11 @@ pub fn handler(
         ..Default::default()
     };
 
-    let ds_log = ConfigLogging::StderrTerminal {
-        level: ConfigLoggingLevel::Error,
-    }
-    .to_logger("admin")
-    .map_err(|e| e.to_string())?;
+    let ds_log = log.new(o!(
+        "component" => crate::COMPONENT_DDM,
+        "module" => crate::MOD_ADMIN,
+        "unit" => UNIT_API_SERVER,
+    ));
 
     let api = api_description().map_err(|e| e.to_string())?;
 

@@ -2,92 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! This file implements the ddm router discovery mechanisms. These mechanisms
-//! are responsible for three primary things
-//!
-//! 1. Soliciting other routers through UDP/IPv6 link local multicast.
-//! 2. Sending out router advertisements in response to solicitations.
-//! 3. Continuously soliciting link-local at a configurable rate to keep
-//!    sessions alive and sending out notifications when peering arrangements
-//!    expire due to not getting a solicitation response within a configurable
-//!    time threshold.
-//!
-//! ## Protocol
-//!
-//! The general sequence of events is depicted in the following diagram.
-//!
-//!             *==========*                *==========*
-//!             |  violin  |                |  piano   |
-//!             *==========*                *==========*
-//!                  |                           |
-//!                  |     solicit(ff02::dd)     |
-//!                  |-------------------------->|
-//!                  |    advertise(fe80::47)    |
-//!                  |<--------------------------|
-//!                  |                           |
-//!                  |            ...            |
-//!                  |                           |
-//!                  |                           |
-//!                  |     solicit(ff02::dd)     |
-//!                  |-------------------------->|
-//!                  |    advertise(fe80::47)    |
-//!                  |<--------------------------|
-//!                  |                           |
-//!                  |     solicit(ff02::dd)     |
-//!                  |-------------------------->|
-//!                  |     solicit(ff02::dd)     |
-//!                  |-------------------------->|
-//!                  |     solicit(ff02::dd)     |
-//!                  |-------------------------->|
-//!                  |                           |
-//!             +----|                           |
-//!      expire |    |                           |
-//!       piano |    |                           |
-//!             +--->|                           |
-//!
-//! This shows violin sending a link-local multicast solicitation over the wire.
-//! That solicitation is received by piano and piano respons with an
-//! advertisement to violin's link-local unicast address. From this point
-//! forward solicitations and responses continue. Each time violin gets a
-//! response from piano, it updates the last seen timestamp for piano. If at
-//! some point piano stops responding to solicitations and the last seen
-//! timestamp is older than the expiration threshold, violin will expire the
-//! session and send out a notification to the ddm state machine that started
-//! it. Violin will continue to send out solicitations in case piano comes back.
-//!
-//! In the event that piano undergoes renumbering e.g. it's link-local unicast
-//! address changes, this will be detected by violin and an advertisement update
-//! will be sent to the ddm state machine through the notification channel
-//! provided to the discovery subsystem.
-//!
-//! The DDM discovery multicast address is ff02::dd. Discovery packets are sent
-//! over UDP using port number 0xddd.
-//!
-//! ## Packets
-//!
-//! Discovery packets follow a very simple format
-//!
-//!                      1                   2                   3
-//!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |   version     |S A r r r r r r|  router kind  | hostname len  |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                           hostname                            :
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! :                             ....                              :
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//!
-//! The first byte indicates the version. The only valid version at present is
-//! version 1. The second byte is a flags bitfield. The first position `S`
-//! indicates a solicitation. The second position `A` indicates and
-//! advertisement. All other positions are reserved for future use. The third
-//! byte indicates the kind of router. Current values are 0 for a server router
-//! and 1 for a transit routers. The fourth byte is a hostname length followed
-//! directly by a hostname of up to 255 bytes in length.
+//! Runtime helpers for ddm router discovery: link-local UDPv6 sockets,
+//! solicitation/advertisement loops, neighbor liveness, and the
+//! [`handler`] entry point invoked by the routing state machine.
+//! illumos-only.
 
+use super::{DiscoveryError, Version};
 use crate::db::Db;
 use crate::sm::{Config, Event, NeighborEvent, SessionStats};
-use crate::util::u8_slice_assume_init_ref;
 use crate::{dbg, err, inf, trc, wrn};
 use ddm_types::db::{PeerInfo, PeerStatus, RouterKind};
 use mg_common::lock;
@@ -101,31 +23,22 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread::{sleep, spawn};
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
 const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
 const SOLICIT: u8 = 1;
 const ADVERTISE: u8 = 1 << 1;
 
-#[derive(Debug, Copy, Clone)]
-#[repr(u8)]
-pub enum Version {
-    V2 = 2,
-    V3 = 3,
-}
-
-#[derive(Error, Debug)]
-pub enum DiscoveryError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("serialization error: {0}")]
-    Serialization(#[from] ispf::Error),
+/// Reinterpret an initialized prefix of `[MaybeUninit<u8>]` as `[u8]`.
+///
+/// TODO: trade for `MaybeUninit::slice_assume_init_ref` when it stabilizes.
+#[inline(always)]
+const unsafe fn u8_slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &[u8] {
+    unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DiscoveryPacket {
+struct DiscoveryPacket {
     version: u8,
     flags: u8,
     kind: RouterKind,
@@ -134,7 +47,7 @@ pub struct DiscoveryPacket {
 }
 
 impl DiscoveryPacket {
-    pub fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
+    fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
             version: Version::V2 as u8,
             flags: SOLICIT,
@@ -142,7 +55,7 @@ impl DiscoveryPacket {
             kind,
         }
     }
-    pub fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
+    fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
             version: Version::V2 as u8,
             flags: ADVERTISE,
@@ -150,17 +63,11 @@ impl DiscoveryPacket {
             kind,
         }
     }
-    pub fn is_solicitation(&self) -> bool {
+    fn is_solicitation(&self) -> bool {
         (self.flags & SOLICIT) != 0
     }
-    pub fn is_advertisement(&self) -> bool {
+    fn is_advertisement(&self) -> bool {
         (self.flags & ADVERTISE) != 0
-    }
-    pub fn set_solicitation(&mut self) {
-        self.flags &= SOLICIT;
-    }
-    pub fn set_advertisement(&mut self) {
-        self.flags &= ADVERTISE;
     }
 }
 
