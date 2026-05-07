@@ -6,13 +6,13 @@ use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "state-machine", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_types::db::RouterKind;
 use signal::handle_signals;
-use slog::{Drain, Logger, error, warn};
+use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "state-machine", target_os = "illumos"))]
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -109,7 +109,7 @@ struct Arg {
     /// networking the state machine requires.
     ///
     /// Analogous to `mgd --no-bgp-dispatcher`.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "addr")]
     no_state_machine: bool,
 }
 
@@ -208,7 +208,7 @@ async fn run() {
 /// short-circuits to empty vectors, leaving the daemon to serve only its
 /// admin API. The illumos and non-illumos variants share that early-exit
 /// branch; only the actual machine setup is platform-specific.
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "state-machine", target_os = "illumos"))]
 fn start_state_machines(
     arg: &Arg,
     db: &Db,
@@ -221,13 +221,6 @@ fn start_state_machines(
     Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
 ) {
     if arg.no_state_machine {
-        if !arg.addresses.is_empty() {
-            warn!(
-                log,
-                "--no-state-machine set; ignoring {} --addr value(s)",
-                arg.addresses.len(),
-            );
-        }
         return (Vec::new(), Vec::new());
     }
 
@@ -288,41 +281,26 @@ fn start_state_machines(
 }
 
 /// Non-illumos variant: the routing state machine depends on illumos
-/// kernel networking, so on every other platform the function logs a warning
-/// and returns empty vectors. Test fixtures should pass `--no-state-machine`
-/// to silence the warning.
-#[cfg(not(all(feature = "illumos", target_os = "illumos")))]
+/// kernel networking, so on every other platform the function returns
+/// empty vectors and the daemon serves only its admin API.
+#[cfg(not(all(feature = "state-machine", target_os = "illumos")))]
 fn start_state_machines(
-    arg: &Arg,
+    _arg: &Arg,
     _db: &Db,
     _dpd: &Option<DpdConfig>,
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
-    log: &Logger,
+    _log: &Logger,
 ) -> (
     Vec<StateMachine>,
     Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
 ) {
-    if !arg.no_state_machine {
-        warn!(
-            log,
-            "routing state machine is not available on non-illumos builds; \
-             behaving as if `--no-state-machine` were set",
-        );
-    }
-    if !arg.addresses.is_empty() {
-        warn!(
-            log,
-            "--no-state-machine set; ignoring {} --addr value(s)",
-            arg.addresses.len(),
-        );
-    }
     (Vec::new(), Vec::new())
 }
 
 /// Install a Ctrl-C handler that withdraws ddmd's imported routes from the
-/// kernel before exiting. illumos-only.
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+/// kernel before exiting. On non-illumos builds there are no kernel routes
+/// to withdraw, so the handler just exits cleanly.
 fn termination_handler(
     db: Db,
     dendrite: Option<DpdConfig>,
@@ -335,42 +313,31 @@ fn termination_handler(
             .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
 
-        let imported = db.imported();
-        let routes: Vec<Route> =
-            imported.iter().map(|x| (x.clone()).into()).collect();
-        ddm::sys::remove_underlay_routes(
-            &log,
-            "shutdown-all",
-            &dendrite,
-            routes,
-            &rt,
-        );
-
-        let imported_tnl = db.imported_tunnel();
-        if let Err(e) =
-            ddm::sys::remove_tunnel_routes(&log, "shutdown-all", &imported_tnl)
+        #[cfg(all(feature = "state-machine", target_os = "illumos"))]
         {
-            error!(log, "shutdown tunnel routes: {e}");
+            let imported = db.imported();
+            let routes: Vec<Route> =
+                imported.iter().map(|x| (x.clone()).into()).collect();
+            ddm::sys::remove_underlay_routes(
+                &log,
+                "shutdown-all",
+                &dendrite,
+                routes,
+                &rt,
+            );
+
+            let imported_tnl = db.imported_tunnel();
+            if let Err(e) = ddm::sys::remove_tunnel_routes(
+                &log,
+                "shutdown-all",
+                &imported_tnl,
+            ) {
+                error!(log, "shutdown tunnel routes: {e}");
+            }
         }
+        #[cfg(not(all(feature = "state-machine", target_os = "illumos")))]
+        let _ = (db, dendrite, rt, log);
 
-        std::process::exit(SIGTERM_EXIT);
-    });
-}
-
-/// Non-illumos variant: there are no kernel routes to withdraw on these
-/// platforms, so the handler installs a Ctrl-C task that just exits cleanly.
-#[cfg(not(all(feature = "illumos", target_os = "illumos")))]
-fn termination_handler(
-    _db: Db,
-    _dendrite: Option<DpdConfig>,
-    _rt: Arc<tokio::runtime::Handle>,
-    _log: Logger,
-) {
-    tokio::spawn(async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("error setting termination handler");
-        const SIGTERM_EXIT: i32 = 130;
         std::process::exit(SIGTERM_EXIT);
     });
 }

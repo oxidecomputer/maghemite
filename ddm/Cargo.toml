@@ -33,7 +33,7 @@ ddm-api.workspace = true
 ddm-types.workspace = true
 
 # illumos-only deps used by the routing state machine and platform sys layer.
-# Gated by the `illumos` feature so non-illumos builds (e.g. Linux test
+# Gated by the `state-machine` feature so stub builds (e.g. Linux test
 # fixtures running ddmd with `--no-state-machine`) link cleanly.
 libnet = { workspace = true, optional = true }
 dpd-client = { workspace = true, optional = true }
@@ -41,5 +41,5 @@ opte-ioctl = { workspace = true, optional = true }
 oxide-vpc = { workspace = true, optional = true }
 
 [features]
-default = ["illumos"]
-illumos = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc"]
+default = ["state-machine"]
+state-machine = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc"]

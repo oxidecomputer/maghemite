@@ -94,10 +94,10 @@
 
 use thiserror::Error;
 
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "state-machine", target_os = "illumos"))]
 mod runtime;
 
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "state-machine", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
 #[derive(Debug, Copy, Clone)]
