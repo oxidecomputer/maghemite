@@ -2,9 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 
 use bgp::params::NeighborResetOp;
+use bgp::session::MessageHistory;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,4 +27,9 @@ impl From<v1::bgp::NeighborResetRequest> for NeighborResetRequest {
             op: req.op.into(),
         }
     }
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponse {
+    pub by_peer: HashMap<IpAddr, MessageHistory>,
 }

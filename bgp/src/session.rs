@@ -1033,9 +1033,9 @@ pub const MAX_MESSAGE_HISTORY: usize = 1024;
 /// A message history entry is a BGP message with an associated timestamp and connection ID
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MessageHistoryEntry {
-    timestamp: chrono::DateTime<chrono::Utc>,
-    message: Message,
-    connection_id: ConnectionId,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub message: Message,
+    pub connection_id: ConnectionId,
 }
 
 /// Message history for a BGP session
