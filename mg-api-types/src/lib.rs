@@ -19,4 +19,6 @@ pub use mg_api_types_versions::latest::rdb::peer::*;
 pub use mg_api_types_versions::latest::rdb::policy::*;
 pub use mg_api_types_versions::latest::rdb::prefix::*;
 pub use mg_api_types_versions::latest::rdb::router::*;
-pub use mg_api_types_versions::latest::rdb::{AddressFamily, ProtocolFilter};
+pub use mg_api_types_versions::latest::rdb::{
+    AddressFamily, ProtocolFilter, Rib, Rib4, Rib6, filter_rib_by_protocol,
+};

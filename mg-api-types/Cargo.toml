@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 mg-api-types-versions.workspace = true
-rdb.workspace = true
+
+[features]
+clap = ["mg-api-types-versions/clap"]

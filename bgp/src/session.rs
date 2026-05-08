@@ -890,56 +890,107 @@ impl SessionInfo {
 
 impl From<&BgpPeerParameters> for SessionInfo {
     fn from(value: &BgpPeerParameters) -> Self {
+        // Destructure exists as a compile barrier: adding a
+        // BgpPeerParameters field will fail to bind here, forcing a
+        // deliberate decision about how (or whether) to thread it
+        // through to runtime SessionInfo.
+        let BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            ipv4_unicast,
+            ipv6_unicast,
+            deterministic_collision_resolution,
+            idle_hold_jitter,
+            connect_retry_jitter,
+            src_addr,
+            src_port,
+        } = value.clone();
+
         SessionInfo {
-            passive_tcp_establishment: value.passive,
-            remote_asn: value.remote_asn,
-            min_ttl: value.min_ttl,
-            md5_auth_key: value.md5_auth_key.clone(),
-            multi_exit_discriminator: value.multi_exit_discriminator,
-            communities: value.communities.clone().into_iter().collect(),
-            local_pref: value.local_pref,
-            enforce_first_as: value.enforce_first_as,
-            vlan_id: value.vlan_id,
+            passive_tcp_establishment: passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities: communities.into_iter().collect(),
+            local_pref,
+            enforce_first_as,
+            vlan_id,
             remote_id: None,
-            bind_addr: value
-                .src_addr
-                .map(|addr| SocketAddr::new(addr, value.src_port.unwrap_or(0))),
-            connect_retry_time: Duration::from_secs(value.connect_retry),
-            keepalive_time: Duration::from_secs(value.keepalive),
-            hold_time: Duration::from_secs(value.hold_time),
-            idle_hold_time: Duration::from_secs(value.idle_hold_time),
-            delay_open_time: Duration::from_secs(value.delay_open),
-            resolution: Duration::from_millis(value.resolution),
-            idle_hold_jitter: value.idle_hold_jitter,
-            connect_retry_jitter: value.connect_retry_jitter,
-            deterministic_collision_resolution: value
-                .deterministic_collision_resolution,
-            ipv4_unicast: value.ipv4_unicast.clone(),
-            ipv6_unicast: value.ipv6_unicast.clone(),
+            bind_addr: src_addr
+                .map(|addr| SocketAddr::new(addr, src_port.unwrap_or(0))),
+            connect_retry_time: Duration::from_secs(connect_retry),
+            keepalive_time: Duration::from_secs(keepalive),
+            hold_time: Duration::from_secs(hold_time),
+            idle_hold_time: Duration::from_secs(idle_hold_time),
+            delay_open_time: Duration::from_secs(delay_open),
+            resolution: Duration::from_millis(resolution),
+            idle_hold_jitter,
+            connect_retry_jitter,
+            deterministic_collision_resolution,
+            ipv4_unicast,
+            ipv6_unicast,
         }
     }
 }
 
 impl From<&BgpPeerParametersV1> for SessionInfo {
     fn from(value: &BgpPeerParametersV1) -> Self {
+        // The v1 form is frozen by design and must never gain a field.
+        // If this destructure stops compiling, the v1 contract has been
+        // violated upstream — fix that, don't teach this conversion to
+        // handle a new field.
+        let BgpPeerParametersV1 {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            allow_import,
+            allow_export,
+            vlan_id,
+        } = value.clone();
+
         SessionInfo {
-            passive_tcp_establishment: value.passive,
-            remote_asn: value.remote_asn,
-            min_ttl: value.min_ttl,
-            md5_auth_key: value.md5_auth_key.clone(),
-            multi_exit_discriminator: value.multi_exit_discriminator,
-            communities: value.communities.clone().into_iter().collect(),
-            local_pref: value.local_pref,
-            enforce_first_as: value.enforce_first_as,
-            vlan_id: value.vlan_id,
+            passive_tcp_establishment: passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities: communities.into_iter().collect(),
+            local_pref,
+            enforce_first_as,
+            vlan_id,
             remote_id: None,
             bind_addr: None,
-            connect_retry_time: Duration::from_secs(value.connect_retry),
-            keepalive_time: Duration::from_secs(value.keepalive),
-            hold_time: Duration::from_secs(value.hold_time),
-            idle_hold_time: Duration::from_secs(value.idle_hold_time),
-            delay_open_time: Duration::from_secs(value.delay_open),
-            resolution: Duration::from_millis(value.resolution),
+            connect_retry_time: Duration::from_secs(connect_retry),
+            keepalive_time: Duration::from_secs(keepalive),
+            hold_time: Duration::from_secs(hold_time),
+            idle_hold_time: Duration::from_secs(idle_hold_time),
+            delay_open_time: Duration::from_secs(delay_open),
+            resolution: Duration::from_millis(resolution),
             idle_hold_jitter: None,
             connect_retry_jitter: Some(JitterRange {
                 min: 0.75,
@@ -948,12 +999,8 @@ impl From<&BgpPeerParametersV1> for SessionInfo {
             deterministic_collision_resolution: false,
             ipv4_unicast: Some(Ipv4UnicastConfig {
                 nexthop: None,
-                import_policy: ImportExportPolicy4::from(
-                    value.allow_import.clone(),
-                ),
-                export_policy: ImportExportPolicy4::from(
-                    value.allow_export.clone(),
-                ),
+                import_policy: ImportExportPolicy4::from(allow_import),
+                export_policy: ImportExportPolicy4::from(allow_export),
             }),
             ipv6_unicast: None,
         }

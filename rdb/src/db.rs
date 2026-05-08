@@ -72,9 +72,7 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
-pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
-pub type Rib4 = BTreeMap<Prefix4, BTreeSet<Path>>;
-pub type Rib6 = BTreeMap<Prefix6, BTreeSet<Path>>;
+pub use mg_api_types::{Rib, Rib4, Rib6};
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.

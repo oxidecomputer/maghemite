@@ -13,26 +13,16 @@ use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
-// Re-export core routing-database types from mg-api-types-versions.
-// rdb cannot depend on the mg-api-types facade because the facade depends
-// on rdb (for boundary helpers in mg-api-types/src/rib.rs), so we route
-// through the leaf crate.
-pub use mg_api_types_versions::latest::rdb::neighbor::{
-    BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
+// Re-export core routing-database types from the mg-api-types facade.
+pub use mg_api_types::{
+    AddressFamily, BgpNeighborInfo, BgpNeighborParameters, BgpPathProperties,
+    BgpRouterInfo, BgpUnnumberedNeighborInfo, ImportExportPolicy,
+    ImportExportPolicy4, ImportExportPolicy6, Path, PeerId, Prefix, Prefix4,
+    Prefix6, ProtocolFilter,
 };
-pub use mg_api_types_versions::latest::rdb::path::{BgpPathProperties, Path};
-pub use mg_api_types_versions::latest::rdb::peer::PeerId;
-pub use mg_api_types_versions::latest::rdb::policy::{
-    ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
-};
-pub use mg_api_types_versions::latest::rdb::prefix::{
-    Prefix, Prefix4, Prefix6,
-};
-pub use mg_api_types_versions::latest::rdb::router::BgpRouterInfo;
-pub use mg_api_types_versions::latest::rdb::{AddressFamily, ProtocolFilter};
 
-// BFD types live in their own facade crate (RFD 619).
-pub use mg_api_types_versions::latest::bfd::{BfdPeerConfig, SessionMode};
+// BFD types are in the same facade.
+pub use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
 
 // Marker types for compile-time address family discrimination.
 //
@@ -62,11 +52,22 @@ pub struct Ipv6Marker;
 
 impl From<StaticRouteKey> for Path {
     fn from(value: StaticRouteKey) -> Self {
+        // Compile barrier: adding a StaticRouteKey field will fail to
+        // bind here, forcing a decision about whether it should appear
+        // on the published Path.
+        let StaticRouteKey {
+            // `prefix` is the map key on the rdb side; Path itself does
+            // not carry the prefix.
+            prefix: _,
+            nexthop,
+            vlan_id,
+            rib_priority,
+        } = value;
         Self {
-            nexthop: value.nexthop,
+            nexthop,
             nexthop_interface: None, // Static routes don't use interface binding
-            vlan_id: value.vlan_id,
-            rib_priority: value.rib_priority,
+            vlan_id,
+            rib_priority,
             shutdown: false,
             bgp: None,
         }

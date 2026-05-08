@@ -80,35 +80,100 @@ impl TimerConfig {
 //
 // `PeerConfig` is bgp-internal (non-published). Boundary conversions live
 // here as inherent `From` impls since `PeerConfig` is local to bgp.
+//
+// Each conversion destructures both the outer Neighbor-shaped type and
+// the embedded BgpPeerParameters so a field addition on either fails
+// to bind here, forcing a deliberate decision about whether the new
+// field belongs on PeerConfig. Bindings prefixed `_:` are intentionally
+// dropped — most BgpPeerParameters fields are threaded through
+// SessionInfo via `From<&BgpPeerParameters> for SessionInfo`; PeerConfig
+// only tracks fields needed to drive the connection state machine.
 
 impl From<Neighbor> for PeerConfig {
     fn from(rq: Neighbor) -> Self {
+        let Neighbor {
+            asn: _,
+            name,
+            group,
+            host,
+            parameters,
+        } = rq;
+        let BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive: _,
+            remote_asn: _,
+            min_ttl: _,
+            md5_auth_key: _,
+            multi_exit_discriminator: _,
+            communities: _,
+            local_pref: _,
+            enforce_first_as: _,
+            vlan_id: _,
+            ipv4_unicast: _,
+            ipv6_unicast: _,
+            deterministic_collision_resolution: _,
+            idle_hold_jitter: _,
+            connect_retry_jitter: _,
+            src_addr: _,
+            src_port: _,
+        } = parameters;
         Self {
-            name: rq.name.clone(),
-            group: rq.group.clone(),
-            host: rq.host,
-            hold_time: rq.parameters.hold_time,
-            idle_hold_time: rq.parameters.idle_hold_time,
-            delay_open: rq.parameters.delay_open,
-            connect_retry: rq.parameters.connect_retry,
-            keepalive: rq.parameters.keepalive,
-            resolution: rq.parameters.resolution,
+            name,
+            group,
+            host,
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
         }
     }
 }
 
 impl From<NeighborV1> for PeerConfig {
     fn from(rq: NeighborV1) -> Self {
+        let NeighborV1 {
+            asn: _,
+            name,
+            group,
+            host,
+            parameters,
+        } = rq;
+        let BgpPeerParametersV1 {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive: _,
+            remote_asn: _,
+            min_ttl: _,
+            md5_auth_key: _,
+            multi_exit_discriminator: _,
+            communities: _,
+            local_pref: _,
+            enforce_first_as: _,
+            allow_import: _,
+            allow_export: _,
+            vlan_id: _,
+        } = parameters;
         Self {
-            name: rq.name.clone(),
-            group: rq.group.clone(),
-            host: rq.host,
-            hold_time: rq.parameters.hold_time,
-            idle_hold_time: rq.parameters.idle_hold_time,
-            delay_open: rq.parameters.delay_open,
-            connect_retry: rq.parameters.connect_retry,
-            keepalive: rq.parameters.keepalive,
-            resolution: rq.parameters.resolution,
+            name,
+            group,
+            host,
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
         }
     }
 }
@@ -120,16 +185,48 @@ impl PeerConfig {
         n: &UnnumberedNeighbor,
         addr: SocketAddrV6,
     ) -> Self {
+        let UnnumberedNeighbor {
+            asn: _,
+            name,
+            group,
+            interface: _,
+            act_as_a_default_ipv6_router: _,
+            parameters,
+        } = n.clone();
+        let BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive: _,
+            remote_asn: _,
+            min_ttl: _,
+            md5_auth_key: _,
+            multi_exit_discriminator: _,
+            communities: _,
+            local_pref: _,
+            enforce_first_as: _,
+            vlan_id: _,
+            ipv4_unicast: _,
+            ipv6_unicast: _,
+            deterministic_collision_resolution: _,
+            idle_hold_jitter: _,
+            connect_retry_jitter: _,
+            src_addr: _,
+            src_port: _,
+        } = parameters;
         Self {
-            name: n.name.clone(),
+            name,
             host: addr.into(),
-            group: n.group.clone(),
-            hold_time: n.parameters.hold_time,
-            idle_hold_time: n.parameters.idle_hold_time,
-            delay_open: n.parameters.delay_open,
-            connect_retry: n.parameters.connect_retry,
-            keepalive: n.parameters.keepalive,
-            resolution: n.parameters.resolution,
+            group,
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
         }
     }
 }

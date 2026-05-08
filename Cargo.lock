@@ -3753,7 +3753,6 @@ name = "mg-api-types"
 version = "0.1.0"
 dependencies = [
  "mg-api-types-versions",
- "rdb",
 ]
 
 [[package]]
@@ -5974,7 +5973,7 @@ dependencies = [
  "ciborium",
  "clap",
  "itertools 0.14.0",
- "mg-api-types-versions",
+ "mg-api-types",
  "mg-common",
  "ndp",
  "oxnet",

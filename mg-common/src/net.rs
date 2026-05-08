@@ -24,8 +24,18 @@ pub struct TunnelOriginV2 {
 
 impl From<TunnelOriginV2> for TunnelOrigin {
     fn from(value: TunnelOriginV2) -> Self {
+        // Compile barrier: TunnelOriginV2 is frozen by design and must
+        // never gain a field. If this destructure stops compiling, the
+        // V2 contract has been violated upstream — fix that, don't
+        // teach the conversion to handle a new field here.
+        let TunnelOriginV2 {
+            overlay_prefix,
+            boundary_addr,
+            vni,
+            metric,
+        } = value;
         TunnelOrigin {
-            overlay_prefix: match value.overlay_prefix {
+            overlay_prefix: match overlay_prefix {
                 IpPrefix::V4(x) => {
                     IpNet::V4(Ipv4Net::new_unchecked(x.addr, x.len))
                 }
@@ -33,17 +43,26 @@ impl From<TunnelOriginV2> for TunnelOrigin {
                     IpNet::V6(Ipv6Net::new_unchecked(x.addr, x.len))
                 }
             },
-            boundary_addr: value.boundary_addr,
-            vni: value.vni,
-            metric: value.metric,
+            boundary_addr,
+            vni,
+            metric,
         }
     }
 }
 
 impl From<TunnelOrigin> for TunnelOriginV2 {
     fn from(value: TunnelOrigin) -> Self {
+        // Compile barrier: adding a TunnelOrigin (latest API) field
+        // fails to bind here, forcing a decision about whether the new
+        // field is representable in the V2 wire form.
+        let TunnelOrigin {
+            overlay_prefix,
+            boundary_addr,
+            vni,
+            metric,
+        } = value;
         TunnelOriginV2 {
-            overlay_prefix: match value.overlay_prefix {
+            overlay_prefix: match overlay_prefix {
                 IpNet::V4(x) => IpPrefix::V4(Ipv4Prefix {
                     addr: x.addr(),
                     len: x.width(),
@@ -53,9 +72,9 @@ impl From<TunnelOrigin> for TunnelOriginV2 {
                     len: x.width(),
                 }),
             },
-            boundary_addr: value.boundary_addr,
-            vni: value.vni,
-            metric: value.metric,
+            boundary_addr,
+            vni,
+            metric,
         }
     }
 }
