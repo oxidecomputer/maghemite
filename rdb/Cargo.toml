@@ -18,7 +18,7 @@ chrono.workspace = true
 clap = { workspace = true, optional = true }
 oxnet.workspace = true
 rdb-types = { workspace = true, features = ["clap"] }
-bfd-types.workspace = true
+mg-api-types-versions.workspace = true
 ndp.workspace = true
 
 [dev-dependencies]

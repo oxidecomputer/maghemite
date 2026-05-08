@@ -22,7 +22,7 @@ pub use rdb_types::{
 };
 
 // BFD types live in their own facade crate (RFD 619).
-pub use bfd_types::{BfdPeerConfig, SessionMode};
+pub use mg_api_types_versions::latest::bfd::{BfdPeerConfig, SessionMode};
 
 // Marker types for compile-time address family discrimination.
 //

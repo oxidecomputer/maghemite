@@ -5,11 +5,11 @@
 use crate::{admin::HandlerContext, log::bfd_log};
 use anyhow::Result;
 use bfd::{AddPeerRequest, BfdEndpoint, DEFAULT_BFD_TTL, Daemon, bidi, packet};
-use bfd_types::BfdPeerInfo;
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,
 };
+use mg_api_types::bfd::BfdPeerInfo;
 use mg_api_types::bfd::DeleteBfdPeerPathParams;
 use mg_common::lock;
 use mg_common::thread::ManagedThread;

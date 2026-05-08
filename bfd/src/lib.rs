@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-pub use bfd_types::BfdPeerState;
-use bfd_types::SessionMode;
+pub use mg_api_types::bfd::BfdPeerState;
+use mg_api_types::bfd::SessionMode;
 use mg_common::thread::ManagedThread;
 use slog::{Logger, warn};
 use sm::StateMachine;

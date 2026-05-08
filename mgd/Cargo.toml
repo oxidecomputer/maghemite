@@ -10,7 +10,6 @@ mg-api-types.workspace = true
 mg-api-types-versions.workspace = true
 mg-common.workspace = true
 bfd.workspace = true
-bfd-types.workspace = true
 bgp.workspace = true
 rdb.workspace = true
 rdb-types-versions.workspace = true

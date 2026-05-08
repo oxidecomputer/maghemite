@@ -326,8 +326,7 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd-types",
- "bfd-types-versions",
+ "mg-api-types",
  "mg-common",
  "num_enum 0.7.6",
  "pretty_assertions",
@@ -339,22 +338,6 @@ dependencies = [
  "slog-async",
  "slog-bunyan",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "bfd-types"
-version = "0.1.0"
-dependencies = [
- "bfd-types-versions",
-]
-
-[[package]]
-name = "bfd-types-versions"
-version = "0.1.0"
-dependencies = [
- "num_enum 0.7.6",
- "schemars 0.8.22",
- "serde",
 ]
 
 [[package]]
@@ -3782,10 +3765,10 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
- "bfd-types",
  "bgp",
  "dropshot",
  "dropshot-api-manager-types",
+ "mg-api-types",
  "mg-api-types-versions",
  "rdb",
  "schemars 0.8.22",
@@ -3807,6 +3790,7 @@ version = "0.1.0"
 dependencies = [
  "bgp-types-versions",
  "chrono",
+ "num_enum 0.7.6",
  "rdb-types-versions",
  "schemars 0.8.22",
  "serde",
@@ -3937,7 +3921,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bfd",
- "bfd-types",
  "bgp",
  "chrono",
  "clap",
@@ -6028,11 +6011,11 @@ name = "rdb"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd-types",
  "chrono",
  "ciborium",
  "clap",
  "itertools 0.14.0",
+ "mg-api-types-versions",
  "mg-common",
  "ndp",
  "oxnet",

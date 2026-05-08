@@ -11,8 +11,6 @@ default-members = [
     "ddm-api-types/versions",
     "dropshot-apis",
     "bfd",
-    "bfd-types",
-    "bfd-types/versions",
     "util",
     "mg-ddm-verify",
     "tests",
@@ -48,8 +46,6 @@ members = [
     "ddm-api-types/versions",
     "dropshot-apis",
     "bfd",
-    "bfd-types",
-    "bfd-types/versions",
     "package",
     "util",
     "mg-ddm-verify",
@@ -88,8 +84,6 @@ bgp-types-versions = { path = "bgp-types/versions" }
 mg-common-types = { path = "mg-common-types" }
 mg-common-types-versions = { path = "mg-common-types/versions" }
 bfd = { path = "bfd" }
-bfd-types = { path = "bfd-types" }
-bfd-types-versions = { path = "bfd-types/versions" }
 mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }
 rdb = { path = "rdb", features = ["clap"] }

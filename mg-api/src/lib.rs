@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use bfd_types::{BfdPeerConfig, BfdPeerInfo};
 use bgp::params::{
     ApplyRequest, ApplyRequestV1, ApplyRequestV6, CheckerSource, Neighbor,
     NeighborV1, NeighborV6, Origin4, Origin6, PeerInfo, PeerInfoV1, PeerInfoV2,
@@ -17,6 +16,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
+use mg_api_types::bfd::{BfdPeerConfig, BfdPeerInfo};
 use mg_api_types_versions::{latest, v1, v2, v4, v5};
 use rdb::Prefix;
 

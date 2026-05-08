@@ -5,7 +5,10 @@
 //! Re-exports of the latest versions of types.
 
 pub mod bfd {
-    pub use crate::v1::bfd::DeleteBfdPeerPathParams;
+    pub use crate::v1::bfd::{
+        BfdPeerConfig, BfdPeerInfo, BfdPeerState, DeleteBfdPeerPathParams,
+        SessionMode,
+    };
 }
 
 pub mod bgp {

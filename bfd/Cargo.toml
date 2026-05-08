@@ -5,8 +5,7 @@ edition = "2024"
 
 [dependencies]
 rdb = { path = "../rdb" }
-bfd-types.workspace = true
-bfd-types-versions.workspace = true
+mg-api-types.workspace = true
 mg-common.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
