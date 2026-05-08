@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bgp-types-versions.workspace = true
+chrono.workspace = true
 rdb-types-versions.workspace = true
 schemars.workspace = true
 serde.workspace = true

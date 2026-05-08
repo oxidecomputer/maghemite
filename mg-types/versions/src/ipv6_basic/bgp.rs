@@ -2,13 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 
-use bgp_types_versions::v2::session::{
-    FsmEventRecord, FsmStateKind, MessageHistory,
+use bgp_types_versions::v1::messages::{
+    NotificationMessage, OpenMessage, PathAttribute as PathAttributeV1,
+    RouteRefreshMessage,
 };
-use rdb_types_versions::v1::prefix::Prefix6;
+use bgp_types_versions::v2::session::{
+    ConnectionId, FsmEventRecord, FsmStateKind,
+    MessageHistory as LiveMessageHistory,
+    MessageHistoryEntry as LiveMessageHistoryEntry,
+};
+use bgp_types_versions::v4::messages::{
+    Message as LiveMessage, UpdateMessage as LiveUpdateMessage,
+};
+use rdb_types_versions::v1::prefix::{Prefix as RdbPrefix, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -78,4 +87,95 @@ pub struct Origin6 {
 
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix6>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistory {
+    pub received: VecDeque<MessageHistoryEntry>,
+    pub sent: VecDeque<MessageHistoryEntry>,
+}
+
+impl From<LiveMessageHistory> for MessageHistory {
+    fn from(history: LiveMessageHistory) -> Self {
+        Self {
+            received: history
+                .received
+                .into_iter()
+                .map(MessageHistoryEntry::from)
+                .collect(),
+            sent: history
+                .sent
+                .into_iter()
+                .map(MessageHistoryEntry::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryEntry {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub message: Message,
+    pub connection_id: ConnectionId,
+}
+
+impl From<LiveMessageHistoryEntry> for MessageHistoryEntry {
+    fn from(entry: LiveMessageHistoryEntry) -> Self {
+        Self {
+            timestamp: entry.timestamp,
+            message: Message::from(entry.message),
+            connection_id: entry.connection_id,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum Message {
+    Open(OpenMessage),
+    Update(UpdateMessage),
+    Notification(NotificationMessage),
+    KeepAlive,
+    RouteRefresh(RouteRefreshMessage),
+}
+
+impl From<LiveMessage> for Message {
+    fn from(msg: LiveMessage) -> Self {
+        match msg {
+            LiveMessage::Open(open) => Self::Open(open),
+            LiveMessage::Update(update) => {
+                Self::Update(UpdateMessage::from(update))
+            }
+            LiveMessage::Notification(notif) => Self::Notification(notif),
+            LiveMessage::KeepAlive => Self::KeepAlive,
+            LiveMessage::RouteRefresh(rr) => Self::RouteRefresh(rr),
+        }
+    }
+}
+
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
+pub struct UpdateMessage {
+    pub withdrawn: Vec<RdbPrefix>,
+    pub path_attributes: Vec<PathAttributeV1>,
+    pub nlri: Vec<RdbPrefix>,
+}
+
+impl From<LiveUpdateMessage> for UpdateMessage {
+    fn from(msg: LiveUpdateMessage) -> Self {
+        // The latest UpdateMessage carries IPv4-only NLRI in its body; IPv6
+        // NLRI lives in MP_REACH/UNREACH path attributes, which v2 does not
+        // surface. Converting v4 prefixes back into the V4/V6 enum gives the
+        // pre-MP-BGP wire shape.
+        Self {
+            withdrawn: msg.withdrawn.into_iter().map(RdbPrefix::V4).collect(),
+            path_attributes: msg
+                .path_attributes
+                .into_iter()
+                .filter_map(Option::<PathAttributeV1>::from)
+                .collect(),
+            nlri: msg.nlri.into_iter().map(RdbPrefix::V4).collect(),
+        }
+    }
 }

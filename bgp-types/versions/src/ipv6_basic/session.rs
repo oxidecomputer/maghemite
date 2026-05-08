@@ -89,9 +89,9 @@ pub enum FsmStateKind {
 /// A message history entry is a BGP message with an associated timestamp and connection ID
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MessageHistoryEntry {
-    pub(crate) timestamp: chrono::DateTime<chrono::Utc>,
-    pub(crate) message: Message,
-    pub(crate) connection_id: ConnectionId,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub message: Message,
+    pub connection_id: ConnectionId,
 }
 
 /// Message history for a BGP session

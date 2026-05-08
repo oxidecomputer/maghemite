@@ -6,11 +6,10 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use bgp_types_versions::v2::session::MessageHistory;
 use bgp_types_versions::v4::messages::Afi;
 use rdb_types_versions::v1::prefix::Prefix;
-use rdb_types_versions::v4::policy::{
-    ImportExportPolicy4, ImportExportPolicy6,
-};
+use rdb_types_versions::v4::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +57,11 @@ impl From<v1::bgp::NeighborResetRequest> for NeighborResetRequest {
             op: req.op.into(),
         }
     }
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponse {
+    pub by_peer: HashMap<IpAddr, MessageHistory>,
 }
 
 /// Jitter range with minimum and maximum multiplier values.

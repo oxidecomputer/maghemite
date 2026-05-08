@@ -1332,7 +1332,7 @@ impl OpenMessage {
         let mut result = BTreeSet::new();
         for p in self.parameters.iter() {
             if let OptionalParameter::Capabilities(caps) = p {
-                result.extend(caps.clone().into_iter());
+                result.extend(caps.clone());
             }
         }
         result

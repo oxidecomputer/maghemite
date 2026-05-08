@@ -30,7 +30,7 @@ use mg_types::static_routes::{
     DeleteStaticRoute6Request,
 };
 use mg_types::switch::SwitchIdentifiers;
-use mg_types_versions::{v1, v2, v5};
+use mg_types_versions::{v1, v2, v4, v5};
 use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
@@ -463,6 +463,14 @@ impl MgAdminApi for MgAdminApiImpl {
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
         bgp_admin::message_history(ctx, request).await
+    }
+
+    async fn message_history_v4(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v2::bgp::MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<v4::bgp::MessageHistoryResponse>, HttpError>
+    {
+        bgp_admin::message_history_v4(ctx, request).await
     }
 
     async fn message_history_v2(

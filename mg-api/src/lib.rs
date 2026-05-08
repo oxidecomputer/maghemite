@@ -17,7 +17,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_types_versions::{latest, v1, v2, v5};
+use mg_types_versions::{latest, v1, v2, v4, v5};
 use rdb::Prefix;
 
 api_versions!([
@@ -611,7 +611,13 @@ pub trait MgAdminApi {
         request: TypedBody<latest::bgp::MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<latest::bgp::MessageHistoryResponse>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn message_history_v4(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v2::bgp::MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<v4::bgp::MessageHistoryResponse>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
     async fn message_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v2::bgp::MessageHistoryRequest>,
