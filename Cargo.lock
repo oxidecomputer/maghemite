@@ -1344,7 +1344,6 @@ dependencies = [
  "ispf",
  "libnet",
  "mg-common",
- "mg-common-types",
  "omicron-common",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3d1fe6ad2df3752dd189ad462c4fdec74ebe25f8)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3d1fe6ad2df3752dd189ad462c4fdec74ebe25f8)",
@@ -1379,10 +1378,10 @@ dependencies = [
 name = "ddm-api"
 version = "0.1.0"
 dependencies = [
+ "ddm-api-types",
  "ddm-api-types-versions",
  "dropshot",
  "dropshot-api-manager-types",
- "mg-common-types",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -1400,7 +1399,6 @@ dependencies = [
 name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
- "mg-common-types-versions",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -3782,9 +3780,9 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
+ "ddm-api-types",
  "libc",
  "libnet",
- "mg-common-types",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -3795,22 +3793,6 @@ dependencies = [
  "slog-bunyan",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "uuid",
-]
-
-[[package]]
-name = "mg-common-types"
-version = "0.1.0"
-dependencies = [
- "mg-common-types-versions",
-]
-
-[[package]]
-name = "mg-common-types-versions"
-version = "0.1.0"
-dependencies = [
- "oxnet",
- "schemars 0.8.22",
- "serde",
 ]
 
 [[package]]

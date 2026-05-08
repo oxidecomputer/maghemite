@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use mg_common_types::net::{IpPrefix, Ipv4Prefix, Ipv6Prefix, TunnelOrigin};
+use ddm_api_types::net::{IpPrefix, Ipv4Prefix, Ipv6Prefix, TunnelOrigin};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

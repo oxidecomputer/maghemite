@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
-use mg_common_types::net::TunnelOrigin;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -24,8 +24,6 @@ default-members = [
     "mgd",
     "mg-lower",
     "mg-common",
-    "mg-common-types",
-    "mg-common-types/versions",
     "ndp",
     "xtask",
     "falcon-lab",
@@ -51,8 +49,6 @@ members = [
     "mg-admin-client",
     "mgadm",
     "rdb",
-    "mg-common-types",
-    "mg-common-types/versions",
     "mgd",
     "mg-lower",
     "mg-common",
@@ -69,8 +65,6 @@ mg-api-types-versions = { path = "mg-api-types/versions" }
 mg-common = { path = "mg-common" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
-mg-common-types = { path = "mg-common-types" }
-mg-common-types-versions = { path = "mg-common-types/versions" }
 bfd = { path = "bfd" }
 mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }

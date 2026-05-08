@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-mg-common-types-versions.workspace = true
 oxnet.workspace = true
 schemars.workspace = true
 serde.workspace = true

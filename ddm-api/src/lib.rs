@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use ddm_api_types::net::TunnelOrigin;
 use ddm_api_types_versions::latest;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
@@ -10,7 +11,6 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
-use mg_common_types::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use std::collections::{HashMap, HashSet};
 
