@@ -28,14 +28,14 @@ pub enum NeighborResetOp {
     SoftOutbound(Option<Afi>),
 }
 
-impl From<v1::bgp::NeighborResetOp> for NeighborResetOp {
-    fn from(op: v1::bgp::NeighborResetOp) -> Self {
+impl From<v1::bgp::config::NeighborResetOp> for NeighborResetOp {
+    fn from(op: v1::bgp::config::NeighborResetOp) -> Self {
         match op {
-            v1::bgp::NeighborResetOp::Hard => NeighborResetOp::Hard,
-            v1::bgp::NeighborResetOp::SoftInbound => {
+            v1::bgp::config::NeighborResetOp::Hard => NeighborResetOp::Hard,
+            v1::bgp::config::NeighborResetOp::SoftInbound => {
                 NeighborResetOp::SoftInbound(Some(Afi::Ipv4))
             }
-            v1::bgp::NeighborResetOp::SoftOutbound => {
+            v1::bgp::config::NeighborResetOp::SoftOutbound => {
                 NeighborResetOp::SoftOutbound(Some(Afi::Ipv4))
             }
         }
@@ -49,8 +49,8 @@ pub struct NeighborResetRequest {
     pub op: NeighborResetOp,
 }
 
-impl From<v1::bgp::NeighborResetRequest> for NeighborResetRequest {
-    fn from(req: v1::bgp::NeighborResetRequest) -> Self {
+impl From<v1::bgp::config::NeighborResetRequest> for NeighborResetRequest {
+    fn from(req: v1::bgp::config::NeighborResetRequest) -> Self {
         Self {
             asn: req.asn,
             addr: req.addr,
@@ -181,8 +181,8 @@ pub struct UnnumberedBgpPeerConfig {
 pub struct ApplyRequest {
     pub asn: u32,
     pub originate: Vec<Prefix>,
-    pub checker: Option<v1::bgp::CheckerSource>,
-    pub shaper: Option<v1::bgp::ShaperSource>,
+    pub checker: Option<v1::bgp::config::CheckerSource>,
+    pub shaper: Option<v1::bgp::config::ShaperSource>,
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
     #[serde(default)]
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,

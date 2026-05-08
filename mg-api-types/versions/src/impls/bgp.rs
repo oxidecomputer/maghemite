@@ -9,7 +9,9 @@ use crate::v1::rdb::prefix::Prefix;
 use crate::v4::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
 use crate::v4::rdb::policy::{ImportExportPolicy4, ImportExportPolicy6};
 
-use crate::v4::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
+use crate::v4::bgp::config::{
+    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
+};
 use crate::{latest, v1, v4, v5};
 use std::net::IpAddr;
 
@@ -118,7 +120,7 @@ impl latest::bgp::Neighbor {
     }
 }
 
-impl v1::bgp::Neighbor {
+impl v1::bgp::config::Neighbor {
     /// Construct a v1 `Neighbor` from an rdb `BgpNeighborInfo`.
     pub fn from_rdb_neighbor_info(asn: u32, rq: &BgpNeighborInfo) -> Self {
         Self {
@@ -126,7 +128,7 @@ impl v1::bgp::Neighbor {
             group: rq.group.clone(),
             name: rq.name.clone(),
             host: rq.host,
-            parameters: v1::bgp::BgpPeerParameters {
+            parameters: v1::bgp::config::BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
                 min_ttl: rq.parameters.min_ttl,
                 hold_time: rq.parameters.hold_time,
@@ -160,7 +162,7 @@ impl v1::bgp::Neighbor {
     pub fn from_bgp_peer_config(
         asn: u32,
         group: String,
-        rq: v1::bgp::BgpPeerConfig,
+        rq: v1::bgp::config::BgpPeerConfig,
     ) -> Self {
         Self {
             asn,
@@ -298,7 +300,9 @@ fn ipv6_unicast_config_new(
 
 // ----- v2 (ipv6_basic) <-> v1 (initial) downgrades for PeerInfo / FsmStateKind -----
 
-impl From<crate::v2::bgp::session::FsmStateKind> for v1::bgp::FsmStateKind {
+impl From<crate::v2::bgp::session::FsmStateKind>
+    for v1::bgp::config::FsmStateKind
+{
     fn from(kind: crate::v2::bgp::session::FsmStateKind) -> Self {
         use crate::v2::bgp::session::FsmStateKind as V2;
         match kind {
@@ -319,10 +323,10 @@ impl From<crate::v2::bgp::session::FsmStateKind> for v1::bgp::FsmStateKind {
     }
 }
 
-impl From<crate::v2::bgp::PeerInfo> for v1::bgp::PeerInfo {
-    fn from(info: crate::v2::bgp::PeerInfo) -> Self {
+impl From<crate::v2::bgp::history::PeerInfo> for v1::bgp::config::PeerInfo {
+    fn from(info: crate::v2::bgp::history::PeerInfo) -> Self {
         Self {
-            state: v1::bgp::FsmStateKind::from(info.state),
+            state: v1::bgp::config::FsmStateKind::from(info.state),
             asn: info.asn,
             duration_millis: info.duration_millis,
             timers: info.timers,
@@ -332,8 +336,8 @@ impl From<crate::v2::bgp::PeerInfo> for v1::bgp::PeerInfo {
 
 // ----- v1 (initial) <-> v8 (bgp_src_addr) conversions -----
 
-impl From<v1::bgp::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
-    fn from(cfg: v1::bgp::BgpPeerConfig) -> Self {
+impl From<v1::bgp::config::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
+    fn from(cfg: v1::bgp::config::BgpPeerConfig) -> Self {
         // Legacy v1 BgpPeerConfig is IPv4-only.
         Self {
             host: cfg.host,
@@ -355,7 +359,7 @@ impl From<v1::bgp::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
                 communities: cfg.parameters.communities,
                 local_pref: cfg.parameters.local_pref,
                 enforce_first_as: cfg.parameters.enforce_first_as,
-                ipv4_unicast: Some(v4::bgp::Ipv4UnicastConfig {
+                ipv4_unicast: Some(v4::bgp::config::Ipv4UnicastConfig {
                     nexthop: None,
                     import_policy: ImportExportPolicy4::from(
                         cfg.parameters.allow_import,
@@ -379,8 +383,8 @@ impl From<v1::bgp::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
     }
 }
 
-impl From<v1::bgp::ApplyRequest> for latest::bgp::ApplyRequest {
-    fn from(req: v1::bgp::ApplyRequest) -> Self {
+impl From<v1::bgp::config::ApplyRequest> for latest::bgp::ApplyRequest {
+    fn from(req: v1::bgp::config::ApplyRequest) -> Self {
         Self {
             asn: req.asn,
             originate: req.originate.iter().map(|p| Prefix::V4(*p)).collect(),
@@ -405,7 +409,9 @@ impl From<v1::bgp::ApplyRequest> for latest::bgp::ApplyRequest {
 
 // ----- v4 (mp_bgp) <-> v8 (bgp_src_addr) conversions -----
 
-impl From<latest::bgp::BgpPeerParameters> for v4::bgp::BgpPeerParameters {
+impl From<latest::bgp::BgpPeerParameters>
+    for v4::bgp::config::BgpPeerParameters
+{
     fn from(p: latest::bgp::BgpPeerParameters) -> Self {
         Self {
             hold_time: p.hold_time,
@@ -433,8 +439,10 @@ impl From<latest::bgp::BgpPeerParameters> for v4::bgp::BgpPeerParameters {
     }
 }
 
-impl From<v4::bgp::BgpPeerParameters> for latest::bgp::BgpPeerParameters {
-    fn from(p: v4::bgp::BgpPeerParameters) -> Self {
+impl From<v4::bgp::config::BgpPeerParameters>
+    for latest::bgp::BgpPeerParameters
+{
+    fn from(p: v4::bgp::config::BgpPeerParameters) -> Self {
         Self {
             hold_time: p.hold_time,
             idle_hold_time: p.idle_hold_time,
@@ -463,18 +471,20 @@ impl From<v4::bgp::BgpPeerParameters> for latest::bgp::BgpPeerParameters {
     }
 }
 
-impl From<latest::bgp::BgpPeerConfig> for v4::bgp::BgpPeerConfig {
+impl From<latest::bgp::BgpPeerConfig> for v4::bgp::config::BgpPeerConfig {
     fn from(cfg: latest::bgp::BgpPeerConfig) -> Self {
         Self {
             host: cfg.host,
             name: cfg.name,
-            parameters: v4::bgp::BgpPeerParameters::from(cfg.parameters),
+            parameters: v4::bgp::config::BgpPeerParameters::from(
+                cfg.parameters,
+            ),
         }
     }
 }
 
-impl From<v4::bgp::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
-    fn from(cfg: v4::bgp::BgpPeerConfig) -> Self {
+impl From<v4::bgp::config::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
+    fn from(cfg: v4::bgp::config::BgpPeerConfig) -> Self {
         Self {
             host: cfg.host,
             name: cfg.name,
@@ -484,22 +494,24 @@ impl From<v4::bgp::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
 }
 
 impl From<latest::bgp::UnnumberedBgpPeerConfig>
-    for v4::bgp::UnnumberedBgpPeerConfig
+    for v4::bgp::config::UnnumberedBgpPeerConfig
 {
     fn from(cfg: latest::bgp::UnnumberedBgpPeerConfig) -> Self {
         Self {
             interface: cfg.interface,
             name: cfg.name,
             router_lifetime: cfg.router_lifetime,
-            parameters: v4::bgp::BgpPeerParameters::from(cfg.parameters),
+            parameters: v4::bgp::config::BgpPeerParameters::from(
+                cfg.parameters,
+            ),
         }
     }
 }
 
-impl From<v4::bgp::UnnumberedBgpPeerConfig>
+impl From<v4::bgp::config::UnnumberedBgpPeerConfig>
     for latest::bgp::UnnumberedBgpPeerConfig
 {
-    fn from(cfg: v4::bgp::UnnumberedBgpPeerConfig) -> Self {
+    fn from(cfg: v4::bgp::config::UnnumberedBgpPeerConfig) -> Self {
         Self {
             interface: cfg.interface,
             name: cfg.name,
@@ -509,20 +521,20 @@ impl From<v4::bgp::UnnumberedBgpPeerConfig>
     }
 }
 
-impl From<latest::bgp::Neighbor> for v4::bgp::Neighbor {
+impl From<latest::bgp::Neighbor> for v4::bgp::config::Neighbor {
     fn from(n: latest::bgp::Neighbor) -> Self {
         Self {
             asn: n.asn,
             name: n.name,
             group: n.group,
             host: n.host,
-            parameters: v4::bgp::BgpPeerParameters::from(n.parameters),
+            parameters: v4::bgp::config::BgpPeerParameters::from(n.parameters),
         }
     }
 }
 
-impl From<v4::bgp::Neighbor> for latest::bgp::Neighbor {
-    fn from(n: v4::bgp::Neighbor) -> Self {
+impl From<v4::bgp::config::Neighbor> for latest::bgp::Neighbor {
+    fn from(n: v4::bgp::config::Neighbor) -> Self {
         Self {
             asn: n.asn,
             name: n.name,
@@ -533,8 +545,8 @@ impl From<v4::bgp::Neighbor> for latest::bgp::Neighbor {
     }
 }
 
-impl From<v4::bgp::ApplyRequest> for latest::bgp::ApplyRequest {
-    fn from(req: v4::bgp::ApplyRequest) -> Self {
+impl From<v4::bgp::config::ApplyRequest> for latest::bgp::ApplyRequest {
+    fn from(req: v4::bgp::config::ApplyRequest) -> Self {
         Self {
             asn: req.asn,
             originate: req.originate,
@@ -578,7 +590,7 @@ impl From<latest::bgp::UnnumberedNeighbor> for v5::bgp::UnnumberedNeighbor {
             group: n.group,
             interface: n.interface,
             act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
-            parameters: v4::bgp::BgpPeerParameters::from(n.parameters),
+            parameters: v4::bgp::config::BgpPeerParameters::from(n.parameters),
         }
     }
 }

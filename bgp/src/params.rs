@@ -21,15 +21,17 @@ use std::{
 // Migrated to mg-api-types-versions in RFD 619 Phase 2d sub-chunk 6a. These
 // re-exports preserve the existing `bgp::params::*` public surface so
 // internal Bgp callers don't have to change.
-pub use mg_api_types_versions::v1::bgp::{
+pub use mg_api_types_versions::v1::bgp::config::{
     ApplyRequest as ApplyRequestV1, BgpPeerConfig as BgpPeerConfigV1,
     BgpPeerParameters as BgpPeerParametersV1, CheckerSource,
     DynamicTimerInfo as DynamicTimerInfoV1, FsmStateKind as FsmStateKindV1,
     Neighbor as NeighborV1, NeighborResetOp as NeighborResetOpV1, Origin4,
     PeerInfo as PeerInfoV1, PeerTimers as PeerTimersV1, Router, ShaperSource,
 };
-pub use mg_api_types_versions::v2::bgp::{Origin6, PeerInfo as PeerInfoV2};
-pub use mg_api_types_versions::v4::bgp::{
+pub use mg_api_types_versions::v2::bgp::history::{
+    Origin6, PeerInfo as PeerInfoV2,
+};
+pub use mg_api_types_versions::v4::bgp::config::{
     AfiSafi, ApplyRequest as ApplyRequestV6, BgpCapability,
     BgpPeerConfig as BgpPeerConfigV6, BgpPeerParameters as BgpPeerParametersV6,
     DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,

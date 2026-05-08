@@ -21,7 +21,7 @@ use crate::v4::bgp::messages::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v1::bgp::PeerTimers;
+use crate::v1::bgp::config::PeerTimers;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]

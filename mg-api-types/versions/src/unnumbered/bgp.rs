@@ -12,8 +12,8 @@ use crate::v4::bgp::messages::Afi;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v2::bgp::{FsmEventBuffer, MessageDirection};
-use crate::v4::bgp::{
+use crate::v2::bgp::history::{FsmEventBuffer, MessageDirection};
+use crate::v4::bgp::config::{
     BgpCapability, BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig,
     Ipv6UnicastConfig, JitterRange, NeighborResetOp, PeerCounters,
     StaticTimerInfo,

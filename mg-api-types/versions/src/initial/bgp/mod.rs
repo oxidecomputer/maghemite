@@ -5,8 +5,3 @@
 pub mod config;
 pub mod messages;
 pub mod session;
-
-// Flatten admin-api types so existing intra-crate references resolve
-// at `crate::v1::bgp::Foo`. The wire-message and session sub-modules
-// stay namespaced.
-pub use config::*;

@@ -10,7 +10,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::v1;
-use crate::v4::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
+use crate::v4::bgp::config::{
+    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
+};
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerParameters {
@@ -105,9 +107,9 @@ pub struct ApplyRequest {
     /// Complete set of prefixes to originate.
     pub originate: Vec<Prefix>,
     /// Checker rhai code to apply to ingress open and update messages.
-    pub checker: Option<v1::bgp::CheckerSource>,
+    pub checker: Option<v1::bgp::config::CheckerSource>,
     /// Checker rhai code to apply to egress open and update messages.
-    pub shaper: Option<v1::bgp::ShaperSource>,
+    pub shaper: Option<v1::bgp::config::ShaperSource>,
     /// Lists of peers indexed by peer group.
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
     /// Lists of unnumbered peers indexed by peer group.

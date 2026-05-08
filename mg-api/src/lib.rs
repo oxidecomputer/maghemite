@@ -208,7 +208,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn read_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
+        request: Query<v1::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseOk<NeighborV6>, HttpError> {
         let rq = request.into_inner();
         Self::read_neighbor_v5(
@@ -225,7 +225,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn read_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<NeighborV6>>, HttpError> {
         Self::read_neighbors_v5(rqctx, request.into_inner().into()).await
     }
@@ -241,7 +241,7 @@ pub trait MgAdminApi {
     #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn delete_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
+        request: Query<v1::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         let rq = request.into_inner();
         Self::delete_neighbor_v5(
@@ -266,13 +266,13 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn read_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
+        request: Query<v1::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseOk<NeighborV1>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = ..VERSION_MP_BGP }]
     async fn read_neighbors_v1(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
@@ -284,7 +284,7 @@ pub trait MgAdminApi {
     #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn delete_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
+        request: Query<v1::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         let rq = request.into_inner();
         Self::delete_neighbor_v5(
@@ -309,7 +309,7 @@ pub trait MgAdminApi {
     #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = ..VERSION_MP_BGP }]
     async fn clear_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::NeighborResetRequest>,
+        request: TypedBody<v1::bgp::config::NeighborResetRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         Self::clear_neighbor(rqctx, request.map(Into::into)).await
     }
@@ -497,7 +497,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/status/exported", versions = ..VERSION_UNNUMBERED }]
     async fn get_exported_v1(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::AsnSelector>,
+        request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError>;
 
     // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum.
@@ -519,7 +519,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC }]
     async fn get_imported_v1(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::AsnSelector>,
+        request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
 
     // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum.
@@ -541,7 +541,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/status/selected", versions = ..VERSION_IPV6_BASIC }]
     async fn get_selected_v1(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::AsnSelector>,
+        request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_UNNUMBERED.. }]
@@ -553,19 +553,19 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn get_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
     async fn get_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = ..VERSION_IPV6_BASIC }]
     async fn get_neighbors_v1(
         rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError>;
 
     // Latest API - ApplyRequest with per-AF policies and src_addr/src_port
@@ -614,20 +614,29 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn message_history_v4(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v2::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v4::bgp::MessageHistoryResponse>, HttpError>;
+        request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v4::bgp::config::MessageHistoryResponse>,
+        HttpError,
+    >;
 
     #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
     async fn message_history_v2(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v2::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError>;
+        request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v2::bgp::history::MessageHistoryResponse>,
+        HttpError,
+    >;
 
     #[endpoint { method = GET, path = "/bgp/message-history", versions = ..VERSION_IPV6_BASIC }]
     async fn message_history_v1(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError>;
+        request: TypedBody<v1::bgp::config::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v1::bgp::config::MessageHistoryResponse>,
+        HttpError,
+    >;
 
     #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_UNNUMBERED.. }]
     async fn fsm_history(
@@ -638,8 +647,8 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn fsm_history_v2(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v2::bgp::FsmHistoryRequest>,
-    ) -> Result<HttpResponseOk<v2::bgp::FsmHistoryResponse>, HttpError>;
+        request: TypedBody<v2::bgp::history::FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<v2::bgp::history::FsmHistoryResponse>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/checker" }]
     async fn create_checker(

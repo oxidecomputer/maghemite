@@ -190,7 +190,7 @@ pub async fn delete_router(
 
 pub async fn read_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::AsnSelector>,
+    request: Query<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -221,7 +221,7 @@ pub async fn create_neighbor_v1(
 
 pub async fn read_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::NeighborSelector>,
+    request: Query<v1::bgp::config::NeighborSelector>,
 ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
@@ -821,7 +821,7 @@ pub async fn delete_origin6(
 // Legacy endpoint (pre MP-BGP/unnumbered): IPv4 only, no filtering
 pub async fn get_exported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v1::bgp::AsnSelector>,
+    request: TypedBody<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -991,7 +991,7 @@ pub async fn get_exported(
 // Pre-UNNUMBERED versions (BgpPathProperties.peer is IpAddr)
 pub async fn get_imported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v1::bgp::AsnSelector>,
+    request: TypedBody<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1003,7 +1003,7 @@ pub async fn get_imported_v1(
 
 pub async fn get_selected_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v1::bgp::AsnSelector>,
+    request: TypedBody<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1015,7 +1015,7 @@ pub async fn get_selected_v1(
 
 pub async fn get_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::AsnSelector>,
+    request: Query<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1080,7 +1080,7 @@ pub async fn get_neighbors_v1(
 
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::AsnSelector>,
+    request: Query<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1143,7 +1143,7 @@ pub async fn get_neighbors_v2(
 
 pub async fn get_neighbors_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::AsnSelector>,
+    request: Query<v1::bgp::config::AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1548,8 +1548,9 @@ fn get_message_history_filtered(
 
 pub async fn message_history_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v1::bgp::MessageHistoryRequest>,
-) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError> {
+    request: TypedBody<v1::bgp::config::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v1::bgp::config::MessageHistoryResponse>, HttpError>
+{
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1563,7 +1564,7 @@ pub async fn message_history_v1(
         }
     }
 
-    Ok(HttpResponseOk(v1::bgp::MessageHistoryResponse {
+    Ok(HttpResponseOk(v1::bgp::config::MessageHistoryResponse {
         by_peer: result,
     }))
 }
@@ -1573,8 +1574,9 @@ pub async fn message_history_v1(
 // path attributes).
 pub async fn message_history_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v2::bgp::MessageHistoryRequest>,
-) -> Result<HttpResponseOk<v4::bgp::MessageHistoryResponse>, HttpError> {
+    request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v4::bgp::config::MessageHistoryResponse>, HttpError>
+{
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1591,15 +1593,18 @@ pub async fn message_history_v4(
         })
         .collect();
 
-    Ok(HttpResponseOk(v4::bgp::MessageHistoryResponse { by_peer }))
+    Ok(HttpResponseOk(v4::bgp::config::MessageHistoryResponse {
+        by_peer,
+    }))
 }
 
 // Pre-UNNUMBERED API endpoint (VERSION_IPV6_BASIC..VERSION_UNNUMBERED)
 // Uses IpAddr for numbered peers only
 pub async fn message_history_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v2::bgp::MessageHistoryRequest>,
-) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError> {
+    request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
+) -> Result<HttpResponseOk<v2::bgp::history::MessageHistoryResponse>, HttpError>
+{
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1612,13 +1617,15 @@ pub async fn message_history_v2(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history)| {
-            key.parse::<IpAddr>()
-                .ok()
-                .map(|addr| (addr, v2::bgp::MessageHistory::from(history)))
+            key.parse::<IpAddr>().ok().map(|addr| {
+                (addr, v2::bgp::history::MessageHistory::from(history))
+            })
         })
         .collect();
 
-    Ok(HttpResponseOk(v2::bgp::MessageHistoryResponse { by_peer }))
+    Ok(HttpResponseOk(v2::bgp::history::MessageHistoryResponse {
+        by_peer,
+    }))
 }
 
 // UNNUMBERED+ API endpoint (VERSION_UNNUMBERED..)
@@ -1678,8 +1685,8 @@ fn get_fsm_history_filtered(
 // FSM event history for numbered peers only
 pub async fn fsm_history_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v2::bgp::FsmHistoryRequest>,
-) -> Result<HttpResponseOk<v2::bgp::FsmHistoryResponse>, HttpError> {
+    request: TypedBody<v2::bgp::history::FsmHistoryRequest>,
+) -> Result<HttpResponseOk<v2::bgp::history::FsmHistoryResponse>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1696,7 +1703,9 @@ pub async fn fsm_history_v2(
         })
         .collect();
 
-    Ok(HttpResponseOk(v2::bgp::FsmHistoryResponse { by_peer }))
+    Ok(HttpResponseOk(v2::bgp::history::FsmHistoryResponse {
+        by_peer,
+    }))
 }
 
 // FSM event history for all peers (numbered and unnumbered)
