@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use bgp_types_versions::v2::session::MessageHistory;
-use bgp_types_versions::v4::messages::Afi;
+use crate::v2::bgp::session::MessageHistory;
+use crate::v4::bgp::messages::Afi;
 use rdb_types_versions::v1::prefix::Prefix;
 use rdb_types_versions::v4::policy::{
     ImportExportPolicy4, ImportExportPolicy6,

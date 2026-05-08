@@ -21,7 +21,7 @@ use crate::error::WireError;
 use std::collections::BTreeSet;
 
 use crate::error::MessageConvertError;
-use crate::v1::messages::{
+use crate::v1::bgp::messages::{
     AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
     CeaseErrorSubcode, ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode,
     MAX_MESSAGE_SIZE, MessageKind, MessageType, NotificationMessage,
@@ -31,7 +31,7 @@ use crate::v1::messages::{
     PathAttributeValue as PathAttributeValueV1, PathOrigin,
     RouteRefreshMessage, Safi, UpdateErrorSubcode,
 };
-use crate::v4::messages::{
+use crate::v4::bgp::messages::{
     Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
     ExtendedNexthopElement, Ipv6DoubleNexthop, Message, MpReachIpv4Unicast,
     MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
@@ -826,7 +826,7 @@ impl From<PathAttributeValue> for PathAttribute {
 // Cross-version conversions: v4 (current) → v1 (compat shapes).
 // ----------------------------------------------------------------------------
 
-impl From<RdbPrefix> for crate::v1::messages::Prefix {
+impl From<RdbPrefix> for crate::v1::bgp::messages::Prefix {
     fn from(prefix: RdbPrefix) -> Self {
         // Convert new Prefix enum to old struct format using wire format:
         // length byte followed by prefix octets.
@@ -1575,7 +1575,7 @@ impl UpdateMessage {
 
     pub fn has_community(
         &self,
-        community: crate::v1::messages::Community,
+        community: crate::v1::bgp::messages::Community,
     ) -> bool {
         for a in &self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &a.value {
@@ -1589,7 +1589,10 @@ impl UpdateMessage {
         false
     }
 
-    pub fn add_community(&mut self, community: crate::v1::messages::Community) {
+    pub fn add_community(
+        &mut self,
+        community: crate::v1::bgp::messages::Community,
+    ) {
         for a in &mut self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &mut a.value {
                 communities.push(community);
@@ -1601,7 +1604,9 @@ impl UpdateMessage {
     }
 
     pub fn graceful_shutdown(&self) -> bool {
-        self.has_community(crate::v1::messages::Community::GracefulShutdown)
+        self.has_community(
+            crate::v1::bgp::messages::Community::GracefulShutdown,
+        )
     }
 
     pub fn mp_reach(&self) -> Option<&MpReachNlri> {
@@ -1681,13 +1686,15 @@ impl Display for UpdateMessage {
 // Cross-version conversions: v4 (current) Message/UpdateMessage → v1 (compat).
 // ----------------------------------------------------------------------------
 
-impl From<UpdateMessage> for crate::v1::messages::UpdateMessage {
+impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
     fn from(msg: UpdateMessage) -> Self {
         Self {
             withdrawn: msg
                 .withdrawn
                 .into_iter()
-                .map(|p| crate::v1::messages::Prefix::from(RdbPrefix::V4(p)))
+                .map(|p| {
+                    crate::v1::bgp::messages::Prefix::from(RdbPrefix::V4(p))
+                })
                 .collect(),
             // Filter out attributes that don't have v1 equivalents (MP-BGP,
             // AtomicAggregate).
@@ -1699,13 +1706,15 @@ impl From<UpdateMessage> for crate::v1::messages::UpdateMessage {
             nlri: msg
                 .nlri
                 .into_iter()
-                .map(|p| crate::v1::messages::Prefix::from(RdbPrefix::V4(p)))
+                .map(|p| {
+                    crate::v1::bgp::messages::Prefix::from(RdbPrefix::V4(p))
+                })
                 .collect(),
         }
     }
 }
 
-impl From<Message> for crate::v1::messages::Message {
+impl From<Message> for crate::v1::bgp::messages::Message {
     fn from(msg: Message) -> Self {
         match msg {
             Message::Open(open) => Self::Open(open),

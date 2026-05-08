@@ -5,16 +5,16 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 
-use bgp_types_versions::v1::messages::{
+use crate::v1::bgp::messages::{
     NotificationMessage, OpenMessage, PathAttribute as PathAttributeV1,
     RouteRefreshMessage,
 };
-use bgp_types_versions::v2::session::{
+use crate::v2::bgp::session::{
     ConnectionId, FsmEventRecord, FsmStateKind,
     MessageHistory as LiveMessageHistory,
     MessageHistoryEntry as LiveMessageHistoryEntry,
 };
-use bgp_types_versions::v4::messages::{
+use crate::v4::bgp::messages::{
     Message as LiveMessage, UpdateMessage as LiveUpdateMessage,
 };
 use rdb_types_versions::v1::prefix::{Prefix as RdbPrefix, Prefix6};

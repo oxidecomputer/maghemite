@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v1::messages::Message;
+use crate::v1::bgp::messages::Message;
 
 // V1 API compatibility type for message history entry (IPv4-only with v1 Message)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

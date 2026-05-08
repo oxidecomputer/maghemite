@@ -345,14 +345,13 @@ name = "bgp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bgp-types",
- "bgp-types-versions",
  "chrono",
  "clap",
  "itertools 0.14.0",
  "lazy_static",
  "libc",
  "libnet",
+ "mg-api-types",
  "mg-api-types-versions",
  "mg-common",
  "nom 8.0.0",
@@ -370,29 +369,6 @@ dependencies = [
  "serial_test",
  "slog",
  "socket2",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "bgp-types"
-version = "0.1.0"
-dependencies = [
- "bgp-types-versions",
-]
-
-[[package]]
-name = "bgp-types-versions"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "nom 8.0.0",
- "num_enum 0.7.6",
- "rdb-types-versions",
- "schemars 0.8.22",
- "serde",
- "slog",
  "thiserror 2.0.18",
  "uuid",
 ]
@@ -3788,12 +3764,16 @@ dependencies = [
 name = "mg-api-types-versions"
 version = "0.1.0"
 dependencies = [
- "bgp-types-versions",
  "chrono",
+ "clap",
+ "nom 8.0.0",
  "num_enum 0.7.6",
  "rdb-types-versions",
  "schemars 0.8.22",
  "serde",
+ "slog",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

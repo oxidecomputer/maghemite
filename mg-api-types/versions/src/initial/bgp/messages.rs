@@ -13,7 +13,7 @@ use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v4::messages::ExtendedNexthopElement;
+use crate::v4::bgp::messages::ExtendedNexthopElement;
 
 /// Maximum BGP message size in octets per RFC 4271 §4.
 pub const MAX_MESSAGE_SIZE: usize = 4096;
@@ -234,7 +234,7 @@ pub enum Safi {
 ///
 /// The schema-published name is `PathAttributeTypeCode` (preserved via
 /// `#[schemars(rename = ...)]`); the in-source name disambiguates from the
-/// 12-variant MP-BGP form at [`crate::v4::messages::PathAttributeTypeCode`].
+/// 12-variant MP-BGP form at [`crate::v4::bgp::messages::PathAttributeTypeCode`].
 #[derive(
     Clone,
     Copy,
@@ -559,7 +559,7 @@ pub struct AddPathElement {
 // v1 wire-shape Prefix and PathAttribute compatibility types.
 //
 // These match the initial API schema. They have the same source name as the
-// MP-BGP-aware versions in [`crate::v4::messages`], disambiguated by the
+// MP-BGP-aware versions in [`crate::v4::bgp::messages`], disambiguated by the
 // `v1::messages` module path. The schemars name matches the in-source name
 // (`Prefix`, `PathAttribute`, `PathAttributeType`, `PathAttributeValue`),
 // since the schema name is "PathAttribute" in v1 and "PathAttribute" in v4
@@ -582,7 +582,7 @@ pub enum PathAttributeValue {
     /// The type of origin associated with a path
     Origin(PathOrigin),
     /// The AS set associated with a path
-    AsPath(Vec<crate::v4::messages::As4PathSegment>),
+    AsPath(Vec<crate::v4::bgp::messages::As4PathSegment>),
     /// The nexthop associated with a path
     NextHop(IpAddr),
     /// A metric used for external (inter-AS) links to discriminate among
@@ -596,7 +596,7 @@ pub enum PathAttributeValue {
     /// Indicates communities associated with a path.
     Communities(Vec<Community>),
     /// The 4-byte encoded AS set associated with a path
-    As4Path(Vec<crate::v4::messages::As4PathSegment>),
+    As4Path(Vec<crate::v4::bgp::messages::As4PathSegment>),
     /// This attribute is included in routes that are formed by aggregation.
     As4Aggregator([u8; 8]),
 }

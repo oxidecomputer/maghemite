@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::v4::messages::Message;
+use crate::v4::bgp::messages::Message;
 
 /// Maximum number of historical messages retained per direction in
 /// `MessageHistory`.

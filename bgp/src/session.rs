@@ -28,11 +28,11 @@ use crate::{
     router::Router,
     unnumbered::UnnumberedManager,
 };
-pub use bgp_types::session::{
+pub use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MAX_MESSAGE_HISTORY,
     MessageHistory, MessageHistoryEntry,
 };
-pub use bgp_types_versions::v1::session::{
+pub use mg_api_types_versions::v1::bgp::session::{
     MessageHistory as MessageHistoryV1,
     MessageHistoryEntry as MessageHistoryEntryV1,
 };
@@ -9083,7 +9083,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
 // V1 message-history shapes (`MessageHistoryV1`, `MessageHistoryEntryV1`) are
 // re-exported at the top of this module. The cross-version `From` conversions
-// live in `bgp_types_versions::impls::session`.
+// live in `mg_api_types_versions::impls::session`.
 
 #[cfg(test)]
 mod tests {

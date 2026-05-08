@@ -18,7 +18,7 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-pub use bgp_types::messages::{
+pub use mg_api_types::bgp::messages::{
     AS_TRANS, AddPathElement, Afi, Aggregator, As4Aggregator, As4PathSegment,
     AsPathType, BGP4, BgpNexthop, Capability, CapabilityCode,
     CeaseErrorSubcode, Community, ErrorCode, ErrorSubcode,
@@ -31,11 +31,11 @@ pub use bgp_types::messages::{
     RouteRefreshMessage, Safi, Tlv, UpdateErrorSubcode, UpdateMessage,
     path_attribute_flags,
 };
-pub use bgp_types_versions::error::MessageConvertError;
-pub use bgp_types_versions::parse::{
+pub use mg_api_types_versions::error::MessageConvertError;
+pub use mg_api_types_versions::parse::{
     AttributeAction, NlriSection, UpdateParseErrorReason,
 };
-pub use bgp_types_versions::v1::messages::{
+pub use mg_api_types_versions::v1::bgp::messages::{
     PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
     PathAttributeTypeCode as PathAttributeTypeCodeV1,
     PathAttributeValue as PathAttributeValueV1, Prefix as PrefixV1,
@@ -2281,7 +2281,7 @@ pub fn capability_from_wire(
 // - UpdateMessage.errors: Vec collecting all non-fatal parse errors encountered.
 
 // `UpdateParseErrorReason`, `AttributeAction`, and `NlriSection` now live in
-// `bgp_types_versions::parse` (re-exported above). Their `Display` impls
+// `mg_api_types_versions::parse` (re-exported above). Their `Display` impls
 // live alongside the type definitions in that crate.
 
 /// Parsed path attributes from wire format.
@@ -2541,15 +2541,15 @@ impl Display for MessageParseError {
     }
 }
 
-// `AttributeAction` now lives in `bgp_types_versions::parse` (re-exported above).
+// `AttributeAction` now lives in `mg_api_types_versions::parse` (re-exported above).
 
 // ============================================================================
 // API Compatibility Types (VERSION_INITIAL / v1.0.0)
 // ============================================================================
 // These types maintain backward compatibility with the INITIAL API version.
-// They are now defined in `bgp_types_versions::v1::messages` and re-exported
+// They are now defined in `mg_api_types_versions::v1::bgp::messages` and re-exported
 // here under their historical `*V1` names. The `From<current> for *V1` impls
-// live alongside the type definitions in `bgp_types_versions::impls::messages`.
+// live alongside the type definitions in `mg_api_types_versions::impls::messages`.
 
 /// V1 UpdateMessage type for API compatibility.
 ///

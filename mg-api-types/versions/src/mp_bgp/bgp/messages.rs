@@ -11,7 +11,7 @@ use rdb_types_versions::v1::prefix::{Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v1::messages::{AsPathType, Community, PathOrigin};
+use crate::v1::bgp::messages::{AsPathType, Community, PathOrigin};
 
 /// Address families supported by Maghemite BGP.
 #[derive(
@@ -413,9 +413,9 @@ pub struct UpdateMessage {
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Message {
-    Open(crate::v1::messages::OpenMessage),
+    Open(crate::v1::bgp::messages::OpenMessage),
     Update(UpdateMessage),
-    Notification(crate::v1::messages::NotificationMessage),
+    Notification(crate::v1::bgp::messages::NotificationMessage),
     KeepAlive,
-    RouteRefresh(crate::v1::messages::RouteRefreshMessage),
+    RouteRefresh(crate::v1::bgp::messages::RouteRefreshMessage),
 }

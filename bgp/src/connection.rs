@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-pub use bgp_types::session::{ConnectionDirection, ConnectionId};
+pub use mg_api_types::bgp::session::{ConnectionDirection, ConnectionId};
 
 #[cfg(target_os = "linux")]
 pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;

@@ -10,17 +10,17 @@ use std::net::SocketAddr;
 
 use uuid::Uuid;
 
-use crate::v1::session::{
+use crate::v1::bgp::session::{
     MessageHistory as MessageHistoryV1,
     MessageHistoryEntry as MessageHistoryEntryV1,
 };
-use crate::v2::session::{
+use crate::v2::bgp::session::{
     ConnectionDirection, ConnectionId, FsmStateKind, MessageHistory,
     MessageHistoryEntry,
 };
-use crate::v4::messages::Message;
+use crate::v4::bgp::messages::Message;
 
-use crate::v2::session::MAX_MESSAGE_HISTORY;
+use crate::v2::bgp::session::MAX_MESSAGE_HISTORY;
 
 impl ConnectionDirection {
     pub fn as_str(&self) -> &'static str {
@@ -153,7 +153,7 @@ impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
     fn from(entry: MessageHistoryEntry) -> Self {
         Self {
             timestamp: entry.timestamp,
-            message: crate::v1::messages::Message::from(entry.message),
+            message: crate::v1::bgp::messages::Message::from(entry.message),
         }
     }
 }

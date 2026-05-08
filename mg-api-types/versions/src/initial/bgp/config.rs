@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use bgp_types_versions::v1::session::MessageHistory as MessageHistoryV1;
+use crate::v1::bgp::session::MessageHistory as MessageHistoryV1;
 use rdb_types_versions::v1::policy::ImportExportPolicy;
 use rdb_types_versions::v1::prefix::Prefix4;
 use schemars::JsonSchema;

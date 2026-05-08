@@ -12,11 +12,13 @@ pub mod bfd {
 }
 
 pub mod bgp {
-    pub use crate::v1::bgp::{
+    pub use crate::v1::bgp::config::{
         AsnSelector, CheckerSource, Origin4, Router, ShaperSource,
     };
-    pub use crate::v2::bgp::{FsmEventBuffer, MessageDirection, Origin6};
-    pub use crate::v4::bgp::{
+    pub use crate::v2::bgp::history::{
+        FsmEventBuffer, MessageDirection, Origin6,
+    };
+    pub use crate::v4::bgp::config::{
         AfiSafi, BgpCapability, DynamicTimerInfo, Ipv4UnicastConfig,
         Ipv6UnicastConfig, JitterRange, NeighborResetRequest, PeerCounters,
         StaticTimerInfo,
@@ -31,6 +33,34 @@ pub mod bgp {
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Neighbor,
         UnnumberedBgpPeerConfig, UnnumberedNeighbor,
     };
+
+    pub mod messages {
+        pub use crate::v1::bgp::messages::{
+            AS_TRANS, AddPathElement, AsPathType, BGP4, Capability,
+            CapabilityCode, CeaseErrorSubcode, Community, ErrorCode,
+            ErrorSubcode, Header, HeaderErrorSubcode, MAX_MESSAGE_SIZE,
+            MessageKind, MessageType, NotificationMessage, OpenErrorSubcode,
+            OpenMessage, OptionalParameter, OptionalParameterCode, PathOrigin,
+            RouteRefreshMessage, Safi, Tlv, UpdateErrorSubcode,
+        };
+
+        pub use crate::v4::bgp::messages::{
+            Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
+            ExtendedNexthopElement, Ipv6DoubleNexthop, Message,
+            MpReachIpv4Unicast, MpReachIpv6Unicast, MpReachNlri,
+            MpUnreachIpv4Unicast, MpUnreachIpv6Unicast, MpUnreachNlri,
+            PathAttribute, PathAttributeType, PathAttributeTypeCode,
+            PathAttributeValue, UpdateMessage, path_attribute_flags,
+        };
+    }
+
+    pub mod session {
+        pub use crate::v2::bgp::session::{
+            ConnectionDirection, ConnectionId, FsmEventCategory,
+            FsmEventRecord, FsmStateKind, MAX_MESSAGE_HISTORY, MessageHistory,
+            MessageHistoryEntry,
+        };
+    }
 }
 
 pub mod ndp {

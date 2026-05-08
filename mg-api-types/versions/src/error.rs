@@ -13,12 +13,12 @@ use std::net::Ipv4Addr;
 
 use num_enum::TryFromPrimitiveError;
 
-use crate::v1::messages::{
+use crate::v1::bgp::messages::{
     AsPathType, CapabilityCode, CeaseErrorSubcode, ErrorCode,
     HeaderErrorSubcode, MessageType, OpenErrorSubcode, OptionalParameterCode,
     PathOrigin, UpdateErrorSubcode,
 };
-use crate::v4::messages::PathAttributeTypeCode;
+use crate::v4::bgp::messages::PathAttributeTypeCode;
 
 #[derive(thiserror::Error, Debug)]
 pub enum WireError {

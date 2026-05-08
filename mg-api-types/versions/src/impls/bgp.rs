@@ -302,11 +302,9 @@ fn ipv6_unicast_config_new(
 
 // ----- v2 (ipv6_basic) <-> v1 (initial) downgrades for PeerInfo / FsmStateKind -----
 
-impl From<bgp_types_versions::v2::session::FsmStateKind>
-    for v1::bgp::FsmStateKind
-{
-    fn from(kind: bgp_types_versions::v2::session::FsmStateKind) -> Self {
-        use bgp_types_versions::v2::session::FsmStateKind as V2;
+impl From<crate::v2::bgp::session::FsmStateKind> for v1::bgp::FsmStateKind {
+    fn from(kind: crate::v2::bgp::session::FsmStateKind) -> Self {
+        use crate::v2::bgp::session::FsmStateKind as V2;
         match kind {
             V2::Idle => Self::Idle,
             V2::Connect => Self::Connect,
@@ -604,10 +602,8 @@ impl From<v5::bgp::UnnumberedNeighbor> for latest::bgp::UnnumberedNeighbor {
 
 // ----- AfiSafi / BgpCapability conversions (reabsorbed from bgp/src/params.rs) -----
 
-impl From<&bgp_types_versions::v1::messages::AddPathElement>
-    for latest::bgp::AfiSafi
-{
-    fn from(value: &bgp_types_versions::v1::messages::AddPathElement) -> Self {
+impl From<&crate::v1::bgp::messages::AddPathElement> for latest::bgp::AfiSafi {
+    fn from(value: &crate::v1::bgp::messages::AddPathElement) -> Self {
         Self {
             afi: value.afi,
             safi: value.safi,
@@ -615,11 +611,11 @@ impl From<&bgp_types_versions::v1::messages::AddPathElement>
     }
 }
 
-impl From<&bgp_types_versions::v1::messages::Capability>
+impl From<&crate::v1::bgp::messages::Capability>
     for latest::bgp::BgpCapability
 {
-    fn from(value: &bgp_types_versions::v1::messages::Capability) -> Self {
-        use bgp_types_versions::v1::messages::{Capability, CapabilityCode};
+    fn from(value: &crate::v1::bgp::messages::Capability) -> Self {
+        use crate::v1::bgp::messages::{Capability, CapabilityCode};
         match value {
             Capability::MultiprotocolExtensions { afi, safi } => {
                 Self::MultiprotocolExtensions(latest::bgp::AfiSafi {

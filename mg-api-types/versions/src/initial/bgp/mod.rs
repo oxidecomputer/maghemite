@@ -2,4 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+pub mod config;
 pub mod messages;
+pub mod session;
+
+// Flatten admin-api types so existing intra-crate references resolve
+// at `crate::v1::bgp::Foo`. The wire-message and session sub-modules
+// stay namespaced.
+pub use config::*;
