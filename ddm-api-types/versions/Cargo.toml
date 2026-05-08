@@ -1,5 +1,5 @@
 [package]
-name = "ddm-types-versions"
+name = "ddm-api-types-versions"
 version = "0.1.0"
 edition = "2024"
 

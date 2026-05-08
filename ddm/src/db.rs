@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::db::{PeerInfo, TunnelRoute};
 use mg_common::lock;
 use mg_common_types::net::TunnelOrigin;
 use oxnet::{IpNet, Ipv6Net};

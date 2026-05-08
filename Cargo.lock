@@ -1376,7 +1376,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "ddm-api",
- "ddm-types",
+ "ddm-api-types",
  "dpd-client",
  "dropshot",
  "hostname 0.4.2",
@@ -1421,7 +1421,7 @@ dependencies = [
 name = "ddm-api"
 version = "0.1.0"
 dependencies = [
- "ddm-types-versions",
+ "ddm-api-types-versions",
  "dropshot",
  "dropshot-api-manager-types",
  "mg-common-types",
@@ -1432,14 +1432,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "ddm-types"
+name = "ddm-api-types"
 version = "0.1.0"
 dependencies = [
- "ddm-types-versions",
+ "ddm-api-types-versions",
 ]
 
 [[package]]
-name = "ddm-types-versions"
+name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "mg-common-types-versions",
@@ -1476,7 +1476,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ddm",
- "ddm-types",
+ "ddm-api-types",
  "dpd-client",
  "hostname 0.4.2",
  "mg-common",
@@ -3856,7 +3856,7 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ddm-types",
+ "ddm-api-types",
  "oxide-tokio-rt",
  "oxnet",
  "reqwest 0.13.3",
