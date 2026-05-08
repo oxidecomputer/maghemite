@@ -9,6 +9,7 @@ use crate::v1::bgp::messages::{
     NotificationMessage, OpenMessage, PathAttribute as PathAttributeV1,
     RouteRefreshMessage,
 };
+use crate::v1::rdb::prefix::{Prefix as RdbPrefix, Prefix6};
 use crate::v2::bgp::session::{
     ConnectionId, FsmEventRecord, FsmStateKind,
     MessageHistory as LiveMessageHistory,
@@ -17,7 +18,6 @@ use crate::v2::bgp::session::{
 use crate::v4::bgp::messages::{
     Message as LiveMessage, UpdateMessage as LiveUpdateMessage,
 };
-use rdb_types_versions::v1::prefix::{Prefix as RdbPrefix, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
+use crate::v1::rdb::peer::PeerId;
 use crate::v2::bgp::session::{FsmEventRecord, FsmStateKind, MessageHistory};
 use crate::v4::bgp::messages::Afi;
-use rdb_types_versions::v1::peer::PeerId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

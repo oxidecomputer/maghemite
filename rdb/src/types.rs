@@ -13,13 +13,23 @@ use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
-// Re-export core types from rdb-types
-pub use rdb_types::{
-    AddressFamily, BgpNeighborInfo, BgpNeighborParameters, BgpPathProperties,
-    BgpRouterInfo, BgpUnnumberedNeighborInfo, ImportExportPolicy,
-    ImportExportPolicy4, ImportExportPolicy6, Path, PeerId, Prefix, Prefix4,
-    Prefix6, ProtocolFilter,
+// Re-export core routing-database types from mg-api-types-versions.
+// rdb cannot depend on the mg-api-types facade because the facade depends
+// on rdb (for boundary helpers in mg-api-types/src/rib.rs), so we route
+// through the leaf crate.
+pub use mg_api_types_versions::latest::rdb::neighbor::{
+    BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
 };
+pub use mg_api_types_versions::latest::rdb::path::{BgpPathProperties, Path};
+pub use mg_api_types_versions::latest::rdb::peer::PeerId;
+pub use mg_api_types_versions::latest::rdb::policy::{
+    ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
+};
+pub use mg_api_types_versions::latest::rdb::prefix::{
+    Prefix, Prefix4, Prefix6,
+};
+pub use mg_api_types_versions::latest::rdb::router::BgpRouterInfo;
+pub use mg_api_types_versions::latest::rdb::{AddressFamily, ProtocolFilter};
 
 // BFD types live in their own facade crate (RFD 619).
 pub use mg_api_types_versions::latest::bfd::{BfdPeerConfig, SessionMode};

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
-use rdb_types_versions::v1::prefix::Prefix;
+use crate::v1::rdb::prefix::Prefix;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -39,13 +39,13 @@ use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
+use mg_api_types_versions::v1::rdb::policy::ImportExportPolicy;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
     ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
-use rdb_types_versions::v1::policy::ImportExportPolicy;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};

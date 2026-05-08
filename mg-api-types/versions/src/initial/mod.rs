@@ -6,5 +6,6 @@
 
 pub mod bfd;
 pub mod bgp;
+pub mod rdb;
 pub mod rib;
 pub mod static_routes;

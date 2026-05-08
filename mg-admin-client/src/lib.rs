@@ -17,18 +17,18 @@ progenitor::generate_api!(
     }),
     derives = [schemars::JsonSchema],
     replace = {
-        Prefix4 = rdb_types::Prefix4,
-        Prefix6 = rdb_types::Prefix6,
-        Prefix = rdb_types::Prefix,
-        AddressFamily = rdb_types::AddressFamily,
-        ProtocolFilter = rdb_types::ProtocolFilter,
-        PeerId = rdb_types::PeerId,
+        Prefix4 = mg_api_types::Prefix4,
+        Prefix6 = mg_api_types::Prefix6,
+        Prefix = mg_api_types::Prefix,
+        AddressFamily = mg_api_types::AddressFamily,
+        ProtocolFilter = mg_api_types::ProtocolFilter,
+        PeerId = mg_api_types::PeerId,
         Duration = std::time::Duration,
     }
 );
 
 use colored::*;
-use rdb_types::{AddressFamily, Prefix, ProtocolFilter};
+use mg_api_types::{AddressFamily, Prefix, ProtocolFilter};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
@@ -162,8 +162,8 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
                 None => path.nexthop.to_string(),
             };
             let peer_str = match &bgp.peer {
-                rdb_types::PeerId::Ip(ip) => ip.to_string(),
-                rdb_types::PeerId::Interface(iface) => iface.clone(),
+                mg_api_types::PeerId::Ip(ip) => ip.to_string(),
+                mg_api_types::PeerId::Interface(iface) => iface.clone(),
             };
             writeln!(
                 &mut tw,

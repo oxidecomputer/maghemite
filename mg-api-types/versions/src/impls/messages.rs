@@ -7,15 +7,15 @@
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use crate::v1::rdb::AddressFamily;
+use crate::v1::rdb::prefix::{
+    Prefix as RdbPrefix, Prefix4 as RdbPrefix4, Prefix6 as RdbPrefix6,
+};
 use nom::{
     bytes::complete::tag,
     number::complete::{be_u16, u8 as parse_u8},
 };
 use num_enum::TryFromPrimitive;
-use rdb_types_versions::v1::AddressFamily;
-use rdb_types_versions::v1::prefix::{
-    Prefix as RdbPrefix, Prefix4 as RdbPrefix4, Prefix6 as RdbPrefix6,
-};
 
 use crate::error::WireError;
 use std::collections::BTreeSet;

@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rdb_types_versions::v5::path::Path as RdbPath;
+use crate::v5::rdb::path::Path as RdbPath;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

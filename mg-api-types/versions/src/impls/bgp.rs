@@ -4,14 +4,10 @@
 
 use std::collections::HashMap;
 
-use rdb_types_versions::v1::policy::ImportExportPolicy as ImportExportPolicyV1;
-use rdb_types_versions::v1::prefix::Prefix;
-use rdb_types_versions::v4::neighbor::{
-    BgpNeighborInfo, BgpUnnumberedNeighborInfo,
-};
-use rdb_types_versions::v4::policy::{
-    ImportExportPolicy4, ImportExportPolicy6,
-};
+use crate::v1::rdb::policy::ImportExportPolicy as ImportExportPolicyV1;
+use crate::v1::rdb::prefix::Prefix;
+use crate::v4::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
+use crate::v4::rdb::policy::{ImportExportPolicy4, ImportExportPolicy6};
 
 use crate::v4::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
 use crate::{latest, v1, v4, v5};
@@ -30,7 +26,7 @@ impl std::fmt::Display for latest::bgp::NeighborResetRequest {
 impl latest::bgp::NeighborSelector {
     /// Convert peer string to PeerId using FromStr implementation.
     /// Tries to parse as IP first, otherwise treats as interface name.
-    pub fn to_peer_id(&self) -> rdb_types_versions::v1::peer::PeerId {
+    pub fn to_peer_id(&self) -> crate::v1::rdb::peer::PeerId {
         self.peer.parse().expect("PeerId::from_str never fails")
     }
 }

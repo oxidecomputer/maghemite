@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU8;
 
-use rdb_types_versions::v1::path::Path;
+use crate::v1::rdb::path::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

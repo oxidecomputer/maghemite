@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::latest::prefix::{Prefix, Prefix4, Prefix6};
+use crate::latest::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use std::cmp::Ordering;
 use std::fmt::{self, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::v1::peer::PeerId;
+use crate::v1::rdb::peer::PeerId;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -41,8 +41,8 @@ pub struct BgpPathProperties {
     pub stale: Option<DateTime<Utc>>,
 }
 
-impl From<crate::v1::path::Path> for Path {
-    fn from(value: crate::v1::path::Path) -> Self {
+impl From<crate::v1::rdb::path::Path> for Path {
+    fn from(value: crate::v1::rdb::path::Path) -> Self {
         Self {
             nexthop: value.nexthop,
             nexthop_interface: None,
@@ -54,20 +54,20 @@ impl From<crate::v1::path::Path> for Path {
     }
 }
 
-impl From<Path> for crate::v1::path::Path {
+impl From<Path> for crate::v1::rdb::path::Path {
     fn from(value: Path) -> Self {
         Self {
             nexthop: value.nexthop,
             shutdown: value.shutdown,
             rib_priority: value.rib_priority,
-            bgp: value.bgp.map(crate::v1::path::BgpPathProperties::from),
+            bgp: value.bgp.map(crate::v1::rdb::path::BgpPathProperties::from),
             vlan_id: value.vlan_id,
         }
     }
 }
 
-impl From<crate::v1::path::BgpPathProperties> for BgpPathProperties {
-    fn from(value: crate::v1::path::BgpPathProperties) -> Self {
+impl From<crate::v1::rdb::path::BgpPathProperties> for BgpPathProperties {
+    fn from(value: crate::v1::rdb::path::BgpPathProperties) -> Self {
         Self {
             origin_as: value.origin_as,
             id: value.id,
@@ -80,7 +80,7 @@ impl From<crate::v1::path::BgpPathProperties> for BgpPathProperties {
     }
 }
 
-impl From<BgpPathProperties> for crate::v1::path::BgpPathProperties {
+impl From<BgpPathProperties> for crate::v1::rdb::path::BgpPathProperties {
     fn from(value: BgpPathProperties) -> Self {
         Self {
             origin_as: value.origin_as,

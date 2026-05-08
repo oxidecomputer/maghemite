@@ -26,8 +26,8 @@ use mg_admin_client::{
         StaticRoute6List,
     },
 };
+use mg_api_types::{AddressFamily, Prefix4, Prefix6};
 use oxnet::{Ipv4Net, Ipv6Net};
-use rdb_types::{AddressFamily, Prefix4, Prefix6};
 use slog::info;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},

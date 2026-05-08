@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 rdb = { path = "../rdb" }
-rdb-types-versions.workspace = true
 mg-api-types.workspace = true
 mg-api-types-versions.workspace = true
 nom.workspace = true

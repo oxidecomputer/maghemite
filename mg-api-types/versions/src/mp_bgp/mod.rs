@@ -8,3 +8,4 @@
 //! configuration and a new neighbor reset request type.
 
 pub mod bgp;
+pub mod rdb;

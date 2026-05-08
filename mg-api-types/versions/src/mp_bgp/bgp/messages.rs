@@ -6,8 +6,8 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use crate::v1::rdb::prefix::{Prefix4, Prefix6};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use rdb_types_versions::v1::prefix::{Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

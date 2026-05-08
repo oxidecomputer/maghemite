@@ -63,6 +63,38 @@ pub mod bgp {
     }
 }
 
+pub mod rdb {
+    pub use crate::v1::rdb::{AddressFamily, ProtocolFilter};
+
+    pub mod neighbor {
+        pub use crate::v4::rdb::neighbor::{
+            BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
+        };
+    }
+
+    pub mod path {
+        pub use crate::v5::rdb::path::{BgpPathProperties, Path};
+    }
+
+    pub mod peer {
+        pub use crate::v1::rdb::peer::PeerId;
+    }
+
+    pub mod policy {
+        pub use crate::v4::rdb::policy::{
+            ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
+        };
+    }
+
+    pub mod prefix {
+        pub use crate::v1::rdb::prefix::{Prefix, Prefix4, Prefix6};
+    }
+
+    pub mod router {
+        pub use crate::v1::rdb::router::BgpRouterInfo;
+    }
+}
+
 pub mod ndp {
     pub use crate::v5::ndp::{
         NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,

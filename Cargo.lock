@@ -362,7 +362,6 @@ dependencies = [
  "proptest",
  "rand 0.10.1",
  "rdb",
- "rdb-types-versions",
  "rhai",
  "schemars 0.8.22",
  "serde",
@@ -1921,9 +1920,9 @@ dependencies = [
  "dpd-client",
  "libfalcon",
  "mg-admin-client 0.1.0",
+ "mg-api-types",
  "oxide-tokio-rt",
  "oxnet",
- "rdb-types 0.1.0",
  "serde",
  "serde_json",
  "slog",
@@ -3708,8 +3707,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "colored",
+ "mg-api-types",
  "progenitor 0.14.0",
- "rdb-types 0.1.0",
  "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
@@ -3727,7 +3726,7 @@ dependencies = [
  "chrono",
  "colored",
  "progenitor 0.13.0",
- "rdb-types 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=7696ee48d5ee29a917dea459e281fe2e8ff20513)",
+ "rdb-types",
  "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
@@ -3757,7 +3756,6 @@ version = "0.1.0"
 dependencies = [
  "mg-api-types-versions",
  "rdb",
- "rdb-types-versions",
 ]
 
 [[package]]
@@ -3768,7 +3766,7 @@ dependencies = [
  "clap",
  "nom 8.0.0",
  "num_enum 0.7.6",
- "rdb-types-versions",
+ "oxnet",
  "schemars 0.8.22",
  "serde",
  "slog",
@@ -3922,7 +3920,6 @@ dependencies = [
  "proptest",
  "rand 0.10.1",
  "rdb",
- "rdb-types-versions",
  "slog",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "socket2",
@@ -6000,7 +5997,6 @@ dependencies = [
  "ndp",
  "oxnet",
  "proptest",
- "rdb-types 0.1.0",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -6012,26 +6008,8 @@ dependencies = [
 [[package]]
 name = "rdb-types"
 version = "0.1.0"
-dependencies = [
- "rdb-types-versions",
-]
-
-[[package]]
-name = "rdb-types"
-version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/maghemite?rev=7696ee48d5ee29a917dea459e281fe2e8ff20513#7696ee48d5ee29a917dea459e281fe2e8ff20513"
 dependencies = [
- "oxnet",
- "schemars 0.8.22",
- "serde",
-]
-
-[[package]]
-name = "rdb-types-versions"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
  "oxnet",
  "schemars 0.8.22",
  "serde",

@@ -6,10 +6,10 @@ pub use mg_api_types_versions::latest::rib::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mg_api_types_versions::v1::rdb::path::Path as PathV1;
 use mg_api_types_versions::{latest, v1};
 use rdb::types::ProtocolFilter;
 use rdb::{Path as RdbPath, Prefix};
-use rdb_types_versions::v1::path::Path as PathV1;
 
 // `rdb::db::Rib` -> versioned `Rib` conversions live here as free
 // functions. The orphan rule prevents an `impl From<rdb::db::Rib> for

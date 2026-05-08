@@ -10,4 +10,5 @@
 
 pub mod bgp;
 pub mod ndp;
+pub mod rdb;
 pub mod rib;
