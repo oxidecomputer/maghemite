@@ -16,30 +16,30 @@ use std::{
     time::Duration,
 };
 
-// ----- Versioned BGP-config families re-exported from mg-types-versions -----
+// ----- Versioned BGP-config families re-exported from mg-api-types-versions -----
 //
-// Migrated to mg-types-versions in RFD 619 Phase 2d sub-chunk 6a. These
+// Migrated to mg-api-types-versions in RFD 619 Phase 2d sub-chunk 6a. These
 // re-exports preserve the existing `bgp::params::*` public surface so
 // internal Bgp callers don't have to change.
-pub use mg_types_versions::v1::bgp::{
+pub use mg_api_types_versions::v1::bgp::{
     ApplyRequest as ApplyRequestV1, BgpPeerConfig as BgpPeerConfigV1,
     BgpPeerParameters as BgpPeerParametersV1, CheckerSource,
     DynamicTimerInfo as DynamicTimerInfoV1, FsmStateKind as FsmStateKindV1,
     Neighbor as NeighborV1, NeighborResetOp as NeighborResetOpV1, Origin4,
     PeerInfo as PeerInfoV1, PeerTimers as PeerTimersV1, Router, ShaperSource,
 };
-pub use mg_types_versions::v2::bgp::{Origin6, PeerInfo as PeerInfoV2};
-pub use mg_types_versions::v4::bgp::{
+pub use mg_api_types_versions::v2::bgp::{Origin6, PeerInfo as PeerInfoV2};
+pub use mg_api_types_versions::v4::bgp::{
     AfiSafi, ApplyRequest as ApplyRequestV6, BgpCapability,
     BgpPeerConfig as BgpPeerConfigV6, BgpPeerParameters as BgpPeerParametersV6,
     DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
     Neighbor as NeighborV6, NeighborResetOp, PeerCounters, StaticTimerInfo,
     UnnumberedBgpPeerConfig as UnnumberedBgpPeerConfigV6,
 };
-pub use mg_types_versions::v5::bgp::{
+pub use mg_api_types_versions::v5::bgp::{
     PeerInfo, PeerTimers, UnnumberedNeighbor as UnnumberedNeighborV6,
 };
-pub use mg_types_versions::v8::bgp::{
+pub use mg_api_types_versions::v8::bgp::{
     ApplyRequest, BgpPeerConfig, BgpPeerParameters, Neighbor,
     UnnumberedBgpPeerConfig, UnnumberedNeighbor,
 };

@@ -9,7 +9,9 @@ use std::time::Duration;
 use bgp_types_versions::v2::session::MessageHistory;
 use bgp_types_versions::v4::messages::Afi;
 use rdb_types_versions::v1::prefix::Prefix;
-use rdb_types_versions::v4::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use rdb_types_versions::v4::policy::{
+    ImportExportPolicy4, ImportExportPolicy6,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

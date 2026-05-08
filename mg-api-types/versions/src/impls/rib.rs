@@ -3,6 +3,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Conversions from `rdb::db::Rib` (a business-logic type) into the
-// versioned `Rib` shapes live in the `mg-types` facade crate (see
-// `mg-types/src/rib.rs`). Keeping them out of `mg-types-versions`
+// versioned `Rib` shapes live in the `mg-api-types` facade crate (see
+// `mg-api-types/src/rib.rs`). Keeping them out of `mg-api-types-versions`
 // preserves the leaf-crate property required by RFD 619.

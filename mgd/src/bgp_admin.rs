@@ -29,18 +29,18 @@ use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
-use mg_common::lock;
-use mg_types::bgp::{
+use mg_api_types::bgp::{
     AsnSelector, ExportedSelector, FsmEventBuffer, FsmHistoryRequest,
     FsmHistoryResponse, MessageDirection, MessageHistoryRequest,
     MessageHistoryResponse, NeighborResetRequest, NeighborSelector,
     UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
 };
-use mg_types::ndp::{
+use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_types_versions::{v1, v2, v4, v5};
+use mg_api_types_versions::{v1, v2, v4, v5};
+use mg_common::lock;
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
     ImportExportPolicy6, Prefix, Prefix4, Prefix6,
@@ -998,7 +998,7 @@ pub async fn get_imported_v1(
     let imported = get_router!(ctx, rq.asn)?
         .db
         .full_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(mg_types::rib::rib_v1_from_rdb(imported)))
+    Ok(HttpResponseOk(mg_api_types::rib::rib_v1_from_rdb(imported)))
 }
 
 pub async fn get_selected_v1(
@@ -1010,7 +1010,7 @@ pub async fn get_selected_v1(
     let selected = get_router!(ctx, rq.asn)?
         .db
         .loc_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(mg_types::rib::rib_v1_from_rdb(selected)))
+    Ok(HttpResponseOk(mg_api_types::rib::rib_v1_from_rdb(selected)))
 }
 
 pub async fn get_neighbors_v1(

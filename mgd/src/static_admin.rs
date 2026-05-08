@@ -8,17 +8,17 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_types::rib::GetRibResult;
-use mg_types::static_routes::{
+use mg_api_types::rib::GetRibResult;
+use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
     DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
-use mg_types::switch::SwitchIdentifiers;
+use mg_api_types::switch::SwitchIdentifiers;
 use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
 
-// `From<StaticRouteN>` impls cannot live in `mg-types-versions` (would
-// force a `rdb` dep) nor in `rdb` (would force an `mg-types-versions` dep).
+// `From<StaticRouteN>` impls cannot live in `mg-api-types-versions` (would
+// force a `rdb` dep) nor in `rdb` (would force an `mg-api-types-versions` dep).
 // Both source and target types are foreign to `mgd`, so we expose the
 // conversion as free fns here at the call site.
 fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {

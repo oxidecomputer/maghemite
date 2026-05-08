@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct Rib(pub BTreeMap<String, BTreeSet<Path>>);
 
-// `From<rdb::db::Rib> for Rib` lives in the `mg-types` facade crate
-// (`mg-types/src/rib.rs`) to keep `mg-types-versions` from depending on
+// `From<rdb::db::Rib> for Rib` lives in the `mg-api-types` facade crate
+// (`mg-api-types/src/rib.rs`) to keep `mg-api-types-versions` from depending on
 // the `rdb` business-logic crate (see RFD 619 leaf-crate rule).
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

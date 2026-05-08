@@ -17,7 +17,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_types_versions::{latest, v1, v2, v4, v5};
+use mg_api_types_versions::{latest, v1, v2, v4, v5};
 use rdb::Prefix;
 
 api_versions!([

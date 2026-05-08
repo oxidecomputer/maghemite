@@ -7,11 +7,11 @@ use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
     RequestContext, TypedBody,
 };
-use mg_types::rib::{
+use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery,
     filter_rib_by_protocol, rib_latest_from_rdb, rib_v1_from_rdb,
 };
-use mg_types_versions::{v1, v2};
+use mg_api_types_versions::{v1, v2};
 use std::sync::Arc;
 
 // Prior version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):

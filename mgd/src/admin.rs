@@ -13,24 +13,24 @@ use dropshot::{
     TypedBody,
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
-use mg_common::stats::MgLowerStats;
-use mg_types::bfd::DeleteBfdPeerPathParams;
-use mg_types::bgp::{
+use mg_api_types::bfd::DeleteBfdPeerPathParams;
+use mg_api_types::bgp::{
     AsnSelector, ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
     MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,
     NeighborSelector, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
-use mg_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
-use mg_types::rib::{
+use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
+use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
-use mg_types::static_routes::{
+use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
     DeleteStaticRoute6Request,
 };
-use mg_types::switch::SwitchIdentifiers;
-use mg_types_versions::{v1, v2, v4, v5};
+use mg_api_types::switch::SwitchIdentifiers;
+use mg_api_types_versions::{v1, v2, v4, v5};
+use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;

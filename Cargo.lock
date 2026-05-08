@@ -370,8 +370,8 @@ dependencies = [
  "lazy_static",
  "libc",
  "libnet",
+ "mg-api-types-versions",
  "mg-common",
- "mg-types-versions",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
@@ -3786,8 +3786,28 @@ dependencies = [
  "bgp",
  "dropshot",
  "dropshot-api-manager-types",
- "mg-types-versions",
+ "mg-api-types-versions",
  "rdb",
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
+name = "mg-api-types"
+version = "0.1.0"
+dependencies = [
+ "mg-api-types-versions",
+ "rdb",
+ "rdb-types-versions",
+]
+
+[[package]]
+name = "mg-api-types-versions"
+version = "0.1.0"
+dependencies = [
+ "bgp-types-versions",
+ "chrono",
+ "rdb-types-versions",
  "schemars 0.8.22",
  "serde",
 ]
@@ -3890,26 +3910,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mg-types"
-version = "0.1.0"
-dependencies = [
- "mg-types-versions",
- "rdb",
- "rdb-types-versions",
-]
-
-[[package]]
-name = "mg-types-versions"
-version = "0.1.0"
-dependencies = [
- "bgp-types-versions",
- "chrono",
- "rdb-types-versions",
- "schemars 0.8.22",
- "serde",
-]
-
-[[package]]
 name = "mgadm"
 version = "0.1.0"
 dependencies = [
@@ -3946,10 +3946,10 @@ dependencies = [
  "hostname 0.4.2",
  "http",
  "mg-api",
+ "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "mg-lower",
- "mg-types",
- "mg-types-versions",
  "ndp",
  "network-interface",
  "omicron-common",
