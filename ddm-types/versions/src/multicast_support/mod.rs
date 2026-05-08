@@ -5,5 +5,6 @@
 //! Types from API version 2 (MULTICAST_SUPPORT) that add multicast
 //! group management to the DDM admin API.
 
+pub mod admin;
 pub mod db;
 pub mod exchange;

@@ -223,6 +223,34 @@
         }
       }
     },
+    "/peer": {
+      "put": {
+        "summary": "Set peer information for a given interface index, bypassing the state machine.",
+        "description": "Intended for test fixtures that run `ddmd` with `--no-state-machine`. In a normal run, discovery writes peer entries keyed by interface index whenever it processes an advertisement, so any directly-injected entry for an active interface will be overwritten the next time a peer is observed there.",
+        "operationId": "put_peer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutPeerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/peers": {
       "get": {
         "operationId": "get_peers",
@@ -715,6 +743,24 @@
           "NoContact",
           "Active",
           "Expired"
+        ]
+      },
+      "PutPeerRequest": {
+        "description": "Body for `PUT /peer`. Sets `info` at the slot keyed by `if_index` (interface index) in the in-memory peer map.",
+        "type": "object",
+        "properties": {
+          "if_index": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "info": {
+            "$ref": "#/components/schemas/PeerInfo"
+          }
+        },
+        "required": [
+          "if_index",
+          "info"
         ]
       },
       "RouterKind": {

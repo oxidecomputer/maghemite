@@ -8,6 +8,7 @@ pub mod admin {
     pub use crate::v1::admin::EnableStatsRequest;
     pub use crate::v1::admin::ExpirePathParams;
     pub use crate::v1::admin::PrefixMap;
+    pub use crate::v2::admin::PutPeerRequest;
 }
 
 pub mod db {

@@ -72,6 +72,23 @@ pub trait DdmAdminApi {
         params: Path<latest::admin::ExpirePathParams>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
+    /// Set peer information for a given interface index, bypassing the state machine.
+    ///
+    /// Intended for test fixtures that run `ddmd` with `--no-state-machine`.
+    /// In a normal run, discovery writes peer entries keyed by interface
+    /// index whenever it processes an advertisement, so any directly-injected
+    /// entry for an active interface will be overwritten the next time a
+    /// peer is observed there.
+    #[endpoint {
+        method = PUT,
+        path = "/peer",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn put_peer(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::admin::PutPeerRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
     #[endpoint { method = GET, path = "/originated" }]
     async fn get_originated(
         ctx: RequestContext<Self::Context>,
