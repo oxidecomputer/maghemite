@@ -17,12 +17,54 @@ progenitor::generate_api!(
     }),
     derives = [schemars::JsonSchema],
     replace = {
+        // Routing-database shapes (flat re-exports at the
+        // mg_api_types crate root).
         Prefix4 = mg_api_types::Prefix4,
         Prefix6 = mg_api_types::Prefix6,
         Prefix = mg_api_types::Prefix,
         AddressFamily = mg_api_types::AddressFamily,
         ProtocolFilter = mg_api_types::ProtocolFilter,
         PeerId = mg_api_types::PeerId,
+
+        // BGP policy shapes.
+        ImportExportPolicy4 = mg_api_types::bgp::ImportExportPolicy4,
+        ImportExportPolicy6 = mg_api_types::bgp::ImportExportPolicy6,
+
+        // BGP admin shapes.
+        CheckerSource = mg_api_types::bgp::CheckerSource,
+        ExportedSelector = mg_api_types::bgp::ExportedSelector,
+        FsmEventBuffer = mg_api_types::bgp::FsmEventBuffer,
+        Ipv4UnicastConfig = mg_api_types::bgp::Ipv4UnicastConfig,
+        Ipv6UnicastConfig = mg_api_types::bgp::Ipv6UnicastConfig,
+        JitterRange = mg_api_types::bgp::JitterRange,
+        MessageDirection = mg_api_types::bgp::MessageDirection,
+        NeighborResetOp = mg_api_types::bgp::NeighborResetOp,
+        NeighborResetRequest = mg_api_types::bgp::NeighborResetRequest,
+        Origin4 = mg_api_types::bgp::Origin4,
+        Origin6 = mg_api_types::bgp::Origin6,
+        PeerInfo = mg_api_types::bgp::PeerInfo,
+        Router = mg_api_types::bgp::Router,
+        ShaperSource = mg_api_types::bgp::ShaperSource,
+        UnnumberedNeighborResetRequest = mg_api_types::bgp::UnnumberedNeighborResetRequest,
+
+        FsmStateKind = mg_api_types::bgp::session::FsmStateKind,
+
+        // BGP wire-message shapes.
+        Afi = mg_api_types::bgp::messages::Afi,
+
+        // RIB shapes.
+        BestpathFanoutRequest = mg_api_types::rib::BestpathFanoutRequest,
+
+        // Static-route shapes.
+        AddStaticRoute4Request = mg_api_types::static_routes::AddStaticRoute4Request,
+        AddStaticRoute6Request = mg_api_types::static_routes::AddStaticRoute6Request,
+        DeleteStaticRoute4Request = mg_api_types::static_routes::DeleteStaticRoute4Request,
+        DeleteStaticRoute6Request = mg_api_types::static_routes::DeleteStaticRoute6Request,
+        StaticRoute4 = mg_api_types::static_routes::StaticRoute4,
+        StaticRoute4List = mg_api_types::static_routes::StaticRoute4List,
+        StaticRoute6 = mg_api_types::static_routes::StaticRoute6,
+        StaticRoute6List = mg_api_types::static_routes::StaticRoute6List,
+
         Duration = std::time::Duration,
     }
 );

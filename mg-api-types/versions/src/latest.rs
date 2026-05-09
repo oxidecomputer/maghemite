@@ -34,6 +34,10 @@ pub mod bgp {
         UnnumberedBgpPeerConfig, UnnumberedNeighbor,
     };
 
+    pub use crate::v4::rdb::policy::{
+        ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
+    };
+
     pub mod messages {
         pub use crate::v1::bgp::messages::{
             AS_TRANS, AddPathElement, AsPathType, BGP4, Capability,

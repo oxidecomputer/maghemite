@@ -16,7 +16,6 @@ pub mod switch;
 pub use mg_api_types_versions::latest::rdb::neighbor::*;
 pub use mg_api_types_versions::latest::rdb::path::*;
 pub use mg_api_types_versions::latest::rdb::peer::*;
-pub use mg_api_types_versions::latest::rdb::policy::*;
 pub use mg_api_types_versions::latest::rdb::prefix::*;
 pub use mg_api_types_versions::latest::rdb::router::*;
 pub use mg_api_types_versions::latest::rdb::{

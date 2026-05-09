@@ -1,8 +1,9 @@
 //! BGP utilities
 
-use mg_admin_client::types::{
+use mg_admin_client::types::UnnumberedNeighbor;
+use mg_api_types::bgp::{
     ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
-    Ipv6UnicastConfig, UnnumberedNeighbor,
+    Ipv6UnicastConfig,
 };
 
 pub fn basic_unnumbered_neighbor(

@@ -14,10 +14,12 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 // Re-export core routing-database types from the mg-api-types facade.
+pub use mg_api_types::bgp::{
+    ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
+};
 pub use mg_api_types::{
     AddressFamily, BgpNeighborInfo, BgpNeighborParameters, BgpPathProperties,
-    BgpRouterInfo, BgpUnnumberedNeighborInfo, ImportExportPolicy,
-    ImportExportPolicy4, ImportExportPolicy6, Path, PeerId, Prefix, Prefix4,
+    BgpRouterInfo, BgpUnnumberedNeighborInfo, Path, PeerId, Prefix, Prefix4,
     Prefix6, ProtocolFilter,
 };
 
