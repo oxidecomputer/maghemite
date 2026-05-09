@@ -34,7 +34,8 @@ pub mod bgp {
         UnnumberedBgpPeerConfig, UnnumberedNeighbor,
     };
 
-    pub use crate::v4::rdb::policy::{
+    pub use crate::v1::bgp::peer::PeerId;
+    pub use crate::v4::bgp::policy::{
         ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
     };
 
@@ -120,16 +121,6 @@ pub mod rdb {
 
     pub mod path {
         pub use crate::v5::rdb::path::{BgpPathProperties, Path};
-    }
-
-    pub mod peer {
-        pub use crate::v1::rdb::peer::PeerId;
-    }
-
-    pub mod policy {
-        pub use crate::v4::rdb::policy::{
-            ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
-        };
     }
 
     pub mod prefix {

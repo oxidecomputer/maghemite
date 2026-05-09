@@ -4,4 +4,6 @@
 
 pub mod config;
 pub mod messages;
+pub mod peer;
+pub mod policy;
 pub mod session;

@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::v1::rdb::prefix::Prefix;
 use crate::v2::bgp::session::MessageHistory;
 use crate::v4::bgp::messages::Afi;
-use crate::v4::rdb::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use crate::v4::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

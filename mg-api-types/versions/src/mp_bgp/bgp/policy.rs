@@ -35,13 +35,13 @@ pub enum ImportExportPolicy {
     V6(ImportExportPolicy6),
 }
 
-impl From<crate::v1::rdb::policy::ImportExportPolicy> for ImportExportPolicy4 {
-    fn from(value: crate::v1::rdb::policy::ImportExportPolicy) -> Self {
+impl From<crate::v1::bgp::policy::ImportExportPolicy> for ImportExportPolicy4 {
+    fn from(value: crate::v1::bgp::policy::ImportExportPolicy) -> Self {
         match value {
-            crate::v1::rdb::policy::ImportExportPolicy::NoFiltering => {
+            crate::v1::bgp::policy::ImportExportPolicy::NoFiltering => {
                 ImportExportPolicy4::NoFiltering
             }
-            crate::v1::rdb::policy::ImportExportPolicy::Allow(prefixes) => {
+            crate::v1::bgp::policy::ImportExportPolicy::Allow(prefixes) => {
                 let v4_prefixes: BTreeSet<Prefix4> = prefixes
                     .iter()
                     .filter_map(|p| match p {
@@ -60,13 +60,13 @@ impl From<crate::v1::rdb::policy::ImportExportPolicy> for ImportExportPolicy4 {
     }
 }
 
-impl From<crate::v1::rdb::policy::ImportExportPolicy> for ImportExportPolicy6 {
-    fn from(value: crate::v1::rdb::policy::ImportExportPolicy) -> Self {
+impl From<crate::v1::bgp::policy::ImportExportPolicy> for ImportExportPolicy6 {
+    fn from(value: crate::v1::bgp::policy::ImportExportPolicy) -> Self {
         match value {
-            crate::v1::rdb::policy::ImportExportPolicy::NoFiltering => {
+            crate::v1::bgp::policy::ImportExportPolicy::NoFiltering => {
                 ImportExportPolicy6::NoFiltering
             }
-            crate::v1::rdb::policy::ImportExportPolicy::Allow(prefixes) => {
+            crate::v1::bgp::policy::ImportExportPolicy::Allow(prefixes) => {
                 let v6_prefixes: BTreeSet<Prefix6> = prefixes
                     .iter()
                     .filter_map(|p| match p {

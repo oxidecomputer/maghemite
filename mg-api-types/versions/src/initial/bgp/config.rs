@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use crate::v1::bgp::policy::ImportExportPolicy;
 use crate::v1::bgp::session::MessageHistory;
-use crate::v1::rdb::policy::ImportExportPolicy;
 use crate::v1::rdb::prefix::Prefix4;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

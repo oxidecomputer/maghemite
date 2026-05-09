@@ -12,6 +12,7 @@ use dropshot::{
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
 use mg_api_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
+use mg_api_types::bgp::PeerId;
 use mg_api_types::bgp::{
     ApplyRequest, AsnSelector, CheckerSource, ExportedSelector,
     FsmHistoryRequest, FsmHistoryResponse, MessageHistoryRequest,
@@ -30,7 +31,7 @@ use mg_api_types::static_routes::{
 use mg_api_types::switch::SwitchIdentifiers;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::stats::MgLowerStats;
-use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
+use rdb::{BfdPeerConfig, Db, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
 #[cfg(all(feature = "mg-lower", target_os = "illumos"))]

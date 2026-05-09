@@ -8,8 +8,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub mod path;
-pub mod peer;
-pub mod policy;
 pub mod prefix;
 pub mod router;
 

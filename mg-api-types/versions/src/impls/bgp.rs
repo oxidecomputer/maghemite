@@ -5,10 +5,10 @@
 use std::collections::HashMap;
 
 use crate::v1::rdb::prefix::Prefix;
+use crate::v4::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use crate::v4::rdb::neighbor::{
     BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
 };
-use crate::v4::rdb::policy::{ImportExportPolicy4, ImportExportPolicy6};
 
 use crate::v4::bgp::config::{
     Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
@@ -36,7 +36,7 @@ impl std::fmt::Display for latest::bgp::NeighborResetRequest {
 impl latest::bgp::NeighborSelector {
     /// Convert peer string to PeerId using FromStr implementation.
     /// Tries to parse as IP first, otherwise treats as interface name.
-    pub fn to_peer_id(&self) -> crate::v1::rdb::peer::PeerId {
+    pub fn to_peer_id(&self) -> crate::v1::bgp::peer::PeerId {
         self.peer.parse().expect("PeerId::from_str never fails")
     }
 }
@@ -330,12 +330,12 @@ fn v1_params_from_rdb(
         local_pref,
         enforce_first_as,
         allow_import:
-            crate::v1::rdb::policy::ImportExportPolicy::from_per_af_policies(
+            crate::v1::bgp::policy::ImportExportPolicy::from_per_af_policies(
                 &allow_import4,
                 &allow_import6,
             ),
         allow_export:
-            crate::v1::rdb::policy::ImportExportPolicy::from_per_af_policies(
+            crate::v1::bgp::policy::ImportExportPolicy::from_per_af_policies(
                 &allow_export4,
                 &allow_export6,
             ),

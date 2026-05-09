@@ -24,6 +24,7 @@ use crate::{
     router::Router,
     unnumbered::UnnumberedManager,
 };
+pub use mg_api_types::bgp::PeerId;
 pub use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MAX_MESSAGE_HISTORY,
     MessageHistory, MessageHistoryEntry,
@@ -38,7 +39,7 @@ use rdb::{
     AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
     ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
-pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY, PeerId};
+pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;

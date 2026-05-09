@@ -24,11 +24,11 @@ progenitor::generate_api!(
         Prefix = mg_api_types::Prefix,
         AddressFamily = mg_api_types::AddressFamily,
         ProtocolFilter = mg_api_types::ProtocolFilter,
-        PeerId = mg_api_types::PeerId,
 
-        // BGP policy shapes.
+        // BGP policy and peer-identity shapes.
         ImportExportPolicy4 = mg_api_types::bgp::ImportExportPolicy4,
         ImportExportPolicy6 = mg_api_types::bgp::ImportExportPolicy6,
+        PeerId = mg_api_types::bgp::PeerId,
 
         // BGP admin shapes.
         CheckerSource = mg_api_types::bgp::CheckerSource,
@@ -204,8 +204,8 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
                 None => path.nexthop.to_string(),
             };
             let peer_str = match &bgp.peer {
-                mg_api_types::PeerId::Ip(ip) => ip.to_string(),
-                mg_api_types::PeerId::Interface(iface) => iface.clone(),
+                mg_api_types::bgp::PeerId::Ip(ip) => ip.to_string(),
+                mg_api_types::bgp::PeerId::Interface(iface) => iface.clone(),
             };
             writeln!(
                 &mut tw,
