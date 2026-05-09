@@ -20,8 +20,8 @@ pub mod bgp {
     };
     pub use crate::v4::bgp::config::{
         AfiSafi, BgpCapability, DynamicTimerInfo, Ipv4UnicastConfig,
-        Ipv6UnicastConfig, JitterRange, NeighborResetRequest, PeerCounters,
-        StaticTimerInfo,
+        Ipv6UnicastConfig, JitterRange, NeighborResetOp, NeighborResetRequest,
+        PeerCounters, StaticTimerInfo,
     };
     pub use crate::v5::bgp::{
         ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,

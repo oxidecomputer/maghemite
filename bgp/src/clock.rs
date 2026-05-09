@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::{BgpConnection, ConnectionId};
-use crate::params::{DynamicTimerInfo, JitterRange};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
+use mg_api_types::bgp::{DynamicTimerInfo, JitterRange};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
 use slog::{Logger, error};
@@ -514,5 +514,38 @@ impl Display for ConnectionClock {
             hold,
             delay_open
         )
+    }
+}
+
+/// Timer configuration extracted from SessionInfo.
+/// This is a lightweight value type that can be cloned and passed
+/// without locks.
+#[derive(
+    Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TimerConfig {
+    pub connect_retry_time: std::time::Duration,
+    pub keepalive_time: std::time::Duration,
+    pub hold_time: std::time::Duration,
+    pub idle_hold_time: std::time::Duration,
+    pub delay_open_time: std::time::Duration,
+    pub resolution: std::time::Duration,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold_jitter: Option<JitterRange>,
+}
+
+impl TimerConfig {
+    /// Extract timer config from SessionInfo without holding lock
+    pub fn from_session_info(session: &crate::session::SessionInfo) -> Self {
+        Self {
+            connect_retry_time: session.connect_retry_time,
+            keepalive_time: session.keepalive_time,
+            hold_time: session.hold_time,
+            idle_hold_time: session.idle_hold_time,
+            delay_open_time: session.delay_open_time,
+            resolution: session.resolution,
+            connect_retry_jitter: session.connect_retry_jitter,
+            idle_hold_jitter: session.idle_hold_jitter,
+        }
     }
 }

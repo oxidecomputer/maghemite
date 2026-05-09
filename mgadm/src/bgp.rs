@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use bgp::{messages::Afi, params::JitterRange};
+use bgp::messages::Afi;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use mg_admin_client::{
@@ -13,6 +13,7 @@ use mg_admin_client::{
         Ipv6UnicastConfig, NeighborResetRequest,
     },
 };
+use mg_api_types::bgp::JitterRange;
 use rdb::types::{PeerId, Prefix4, Prefix6};
 use std::{
     fs::read_to_string,

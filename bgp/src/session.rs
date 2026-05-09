@@ -4,6 +4,7 @@
 
 use crate::{
     clock::SessionClock,
+    clock::TimerConfig,
     config::PeerConfig,
     connection::{
         BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
@@ -18,11 +19,6 @@ use crate::{
         OpenErrorSubcode, OpenMessage, PathAttributeValue, RouteRefreshMessage,
         Safi, UpdateMessage,
     },
-    params::{
-        BgpPeerParameters, BgpPeerParametersV1, DynamicTimerInfo,
-        Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, PeerCounters,
-        PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
-    },
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
     router::Router,
@@ -32,10 +28,11 @@ pub use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MAX_MESSAGE_HISTORY,
     MessageHistory, MessageHistoryEntry,
 };
-pub use mg_api_types_versions::v1::bgp::session::{
-    MessageHistory as MessageHistoryV1,
-    MessageHistoryEntry as MessageHistoryEntryV1,
+use mg_api_types::bgp::{
+    BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
+    JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
 };
+use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{
     AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
@@ -947,13 +944,13 @@ impl From<&BgpPeerParameters> for SessionInfo {
     }
 }
 
-impl From<&BgpPeerParametersV1> for SessionInfo {
-    fn from(value: &BgpPeerParametersV1) -> Self {
+impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
+    fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
         // The v1 form is frozen by design and must never gain a field.
         // If this destructure stops compiling, the v1 contract has been
         // violated upstream — fix that, don't teach this conversion to
         // handle a new field.
-        let BgpPeerParametersV1 {
+        let v1::bgp::config::BgpPeerParameters {
             hold_time,
             idle_hold_time,
             delay_open,
@@ -1145,6 +1142,124 @@ pub struct SessionCounters {
     pub tcp_connection_failure: AtomicU64,
     pub md5_auth_failures: AtomicU64,
     pub connector_panics: AtomicU64,
+}
+
+impl From<&SessionCounters> for PeerCounters {
+    fn from(value: &SessionCounters) -> Self {
+        Self {
+            connection_retries: value
+                .connection_retries
+                .load(Ordering::Relaxed),
+            active_connections_accepted: value
+                .active_connections_accepted
+                .load(Ordering::Relaxed),
+            active_connections_declined: value
+                .active_connections_declined
+                .load(Ordering::Relaxed),
+            passive_connections_accepted: value
+                .passive_connections_accepted
+                .load(Ordering::Relaxed),
+            passive_connections_declined: value
+                .passive_connections_declined
+                .load(Ordering::Relaxed),
+            transitions_to_idle: value
+                .transitions_to_idle
+                .load(Ordering::Relaxed),
+            transitions_to_connect: value
+                .transitions_to_connect
+                .load(Ordering::Relaxed),
+            transitions_to_active: value
+                .transitions_to_active
+                .load(Ordering::Relaxed),
+            transitions_to_open_sent: value
+                .transitions_to_open_sent
+                .load(Ordering::Relaxed),
+            transitions_to_open_confirm: value
+                .transitions_to_open_confirm
+                .load(Ordering::Relaxed),
+            transitions_to_connection_collision: value
+                .transitions_to_connection_collision
+                .load(Ordering::Relaxed),
+            transitions_to_session_setup: value
+                .transitions_to_session_setup
+                .load(Ordering::Relaxed),
+            transitions_to_established: value
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            hold_timer_expirations: value
+                .hold_timer_expirations
+                .load(Ordering::Relaxed),
+            idle_hold_timer_expirations: value
+                .idle_hold_timer_expirations
+                .load(Ordering::Relaxed),
+            prefixes_advertised: value
+                .prefixes_advertised
+                .load(Ordering::Relaxed),
+            prefixes_imported: value.prefixes_imported.load(Ordering::Relaxed),
+            keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
+            keepalives_received: value
+                .keepalives_received
+                .load(Ordering::Relaxed),
+            route_refresh_sent: value
+                .route_refresh_sent
+                .load(Ordering::Relaxed),
+            route_refresh_received: value
+                .route_refresh_received
+                .load(Ordering::Relaxed),
+            opens_sent: value.opens_sent.load(Ordering::Relaxed),
+            opens_received: value.opens_received.load(Ordering::Relaxed),
+            notifications_sent: value
+                .notifications_sent
+                .load(Ordering::Relaxed),
+            notifications_received: value
+                .notifications_received
+                .load(Ordering::Relaxed),
+            updates_sent: value.updates_sent.load(Ordering::Relaxed),
+            updates_received: value.updates_received.load(Ordering::Relaxed),
+            unexpected_update_message: value
+                .unexpected_update_message
+                .load(Ordering::Relaxed),
+            unexpected_keepalive_message: value
+                .unexpected_keepalive_message
+                .load(Ordering::Relaxed),
+            unexpected_open_message: value
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            unexpected_route_refresh_message: value
+                .unexpected_route_refresh_message
+                .load(Ordering::Relaxed),
+            unexpected_notification_message: value
+                .unexpected_notification_message
+                .load(Ordering::Relaxed),
+            update_nexhop_missing: value
+                .update_nexhop_missing
+                .load(Ordering::Relaxed),
+            open_handle_failures: value
+                .open_handle_failures
+                .load(Ordering::Relaxed),
+            unnegotiated_address_family: value
+                .unnegotiated_address_family
+                .load(Ordering::Relaxed),
+            notification_send_failure: value
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            open_send_failure: value.open_send_failure.load(Ordering::Relaxed),
+            keepalive_send_failure: value
+                .keepalive_send_failure
+                .load(Ordering::Relaxed),
+            route_refresh_send_failure: value
+                .route_refresh_send_failure
+                .load(Ordering::Relaxed),
+            update_send_failure: value
+                .update_send_failure
+                .load(Ordering::Relaxed),
+            tcp_connection_failure: value
+                .tcp_connection_failure
+                .load(Ordering::Relaxed),
+            md5_auth_failures: value.md5_auth_failures.load(Ordering::Relaxed),
+            connector_panics: value.connector_panics.load(Ordering::Relaxed),
+        }
+    }
 }
 
 pub enum ShaperApplication {
@@ -9069,7 +9184,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let received_capabilities = pc
                         .caps
                         .iter()
-                        .map(crate::params::BgpCapability::from)
+                        .map(mg_api_types::bgp::BgpCapability::from)
                         .collect();
                     PeerInfo {
                         name,
@@ -9128,9 +9243,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 }
 
-// V1 message-history shapes (`MessageHistoryV1`, `MessageHistoryEntryV1`) are
-// re-exported at the top of this module. The cross-version `From` conversions
-// live in `mg_api_types_versions::impls::session`.
+// V1 message-history shapes live in `v1::bgp::session`. Cross-version
+// `From` conversions are in `mg_api_types_versions::impls::session`.
 
 #[cfg(test)]
 mod tests {

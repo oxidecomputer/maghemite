@@ -10,10 +10,7 @@ use std::net::SocketAddr;
 
 use uuid::Uuid;
 
-use crate::v1::bgp::session::{
-    MessageHistory as MessageHistoryV1,
-    MessageHistoryEntry as MessageHistoryEntryV1,
-};
+use crate::v1;
 use crate::v2::bgp::session::{
     ConnectionDirection, ConnectionId, FsmStateKind, MessageHistory,
     MessageHistoryEntry,
@@ -149,7 +146,7 @@ impl MessageHistory {
 // Cross-version conversions: v2 (latest) → v1 (compat shapes).
 // ----------------------------------------------------------------------------
 
-impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
+impl From<MessageHistoryEntry> for v1::bgp::session::MessageHistoryEntry {
     fn from(entry: MessageHistoryEntry) -> Self {
         // Compile barrier: a v2 MessageHistoryEntry field addition will
         // fail to bind here, forcing a deliberate decision about how
@@ -168,15 +165,18 @@ impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
     }
 }
 
-impl From<MessageHistory> for MessageHistoryV1 {
+impl From<MessageHistory> for v1::bgp::session::MessageHistory {
     fn from(history: MessageHistory) -> Self {
         let MessageHistory { received, sent } = history;
         Self {
             received: received
                 .into_iter()
-                .map(MessageHistoryEntryV1::from)
+                .map(v1::bgp::session::MessageHistoryEntry::from)
                 .collect(),
-            sent: sent.into_iter().map(MessageHistoryEntryV1::from).collect(),
+            sent: sent
+                .into_iter()
+                .map(v1::bgp::session::MessageHistoryEntry::from)
+                .collect(),
         }
     }
 }

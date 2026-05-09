@@ -16,12 +16,11 @@ use bgp::{
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     messages::Afi,
-    params::*,
+    policy::{PolicyKind, PolicySource},
     router::{LoadPolicyError, Router},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmEventRecord, FsmStateKind,
-        MessageHistory, MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo,
-        SessionRunner,
+        MessageHistory, PeerId, SessionEndpoint, SessionInfo, SessionRunner,
     },
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -30,10 +29,12 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api_types::bgp::{
-    AsnSelector, ExportedSelector, FsmEventBuffer, FsmHistoryRequest,
-    FsmHistoryResponse, MessageDirection, MessageHistoryRequest,
-    MessageHistoryResponse, NeighborResetRequest, NeighborSelector,
-    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
+    ApplyRequest, AsnSelector, CheckerSource, ExportedSelector, FsmEventBuffer,
+    FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
+    MessageHistoryRequest, MessageHistoryResponse, Neighbor, NeighborResetOp,
+    NeighborResetRequest, NeighborSelector, Origin4, Origin6, PeerInfo,
+    ShaperSource, UnnumberedNeighbor, UnnumberedNeighborResetRequest,
+    UnnumberedNeighborSelector,
 };
 use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
@@ -95,7 +96,7 @@ macro_rules! get_router {
 
 pub async fn read_routers(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<Vec<bgp::params::Router>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<mg_api_types::bgp::Router>>, HttpError> {
     let ctx = ctx.context();
     let routers = ctx
         .db
@@ -104,7 +105,7 @@ pub async fn read_routers(
     let mut result = Vec::new();
 
     for (asn, info) in routers.iter() {
-        result.push(bgp::params::Router {
+        result.push(mg_api_types::bgp::Router {
             asn: *asn,
             id: info.id,
             listen: info.listen.clone(),
@@ -117,7 +118,7 @@ pub async fn read_routers(
 
 pub async fn create_router(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<bgp::params::Router>,
+    request: TypedBody<mg_api_types::bgp::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
@@ -136,7 +137,7 @@ pub async fn create_router(
 pub async fn read_router(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<bgp::params::Router>, HttpError> {
+) -> Result<HttpResponseOk<mg_api_types::bgp::Router>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
 
@@ -150,7 +151,7 @@ pub async fn read_router(
         format!("asn: {} not found in db", rq.asn),
     ))?;
 
-    Ok(HttpResponseOk(bgp::params::Router {
+    Ok(HttpResponseOk(mg_api_types::bgp::Router {
         asn: rq.asn,
         id: info.id,
         listen: info.listen.clone(),
@@ -160,7 +161,7 @@ pub async fn read_router(
 
 pub async fn update_router(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<bgp::params::Router>,
+    request: TypedBody<mg_api_types::bgp::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
@@ -191,7 +192,7 @@ pub async fn delete_router(
 pub async fn read_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -203,7 +204,7 @@ pub async fn read_neighbors_v1(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| NeighborV1::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| v1::bgp::config::Neighbor::from_rdb_neighbor_info(rq.asn, &x))
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -211,7 +212,7 @@ pub async fn read_neighbors_v1(
 
 pub async fn create_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborV1>,
+    request: TypedBody<v1::bgp::config::Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -222,7 +223,7 @@ pub async fn create_neighbor_v1(
 pub async fn read_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::NeighborSelector>,
-) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
+) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
         HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
@@ -235,13 +236,16 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result = NeighborV1::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let result = v1::bgp::config::Neighbor::from_rdb_neighbor_info(
+        rq.asn,
+        neighbor_info,
+    );
     Ok(HttpResponseOk(result))
 }
 
 pub async fn update_neighbor_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborV1>,
+    request: TypedBody<v1::bgp::config::Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -1016,7 +1020,8 @@ pub async fn get_selected_v1(
 pub async fn get_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, v1::bgp::config::PeerInfo>>, HttpError>
+{
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1052,16 +1057,16 @@ pub async fn get_neighbors_v1(
                 )
             };
 
-        let pi = PeerInfoV2 {
+        let pi = v2::bgp::history::PeerInfo {
             state: s.state(),
             asn: s.remote_asn(),
             duration_millis: dur,
-            timers: PeerTimersV1 {
-                hold: DynamicTimerInfoV1 {
+            timers: v1::bgp::config::PeerTimers {
+                hold: v1::bgp::config::DynamicTimerInfo {
                     configured: conf_holdtime,
                     negotiated: neg_holdtime,
                 },
-                keepalive: DynamicTimerInfoV1 {
+                keepalive: v1::bgp::config::DynamicTimerInfo {
                     configured: conf_keepalive,
                     negotiated: neg_keepalive,
                 },
@@ -1072,7 +1077,7 @@ pub async fn get_neighbors_v1(
             PeerId::Ip(ip) => ip,
             PeerId::Interface(_) => continue, // Skip unnumbered sessions for V1 API
         };
-        peers.insert(peer_ip, PeerInfoV1::from(pi));
+        peers.insert(peer_ip, v1::bgp::config::PeerInfo::from(pi));
     }
 
     Ok(HttpResponseOk(peers))
@@ -1081,7 +1086,10 @@ pub async fn get_neighbors_v1(
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
+) -> Result<
+    HttpResponseOk<HashMap<IpAddr, v2::bgp::history::PeerInfo>>,
+    HttpError,
+> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1120,16 +1128,16 @@ pub async fn get_neighbors_v2(
         };
         peers.insert(
             peer_ip,
-            PeerInfoV2 {
+            v2::bgp::history::PeerInfo {
                 state: s.state(),
                 asn: s.remote_asn(),
                 duration_millis: dur,
-                timers: PeerTimersV1 {
-                    hold: DynamicTimerInfoV1 {
+                timers: v1::bgp::config::PeerTimers {
+                    hold: v1::bgp::config::DynamicTimerInfo {
                         configured: conf_holdtime,
                         negotiated: neg_holdtime,
                     },
-                    keepalive: DynamicTimerInfoV1 {
+                    keepalive: v1::bgp::config::DynamicTimerInfo {
                         configured: conf_keepalive,
                         negotiated: neg_keepalive,
                     },
@@ -1281,7 +1289,7 @@ async fn do_bgp_apply(
 
     helpers::ensure_router(
         ctx.clone(),
-        bgp::params::Router {
+        mg_api_types::bgp::Router {
             asn: rq.asn,
             id: rq.asn,
             listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
@@ -1560,7 +1568,7 @@ pub async fn message_history_v1(
         // Only include IP-based sessions in the history
         if let PeerId::Ip(addr) = key {
             let mh = lock!(session.message_history).clone();
-            result.insert(*addr, MessageHistoryV1::from(mh));
+            result.insert(*addr, v1::bgp::session::MessageHistory::from(mh));
         }
     }
 
@@ -1833,7 +1841,7 @@ pub(crate) mod helpers {
 
     pub(crate) async fn ensure_router(
         ctx: Arc<HandlerContext>,
-        rq: bgp::params::Router,
+        rq: mg_api_types::bgp::Router,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let mut guard = lock!(ctx.bgp.router);
         if let Some(current) = guard.get(&rq.asn) {
@@ -1885,7 +1893,7 @@ pub(crate) mod helpers {
 
     pub(crate) fn add_neighbor_v1(
         ctx: Arc<HandlerContext>,
-        rq: NeighborV1,
+        rq: v1::bgp::config::Neighbor,
         ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
@@ -2333,7 +2341,7 @@ pub(crate) mod helpers {
 
     pub(crate) fn add_router(
         ctx: Arc<HandlerContext>,
-        rq: bgp::params::Router,
+        rq: mg_api_types::bgp::Router,
         routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let cfg = RouterConfig {
@@ -2584,7 +2592,9 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
-    use bgp::params::{ApplyRequestV1, BgpPeerConfigV1, BgpPeerParametersV1};
+    use mg_api_types_versions::v1::bgp::config::{
+        ApplyRequest, BgpPeerConfig, BgpPeerParameters,
+    };
     use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
@@ -2631,10 +2641,10 @@ mod tests {
         let mut peers = HashMap::new();
         peers.insert(
             String::from("qsfp0"),
-            vec![BgpPeerConfigV1 {
+            vec![BgpPeerConfig {
                 host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179),
                 name: String::from("bob"),
-                parameters: BgpPeerParametersV1 {
+                parameters: BgpPeerParameters {
                     hold_time: 3,
                     idle_hold_time: 1,
                     delay_open: 1,
@@ -2657,10 +2667,10 @@ mod tests {
         );
         peers.insert(
             String::from("qsfp1"),
-            vec![BgpPeerConfigV1 {
+            vec![BgpPeerConfig {
                 host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179),
                 name: String::from("alice"),
-                parameters: BgpPeerParametersV1 {
+                parameters: BgpPeerParameters {
                     hold_time: 3,
                     idle_hold_time: 1,
                     delay_open: 1,
@@ -2682,7 +2692,7 @@ mod tests {
             }],
         );
 
-        let mut req = ApplyRequestV1 {
+        let mut req = ApplyRequest {
             asn: 47,
             originate: Vec::default(),
             checker: None,

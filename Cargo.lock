@@ -3861,6 +3861,7 @@ dependencies = [
  "clap",
  "colored",
  "mg-admin-client 0.1.0",
+ "mg-api-types",
  "mg-common",
  "natord",
  "oxide-tokio-rt",

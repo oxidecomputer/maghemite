@@ -409,6 +409,16 @@ pub fn load_checker(program_source: &str) -> Result<AST, Error> {
     Ok(ast)
 }
 
+pub enum PolicySource {
+    Checker(String),
+    Shaper(String),
+}
+
+pub enum PolicyKind {
+    Checker,
+    Shaper,
+}
+
 #[cfg(test)]
 mod test {
     use crate::messages::{

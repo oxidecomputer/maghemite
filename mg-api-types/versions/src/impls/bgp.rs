@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-use crate::v1::rdb::policy::ImportExportPolicy as ImportExportPolicyV1;
 use crate::v1::rdb::prefix::Prefix;
 use crate::v4::rdb::neighbor::{
     BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
@@ -330,14 +329,16 @@ fn v1_params_from_rdb(
         communities,
         local_pref,
         enforce_first_as,
-        allow_import: ImportExportPolicyV1::from_per_af_policies(
-            &allow_import4,
-            &allow_import6,
-        ),
-        allow_export: ImportExportPolicyV1::from_per_af_policies(
-            &allow_export4,
-            &allow_export6,
-        ),
+        allow_import:
+            crate::v1::rdb::policy::ImportExportPolicy::from_per_af_policies(
+                &allow_import4,
+                &allow_import6,
+            ),
+        allow_export:
+            crate::v1::rdb::policy::ImportExportPolicy::from_per_af_policies(
+                &allow_export4,
+                &allow_export6,
+            ),
         vlan_id,
     }
 }

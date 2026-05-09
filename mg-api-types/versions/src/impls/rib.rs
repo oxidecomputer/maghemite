@@ -9,7 +9,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::v1::rdb::path::Path as PathV1;
 use crate::{latest, v1};
 
 impl From<latest::rdb::Rib> for latest::rib::Rib {
@@ -26,8 +25,8 @@ impl From<latest::rdb::Rib> for v1::rib::Rib {
             value
                 .into_iter()
                 .map(|(k, v)| {
-                    let paths_v1: BTreeSet<PathV1> =
-                        v.into_iter().map(PathV1::from).collect();
+                    let paths_v1: BTreeSet<v1::rdb::path::Path> =
+                        v.into_iter().map(v1::rdb::path::Path::from).collect();
                     (k.to_string(), paths_v1)
                 })
                 .collect(),

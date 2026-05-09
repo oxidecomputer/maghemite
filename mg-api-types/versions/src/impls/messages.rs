@@ -8,9 +8,6 @@ use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::v1::rdb::AddressFamily;
-use crate::v1::rdb::prefix::{
-    Prefix as RdbPrefix, Prefix4 as RdbPrefix4, Prefix6 as RdbPrefix6,
-};
 use nom::{
     bytes::complete::tag,
     number::complete::{be_u16, u8 as parse_u8},
@@ -21,14 +18,12 @@ use crate::error::WireError;
 use std::collections::BTreeSet;
 
 use crate::error::MessageConvertError;
+use crate::v1;
 use crate::v1::bgp::messages::{
     AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
     CeaseErrorSubcode, ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode,
     MAX_MESSAGE_SIZE, MessageKind, MessageType, NotificationMessage,
-    OpenErrorSubcode, OpenMessage, OptionalParameter,
-    PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
-    PathAttributeTypeCode as PathAttributeTypeCodeV1,
-    PathAttributeValue as PathAttributeValueV1, PathOrigin,
+    OpenErrorSubcode, OpenMessage, OptionalParameter, PathOrigin,
     RouteRefreshMessage, Safi, UpdateErrorSubcode,
 };
 use crate::v4::bgp::messages::{
@@ -610,7 +605,10 @@ impl MpReachNlri {
     }
 
     /// Create an IPv4 Unicast MP_REACH_NLRI.
-    pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<RdbPrefix4>) -> Self {
+    pub fn ipv4_unicast(
+        nexthop: BgpNexthop,
+        nlri: Vec<v1::rdb::prefix::Prefix4>,
+    ) -> Self {
         Self::Ipv4Unicast(MpReachIpv4Unicast {
             nexthop,
             reserved: 0, // Always send 0 per RFC 4760
@@ -619,7 +617,10 @@ impl MpReachNlri {
     }
 
     /// Create an IPv6 Unicast MP_REACH_NLRI.
-    pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<RdbPrefix6>) -> Self {
+    pub fn ipv6_unicast(
+        nexthop: BgpNexthop,
+        nlri: Vec<v1::rdb::prefix::Prefix6>,
+    ) -> Self {
         Self::Ipv6Unicast(MpReachIpv6Unicast {
             nexthop,
             reserved: 0,
@@ -674,12 +675,12 @@ impl MpUnreachNlri {
     }
 
     /// Create an IPv4 Unicast MP_UNREACH_NLRI.
-    pub fn ipv4_unicast(withdrawn: Vec<RdbPrefix4>) -> Self {
+    pub fn ipv4_unicast(withdrawn: Vec<v1::rdb::prefix::Prefix4>) -> Self {
         Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })
     }
 
     /// Create an IPv6 Unicast MP_UNREACH_NLRI.
-    pub fn ipv6_unicast(withdrawn: Vec<RdbPrefix6>) -> Self {
+    pub fn ipv6_unicast(withdrawn: Vec<v1::rdb::prefix::Prefix6>) -> Self {
         Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
     }
 }
@@ -826,22 +827,22 @@ impl From<PathAttributeValue> for PathAttribute {
 // Cross-version conversions: v4 (current) → v1 (compat shapes).
 // ----------------------------------------------------------------------------
 
-impl From<RdbPrefix> for crate::v1::bgp::messages::Prefix {
-    fn from(prefix: RdbPrefix) -> Self {
+impl From<v1::rdb::prefix::Prefix> for v1::bgp::messages::Prefix {
+    fn from(prefix: v1::rdb::prefix::Prefix) -> Self {
         // Convert new Prefix enum to old struct format using wire format:
         // length byte followed by prefix octets.
         // Prefix4/Prefix6 wire format: 1-byte length + ceil(length/8) octets.
         // We use direct encoding here to avoid a circular dep on
         // bgp::messages::BgpWireFormat.
         match prefix {
-            RdbPrefix::V4(p) => {
+            v1::rdb::prefix::Prefix::V4(p) => {
                 let length = p.length;
                 let octet_count = (length as usize).div_ceil(8);
                 let octets = p.value.octets();
                 let value = octets[..octet_count].to_vec();
                 Self { length, value }
             }
-            RdbPrefix::V6(p) => {
+            v1::rdb::prefix::Prefix::V6(p) => {
                 let length = p.length;
                 let octet_count = (length as usize).div_ceil(8);
                 let octets = p.value.octets();
@@ -852,96 +853,111 @@ impl From<RdbPrefix> for crate::v1::bgp::messages::Prefix {
     }
 }
 
-impl From<PathAttributeTypeCode> for PathAttributeTypeCodeV1 {
+impl From<PathAttributeTypeCode> for v1::bgp::messages::PathAttributeTypeCode {
     fn from(code: PathAttributeTypeCode) -> Self {
         match code {
-            PathAttributeTypeCode::Origin => PathAttributeTypeCodeV1::Origin,
-            PathAttributeTypeCode::AsPath => PathAttributeTypeCodeV1::AsPath,
-            PathAttributeTypeCode::NextHop => PathAttributeTypeCodeV1::NextHop,
+            PathAttributeTypeCode::Origin => {
+                v1::bgp::messages::PathAttributeTypeCode::Origin
+            }
+            PathAttributeTypeCode::AsPath => {
+                v1::bgp::messages::PathAttributeTypeCode::AsPath
+            }
+            PathAttributeTypeCode::NextHop => {
+                v1::bgp::messages::PathAttributeTypeCode::NextHop
+            }
             PathAttributeTypeCode::MultiExitDisc => {
-                PathAttributeTypeCodeV1::MultiExitDisc
+                v1::bgp::messages::PathAttributeTypeCode::MultiExitDisc
             }
             PathAttributeTypeCode::LocalPref => {
-                PathAttributeTypeCodeV1::LocalPref
+                v1::bgp::messages::PathAttributeTypeCode::LocalPref
             }
             PathAttributeTypeCode::AtomicAggregate => {
-                PathAttributeTypeCodeV1::AtomicAggregate
+                v1::bgp::messages::PathAttributeTypeCode::AtomicAggregate
             }
             PathAttributeTypeCode::Aggregator => {
-                PathAttributeTypeCodeV1::Aggregator
+                v1::bgp::messages::PathAttributeTypeCode::Aggregator
             }
             PathAttributeTypeCode::Communities => {
-                PathAttributeTypeCodeV1::Communities
+                v1::bgp::messages::PathAttributeTypeCode::Communities
             }
             // MP-BGP type codes have no v1 equivalent; map to As4Path as a
             // fallback (they are filtered out before this conversion runs in
             // the value-level mapping).
             PathAttributeTypeCode::MpReachNlri
             | PathAttributeTypeCode::MpUnreachNlri => {
-                PathAttributeTypeCodeV1::As4Path
+                v1::bgp::messages::PathAttributeTypeCode::As4Path
             }
-            PathAttributeTypeCode::As4Path => PathAttributeTypeCodeV1::As4Path,
+            PathAttributeTypeCode::As4Path => {
+                v1::bgp::messages::PathAttributeTypeCode::As4Path
+            }
             PathAttributeTypeCode::As4Aggregator => {
-                PathAttributeTypeCodeV1::As4Aggregator
+                v1::bgp::messages::PathAttributeTypeCode::As4Aggregator
             }
         }
     }
 }
 
-impl From<PathAttributeType> for PathAttributeTypeV1 {
+impl From<PathAttributeType> for v1::bgp::messages::PathAttributeType {
     fn from(t: PathAttributeType) -> Self {
         let PathAttributeType { flags, type_code } = t;
         Self {
             flags,
-            type_code: PathAttributeTypeCodeV1::from(type_code),
+            type_code: v1::bgp::messages::PathAttributeTypeCode::from(
+                type_code,
+            ),
         }
     }
 }
 
-impl From<PathAttributeValue> for Option<PathAttributeValueV1> {
+impl From<PathAttributeValue>
+    for Option<v1::bgp::messages::PathAttributeValue>
+{
     fn from(val: PathAttributeValue) -> Self {
         match val {
             PathAttributeValue::Origin(o) => {
-                Some(PathAttributeValueV1::Origin(o))
+                Some(v1::bgp::messages::PathAttributeValue::Origin(o))
             }
             PathAttributeValue::AsPath(p) => {
-                Some(PathAttributeValueV1::AsPath(p))
+                Some(v1::bgp::messages::PathAttributeValue::AsPath(p))
             }
-            PathAttributeValue::NextHop(nh) => {
-                Some(PathAttributeValueV1::NextHop(IpAddr::V4(nh)))
-            }
+            PathAttributeValue::NextHop(nh) => Some(
+                v1::bgp::messages::PathAttributeValue::NextHop(IpAddr::V4(nh)),
+            ),
             PathAttributeValue::MultiExitDisc(m) => {
-                Some(PathAttributeValueV1::MultiExitDisc(m))
+                Some(v1::bgp::messages::PathAttributeValue::MultiExitDisc(m))
             }
             PathAttributeValue::LocalPref(l) => {
-                Some(PathAttributeValueV1::LocalPref(l))
+                Some(v1::bgp::messages::PathAttributeValue::LocalPref(l))
             }
-            PathAttributeValue::Aggregator(a) => {
-                Some(PathAttributeValueV1::Aggregator(a.to_bytes()))
-            }
+            PathAttributeValue::Aggregator(a) => Some(
+                v1::bgp::messages::PathAttributeValue::Aggregator(a.to_bytes()),
+            ),
             PathAttributeValue::Communities(c) => {
-                Some(PathAttributeValueV1::Communities(c))
+                Some(v1::bgp::messages::PathAttributeValue::Communities(c))
             }
             // AtomicAggregate / MP-BGP attributes have no v1 representation.
             PathAttributeValue::AtomicAggregate
             | PathAttributeValue::MpReachNlri(_)
             | PathAttributeValue::MpUnreachNlri(_) => None,
             PathAttributeValue::As4Path(p) => {
-                Some(PathAttributeValueV1::As4Path(p))
+                Some(v1::bgp::messages::PathAttributeValue::As4Path(p))
             }
             PathAttributeValue::As4Aggregator(a) => {
-                Some(PathAttributeValueV1::As4Aggregator(a.to_bytes()))
+                Some(v1::bgp::messages::PathAttributeValue::As4Aggregator(
+                    a.to_bytes(),
+                ))
             }
         }
     }
 }
 
-impl From<PathAttribute> for Option<PathAttributeV1> {
+impl From<PathAttribute> for Option<v1::bgp::messages::PathAttribute> {
     fn from(attr: PathAttribute) -> Self {
         let PathAttribute { typ, value } = attr;
-        let value_opt: Option<PathAttributeValueV1> = value.into();
-        value_opt.map(|value| PathAttributeV1 {
-            typ: PathAttributeTypeV1::from(typ),
+        let value_opt: Option<v1::bgp::messages::PathAttributeValue> =
+            value.into();
+        value_opt.map(|value| v1::bgp::messages::PathAttribute {
+            typ: v1::bgp::messages::PathAttributeType::from(typ),
             value,
         })
     }
@@ -1577,7 +1593,7 @@ impl UpdateMessage {
 
     pub fn has_community(
         &self,
-        community: crate::v1::bgp::messages::Community,
+        community: v1::bgp::messages::Community,
     ) -> bool {
         for a in &self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &a.value {
@@ -1591,10 +1607,7 @@ impl UpdateMessage {
         false
     }
 
-    pub fn add_community(
-        &mut self,
-        community: crate::v1::bgp::messages::Community,
-    ) {
+    pub fn add_community(&mut self, community: v1::bgp::messages::Community) {
         for a in &mut self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &mut a.value {
                 communities.push(community);
@@ -1606,9 +1619,7 @@ impl UpdateMessage {
     }
 
     pub fn graceful_shutdown(&self) -> bool {
-        self.has_community(
-            crate::v1::bgp::messages::Community::GracefulShutdown,
-        )
+        self.has_community(v1::bgp::messages::Community::GracefulShutdown)
     }
 
     pub fn mp_reach(&self) -> Option<&MpReachNlri> {
@@ -1688,7 +1699,7 @@ impl Display for UpdateMessage {
 // Cross-version conversions: v4 (current) Message/UpdateMessage → v1 (compat).
 // ----------------------------------------------------------------------------
 
-impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
+impl From<UpdateMessage> for v1::bgp::messages::UpdateMessage {
     fn from(msg: UpdateMessage) -> Self {
         // Compile barrier: a latest UpdateMessage field addition will
         // fail to bind here, forcing a deliberate decision about how
@@ -1706,26 +1717,30 @@ impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
             withdrawn: withdrawn
                 .into_iter()
                 .map(|p| {
-                    crate::v1::bgp::messages::Prefix::from(RdbPrefix::V4(p))
+                    v1::bgp::messages::Prefix::from(
+                        v1::rdb::prefix::Prefix::V4(p),
+                    )
                 })
                 .collect(),
             // Filter out attributes that don't have v1 equivalents (MP-BGP,
             // AtomicAggregate).
             path_attributes: path_attributes
                 .into_iter()
-                .filter_map(Option::<PathAttributeV1>::from)
+                .filter_map(Option::<v1::bgp::messages::PathAttribute>::from)
                 .collect(),
             nlri: nlri
                 .into_iter()
                 .map(|p| {
-                    crate::v1::bgp::messages::Prefix::from(RdbPrefix::V4(p))
+                    v1::bgp::messages::Prefix::from(
+                        v1::rdb::prefix::Prefix::V4(p),
+                    )
                 })
                 .collect(),
         }
     }
 }
 
-impl From<Message> for crate::v1::bgp::messages::Message {
+impl From<Message> for v1::bgp::messages::Message {
     fn from(msg: Message) -> Self {
         // The match exhausts all latest Message variants; adding a
         // variant fails to compile here, forcing an explicit v1 mapping.

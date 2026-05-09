@@ -4,14 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::v5::rdb::path::Path as RdbPath;
+use crate::v5::rdb::path::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct Rib(pub BTreeMap<String, BTreeSet<RdbPath>>);
+pub struct Rib(pub BTreeMap<String, BTreeSet<Path>>);
 
-pub type GetRibResult = BTreeMap<String, BTreeSet<RdbPath>>;
+pub type GetRibResult = BTreeMap<String, BTreeSet<Path>>;
 
 /// Downgrade a v5 `GetRibResult` to its v1 shape by mapping each `Path`
 /// through `From<v5::path::Path> for v1::path::Path`. Used by the

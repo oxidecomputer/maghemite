@@ -8,7 +8,6 @@ use crate::{
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
-    params::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange},
     router::{EnsureSessionResult, Router},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
@@ -18,6 +17,7 @@ use crate::{
     unnumbered_mock::UnnumberedManagerMock,
 };
 use lazy_static::lazy_static;
+use mg_api_types::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;

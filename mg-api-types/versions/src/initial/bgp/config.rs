@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use crate::v1::bgp::session::MessageHistory as MessageHistoryV1;
+use crate::v1::bgp::session::MessageHistory;
 use crate::v1::rdb::policy::ImportExportPolicy;
 use crate::v1::rdb::prefix::Prefix4;
 use schemars::JsonSchema;
@@ -49,7 +49,7 @@ pub struct MessageHistoryRequest {
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
-    pub by_peer: HashMap<IpAddr, MessageHistoryV1>,
+    pub by_peer: HashMap<IpAddr, MessageHistory>,
 }
 
 /// Legacy neighbor configuration (v1/v2 API compatibility)
