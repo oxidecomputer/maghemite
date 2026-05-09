@@ -30,14 +30,14 @@ pub struct RouterConfig {
 
 // ----- PeerConfig boundary conversions -----
 //
-// `PeerConfig` is bgp-internal (non-published). Each conversion
-// destructures both the outer Neighbor-shaped type and the embedded
-// BgpPeerParameters so a field addition on either fails to bind here,
-// forcing a deliberate decision about whether the new field belongs
-// on PeerConfig. Bindings prefixed `_:` are intentionally dropped —
-// most BgpPeerParameters fields are threaded through SessionInfo via
-// `From<&BgpPeerParameters> for SessionInfo`; PeerConfig only tracks
-// fields needed to drive the connection state machine.
+// `PeerConfig` is bgp-internal (non-published) and tracks only the
+// fields needed to drive the connection state machine — most
+// BgpPeerParameters fields are session-level and don't belong here.
+// Each conversion destructures both the outer Neighbor-shaped type
+// and the embedded BgpPeerParameters so a field addition on either
+// fails to bind here, forcing a deliberate decision about whether
+// the new field belongs on PeerConfig. Bindings prefixed `_:` are
+// intentionally dropped.
 
 impl From<Neighbor> for PeerConfig {
     fn from(rq: Neighbor) -> Self {

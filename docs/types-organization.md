@@ -76,43 +76,35 @@ where its current shape was first introduced, grouped by `pub mod
 
 ### Internal layout of `mg-api-types-versions`
 
-Per-version modules group sub-areas to keep version-vs-domain navigation
-cheap:
+Each `vN/` directory contains the API-shape sub-modules that
+introduced or changed types at that version — typically `bfd.rs`,
+`bgp/`, `rdb/`, `rib.rs`, `static_routes.rs`. The `bgp/` and `rdb/`
+sub-directories split further into `config`, `messages`, `session`,
+etc. Versions that introduced no new sub-area types (e.g. v6
+`rib_exported_string_key`, v7 `operation_id_cleanup`) typically
+contain only a single file or a `mod.rs`-only shape change.
+
+The crate root holds `parse.rs` and `error.rs` (non-published
+wire-parse helpers) and `impls/` (cross-version `From` impls and
+inherent methods on the latest forms; structured by area rather than
+by version).
+
+Versions that introduced no new wire-protocol types (v5 `unnumbered`,
+v8 `bgp_src_addr` — both admin-only) carry a flat `bgp.rs` rather than
+the `bgp/{config, messages, session}` sub-directory structure used by
+v1, v2, and v4. The directory split is added when a version genuinely
+introduces multi-kind content; otherwise a flat file is kept.
+
+As a worked example, v1's tree:
 
 ```
-v1 (initial)/
-  bfd.rs                       - BFD wire + admin path-params
-  bgp/{messages,session,config}.rs  - wire types, session history, admin config
-  rdb/{path,peer,policy,prefix,router,mod}.rs  - routing-database types,
-                                                 AddressFamily/ProtocolFilter
+v1/
+  bfd.rs
+  bgp/{config,messages,session}.rs
+  rdb/{path,peer,policy,prefix,router,mod}.rs
   rib.rs
   static_routes.rs
-v2 (ipv6_basic)/
-  bgp/{session,history}.rs     - v2 wire/session updates plus admin history
-  rib.rs
-  static_routes.rs
-v3 (switch_identifiers)/
-  switch.rs
-v4 (mp_bgp)/
-  bgp/{messages,config}.rs     - MP-BGP wire types and admin config
-  rdb/{neighbor,policy}.rs
-v5 (unnumbered)/
-  bgp.rs                       - unnumbered admin types
-  ndp.rs
-  rdb/path.rs
-  rib.rs
-v6, v7, v8/                    - schema-only or small-shape changes
-parse.rs, error.rs             - non-published wire-parse helpers
-impls/                         - cross-version From impls + inherent methods
-                                 on latest forms (bgp, messages, session,
-                                 path, peer, policy, prefix, rib)
 ```
-
-The `vN/bgp/mod.rs` and `vN/rdb/mod.rs` files re-flatten their per-area
-sub-modules so existing intra-crate references like
-`crate::v1::bgp::CheckerSource` continue to resolve. The wire-message
-and session sub-modules stay namespaced (`crate::v1::bgp::messages::*`,
-`crate::v2::bgp::session::*`).
 
 ### `mg-api-types` facade
 
@@ -150,6 +142,9 @@ through versioned module paths, not name-suffix or `as` renames:
   collisions are fair game for `as` renames.
 - Do not introduce name-suffix renames (`as FooV1`, `as FooV6`,
   `as LiveFoo`). The version path *is* the type's identity.
+- For latest-API types, prefer the `mg_api_types::area::Foo` facade.
+  Reach for `vN::area::Foo` only when you specifically need the
+  version-N shape (e.g. an older API endpoint or a downgrade path).
 
 ## Type to crate quick reference
 

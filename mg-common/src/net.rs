@@ -24,10 +24,10 @@ pub struct TunnelOriginV2 {
 
 impl From<TunnelOriginV2> for TunnelOrigin {
     fn from(value: TunnelOriginV2) -> Self {
-        // Compile barrier: TunnelOriginV2 is frozen by design and must
-        // never gain a field. If this destructure stops compiling, the
-        // V2 contract has been violated upstream — fix that, don't
-        // teach the conversion to handle a new field here.
+        // TunnelOriginV2 is the DDMv2 wire shape, frozen by protocol
+        // contract. If this destructure stops compiling, the V2
+        // contract has been violated upstream — there is no
+        // #[serde(skip)] escape valve for a wire-format type.
         let TunnelOriginV2 {
             overlay_prefix,
             boundary_addr,

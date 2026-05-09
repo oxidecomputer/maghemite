@@ -492,10 +492,11 @@ impl From<v1::bgp::config::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
 
 impl From<v1::bgp::config::ApplyRequest> for latest::bgp::ApplyRequest {
     fn from(req: v1::bgp::config::ApplyRequest) -> Self {
-        // v1 is frozen by design and must never gain a field. If this
-        // destructure stops compiling, the v1 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v1 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v1 contract has
+        // been violated upstream.
         let v1::bgp::config::ApplyRequest {
             asn,
             originate,
@@ -654,10 +655,11 @@ impl From<latest::bgp::BgpPeerConfig> for v4::bgp::config::BgpPeerConfig {
 
 impl From<v4::bgp::config::BgpPeerConfig> for latest::bgp::BgpPeerConfig {
     fn from(cfg: v4::bgp::config::BgpPeerConfig) -> Self {
-        // v4 is frozen by design and must never gain a field. If this
-        // destructure stops compiling, the v4 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v4 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v4 contract has
+        // been violated upstream.
         let v4::bgp::config::BgpPeerConfig {
             host,
             name,
@@ -694,10 +696,11 @@ impl From<v4::bgp::config::UnnumberedBgpPeerConfig>
     for latest::bgp::UnnumberedBgpPeerConfig
 {
     fn from(cfg: v4::bgp::config::UnnumberedBgpPeerConfig) -> Self {
-        // v4 is frozen by design and must never gain a field. If this
-        // destructure stops compiling, the v4 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v4 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v4 contract has
+        // been violated upstream.
         let v4::bgp::config::UnnumberedBgpPeerConfig {
             interface,
             name,
@@ -734,10 +737,11 @@ impl From<latest::bgp::Neighbor> for v4::bgp::config::Neighbor {
 
 impl From<v4::bgp::config::Neighbor> for latest::bgp::Neighbor {
     fn from(n: v4::bgp::config::Neighbor) -> Self {
-        // v4 is frozen by design and must never gain a field. If this
-        // destructure stops compiling, the v4 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v4 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v4 contract has
+        // been violated upstream.
         let v4::bgp::config::Neighbor {
             asn,
             name,
@@ -757,10 +761,11 @@ impl From<v4::bgp::config::Neighbor> for latest::bgp::Neighbor {
 
 impl From<v4::bgp::config::ApplyRequest> for latest::bgp::ApplyRequest {
     fn from(req: v4::bgp::config::ApplyRequest) -> Self {
-        // v4 is frozen by design and must never gain a field. If this
-        // destructure stops compiling, the v4 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v4 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v4 contract has
+        // been violated upstream.
         let v4::bgp::config::ApplyRequest {
             asn,
             originate,
@@ -825,10 +830,11 @@ impl From<latest::bgp::UnnumberedNeighbor> for v5::bgp::UnnumberedNeighbor {
 
 impl From<v5::bgp::UnnumberedNeighbor> for latest::bgp::UnnumberedNeighbor {
     fn from(n: v5::bgp::UnnumberedNeighbor) -> Self {
-        // v5 is frozen by design and must never gain a field. If this
-        // destructure stops compiling, the v5 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v5 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v5 contract has
+        // been violated upstream.
         let v5::bgp::UnnumberedNeighbor {
             asn,
             name,

@@ -946,10 +946,11 @@ impl From<&BgpPeerParameters> for SessionInfo {
 
 impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
     fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
-        // The v1 form is frozen by design and must never gain a field.
-        // If this destructure stops compiling, the v1 contract has been
-        // violated upstream — fix that, don't teach this conversion to
-        // handle a new field.
+        // v1 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v1 contract has
+        // been violated upstream.
         let v1::bgp::config::BgpPeerParameters {
             hold_time,
             idle_hold_time,
@@ -9092,7 +9093,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let session_conf = lock!(self.session);
             let ipv4 = session_conf.ipv4_unicast.clone().unwrap_or_default();
             let ipv6 = session_conf.ipv6_unicast.clone().unwrap_or_default();
-            let timers = TimerConfig::from_session_info(&session_conf);
+            let timers = TimerConfig::from(&*session_conf);
             (ipv4, ipv6, timers)
         }; // Lock dropped here!
 

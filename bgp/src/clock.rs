@@ -3,10 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::{BgpConnection, ConnectionId};
-use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
+use crate::session::{ConnectionEvent, FsmEvent, SessionEvent, SessionInfo};
 use mg_api_types::bgp::{DynamicTimerInfo, JitterRange};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use slog::{Logger, error};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -517,26 +519,22 @@ impl Display for ConnectionClock {
     }
 }
 
-/// Timer configuration extracted from SessionInfo.
-/// This is a lightweight value type that can be cloned and passed
-/// without locks.
-#[derive(
-    Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
+/// Timer configuration extracted from `SessionInfo`. Lightweight value
+/// type that can be cloned and passed without locks.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct TimerConfig {
-    pub connect_retry_time: std::time::Duration,
-    pub keepalive_time: std::time::Duration,
-    pub hold_time: std::time::Duration,
-    pub idle_hold_time: std::time::Duration,
-    pub delay_open_time: std::time::Duration,
-    pub resolution: std::time::Duration,
+    pub connect_retry_time: Duration,
+    pub keepalive_time: Duration,
+    pub hold_time: Duration,
+    pub idle_hold_time: Duration,
+    pub delay_open_time: Duration,
+    pub resolution: Duration,
     pub connect_retry_jitter: Option<JitterRange>,
     pub idle_hold_jitter: Option<JitterRange>,
 }
 
-impl TimerConfig {
-    /// Extract timer config from SessionInfo without holding lock
-    pub fn from_session_info(session: &crate::session::SessionInfo) -> Self {
+impl From<&SessionInfo> for TimerConfig {
+    fn from(session: &SessionInfo) -> Self {
         Self {
             connect_retry_time: session.connect_retry_time,
             keepalive_time: session.keepalive_time,
