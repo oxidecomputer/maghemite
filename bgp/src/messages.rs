@@ -10,8 +10,6 @@ use nom::{
 use path_attribute_flags::*;
 pub use rdb::types::Prefix;
 use rdb::types::{AddressFamily, Prefix4, Prefix6};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashSet},
     fmt::{Display, Formatter},
@@ -35,12 +33,6 @@ pub use mg_api_types_versions::error::MessageConvertError;
 pub use mg_api_types_versions::parse::{
     AttributeAction, NlriSection, UpdateParseErrorReason,
 };
-pub use mg_api_types_versions::v1::bgp::messages::{
-    PathAttribute as PathAttributeV1, PathAttributeType as PathAttributeTypeV1,
-    PathAttributeTypeCode as PathAttributeTypeCodeV1,
-    PathAttributeValue as PathAttributeValueV1, Prefix as PrefixV1,
-};
-
 /// Trait for encoding/decoding values to/from BGP wire format.
 ///
 /// This trait separates serialization/deserialization concerns from semantic
@@ -2542,78 +2534,6 @@ impl Display for MessageParseError {
 }
 
 // `AttributeAction` now lives in `mg_api_types_versions::parse` (re-exported above).
-
-// ============================================================================
-// API Compatibility Types (VERSION_INITIAL / v1.0.0)
-// ============================================================================
-// These types maintain backward compatibility with the INITIAL API version.
-// They are now defined in `mg_api_types_versions::v1::bgp::messages` and re-exported
-// here under their historical `*V1` names. The `From<current> for *V1` impls
-// live alongside the type definitions in `mg_api_types_versions::impls::messages`.
-
-/// V1 UpdateMessage type for API compatibility.
-///
-/// Uses PrefixV1 for NLRI and withdrawn prefixes, PathAttributeV1 for
-/// attributes. Lives in `bgp` because UpdateMessage itself has not yet
-/// migrated.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
-)]
-pub struct UpdateMessageV1 {
-    pub withdrawn: Vec<PrefixV1>,
-    pub path_attributes: Vec<PathAttributeV1>,
-    pub nlri: Vec<PrefixV1>,
-}
-
-impl From<UpdateMessage> for UpdateMessageV1 {
-    fn from(msg: UpdateMessage) -> Self {
-        Self {
-            withdrawn: msg
-                .withdrawn
-                .into_iter()
-                .map(|p| PrefixV1::from(Prefix::V4(p)))
-                .collect(),
-            // Filter out attributes that don't have v1 equivalents (MP-BGP,
-            // AtomicAggregate).
-            path_attributes: msg
-                .path_attributes
-                .into_iter()
-                .filter_map(Option::<PathAttributeV1>::from)
-                .collect(),
-            nlri: msg
-                .nlri
-                .into_iter()
-                .map(|p| PrefixV1::from(Prefix::V4(p)))
-                .collect(),
-        }
-    }
-}
-
-/// V1 Message enum for API compatibility. Lives in `bgp` because Message
-/// itself has not yet migrated.
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
-pub enum MessageV1 {
-    Open(OpenMessage),
-    Update(UpdateMessageV1),
-    Notification(NotificationMessage),
-    KeepAlive,
-    RouteRefresh(RouteRefreshMessage),
-}
-
-impl From<Message> for MessageV1 {
-    fn from(msg: Message) -> Self {
-        match msg {
-            Message::Open(open) => Self::Open(open),
-            Message::Update(update) => {
-                Self::Update(UpdateMessageV1::from(update))
-            }
-            Message::Notification(notif) => Self::Notification(notif),
-            Message::KeepAlive => Self::KeepAlive,
-            Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
