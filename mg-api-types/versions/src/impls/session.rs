@@ -151,26 +151,32 @@ impl MessageHistory {
 
 impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
     fn from(entry: MessageHistoryEntry) -> Self {
+        // Compile barrier: a v2 MessageHistoryEntry field addition will
+        // fail to bind here, forcing a deliberate decision about how
+        // (or whether) to surface it on the v1 form.
+        let MessageHistoryEntry {
+            timestamp,
+            message,
+            // v1 has no connection_id concept (added in v2 alongside
+            // multi-connection FSM history).
+            connection_id: _,
+        } = entry;
         Self {
-            timestamp: entry.timestamp,
-            message: crate::v1::bgp::messages::Message::from(entry.message),
+            timestamp,
+            message: crate::v1::bgp::messages::Message::from(message),
         }
     }
 }
 
 impl From<MessageHistory> for MessageHistoryV1 {
     fn from(history: MessageHistory) -> Self {
+        let MessageHistory { received, sent } = history;
         Self {
-            received: history
-                .received
+            received: received
                 .into_iter()
                 .map(MessageHistoryEntryV1::from)
                 .collect(),
-            sent: history
-                .sent
-                .into_iter()
-                .map(MessageHistoryEntryV1::from)
-                .collect(),
+            sent: sent.into_iter().map(MessageHistoryEntryV1::from).collect(),
         }
     }
 }

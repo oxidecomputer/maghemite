@@ -890,9 +890,10 @@ impl From<PathAttributeTypeCode> for PathAttributeTypeCodeV1 {
 
 impl From<PathAttributeType> for PathAttributeTypeV1 {
     fn from(t: PathAttributeType) -> Self {
+        let PathAttributeType { flags, type_code } = t;
         Self {
-            flags: t.flags,
-            type_code: PathAttributeTypeCodeV1::from(t.type_code),
+            flags,
+            type_code: PathAttributeTypeCodeV1::from(type_code),
         }
     }
 }
@@ -937,9 +938,10 @@ impl From<PathAttributeValue> for Option<PathAttributeValueV1> {
 
 impl From<PathAttribute> for Option<PathAttributeV1> {
     fn from(attr: PathAttribute) -> Self {
-        let value_opt: Option<PathAttributeValueV1> = attr.value.into();
+        let PathAttribute { typ, value } = attr;
+        let value_opt: Option<PathAttributeValueV1> = value.into();
         value_opt.map(|value| PathAttributeV1 {
-            typ: PathAttributeTypeV1::from(attr.typ),
+            typ: PathAttributeTypeV1::from(typ),
             value,
         })
     }
@@ -1688,9 +1690,20 @@ impl Display for UpdateMessage {
 
 impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
     fn from(msg: UpdateMessage) -> Self {
+        // Compile barrier: a latest UpdateMessage field addition will
+        // fail to bind here, forcing a deliberate decision about how
+        // (or whether) to surface it on the v1 form.
+        let UpdateMessage {
+            withdrawn,
+            path_attributes,
+            nlri,
+            // `errors` is the runtime parse-error trace (#[serde(skip)],
+            // #[schemars(skip)]); it never appears on the wire and has
+            // no v1 representation.
+            errors: _,
+        } = msg;
         Self {
-            withdrawn: msg
-                .withdrawn
+            withdrawn: withdrawn
                 .into_iter()
                 .map(|p| {
                     crate::v1::bgp::messages::Prefix::from(RdbPrefix::V4(p))
@@ -1698,13 +1711,11 @@ impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
                 .collect(),
             // Filter out attributes that don't have v1 equivalents (MP-BGP,
             // AtomicAggregate).
-            path_attributes: msg
-                .path_attributes
+            path_attributes: path_attributes
                 .into_iter()
                 .filter_map(Option::<PathAttributeV1>::from)
                 .collect(),
-            nlri: msg
-                .nlri
+            nlri: nlri
                 .into_iter()
                 .map(|p| {
                     crate::v1::bgp::messages::Prefix::from(RdbPrefix::V4(p))
@@ -1716,6 +1727,8 @@ impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
 
 impl From<Message> for crate::v1::bgp::messages::Message {
     fn from(msg: Message) -> Self {
+        // The match exhausts all latest Message variants; adding a
+        // variant fails to compile here, forcing an explicit v1 mapping.
         match msg {
             Message::Open(open) => Self::Open(open),
             Message::Update(update) => Self::Update(update.into()),
