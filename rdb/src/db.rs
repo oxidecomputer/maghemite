@@ -14,6 +14,12 @@ use crate::error::Error;
 use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
+use mg_api_types::bfd::BfdPeerConfig;
+use mg_api_types::bgp::PeerId;
+use mg_api_types::{
+    AddressFamily, BgpNeighborInfo, BgpRouterInfo, BgpUnnumberedNeighborInfo,
+    Path, Prefix, Prefix4, Prefix6,
+};
 use mg_common::{lock, read_lock, write_lock};
 use sled::Tree;
 use slog::{Logger, error};
@@ -72,7 +78,7 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
-pub use mg_api_types::{Rib, Rib4, Rib6};
+use mg_api_types::{Rib, Rib4, Rib6};
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -1473,10 +1479,10 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
-        Prefix6, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
-        types::test_helpers::path_vecs_equal,
+        DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey, db::Db, test::TestDb,
+        types::PrefixDbKey, types::test_helpers::path_vecs_equal,
     };
+    use mg_api_types::{AddressFamily, Path, Prefix, Prefix4, Prefix6};
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
@@ -1512,9 +1518,10 @@ mod test {
     fn test_rib() {
         use crate::StaticRouteKey;
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4, db::Db,
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC, db::Db,
         };
+        use mg_api_types::bgp::PeerId;
+        use mg_api_types::{BgpPathProperties, Path, Prefix, Prefix4};
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
@@ -2243,10 +2250,11 @@ mod test {
     #[test]
     fn test_set_nexthop_shutdown_replaces_path() {
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4,
-            Prefix6, StaticRouteKey,
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+            StaticRouteKey,
         };
+        use mg_api_types::bgp::PeerId;
+        use mg_api_types::{BgpPathProperties, Path, Prefix, Prefix4, Prefix6};
 
         let db = get_test_db();
 

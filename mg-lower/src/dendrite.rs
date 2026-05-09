@@ -10,8 +10,8 @@ use crate::{
 #[cfg(target_os = "illumos")]
 use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
+use mg_api_types::{Path, Prefix};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use rdb::{Path, Prefix};
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},

@@ -403,8 +403,8 @@ pub struct UpdateMessage {
     #[serde(skip, default)]
     #[schemars(skip)]
     pub errors: Vec<(
-        crate::parse::UpdateParseErrorReason,
-        crate::parse::AttributeAction,
+        crate::bgp::parse::UpdateParseErrorReason,
+        crate::bgp::parse::AttributeAction,
     )>,
 }
 

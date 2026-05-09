@@ -7,7 +7,8 @@ use crate::session::{
     AdminEvent, FsmEvent, PeerId, RouteUpdate, RouteUpdate4, RouteUpdate6,
 };
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
-use rdb::types::{Ipv4Marker, Ipv6Marker, Prefix4, Prefix6};
+use mg_api_types::{Prefix4, Prefix6};
+use rdb::types::{Ipv4Marker, Ipv6Marker};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;

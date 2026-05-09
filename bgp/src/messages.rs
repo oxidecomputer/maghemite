@@ -3,34 +3,34 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{BGP_VERSION, error::Error};
+pub(crate) use mg_api_types::Prefix;
+use mg_api_types::{AddressFamily, Prefix4, Prefix6};
 use nom::{
     bytes::complete::take,
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
 use path_attribute_flags::*;
-pub use rdb::types::Prefix;
-use rdb::types::{AddressFamily, Prefix4, Prefix6};
 use std::{
     collections::{BTreeSet, HashSet},
     fmt::{Display, Formatter},
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-pub use mg_api_types::bgp::messages::{
-    AS_TRANS, AddPathElement, Afi, Aggregator, As4Aggregator, As4PathSegment,
-    AsPathType, BGP4, BgpNexthop, Capability, CapabilityCode,
-    CeaseErrorSubcode, Community, ErrorCode, ErrorSubcode,
-    ExtendedNexthopElement, Header, HeaderErrorSubcode, Ipv6DoubleNexthop,
-    MAX_MESSAGE_SIZE, Message, MessageKind, MessageType, MpReachIpv4Unicast,
-    MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
+#[cfg(test)]
+pub(crate) use mg_api_types::bgp::messages::Ipv6DoubleNexthop;
+pub(crate) use mg_api_types::bgp::messages::{
+    AddPathElement, Afi, Aggregator, As4Aggregator, As4PathSegment, AsPathType,
+    BgpNexthop, Capability, CapabilityCode, CeaseErrorSubcode, Community,
+    ErrorCode, ErrorSubcode, ExtendedNexthopElement, Header,
+    HeaderErrorSubcode, MAX_MESSAGE_SIZE, Message, MessageKind, MessageType,
+    MpReachIpv4Unicast, MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
     MpUnreachIpv6Unicast, MpUnreachNlri, NotificationMessage, OpenErrorSubcode,
     OpenMessage, OptionalParameter, OptionalParameterCode, PathAttribute,
     PathAttributeType, PathAttributeTypeCode, PathAttributeValue, PathOrigin,
-    RouteRefreshMessage, Safi, Tlv, UpdateErrorSubcode, UpdateMessage,
+    RouteRefreshMessage, Safi, UpdateErrorSubcode, UpdateMessage,
     path_attribute_flags,
 };
-pub use mg_api_types_versions::error::MessageConvertError;
-pub use mg_api_types_versions::parse::{
+use mg_api_types::bgp::parse::{
     AttributeAction, NlriSection, UpdateParseErrorReason,
 };
 /// Trait for encoding/decoding values to/from BGP wire format.
@@ -2272,10 +2272,6 @@ pub fn capability_from_wire(
 //   during parsing. false = normal, true = process all NLRI as withdrawals.
 // - UpdateMessage.errors: Vec collecting all non-fatal parse errors encountered.
 
-// `UpdateParseErrorReason`, `AttributeAction`, and `NlriSection` now live in
-// `mg_api_types_versions::parse` (re-exported above). Their `Display` impls
-// live alongside the type definitions in that crate.
-
 /// Parsed path attributes from wire format.
 ///
 /// Note: Existence of this struct means no fatal (SessionReset) errors occurred.
@@ -2533,15 +2529,13 @@ impl Display for MessageParseError {
     }
 }
 
-// `AttributeAction` now lives in `mg_api_types_versions::parse` (re-exported above).
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mg_api_types::Prefix;
     use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
-    use rdb::Prefix;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -4694,7 +4688,7 @@ mod tests {
             path_attribute_value_from_wire, path_attribute_value_to_wire,
             treat_as_withdraw, update_message_from_wire,
         };
-        use rdb::Prefix6;
+        use mg_api_types::Prefix6;
 
         /// Build an UPDATE message wire format with the given path attributes bytes.
         fn build_update_wire(path_attrs: &[u8], nlri: &[u8]) -> Vec<u8> {

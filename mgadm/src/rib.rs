@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::{Client, print_rib};
 use mg_api_types::rib::BestpathFanoutRequest;
-use rdb::types::{AddressFamily, ProtocolFilter};
+use mg_api_types::{AddressFamily, ProtocolFilter};
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {

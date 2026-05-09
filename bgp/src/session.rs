@@ -24,21 +24,22 @@ use crate::{
     router::Router,
     unnumbered::UnnumberedManager,
 };
-pub use mg_api_types::bgp::PeerId;
-pub use mg_api_types::bgp::session::{
-    FsmEventCategory, FsmEventRecord, FsmStateKind, MAX_MESSAGE_HISTORY,
-    MessageHistory, MessageHistoryEntry,
+pub(crate) use mg_api_types::bgp::PeerId;
+pub(crate) use mg_api_types::bgp::session::{
+    FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
 };
 use mg_api_types::bgp::{
-    BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
-    JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
+    BgpPeerParameters, DynamicTimerInfo, ImportExportPolicy,
+    ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
+    Ipv6UnicastConfig, JitterRange, PeerCounters, PeerInfo, PeerTimers,
+    StaticTimerInfo,
+};
+use mg_api_types::{
+    AddressFamily, BgpPathProperties, Prefix, Prefix4, Prefix6,
 };
 use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{
-    AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
-    ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
-};
+use rdb::{Asn, Db};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -8482,7 +8483,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 let nexthop_interface =
                     derive_nexthop_interface(&self.peer_id(), nexthop);
-                let path = rdb::Path {
+                let path = mg_api_types::Path {
                     nexthop,
                     nexthop_interface,
                     shutdown: update.graceful_shutdown(),
@@ -8557,7 +8558,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             &self.peer_id(),
                             mp_nexthop,
                         );
-                        let path4 = rdb::Path {
+                        let path4 = mg_api_types::Path {
                             nexthop: mp_nexthop,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),
@@ -8637,7 +8638,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                         let nexthop_interface =
                             derive_nexthop_interface(&self.peer_id(), nexthop6);
-                        let path6 = rdb::Path {
+                        let path6 = mg_api_types::Path {
                             nexthop: nexthop6,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),

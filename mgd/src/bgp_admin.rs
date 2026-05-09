@@ -15,18 +15,22 @@ use bgp::{
     config::{PeerConfig, RouterConfig},
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
-    messages::Afi,
     policy::{PolicyKind, PolicySource},
     router::{LoadPolicyError, Router},
     session::{
-        AdminEvent, ConnectionKind, FsmEvent, FsmEventRecord, FsmStateKind,
-        MessageHistory, PeerId, SessionEndpoint, SessionInfo, SessionRunner,
+        AdminEvent, ConnectionKind, FsmEvent, SessionEndpoint, SessionInfo,
+        SessionRunner,
     },
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
+};
+use mg_api_types::bgp::PeerId;
+use mg_api_types::bgp::messages::Afi;
+use mg_api_types::bgp::session::{
+    FsmEventRecord, FsmStateKind, MessageHistory,
 };
 use mg_api_types::bgp::{
     ApplyRequest, AsnSelector, CheckerSource, ExportedSelector, FsmEventBuffer,
@@ -36,17 +40,16 @@ use mg_api_types::bgp::{
     ShaperSource, UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
+use mg_api_types::bgp::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
+use mg_api_types::{AddressFamily, BgpRouterInfo, Prefix, Prefix4, Prefix6};
 use mg_api_types_versions::v1::bgp::policy::ImportExportPolicy;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
-use rdb::{
-    AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
-    ImportExportPolicy6, Prefix, Prefix4, Prefix6,
-};
+use rdb::Asn;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -1299,7 +1302,7 @@ async fn do_bgp_apply(
     .await?;
 
     for (group, peers) in &upeers {
-        let current: Vec<rdb::BgpUnnumberedNeighborInfo> = ctx
+        let current: Vec<mg_api_types::BgpUnnumberedNeighborInfo> = ctx
             .db
             .get_unnumbered_bgp_neighbors()
             .map_err(Error::Db)?
@@ -1397,7 +1400,7 @@ async fn do_bgp_apply(
     }
 
     for (group, peers) in &peers {
-        let current: Vec<rdb::BgpNeighborInfo> = ctx
+        let current: Vec<mg_api_types::BgpNeighborInfo> = ctx
             .db
             .get_bgp_neighbors()
             .map_err(Error::Db)?
@@ -1835,7 +1838,7 @@ pub async fn delete_shaper(
 
 pub(crate) mod helpers {
     use bgp::router::{EnsureSessionResult, UnloadPolicyError};
-    use rdb::BgpNeighborParameters;
+    use mg_api_types::BgpNeighborParameters;
 
     use super::*;
 
@@ -1933,7 +1936,7 @@ pub(crate) mod helpers {
             true
         };
 
-        ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+        ctx.db.add_bgp_neighbor(mg_api_types::BgpNeighborInfo {
             asn: rq.asn,
             name: rq.name.clone(),
             group: rq.group.clone(),
@@ -2047,7 +2050,7 @@ pub(crate) mod helpers {
                 ),
             };
 
-        ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+        ctx.db.add_bgp_neighbor(mg_api_types::BgpNeighborInfo {
             asn: rq.asn,
             group: rq.group.clone(),
             name: rq.name.clone(),
@@ -2170,8 +2173,8 @@ pub(crate) mod helpers {
                 ),
             };
 
-        ctx.db
-            .add_unnumbered_bgp_neighbor(rdb::BgpUnnumberedNeighborInfo {
+        ctx.db.add_unnumbered_bgp_neighbor(
+            mg_api_types::BgpUnnumberedNeighborInfo {
                 asn: rq.asn,
                 name: rq.name.clone(),
                 group: rq.group.clone(),
@@ -2206,7 +2209,8 @@ pub(crate) mod helpers {
                     src_addr: rq.parameters.src_addr,
                     src_port: rq.parameters.src_port,
                 },
-            })?;
+            },
+        )?;
 
         // Register interface for NDP peer discovery (NDP-only, no session creation)
         ctx.bgp

@@ -17,11 +17,13 @@ use crate::{
     unnumbered_mock::UnnumberedManagerMock,
 };
 use lazy_static::lazy_static;
+use mg_api_types::bgp::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
+use mg_api_types::{Prefix, Prefix4};
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
-use rdb::{Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4};
+use rdb::Asn;
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
@@ -1380,7 +1382,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
 /// 5. Path attributes are correctly preserved through filtering
 #[test]
 fn test_import_export_policy_filtering() {
-    use rdb::ImportExportPolicy4;
+    use mg_api_types::bgp::ImportExportPolicy4;
     use std::collections::BTreeSet;
 
     let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.12:{TEST_BGP_PORT}"));

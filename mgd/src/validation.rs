@@ -5,7 +5,7 @@
 //! Shared validation functions for API request handlers.
 
 use dropshot::HttpError;
-use rdb::{Prefix, Prefix4, Prefix6};
+use mg_api_types::{Prefix, Prefix4, Prefix6};
 
 /// Validate that all IPv4 prefixes have host bits unset and are valid for RIB.
 ///

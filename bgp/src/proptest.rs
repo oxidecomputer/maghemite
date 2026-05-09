@@ -19,8 +19,8 @@ use crate::messages::{
     path_attribute_flags, update_message_from_wire, update_message_nexthop,
     update_message_to_wire,
 };
+use mg_api_types::{Prefix4, Prefix6};
 use proptest::prelude::*;
-use rdb::types::{Prefix4, Prefix6};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 // =============================================================================

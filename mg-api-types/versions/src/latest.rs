@@ -39,6 +39,8 @@ pub mod bgp {
         ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6,
     };
 
+    pub use crate::bgp::{error, parse};
+
     pub mod messages {
         pub use crate::v1::bgp::messages::{
             AS_TRANS, AddPathElement, AsPathType, BGP4, Capability,

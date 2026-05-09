@@ -14,10 +14,10 @@ use nom::{
 };
 use num_enum::TryFromPrimitive;
 
-use crate::error::WireError;
+use crate::bgp::error::WireError;
 use std::collections::BTreeSet;
 
-use crate::error::MessageConvertError;
+use crate::bgp::error::MessageConvertError;
 use crate::v1;
 use crate::v1::bgp::messages::{
     AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
@@ -1536,7 +1536,10 @@ impl UpdateMessage {
     /// When true, all NLRI (v4 + v6) should be processed as withdrawals.
     pub fn treat_as_withdraw(&self) -> bool {
         self.errors.iter().any(|(_, action)| {
-            matches!(action, crate::parse::AttributeAction::TreatAsWithdraw,)
+            matches!(
+                action,
+                crate::bgp::parse::AttributeAction::TreatAsWithdraw,
+            )
         })
     }
 

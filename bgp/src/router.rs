@@ -19,8 +19,9 @@ use crate::{
     },
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::{Prefix4, Prefix6};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, Db, Prefix4, Prefix6};
+use rdb::{Asn, Db};
 use rhai::AST;
 use slog::Logger;
 use std::{

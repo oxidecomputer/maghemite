@@ -5,7 +5,7 @@ use dpd_client::types::{
     Ipv4Route, Ipv6Route, LinkId, LinkState, PortId, PortMedia, PortPrbsMode,
     PortSpeed, Route,
 };
-use rdb::{Path, Prefix4, db::Rib};
+use mg_api_types::{Path, Prefix4, Rib};
 
 use crate::dendrite::get_routes_for_prefix;
 use crate::platform::test::{TestDdm, TestDpd, TestSwitchZone};
@@ -326,7 +326,7 @@ async fn sync_v4_over_v6_readback() {
         );
 
         let log = util::test::logger();
-        let prefix: rdb::Prefix =
+        let prefix: mg_api_types::Prefix =
             "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
 
         let result =
@@ -392,7 +392,7 @@ async fn sync_v4_over_v6_idempotent() {
         });
 
         let log = util::test::logger();
-        let prefix: rdb::Prefix =
+        let prefix: mg_api_types::Prefix =
             "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
 
         // First sync — installs the route.
@@ -469,7 +469,7 @@ async fn sync_v4_over_v6_removal() {
         let rib = Rib::default();
 
         let log = util::test::logger();
-        let prefix: rdb::Prefix =
+        let prefix: mg_api_types::Prefix =
             "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
 
         crate::sync_prefix(tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt)
@@ -572,7 +572,7 @@ async fn sync_mixed_v4_and_v4_over_v6() {
         });
 
         let log = util::test::logger();
-        let prefix: rdb::Prefix =
+        let prefix: mg_api_types::Prefix =
             "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
 
         crate::sync_prefix(tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt)

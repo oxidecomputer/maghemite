@@ -13,21 +13,12 @@ use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
-// Re-export schema types that rdb stores or filters at runtime, sourced
-// from the mg-api-types facade. BGP-domain types come through
-// `mg_api_types::bgp::*`; routing-database-domain types come through
-// the `mg_api_types::*` flat root re-exports.
-pub use mg_api_types::bgp::{
-    ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6, PeerId,
-};
-pub use mg_api_types::{
-    AddressFamily, BgpNeighborInfo, BgpNeighborParameters, BgpPathProperties,
-    BgpRouterInfo, BgpUnnumberedNeighborInfo, Path, Prefix, Prefix4, Prefix6,
-    ProtocolFilter,
-};
-
-// BFD types are in the same facade.
-pub use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
+#[cfg(test)]
+use mg_api_types::BgpPathProperties;
+use mg_api_types::Path;
+#[cfg(test)]
+use mg_api_types::bgp::PeerId;
+use mg_api_types::{Prefix, Prefix4, Prefix6};
 
 // Marker types for compile-time address family discrimination.
 //

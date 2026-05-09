@@ -4,8 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::types::Path;
 use itertools::Itertools;
+use mg_api_types::Path;
 
 /// The bestpath algorithm chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
@@ -125,17 +125,17 @@ pub fn bgp_bestpaths(
 
 #[cfg(test)]
 mod test {
-    use crate::PeerId;
+    use mg_api_types::bgp::PeerId;
     use std::collections::BTreeSet;
     use std::net::IpAddr;
     use std::str::FromStr;
 
     use super::bestpaths;
     use crate::{
-        BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-        DEFAULT_RIB_PRIORITY_STATIC, Path,
+        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
         types::test_helpers::path_sets_equal,
     };
+    use mg_api_types::{BgpPathProperties, Path};
 
     // Bestpaths is purely a function of the path info itself, so we don't
     // need a Rib or Prefix, just a set of candidate paths and a set of

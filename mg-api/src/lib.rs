@@ -5,19 +5,19 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use bgp::session::PeerId;
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
+use mg_api_types::Prefix;
 use mg_api_types::bfd::{BfdPeerConfig, BfdPeerInfo};
+use mg_api_types::bgp::PeerId;
 use mg_api_types::bgp::{
     ApplyRequest, CheckerSource, Neighbor, Origin4, Origin6, PeerInfo, Router,
     ShaperSource, UnnumberedNeighbor,
 };
 use mg_api_types_versions::{latest, v1, v2, v4, v5};
-use rdb::Prefix;
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):

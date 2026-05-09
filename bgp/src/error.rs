@@ -194,9 +194,7 @@ pub enum Error {
     UnsupportedOperation(String),
 
     #[error("Message conversion: {0}")]
-    MessageConversion(
-        #[from] mg_api_types_versions::error::MessageConvertError,
-    ),
+    MessageConversion(#[from] mg_api_types::bgp::error::MessageConvertError),
 
     #[error("Failed to send event: {0}")]
     EventSend(String),
@@ -217,7 +215,7 @@ pub enum Error {
     MalformedAttributeList(String),
 
     #[error("Wire error: {0}")]
-    Wire(#[from] mg_api_types_versions::error::WireError),
+    Wire(#[from] mg_api_types::bgp::error::WireError),
 }
 
 #[derive(Debug)]

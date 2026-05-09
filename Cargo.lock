@@ -3814,6 +3814,7 @@ dependencies = [
  "ddm-admin-client",
  "dpd-client",
  "libnet",
+ "mg-api-types",
  "mg-common",
  "oxnet",
  "progenitor-client 0.14.0",

@@ -14,7 +14,8 @@ use mg_api_types::static_routes::{
     DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
 use mg_api_types::switch::SwitchIdentifiers;
-use rdb::{AddressFamily, Prefix, StaticRouteKey};
+use mg_api_types::{AddressFamily, Prefix};
+use rdb::StaticRouteKey;
 use std::{collections::BTreeMap, sync::Arc};
 
 // `From<StaticRouteN>` impls cannot live in `mg-api-types-versions` (would

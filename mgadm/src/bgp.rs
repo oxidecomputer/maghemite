@@ -11,7 +11,7 @@ use mg_api_types::bgp::{
     ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
     Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
 };
-use rdb::types::{Prefix4, Prefix6};
+use mg_api_types::{Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -1257,7 +1257,7 @@ async fn get_exported(
 ) -> Result<()> {
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.map(|p| {
-        let bgp_peer_id: bgp::session::PeerId =
+        let bgp_peer_id: mg_api_types::bgp::PeerId =
             p.parse().expect("PeerId::from_str should always succeed");
         bgp_peer_id
     });
@@ -1573,7 +1573,7 @@ async fn get_fsm_history(
 
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.as_ref().map(|p| {
-        let bgp_peer_id: bgp::session::PeerId =
+        let bgp_peer_id: mg_api_types::bgp::PeerId =
             p.parse().expect("PeerId::from_str should always succeed");
         bgp_peer_id
     });
@@ -1716,7 +1716,7 @@ async fn get_message_history(
     };
 
     // Parse peer and convert to API type
-    let bgp_peer_id: bgp::session::PeerId = peer
+    let bgp_peer_id: mg_api_types::bgp::PeerId = peer
         .parse()
         .expect("PeerId::from_str should always succeed");
     let peer_id = bgp_peer_id;
