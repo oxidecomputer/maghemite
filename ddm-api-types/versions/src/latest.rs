@@ -23,5 +23,8 @@ pub mod exchange {
 }
 
 pub mod net {
-    pub use crate::v1::net::{IpPrefix, Ipv4Prefix, Ipv6Prefix, TunnelOrigin};
+    pub use crate::v1::net::IpPrefix;
+    pub use crate::v1::net::Ipv4Prefix;
+    pub use crate::v1::net::Ipv6Prefix;
+    pub use crate::v1::net::TunnelOrigin;
 }
