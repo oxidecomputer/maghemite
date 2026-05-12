@@ -1387,14 +1387,10 @@ dependencies = [
 name = "ddm-api"
 version = "0.1.0"
 dependencies = [
- "ddm-api-types",
  "ddm-api-types-versions",
  "dropshot",
  "dropshot-api-manager-types",
  "oxnet",
- "schemars 0.8.22",
- "serde",
- "uuid",
 ]
 
 [[package]]
@@ -3746,14 +3742,9 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
- "bgp",
  "dropshot",
  "dropshot-api-manager-types",
- "mg-api-types",
  "mg-api-types-versions",
- "rdb",
- "schemars 0.8.22",
- "serde",
 ]
 
 [[package]]

@@ -10,13 +10,6 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_api_types::Prefix;
-use mg_api_types::bfd::{BfdPeerConfig, BfdPeerInfo};
-use mg_api_types::bgp::PeerId;
-use mg_api_types::bgp::{
-    ApplyRequest, CheckerSource, Neighbor, Origin4, Origin6, PeerInfo, Router,
-    ShaperSource, UnnumberedNeighbor,
-};
 use mg_api_types_versions::{latest, v1, v2, v4, v5};
 
 api_versions!([
@@ -63,14 +56,14 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bfd/peers" }]
     async fn get_bfd_peers(
         rqctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<latest::bfd::BfdPeerInfo>>, HttpError>;
 
     /// Add a new peer to the daemon. A session for the specified peer will start
     /// immediately.
     #[endpoint { method = PUT, path = "/bfd/peers" }]
     async fn add_bfd_peer(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<BfdPeerConfig>,
+        request: TypedBody<latest::bfd::BfdPeerConfig>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     /// Remove the specified peer from the daemon. The associated peer session will
@@ -84,24 +77,24 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/config/routers" }]
     async fn read_routers(
         rqctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<Vec<Router>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<latest::bgp::Router>>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/router" }]
     async fn create_router(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Router>,
+        request: TypedBody<latest::bgp::Router>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/router" }]
     async fn read_router(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Router>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::Router>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/router" }]
     async fn update_router(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Router>,
+        request: TypedBody<latest::bgp::Router>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/router" }]
@@ -118,25 +111,25 @@ pub trait MgAdminApi {
     #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn create_neighbor(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<latest::bgp::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn read_neighbor(
         rqctx: RequestContext<Self::Context>,
         path: Path<latest::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::Neighbor>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn read_neighbors(
         rqctx: RequestContext<Self::Context>,
         path: Path<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<latest::bgp::Neighbor>>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn update_neighbor(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<latest::bgp::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_BGP_SRC_ADDR.. }]
@@ -321,24 +314,24 @@ pub trait MgAdminApi {
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<latest::bgp::UnnumberedNeighbor>>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<UnnumberedNeighbor>,
+        request: TypedBody<latest::bgp::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::UnnumberedNeighbor>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<UnnumberedNeighbor>,
+        request: TypedBody<latest::bgp::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR.. }]
@@ -432,19 +425,19 @@ pub trait MgAdminApi {
     #[endpoint { method = PUT, path = "/bgp/config/origin4" }]
     async fn create_origin4(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Origin4>,
+        request: TypedBody<latest::bgp::Origin4>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/origin4" }]
     async fn read_origin4(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Origin4>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::Origin4>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/origin4" }]
     async fn update_origin4(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Origin4>,
+        request: TypedBody<latest::bgp::Origin4>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/origin4" }]
@@ -456,19 +449,19 @@ pub trait MgAdminApi {
     #[endpoint { method = PUT, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
     async fn create_origin6(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Origin6>,
+        request: TypedBody<latest::bgp::Origin6>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
     async fn read_origin6(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Origin6>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::Origin6>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
     async fn update_origin6(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Origin6>,
+        request: TypedBody<latest::bgp::Origin6>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
@@ -483,7 +476,10 @@ pub trait MgAdminApi {
     async fn get_exported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bgp::ExportedSelector>,
-    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError>;
+    ) -> Result<
+        HttpResponseOk<HashMap<String, Vec<latest::rdb::prefix::Prefix>>>,
+        HttpError,
+    >;
 
     // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers.
     // NOTE: broken — PeerId enum can't serialize as JSON object key.
@@ -491,14 +487,22 @@ pub trait MgAdminApi {
     async fn get_exported_v5(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v5::bgp::ExportedSelector>,
-    ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError>;
+    ) -> Result<
+        HttpResponseOk<
+            HashMap<latest::bgp::PeerId, Vec<latest::rdb::prefix::Prefix>>,
+        >,
+        HttpError,
+    >;
 
     // Old exported endpoint - IPv4 only, no filtering.
     #[endpoint { method = GET, path = "/bgp/status/exported", versions = ..VERSION_UNNUMBERED }]
     async fn get_exported_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError>;
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, Vec<latest::rdb::prefix::Prefix>>>,
+        HttpError,
+    >;
 
     // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum.
     #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED.. }]
@@ -548,13 +552,13 @@ pub trait MgAdminApi {
     async fn get_neighbors(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<String, latest::bgp::PeerInfo>>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn get_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, latest::bgp::PeerInfo>>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
     async fn get_neighbors_v2(
@@ -578,7 +582,7 @@ pub trait MgAdminApi {
     #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_BGP_SRC_ADDR.. }]
     async fn bgp_apply(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequest>,
+        request: TypedBody<latest::bgp::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     // V4-V7 API - v4::bgp::config::ApplyRequest with per-AF policies but no src_addr/src_port.
@@ -659,19 +663,19 @@ pub trait MgAdminApi {
     #[endpoint { method = PUT, path = "/bgp/config/checker" }]
     async fn create_checker(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<CheckerSource>,
+        request: TypedBody<latest::bgp::CheckerSource>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/checker" }]
     async fn read_checker(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<CheckerSource>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::CheckerSource>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/checker" }]
     async fn update_checker(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<CheckerSource>,
+        request: TypedBody<latest::bgp::CheckerSource>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/checker" }]
@@ -683,19 +687,19 @@ pub trait MgAdminApi {
     #[endpoint { method = PUT, path = "/bgp/config/shaper" }]
     async fn create_shaper(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<ShaperSource>,
+        request: TypedBody<latest::bgp::ShaperSource>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/shaper" }]
     async fn read_shaper(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<ShaperSource>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::bgp::ShaperSource>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/shaper" }]
     async fn update_shaper(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<ShaperSource>,
+        request: TypedBody<latest::bgp::ShaperSource>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/shaper" }]
