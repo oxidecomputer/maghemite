@@ -30,7 +30,7 @@ use crate::messages::{
     CapabilityCode, Message, OpenMessage, Prefix, UpdateMessage,
 };
 use crate::rhai_integration::*;
-use mg_api_types::{Prefix4, Prefix6};
+use mg_api_types::rdb::{Prefix4, Prefix6};
 use rhai::{
     AST, Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
     Scope,

@@ -34,7 +34,7 @@ use mg_api_types::bgp::{
     Ipv6UnicastConfig, JitterRange, PeerCounters, PeerInfo, PeerTimers,
     StaticTimerInfo,
 };
-use mg_api_types::{
+use mg_api_types::rdb::{
     AddressFamily, BgpPathProperties, Prefix, Prefix4, Prefix6,
 };
 use mg_api_types_versions::v1;
@@ -8483,7 +8483,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 let nexthop_interface =
                     derive_nexthop_interface(&self.peer_id(), nexthop);
-                let path = mg_api_types::Path {
+                let path = mg_api_types::rdb::Path {
                     nexthop,
                     nexthop_interface,
                     shutdown: update.graceful_shutdown(),
@@ -8558,7 +8558,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             &self.peer_id(),
                             mp_nexthop,
                         );
-                        let path4 = mg_api_types::Path {
+                        let path4 = mg_api_types::rdb::Path {
                             nexthop: mp_nexthop,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),
@@ -8638,7 +8638,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                         let nexthop_interface =
                             derive_nexthop_interface(&self.peer_id(), nexthop6);
-                        let path6 = mg_api_types::Path {
+                        let path6 = mg_api_types::rdb::Path {
                             nexthop: nexthop6,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),

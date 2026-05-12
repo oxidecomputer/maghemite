@@ -8,13 +8,13 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
+use mg_api_types::rdb::{AddressFamily, Prefix};
 use mg_api_types::rib::GetRibResult;
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
     DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
 use mg_api_types::switch::SwitchIdentifiers;
-use mg_api_types::{AddressFamily, Prefix};
 use rdb::StaticRouteKey;
 use std::{collections::BTreeMap, sync::Arc};
 

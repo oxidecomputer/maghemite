@@ -14,11 +14,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 #[cfg(test)]
-use mg_api_types::BgpPathProperties;
-use mg_api_types::Path;
-#[cfg(test)]
 use mg_api_types::bgp::PeerId;
-use mg_api_types::{Prefix, Prefix4, Prefix6};
+#[cfg(test)]
+use mg_api_types::rdb::BgpPathProperties;
+use mg_api_types::rdb::Path;
+use mg_api_types::rdb::{Prefix, Prefix4, Prefix6};
 
 // Marker types for compile-time address family discrimination.
 //

@@ -11,7 +11,6 @@ use dropshot::{
     TypedBody,
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
-use mg_api_types::Prefix;
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_api_types::bgp::PeerId;
@@ -23,6 +22,7 @@ use mg_api_types::bgp::{
     UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
 };
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
+use mg_api_types::rdb::Prefix;
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };

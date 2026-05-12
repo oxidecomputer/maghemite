@@ -10,7 +10,7 @@
 
 use crate::types::StaticRouteKey;
 use mg_api_types::bgp::{ImportExportPolicy4, ImportExportPolicy6};
-use mg_api_types::{
+use mg_api_types::rdb::{
     BgpNeighborInfo, BgpNeighborParameters, Prefix, Prefix4, Prefix6,
 };
 use proptest::{prelude::*, strategy::Just};

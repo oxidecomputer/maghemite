@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mg_api_types::Path;
+use mg_api_types::rdb::Path;
 
 /// The bestpath algorithm chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
@@ -135,7 +135,7 @@ mod test {
         DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
         types::test_helpers::path_sets_equal,
     };
-    use mg_api_types::{BgpPathProperties, Path};
+    use mg_api_types::rdb::{BgpPathProperties, Path};
 
     // Bestpaths is purely a function of the path info itself, so we don't
     // need a Rib or Prefix, just a set of candidate paths and a set of

@@ -45,7 +45,9 @@ use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_api_types::{AddressFamily, BgpRouterInfo, Prefix, Prefix4, Prefix6};
+use mg_api_types::rdb::{
+    AddressFamily, BgpRouterInfo, Prefix, Prefix4, Prefix6,
+};
 use mg_api_types_versions::v1::bgp::policy::ImportExportPolicy;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
@@ -1306,7 +1308,7 @@ async fn do_bgp_apply(
     .await?;
 
     for (group, peers) in &upeers {
-        let current: Vec<mg_api_types::BgpUnnumberedNeighborInfo> = ctx
+        let current: Vec<mg_api_types::rdb::BgpUnnumberedNeighborInfo> = ctx
             .db
             .get_unnumbered_bgp_neighbors()
             .map_err(Error::Db)?
@@ -1404,7 +1406,7 @@ async fn do_bgp_apply(
     }
 
     for (group, peers) in &peers {
-        let current: Vec<mg_api_types::BgpNeighborInfo> = ctx
+        let current: Vec<mg_api_types::rdb::BgpNeighborInfo> = ctx
             .db
             .get_bgp_neighbors()
             .map_err(Error::Db)?
@@ -1842,7 +1844,7 @@ pub async fn delete_shaper(
 
 pub(crate) mod helpers {
     use bgp::router::{EnsureSessionResult, UnloadPolicyError};
-    use mg_api_types::BgpNeighborParameters;
+    use mg_api_types::rdb::BgpNeighborParameters;
 
     use super::*;
 
@@ -1940,43 +1942,44 @@ pub(crate) mod helpers {
             true
         };
 
-        ctx.db.add_bgp_neighbor(mg_api_types::BgpNeighborInfo {
-            asn: rq.asn,
-            name: rq.name.clone(),
-            group: rq.group.clone(),
-            host: rq.host,
-            parameters: BgpNeighborParameters {
-                hold_time: rq.parameters.hold_time,
-                idle_hold_time: rq.parameters.idle_hold_time,
-                delay_open: rq.parameters.delay_open,
-                passive: rq.parameters.passive,
-                connect_retry: rq.parameters.connect_retry,
-                keepalive: rq.parameters.keepalive,
-                resolution: rq.parameters.resolution,
-                remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
-                md5_auth_key: rq.parameters.md5_auth_key,
-                multi_exit_discriminator: rq
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: rq.parameters.communities,
-                local_pref: rq.parameters.local_pref,
-                enforce_first_as: rq.parameters.enforce_first_as,
-                allow_import4,
-                allow_export4,
-                vlan_id: rq.parameters.vlan_id,
+        ctx.db
+            .add_bgp_neighbor(mg_api_types::rdb::BgpNeighborInfo {
+                asn: rq.asn,
+                name: rq.name.clone(),
+                group: rq.group.clone(),
+                host: rq.host,
+                parameters: BgpNeighborParameters {
+                    hold_time: rq.parameters.hold_time,
+                    idle_hold_time: rq.parameters.idle_hold_time,
+                    delay_open: rq.parameters.delay_open,
+                    passive: rq.parameters.passive,
+                    connect_retry: rq.parameters.connect_retry,
+                    keepalive: rq.parameters.keepalive,
+                    resolution: rq.parameters.resolution,
+                    remote_asn: rq.parameters.remote_asn,
+                    min_ttl: rq.parameters.min_ttl,
+                    md5_auth_key: rq.parameters.md5_auth_key,
+                    multi_exit_discriminator: rq
+                        .parameters
+                        .multi_exit_discriminator,
+                    communities: rq.parameters.communities,
+                    local_pref: rq.parameters.local_pref,
+                    enforce_first_as: rq.parameters.enforce_first_as,
+                    allow_import4,
+                    allow_export4,
+                    vlan_id: rq.parameters.vlan_id,
 
-                // V1 API is IPv4-only and doesn't support nexthop override
-                ipv4_enabled: true,
-                ipv6_enabled: false,
-                allow_import6: ImportExportPolicy6::NoFiltering,
-                allow_export6: ImportExportPolicy6::NoFiltering,
-                nexthop4: None,
-                nexthop6: None,
-                src_addr: None,
-                src_port: None,
-            },
-        })?;
+                    // V1 API is IPv4-only and doesn't support nexthop override
+                    ipv4_enabled: true,
+                    ipv6_enabled: false,
+                    allow_import6: ImportExportPolicy6::NoFiltering,
+                    allow_export6: ImportExportPolicy6::NoFiltering,
+                    nexthop4: None,
+                    nexthop6: None,
+                    src_addr: None,
+                    src_port: None,
+                },
+            })?;
 
         if start_session {
             start_bgp_session(&event_tx)?;
@@ -2054,41 +2057,42 @@ pub(crate) mod helpers {
                 ),
             };
 
-        ctx.db.add_bgp_neighbor(mg_api_types::BgpNeighborInfo {
-            asn: rq.asn,
-            group: rq.group.clone(),
-            name: rq.name.clone(),
-            host: rq.host,
-            parameters: BgpNeighborParameters {
-                remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
-                hold_time: rq.parameters.hold_time,
-                idle_hold_time: rq.parameters.idle_hold_time,
-                delay_open: rq.parameters.delay_open,
-                connect_retry: rq.parameters.connect_retry,
-                keepalive: rq.parameters.keepalive,
-                resolution: rq.parameters.resolution,
-                passive: rq.parameters.passive,
-                md5_auth_key: rq.parameters.md5_auth_key,
-                multi_exit_discriminator: rq
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: rq.parameters.communities,
-                local_pref: rq.parameters.local_pref,
-                enforce_first_as: rq.parameters.enforce_first_as,
-                allow_import4,
-                allow_import6,
-                allow_export4,
-                allow_export6,
-                ipv4_enabled: rq.parameters.ipv4_unicast.is_some(),
-                ipv6_enabled: rq.parameters.ipv6_unicast.is_some(),
-                nexthop4,
-                nexthop6,
-                vlan_id: rq.parameters.vlan_id,
-                src_addr: rq.parameters.src_addr,
-                src_port: rq.parameters.src_port,
-            },
-        })?;
+        ctx.db
+            .add_bgp_neighbor(mg_api_types::rdb::BgpNeighborInfo {
+                asn: rq.asn,
+                group: rq.group.clone(),
+                name: rq.name.clone(),
+                host: rq.host,
+                parameters: BgpNeighborParameters {
+                    remote_asn: rq.parameters.remote_asn,
+                    min_ttl: rq.parameters.min_ttl,
+                    hold_time: rq.parameters.hold_time,
+                    idle_hold_time: rq.parameters.idle_hold_time,
+                    delay_open: rq.parameters.delay_open,
+                    connect_retry: rq.parameters.connect_retry,
+                    keepalive: rq.parameters.keepalive,
+                    resolution: rq.parameters.resolution,
+                    passive: rq.parameters.passive,
+                    md5_auth_key: rq.parameters.md5_auth_key,
+                    multi_exit_discriminator: rq
+                        .parameters
+                        .multi_exit_discriminator,
+                    communities: rq.parameters.communities,
+                    local_pref: rq.parameters.local_pref,
+                    enforce_first_as: rq.parameters.enforce_first_as,
+                    allow_import4,
+                    allow_import6,
+                    allow_export4,
+                    allow_export6,
+                    ipv4_enabled: rq.parameters.ipv4_unicast.is_some(),
+                    ipv6_enabled: rq.parameters.ipv6_unicast.is_some(),
+                    nexthop4,
+                    nexthop6,
+                    vlan_id: rq.parameters.vlan_id,
+                    src_addr: rq.parameters.src_addr,
+                    src_port: rq.parameters.src_port,
+                },
+            })?;
 
         if start_session {
             start_bgp_session(&event_tx)?;
@@ -2178,7 +2182,7 @@ pub(crate) mod helpers {
             };
 
         ctx.db.add_unnumbered_bgp_neighbor(
-            mg_api_types::BgpUnnumberedNeighborInfo {
+            mg_api_types::rdb::BgpUnnumberedNeighborInfo {
                 asn: rq.asn,
                 name: rq.name.clone(),
                 group: rq.group.clone(),

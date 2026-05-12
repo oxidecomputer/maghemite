@@ -11,7 +11,7 @@ use mg_api_types::bgp::{
     ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
     Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
 };
-use mg_api_types::{Prefix4, Prefix6};
+use mg_api_types::rdb::{Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},

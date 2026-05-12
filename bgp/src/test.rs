@@ -19,7 +19,7 @@ use crate::{
 use lazy_static::lazy_static;
 use mg_api_types::bgp::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types::bgp::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange};
-use mg_api_types::{Prefix, Prefix4};
+use mg_api_types::rdb::{Prefix, Prefix4};
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;

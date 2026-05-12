@@ -8,7 +8,7 @@
 //! The published wire-shaped RIB is `mg_api_types::rib::Rib`; the
 //! [`RibExt::into_latest_api_rib`] method converts to it.
 
-use mg_api_types::{Path, Prefix, Prefix4, Prefix6, ProtocolFilter};
+use mg_api_types::rdb::{Path, Prefix, Prefix4, Prefix6, ProtocolFilter};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Runtime IPv4+IPv6 routing-information-base shape.

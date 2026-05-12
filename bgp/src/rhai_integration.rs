@@ -11,7 +11,7 @@ use crate::{
     },
     policy::{CheckerResult, ShaperResult},
 };
-use mg_api_types::{Prefix4, Prefix6};
+use mg_api_types::rdb::{Prefix4, Prefix6};
 use rhai::{Module, export_module, plugin::*};
 
 macro_rules! create_enum_module {

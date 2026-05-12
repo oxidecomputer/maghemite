@@ -16,7 +16,7 @@ use crate::types::*;
 use chrono::Utc;
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::PeerId;
-use mg_api_types::{
+use mg_api_types::rdb::{
     AddressFamily, BgpNeighborInfo, BgpRouterInfo, BgpUnnumberedNeighborInfo,
     Path, Prefix, Prefix4, Prefix6,
 };
@@ -1482,7 +1482,7 @@ mod test {
         DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey, db::Db, test::TestDb,
         types::PrefixDbKey, types::test_helpers::path_vecs_equal,
     };
-    use mg_api_types::{AddressFamily, Path, Prefix, Prefix4, Prefix6};
+    use mg_api_types::rdb::{AddressFamily, Path, Prefix, Prefix4, Prefix6};
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
@@ -1521,7 +1521,7 @@ mod test {
             DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC, db::Db,
         };
         use mg_api_types::bgp::PeerId;
-        use mg_api_types::{BgpPathProperties, Path, Prefix, Prefix4};
+        use mg_api_types::rdb::{BgpPathProperties, Path, Prefix, Prefix4};
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
@@ -2254,7 +2254,9 @@ mod test {
             StaticRouteKey,
         };
         use mg_api_types::bgp::PeerId;
-        use mg_api_types::{BgpPathProperties, Path, Prefix, Prefix4, Prefix6};
+        use mg_api_types::rdb::{
+            BgpPathProperties, Path, Prefix, Prefix4, Prefix6,
+        };
 
         let db = get_test_db();
 
