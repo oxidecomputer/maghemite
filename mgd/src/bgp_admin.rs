@@ -48,7 +48,6 @@ use mg_api_types::ndp::{
 use mg_api_types::rdb::{
     AddressFamily, BgpRouterInfo, Prefix, Prefix4, Prefix6,
 };
-use mg_api_types_versions::v1::bgp::policy::ImportExportPolicy;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
 use rdb::{Asn, RibExt};
@@ -861,13 +860,14 @@ pub async fn get_exported_v1(
             orig4.clone().iter().map(|p| Prefix::from(*p)).collect();
 
         // Combine per-AF export policies into legacy format for filtering
-        let allow_export = ImportExportPolicy::from_per_af_policies(
-            &n.parameters.allow_export4,
-            &n.parameters.allow_export6,
-        );
+        let allow_export =
+            v1::bgp::policy::ImportExportPolicy::from_per_af_policies(
+                &n.parameters.allow_export4,
+                &n.parameters.allow_export6,
+            );
         let mut exported_routes: Vec<Prefix> = match allow_export {
-            ImportExportPolicy::NoFiltering => orig_routes,
-            ImportExportPolicy::Allow(epol) => {
+            v1::bgp::policy::ImportExportPolicy::NoFiltering => orig_routes,
+            v1::bgp::policy::ImportExportPolicy::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -2600,10 +2600,11 @@ pub(crate) mod helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportExportPolicy, do_bgp_apply};
+    use super::do_bgp_apply;
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
+    use mg_api_types_versions::v1;
     use mg_api_types_versions::v1::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
     };
@@ -2671,8 +2672,10 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: ImportExportPolicy::NoFiltering,
-                    allow_export: ImportExportPolicy::NoFiltering,
+                    allow_import:
+                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
+                    allow_export:
+                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
                     vlan_id: None,
                 },
             }],
@@ -2697,8 +2700,10 @@ mod tests {
                     communities: Vec::default(),
                     local_pref: None,
                     enforce_first_as: false,
-                    allow_import: ImportExportPolicy::NoFiltering,
-                    allow_export: ImportExportPolicy::NoFiltering,
+                    allow_import:
+                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
+                    allow_export:
+                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
                     vlan_id: None,
                 },
             }],
