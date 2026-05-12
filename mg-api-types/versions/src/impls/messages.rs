@@ -14,10 +14,10 @@ use nom::{
 };
 use num_enum::TryFromPrimitive;
 
-use crate::bgp::error::WireError;
+use crate::impls::bgp::error::WireError;
 use std::collections::BTreeSet;
 
-use crate::bgp::error::MessageConvertError;
+use crate::impls::bgp::error::MessageConvertError;
 use crate::v1;
 use crate::v1::bgp::messages::{
     AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
@@ -1538,7 +1538,7 @@ impl UpdateMessage {
         self.errors.iter().any(|(_, action)| {
             matches!(
                 action,
-                crate::bgp::parse::AttributeAction::TreatAsWithdraw,
+                crate::impls::bgp::parse::AttributeAction::TreatAsWithdraw,
             )
         })
     }

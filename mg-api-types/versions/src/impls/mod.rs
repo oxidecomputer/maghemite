@@ -4,7 +4,7 @@
 
 //! Functional code for the latest versions of types.
 
-mod bgp;
+pub(crate) mod bgp;
 mod messages;
 mod path;
 mod peer;

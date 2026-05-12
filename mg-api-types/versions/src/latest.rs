@@ -56,8 +56,8 @@ pub mod bgp {
     pub use crate::v8::bgp::UnnumberedBgpPeerConfig;
     pub use crate::v8::bgp::UnnumberedNeighbor;
 
-    pub use crate::bgp::error;
-    pub use crate::bgp::parse;
+    pub use crate::impls::bgp::error;
+    pub use crate::impls::bgp::parse;
 
     pub mod messages {
         pub use crate::v1::bgp::messages::AS_TRANS;
