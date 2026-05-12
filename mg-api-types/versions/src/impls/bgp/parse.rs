@@ -10,7 +10,7 @@
 //! field) purely for internal RFC 7606 treat-as-withdraw / discard signaling
 //! between the decoder in the `bgp` crate and its consumers.
 
-use crate::v4::bgp::messages::PathAttributeTypeCode;
+use crate::latest::bgp::messages::PathAttributeTypeCode;
 use std::fmt::Display;
 use std::fmt::Formatter;
 

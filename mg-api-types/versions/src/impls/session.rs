@@ -12,15 +12,15 @@ use std::net::SocketAddr;
 
 use uuid::Uuid;
 
+use crate::latest::bgp::messages::Message;
+use crate::latest::bgp::session::ConnectionDirection;
+use crate::latest::bgp::session::ConnectionId;
+use crate::latest::bgp::session::FsmStateKind;
+use crate::latest::bgp::session::MessageHistory;
+use crate::latest::bgp::session::MessageHistoryEntry;
 use crate::v1;
-use crate::v2::bgp::session::ConnectionDirection;
-use crate::v2::bgp::session::ConnectionId;
-use crate::v2::bgp::session::FsmStateKind;
-use crate::v2::bgp::session::MessageHistory;
-use crate::v2::bgp::session::MessageHistoryEntry;
-use crate::v4::bgp::messages::Message;
 
-use crate::v2::bgp::session::MAX_MESSAGE_HISTORY;
+use crate::latest::bgp::session::MAX_MESSAGE_HISTORY;
 
 impl ConnectionDirection {
     pub fn as_str(&self) -> &'static str {

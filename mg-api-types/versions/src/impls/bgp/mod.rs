@@ -7,19 +7,19 @@ pub mod parse;
 
 use std::collections::HashMap;
 
-use crate::v1::rdb::prefix::Prefix;
-use crate::v4::bgp::policy::ImportExportPolicy4;
-use crate::v4::bgp::policy::ImportExportPolicy6;
-use crate::v4::rdb::neighbor::BgpNeighborInfo;
-use crate::v4::rdb::neighbor::BgpNeighborParameters;
-use crate::v4::rdb::neighbor::BgpUnnumberedNeighborInfo;
+use crate::latest::bgp::ImportExportPolicy4;
+use crate::latest::bgp::ImportExportPolicy6;
+use crate::latest::rdb::neighbor::BgpNeighborInfo;
+use crate::latest::rdb::neighbor::BgpNeighborParameters;
+use crate::latest::rdb::neighbor::BgpUnnumberedNeighborInfo;
+use crate::latest::rdb::prefix::Prefix;
 
 use crate::latest;
+use crate::latest::bgp::Ipv4UnicastConfig;
+use crate::latest::bgp::Ipv6UnicastConfig;
+use crate::latest::bgp::JitterRange;
 use crate::v1;
 use crate::v4;
-use crate::v4::bgp::config::Ipv4UnicastConfig;
-use crate::v4::bgp::config::Ipv6UnicastConfig;
-use crate::v4::bgp::config::JitterRange;
 use crate::v5;
 use std::net::IpAddr;
 
@@ -43,7 +43,7 @@ impl std::fmt::Display for latest::bgp::NeighborResetRequest {
 impl latest::bgp::NeighborSelector {
     /// Convert peer string to PeerId using FromStr implementation.
     /// Tries to parse as IP first, otherwise treats as interface name.
-    pub fn to_peer_id(&self) -> crate::v1::bgp::peer::PeerId {
+    pub fn to_peer_id(&self) -> latest::bgp::PeerId {
         self.peer.parse().expect("PeerId::from_str never fails")
     }
 }
