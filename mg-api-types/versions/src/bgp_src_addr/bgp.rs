@@ -3,16 +3,18 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
+use std::net::SocketAddr;
 
 use crate::v1::rdb::prefix::Prefix;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::v1;
-use crate::v4::bgp::config::{
-    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
-};
+use crate::v4::bgp::config::Ipv4UnicastConfig;
+use crate::v4::bgp::config::Ipv6UnicastConfig;
+use crate::v4::bgp::config::JitterRange;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerParameters {

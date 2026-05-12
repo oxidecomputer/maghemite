@@ -2,9 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::v1::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use crate::v1::rdb::prefix::Prefix;
+use crate::v1::rdb::prefix::Prefix4;
+use crate::v1::rdb::prefix::Prefix6;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeSet;
 
 /// Import/Export policy for IPv4 prefixes only.

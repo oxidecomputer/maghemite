@@ -2,24 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::net::IpAddr;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::v1::{
-    bgp::{
-        config::PeerTimers,
-        messages::{
-            NotificationMessage, OpenMessage, PathAttribute,
-            RouteRefreshMessage,
-        },
-    },
-    rdb::prefix::{Prefix, Prefix6},
-};
-use crate::v2::bgp::session::{ConnectionId, FsmEventRecord, FsmStateKind};
-use crate::{v2, v4};
+use crate::v1::bgp::config::PeerTimers;
+use crate::v1::bgp::messages::NotificationMessage;
+use crate::v1::bgp::messages::OpenMessage;
+use crate::v1::bgp::messages::PathAttribute;
+use crate::v1::bgp::messages::RouteRefreshMessage;
+use crate::v1::rdb::prefix::Prefix;
+use crate::v1::rdb::prefix::Prefix6;
+use crate::v2;
+use crate::v2::bgp::session::ConnectionId;
+use crate::v2::bgp::session::FsmEventRecord;
+use crate::v2::bgp::session::FsmStateKind;
+use crate::v4;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]

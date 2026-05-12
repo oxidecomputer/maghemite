@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::latest::rdb::path::{BgpPathProperties, Path};
+use crate::latest::rdb::path::BgpPathProperties;
+use crate::latest::rdb::path::Path;
 use chrono::Utc;
 use std::cmp::Ordering;
 

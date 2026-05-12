@@ -4,14 +4,16 @@
 
 //! Display and conversion impls for the versioned BGP wire-message types.
 
-use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
 
 use crate::v1::rdb::AddressFamily;
-use nom::{
-    bytes::complete::tag,
-    number::complete::{be_u16, u8 as parse_u8},
-};
+use nom::bytes::complete::tag;
+use nom::number::complete::be_u16;
+use nom::number::complete::u8 as parse_u8;
 use num_enum::TryFromPrimitive;
 
 use crate::impls::bgp::error::WireError;
@@ -19,21 +21,48 @@ use std::collections::BTreeSet;
 
 use crate::impls::bgp::error::MessageConvertError;
 use crate::v1;
-use crate::v1::bgp::messages::{
-    AS_TRANS, AddPathElement, AsPathType, BGP4, Capability, CapabilityCode,
-    CeaseErrorSubcode, ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode,
-    MAX_MESSAGE_SIZE, MessageKind, MessageType, NotificationMessage,
-    OpenErrorSubcode, OpenMessage, OptionalParameter, PathOrigin,
-    RouteRefreshMessage, Safi, UpdateErrorSubcode,
-};
-use crate::v4::bgp::messages::{
-    Afi, Aggregator, As4Aggregator, As4PathSegment, BgpNexthop,
-    ExtendedNexthopElement, Ipv6DoubleNexthop, Message, MpReachIpv4Unicast,
-    MpReachIpv6Unicast, MpReachNlri, MpUnreachIpv4Unicast,
-    MpUnreachIpv6Unicast, MpUnreachNlri, PathAttribute, PathAttributeType,
-    PathAttributeTypeCode, PathAttributeValue, UpdateMessage,
-    path_attribute_flags,
-};
+use crate::v1::bgp::messages::AS_TRANS;
+use crate::v1::bgp::messages::AddPathElement;
+use crate::v1::bgp::messages::AsPathType;
+use crate::v1::bgp::messages::BGP4;
+use crate::v1::bgp::messages::Capability;
+use crate::v1::bgp::messages::CapabilityCode;
+use crate::v1::bgp::messages::CeaseErrorSubcode;
+use crate::v1::bgp::messages::ErrorCode;
+use crate::v1::bgp::messages::ErrorSubcode;
+use crate::v1::bgp::messages::Header;
+use crate::v1::bgp::messages::HeaderErrorSubcode;
+use crate::v1::bgp::messages::MAX_MESSAGE_SIZE;
+use crate::v1::bgp::messages::MessageKind;
+use crate::v1::bgp::messages::MessageType;
+use crate::v1::bgp::messages::NotificationMessage;
+use crate::v1::bgp::messages::OpenErrorSubcode;
+use crate::v1::bgp::messages::OpenMessage;
+use crate::v1::bgp::messages::OptionalParameter;
+use crate::v1::bgp::messages::PathOrigin;
+use crate::v1::bgp::messages::RouteRefreshMessage;
+use crate::v1::bgp::messages::Safi;
+use crate::v1::bgp::messages::UpdateErrorSubcode;
+use crate::v4::bgp::messages::Afi;
+use crate::v4::bgp::messages::Aggregator;
+use crate::v4::bgp::messages::As4Aggregator;
+use crate::v4::bgp::messages::As4PathSegment;
+use crate::v4::bgp::messages::BgpNexthop;
+use crate::v4::bgp::messages::ExtendedNexthopElement;
+use crate::v4::bgp::messages::Ipv6DoubleNexthop;
+use crate::v4::bgp::messages::Message;
+use crate::v4::bgp::messages::MpReachIpv4Unicast;
+use crate::v4::bgp::messages::MpReachIpv6Unicast;
+use crate::v4::bgp::messages::MpReachNlri;
+use crate::v4::bgp::messages::MpUnreachIpv4Unicast;
+use crate::v4::bgp::messages::MpUnreachIpv6Unicast;
+use crate::v4::bgp::messages::MpUnreachNlri;
+use crate::v4::bgp::messages::PathAttribute;
+use crate::v4::bgp::messages::PathAttributeType;
+use crate::v4::bgp::messages::PathAttributeTypeCode;
+use crate::v4::bgp::messages::PathAttributeValue;
+use crate::v4::bgp::messages::UpdateMessage;
+use crate::v4::bgp::messages::path_attribute_flags;
 
 /// According to RFC 4271 §4.1 the header marker is all ones.
 const MARKER: [u8; 16] = [0xFFu8; 16];

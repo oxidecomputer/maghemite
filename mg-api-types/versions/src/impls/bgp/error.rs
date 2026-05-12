@@ -13,11 +13,16 @@ use std::net::Ipv4Addr;
 
 use num_enum::TryFromPrimitiveError;
 
-use crate::v1::bgp::messages::{
-    AsPathType, CapabilityCode, CeaseErrorSubcode, ErrorCode,
-    HeaderErrorSubcode, MessageType, OpenErrorSubcode, OptionalParameterCode,
-    PathOrigin, UpdateErrorSubcode,
-};
+use crate::v1::bgp::messages::AsPathType;
+use crate::v1::bgp::messages::CapabilityCode;
+use crate::v1::bgp::messages::CeaseErrorSubcode;
+use crate::v1::bgp::messages::ErrorCode;
+use crate::v1::bgp::messages::HeaderErrorSubcode;
+use crate::v1::bgp::messages::MessageType;
+use crate::v1::bgp::messages::OpenErrorSubcode;
+use crate::v1::bgp::messages::OptionalParameterCode;
+use crate::v1::bgp::messages::PathOrigin;
+use crate::v1::bgp::messages::UpdateErrorSubcode;
 use crate::v4::bgp::messages::PathAttributeTypeCode;
 
 #[derive(thiserror::Error, Debug)]

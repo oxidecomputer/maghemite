@@ -2,9 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::v1::rdb::{AddressFamily, ProtocolFilter};
+use crate::v1::rdb::AddressFamily;
+use crate::v1::rdb::ProtocolFilter;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RibQuery {

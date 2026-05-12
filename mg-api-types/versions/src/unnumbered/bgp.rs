@@ -7,17 +7,25 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use crate::v1::bgp::peer::PeerId;
-use crate::v2::bgp::session::{FsmEventRecord, FsmStateKind, MessageHistory};
+use crate::v2::bgp::session::FsmEventRecord;
+use crate::v2::bgp::session::FsmStateKind;
+use crate::v2::bgp::session::MessageHistory;
 use crate::v4::bgp::messages::Afi;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::v2::bgp::history::{FsmEventBuffer, MessageDirection};
-use crate::v4::bgp::config::{
-    BgpCapability, BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig,
-    Ipv6UnicastConfig, JitterRange, NeighborResetOp, PeerCounters,
-    StaticTimerInfo,
-};
+use crate::v2::bgp::history::FsmEventBuffer;
+use crate::v2::bgp::history::MessageDirection;
+use crate::v4::bgp::config::BgpCapability;
+use crate::v4::bgp::config::BgpPeerParameters;
+use crate::v4::bgp::config::DynamicTimerInfo;
+use crate::v4::bgp::config::Ipv4UnicastConfig;
+use crate::v4::bgp::config::Ipv6UnicastConfig;
+use crate::v4::bgp::config::JitterRange;
+use crate::v4::bgp::config::NeighborResetOp;
+use crate::v4::bgp::config::PeerCounters;
+use crate::v4::bgp::config::StaticTimerInfo;
 
 /// Unified neighbor selector supporting both numbered and unnumbered peers.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]

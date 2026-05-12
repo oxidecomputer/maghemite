@@ -6,7 +6,8 @@
 
 use crate::v1::bgp::policy::ImportExportPolicy;
 use crate::v1::rdb::prefix::Prefix;
-use crate::v4::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use crate::v4::bgp::policy::ImportExportPolicy4;
+use crate::v4::bgp::policy::ImportExportPolicy6;
 use std::collections::BTreeSet;
 
 impl ImportExportPolicy {

@@ -11,7 +11,8 @@
 //! between the decoder in the `bgp` crate and its consumers.
 
 use crate::v4::bgp::messages::PathAttributeTypeCode;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// NLRI section identifier for error context
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

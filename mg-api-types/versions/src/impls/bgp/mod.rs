@@ -8,15 +8,19 @@ pub mod parse;
 use std::collections::HashMap;
 
 use crate::v1::rdb::prefix::Prefix;
-use crate::v4::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use crate::v4::rdb::neighbor::{
-    BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
-};
+use crate::v4::bgp::policy::ImportExportPolicy4;
+use crate::v4::bgp::policy::ImportExportPolicy6;
+use crate::v4::rdb::neighbor::BgpNeighborInfo;
+use crate::v4::rdb::neighbor::BgpNeighborParameters;
+use crate::v4::rdb::neighbor::BgpUnnumberedNeighborInfo;
 
-use crate::v4::bgp::config::{
-    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
-};
-use crate::{latest, v1, v4, v5};
+use crate::latest;
+use crate::v1;
+use crate::v4;
+use crate::v4::bgp::config::Ipv4UnicastConfig;
+use crate::v4::bgp::config::Ipv6UnicastConfig;
+use crate::v4::bgp::config::JitterRange;
+use crate::v5;
 use std::net::IpAddr;
 
 // Each conversion below uses full-struct destructuring at the source
@@ -889,7 +893,8 @@ impl From<&crate::v1::bgp::messages::Capability>
         // variant fails to compile here. That forces a deliberate
         // decision: add a structured BgpCapability variant for it, or
         // route it to Unknown like the others.
-        use crate::v1::bgp::messages::{Capability, CapabilityCode};
+        use crate::v1::bgp::messages::Capability;
+        use crate::v1::bgp::messages::CapabilityCode;
         match value {
             Capability::MultiprotocolExtensions { afi, safi } => {
                 Self::MultiprotocolExtensions(latest::bgp::AfiSafi {

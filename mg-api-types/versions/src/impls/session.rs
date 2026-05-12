@@ -5,16 +5,19 @@
 //! Display, helper, and cross-version conversion impls for the versioned BGP
 //! session-history types.
 
-use std::fmt::{self, Display, Formatter};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::{self};
 use std::net::SocketAddr;
 
 use uuid::Uuid;
 
 use crate::v1;
-use crate::v2::bgp::session::{
-    ConnectionDirection, ConnectionId, FsmStateKind, MessageHistory,
-    MessageHistoryEntry,
-};
+use crate::v2::bgp::session::ConnectionDirection;
+use crate::v2::bgp::session::ConnectionId;
+use crate::v2::bgp::session::FsmStateKind;
+use crate::v2::bgp::session::MessageHistory;
+use crate::v2::bgp::session::MessageHistoryEntry;
 use crate::v4::bgp::messages::Message;
 
 use crate::v2::bgp::session::MAX_MESSAGE_HISTORY;
