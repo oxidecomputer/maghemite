@@ -152,7 +152,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
     async fn read_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
-        path: Path<latest::bgp::NeighborSelector>,
+        path: Path<v5::bgp::NeighborSelector>,
     ) -> Result<HttpResponseOk<v4::bgp::config::Neighbor>, HttpError> {
         Self::read_neighbor(rqctx, path)
             .await
@@ -162,7 +162,7 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
     async fn read_neighbors_v5(
         rqctx: RequestContext<Self::Context>,
-        path: Path<latest::bgp::AsnSelector>,
+        path: Path<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<v4::bgp::config::Neighbor>>, HttpError> {
         Self::read_neighbors(rqctx, path)
             .await
@@ -180,7 +180,7 @@ pub trait MgAdminApi {
     #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
     async fn delete_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
-        path: Path<latest::bgp::NeighborSelector>,
+        path: Path<v5::bgp::NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         Self::delete_neighbor(rqctx, path).await
     }
@@ -205,7 +205,7 @@ pub trait MgAdminApi {
         let rq = request.into_inner();
         Self::read_neighbor_v5(
             rqctx,
-            latest::bgp::NeighborSelector {
+            v5::bgp::NeighborSelector {
                 asn: rq.asn,
                 peer: rq.addr.to_string(),
             }
@@ -238,7 +238,7 @@ pub trait MgAdminApi {
         let rq = request.into_inner();
         Self::delete_neighbor_v5(
             rqctx,
-            latest::bgp::NeighborSelector {
+            v5::bgp::NeighborSelector {
                 asn: rq.asn,
                 peer: rq.addr.to_string(),
             }
@@ -281,7 +281,7 @@ pub trait MgAdminApi {
         let rq = request.into_inner();
         Self::delete_neighbor_v5(
             rqctx,
-            latest::bgp::NeighborSelector {
+            v5::bgp::NeighborSelector {
                 asn: rq.asn,
                 peer: rq.addr.to_string(),
             }
