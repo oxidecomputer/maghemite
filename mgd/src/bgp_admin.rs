@@ -49,7 +49,7 @@ use mg_api_types::{AddressFamily, BgpRouterInfo, Prefix, Prefix4, Prefix6};
 use mg_api_types_versions::v1::bgp::policy::ImportExportPolicy;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
-use rdb::Asn;
+use rdb::{Asn, RibExt};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -1005,7 +1005,9 @@ pub async fn get_imported_v1(
     let imported = get_router!(ctx, rq.asn)?
         .db
         .full_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(v1::rib::Rib::from(imported)))
+    Ok(HttpResponseOk(v1::rib::Rib::from(
+        imported.into_latest_api_rib(),
+    )))
 }
 
 pub async fn get_selected_v1(
@@ -1017,7 +1019,9 @@ pub async fn get_selected_v1(
     let selected = get_router!(ctx, rq.asn)?
         .db
         .loc_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(v1::rib::Rib::from(selected)))
+    Ok(HttpResponseOk(v1::rib::Rib::from(
+        selected.into_latest_api_rib(),
+    )))
 }
 
 pub async fn get_neighbors_v1(

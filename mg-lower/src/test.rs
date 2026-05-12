@@ -5,7 +5,8 @@ use dpd_client::types::{
     Ipv4Route, Ipv6Route, LinkId, LinkState, PortId, PortMedia, PortPrbsMode,
     PortSpeed, Route,
 };
-use mg_api_types::{Path, Prefix4, Rib};
+use mg_api_types::{Path, Prefix4};
+use rdb::Rib;
 
 use crate::dendrite::get_routes_for_prefix;
 use crate::platform::test::{TestDdm, TestDpd, TestSwitchZone};

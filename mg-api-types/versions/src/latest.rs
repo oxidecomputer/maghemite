@@ -121,50 +121,8 @@ pub mod bgp {
 }
 
 pub mod rdb {
-    use std::collections::{BTreeMap, BTreeSet};
-
     pub use crate::v1::rdb::AddressFamily;
     pub use crate::v1::rdb::ProtocolFilter;
-
-    /// Runtime IPv4+IPv6 routing-information-base shape used by `rdb`.
-    /// Defined here (rather than in `rdb`) so cross-version conversions
-    /// can live in `mg-api-types-versions` without forcing it to depend
-    /// on the `rdb` business-logic crate.
-    pub type Rib = BTreeMap<prefix::Prefix, BTreeSet<path::Path>>;
-    /// Runtime IPv4-only RIB.
-    pub type Rib4 = BTreeMap<prefix::Prefix4, BTreeSet<path::Path>>;
-    /// Runtime IPv6-only RIB.
-    pub type Rib6 = BTreeMap<prefix::Prefix6, BTreeSet<path::Path>>;
-
-    /// Drop paths from `rib` whose protocol does not match
-    /// `protocol_filter`. `None` is a pass-through.
-    pub fn filter_rib_by_protocol(
-        rib: Rib,
-        protocol_filter: Option<ProtocolFilter>,
-    ) -> Rib {
-        match protocol_filter {
-            None => rib,
-            Some(filter) => {
-                let mut filtered = BTreeMap::new();
-
-                for (prefix, paths) in rib {
-                    let filtered_paths: BTreeSet<_> = paths
-                        .into_iter()
-                        .filter(|path| match filter {
-                            ProtocolFilter::Bgp => path.bgp.is_some(),
-                            ProtocolFilter::Static => path.bgp.is_none(),
-                        })
-                        .collect();
-
-                    if !filtered_paths.is_empty() {
-                        filtered.insert(prefix, filtered_paths);
-                    }
-                }
-
-                filtered
-            }
-        }
-    }
 
     pub mod neighbor {
         pub use crate::v4::rdb::neighbor::BgpNeighborInfo;

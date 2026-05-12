@@ -78,7 +78,7 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
-use mg_api_types::{Rib, Rib4, Rib6};
+use crate::rib::{Rib, Rib4, Rib6};
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
