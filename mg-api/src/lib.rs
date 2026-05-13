@@ -352,7 +352,7 @@ pub trait MgAdminApi {
     }]
     async fn read_unnumbered_neighbors_v5(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<v5::bgp::UnnumberedNeighbor>>, HttpError>
     {
         Self::read_unnumbered_neighbors(rqctx, request)
@@ -381,7 +381,7 @@ pub trait MgAdminApi {
     }]
     async fn read_unnumbered_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::UnnumberedNeighborSelector>,
+        request: Query<v5::bgp::UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<v5::bgp::UnnumberedNeighbor>, HttpError> {
         Self::read_unnumbered_neighbor(rqctx, request)
             .await
@@ -409,7 +409,7 @@ pub trait MgAdminApi {
     }]
     async fn delete_unnumbered_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::UnnumberedNeighborSelector>,
+        request: Query<v5::bgp::UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         Self::delete_unnumbered_neighbor(rqctx, request).await
     }
@@ -558,7 +558,7 @@ pub trait MgAdminApi {
     async fn get_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, latest::bgp::PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, v5::bgp::PeerInfo>>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP, operation_id = "get_neighbors" }]
     async fn get_neighbors_v2(

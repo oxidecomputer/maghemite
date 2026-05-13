@@ -1169,7 +1169,7 @@ pub async fn get_neighbors_v2(
 pub async fn get_neighbors_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, v5::bgp::PeerInfo>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
