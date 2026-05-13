@@ -11,9 +11,7 @@ use dropshot::{
     TypedBody,
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
-use mg_api_types::bfd::BfdPeerConfig;
-use mg_api_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
-use mg_api_types::bgp::PeerId;
+use mg_api_types::bfd::{BfdPeerConfig, BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_api_types::bgp::{
     ApplyRequest, AsnSelector, CheckerSource, ExportedSelector,
     FsmHistoryRequest, FsmHistoryResponse, MessageHistoryRequest,
@@ -370,14 +368,22 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_exported_v5(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<v5::bgp::ExportedSelector>,
-    ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
+    ) -> Result<
+        HttpResponseOk<
+            HashMap<v1::bgp::peer::PeerId, Vec<v1::rdb::prefix::Prefix>>,
+        >,
+        HttpError,
+    > {
         bgp_admin::get_exported_v5(ctx, request).await
     }
 
     async fn get_exported_v1(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, Vec<v1::rdb::prefix::Prefix>>>,
+        HttpError,
+    > {
         bgp_admin::get_exported_v1(ctx, request).await
     }
 

@@ -489,7 +489,7 @@ pub trait MgAdminApi {
         request: TypedBody<v5::bgp::ExportedSelector>,
     ) -> Result<
         HttpResponseOk<
-            HashMap<latest::bgp::PeerId, Vec<latest::rdb::prefix::Prefix>>,
+            HashMap<v1::bgp::peer::PeerId, Vec<v1::rdb::prefix::Prefix>>,
         >,
         HttpError,
     >;
@@ -500,7 +500,7 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<
-        HttpResponseOk<HashMap<IpAddr, Vec<latest::rdb::prefix::Prefix>>>,
+        HttpResponseOk<HashMap<IpAddr, Vec<v1::rdb::prefix::Prefix>>>,
         HttpError,
     >;
 

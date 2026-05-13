@@ -830,7 +830,10 @@ pub async fn delete_origin6(
 pub async fn get_exported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
+) -> Result<
+    HttpResponseOk<HashMap<IpAddr, Vec<v1::rdb::prefix::Prefix>>>,
+    HttpError,
+> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
@@ -885,7 +888,12 @@ pub async fn get_exported_v1(
 pub async fn get_exported_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<v5::bgp::ExportedSelector>,
-) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
+) -> Result<
+    HttpResponseOk<
+        HashMap<v1::bgp::peer::PeerId, Vec<v1::rdb::prefix::Prefix>>,
+    >,
+    HttpError,
+> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
