@@ -141,7 +141,7 @@ pub trait MgAdminApi {
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - supports both
     // numbered and unnumbered neighbors but lacks src_addr/src_port.
 
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR, operation_id = "create_neighbor" }]
     async fn create_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
@@ -149,7 +149,7 @@ pub trait MgAdminApi {
         Self::create_neighbor(rqctx, request.map(Into::into)).await
     }
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR, operation_id = "read_neighbor" }]
     async fn read_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
         path: Path<v5::bgp::NeighborSelector>,
@@ -159,7 +159,7 @@ pub trait MgAdminApi {
             .map(|r| r.map(Into::into))
     }
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR, operation_id = "read_neighbors" }]
     async fn read_neighbors_v5(
         rqctx: RequestContext<Self::Context>,
         path: Path<v1::bgp::config::AsnSelector>,
@@ -169,7 +169,7 @@ pub trait MgAdminApi {
             .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
     }
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR, operation_id = "update_neighbor" }]
     async fn update_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
@@ -177,7 +177,7 @@ pub trait MgAdminApi {
         Self::update_neighbor(rqctx, request.map(Into::into)).await
     }
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR }]
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR, operation_id = "delete_neighbor" }]
     async fn delete_neighbor_v5(
         rqctx: RequestContext<Self::Context>,
         path: Path<v5::bgp::NeighborSelector>,
@@ -189,7 +189,7 @@ pub trait MgAdminApi {
     // peers only). create and update take v4::bgp::config::Neighbor (same schema as V5);
     // read and delete use a different selector type.
 
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "create_neighbor" }]
     async fn create_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
@@ -197,7 +197,7 @@ pub trait MgAdminApi {
         Self::create_neighbor_v5(rqctx, request).await
     }
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "read_neighbor" }]
     async fn read_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
@@ -214,7 +214,7 @@ pub trait MgAdminApi {
         .await
     }
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "read_neighbors" }]
     async fn read_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
@@ -222,7 +222,7 @@ pub trait MgAdminApi {
         Self::read_neighbors_v5(rqctx, request.into_inner().into()).await
     }
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "update_neighbor" }]
     async fn update_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
@@ -230,7 +230,7 @@ pub trait MgAdminApi {
         Self::update_neighbor_v5(rqctx, request).await
     }
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "delete_neighbor" }]
     async fn delete_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
@@ -249,31 +249,31 @@ pub trait MgAdminApi {
 
     // V1/V2 API - legacy Neighbor type with combined import/export policies
 
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP, operation_id = "create_neighbor" }]
     async fn create_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP, operation_id = "read_neighbor" }]
     async fn read_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = ..VERSION_MP_BGP }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = ..VERSION_MP_BGP, operation_id = "read_neighbors" }]
     async fn read_neighbors_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP, operation_id = "update_neighbor" }]
     async fn update_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP, operation_id = "delete_neighbor" }]
     async fn delete_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
@@ -298,7 +298,7 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     // V1/V2 API clear neighbor (backwards compatibility w/ IPv4 only support)
-    #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = ..VERSION_MP_BGP }]
+    #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = ..VERSION_MP_BGP, operation_id = "clear_neighbor" }]
     async fn clear_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::NeighborResetRequest>,
@@ -483,7 +483,7 @@ pub trait MgAdminApi {
 
     // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers.
     // NOTE: broken — PeerId enum can't serialize as JSON object key.
-    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_UNNUMBERED..VERSION_RIB_EXPORTED_STRING_KEY }]
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_UNNUMBERED..VERSION_RIB_EXPORTED_STRING_KEY, operation_id = "get_exported" }]
     async fn get_exported_v5(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v5::bgp::ExportedSelector>,
@@ -495,7 +495,7 @@ pub trait MgAdminApi {
     >;
 
     // Old exported endpoint - IPv4 only, no filtering.
-    #[endpoint { method = GET, path = "/bgp/status/exported", versions = ..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = ..VERSION_UNNUMBERED, operation_id = "get_exported" }]
     async fn get_exported_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::AsnSelector>,
@@ -513,14 +513,14 @@ pub trait MgAdminApi {
 
     // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
     // BgpPathProperties.peer is IpAddr.
-    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED, operation_id = "get_rib_imported" }]
     async fn get_rib_imported_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<v2::rib::RibQuery>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
 
     // imported moved under /rib/status in VERSION_IPV6_BASIC.
-    #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC }]
+    #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC, operation_id = "get_imported" }]
     async fn get_imported_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::AsnSelector>,
@@ -535,14 +535,14 @@ pub trait MgAdminApi {
 
     // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
     // BgpPathProperties.peer is IpAddr.
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED, operation_id = "get_rib_selected" }]
     async fn get_rib_selected_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<v2::rib::RibQuery>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
 
     // selected moved under /rib/status in VERSION_IPV6_BASIC.
-    #[endpoint { method = GET, path = "/bgp/status/selected", versions = ..VERSION_IPV6_BASIC }]
+    #[endpoint { method = GET, path = "/bgp/status/selected", versions = ..VERSION_IPV6_BASIC, operation_id = "get_selected" }]
     async fn get_selected_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::AsnSelector>,
@@ -554,13 +554,13 @@ pub trait MgAdminApi {
         request: Query<latest::bgp::AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<String, latest::bgp::PeerInfo>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "get_neighbors" }]
     async fn get_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, latest::bgp::PeerInfo>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP, operation_id = "get_neighbors" }]
     async fn get_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
@@ -569,7 +569,7 @@ pub trait MgAdminApi {
         HttpError,
     >;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = ..VERSION_IPV6_BASIC }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = ..VERSION_IPV6_BASIC, operation_id = "get_neighbors" }]
     async fn get_neighbors_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
@@ -621,7 +621,7 @@ pub trait MgAdminApi {
         request: TypedBody<latest::bgp::MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<latest::bgp::MessageHistoryResponse>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_MP_BGP..VERSION_UNNUMBERED, operation_id = "message_history" }]
     async fn message_history_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
@@ -630,7 +630,7 @@ pub trait MgAdminApi {
         HttpError,
     >;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP, operation_id = "message_history" }]
     async fn message_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
@@ -639,7 +639,7 @@ pub trait MgAdminApi {
         HttpError,
     >;
 
-    #[endpoint { method = GET, path = "/bgp/message-history", versions = ..VERSION_IPV6_BASIC }]
+    #[endpoint { method = GET, path = "/bgp/message-history", versions = ..VERSION_IPV6_BASIC, operation_id = "message_history" }]
     async fn message_history_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::MessageHistoryRequest>,
@@ -654,7 +654,7 @@ pub trait MgAdminApi {
         request: TypedBody<latest::bgp::FsmHistoryRequest>,
     ) -> Result<HttpResponseOk<latest::bgp::FsmHistoryResponse>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED, operation_id = "fsm_history" }]
     async fn fsm_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v2::bgp::history::FsmHistoryRequest>,
@@ -719,7 +719,7 @@ pub trait MgAdminApi {
         request: TypedBody<latest::rib::BestpathFanoutRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bestpath/config/fanout", versions = ..VERSION_IPV6_BASIC }]
+    #[endpoint { method = GET, path = "/bestpath/config/fanout", versions = ..VERSION_IPV6_BASIC, operation_id = "read_bestpath_fanout" }]
     async fn read_bestpath_fanout_v1(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<v1::rib::BestpathFanoutResponse>, HttpError>
@@ -727,7 +727,7 @@ pub trait MgAdminApi {
         Self::read_bestpath_fanout(rqctx).await
     }
 
-    #[endpoint { method = POST, path = "/bestpath/config/fanout", versions = ..VERSION_IPV6_BASIC }]
+    #[endpoint { method = POST, path = "/bestpath/config/fanout", versions = ..VERSION_IPV6_BASIC, operation_id = "update_bestpath_fanout" }]
     async fn update_bestpath_fanout_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::rib::BestpathFanoutRequest>,
