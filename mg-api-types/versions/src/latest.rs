@@ -33,6 +33,8 @@ pub mod bgp {
     pub use crate::v4::bgp::config::NeighborResetOp;
     pub use crate::v4::bgp::config::NeighborResetRequest;
     pub use crate::v4::bgp::config::PeerCounters;
+    pub use crate::v4::bgp::config::PeerInfo;
+    pub use crate::v4::bgp::config::PeerTimers;
     pub use crate::v4::bgp::config::StaticTimerInfo;
     pub use crate::v4::bgp::policy::ImportExportPolicy;
     pub use crate::v4::bgp::policy::ImportExportPolicy4;
@@ -44,8 +46,6 @@ pub mod bgp {
     pub use crate::v5::bgp::MessageHistoryRequest;
     pub use crate::v5::bgp::MessageHistoryResponse;
     pub use crate::v5::bgp::NeighborSelector;
-    pub use crate::v5::bgp::PeerInfo;
-    pub use crate::v5::bgp::PeerTimers;
     pub use crate::v5::bgp::UnnumberedNeighborResetRequest;
     pub use crate::v5::bgp::UnnumberedNeighborSelector;
 

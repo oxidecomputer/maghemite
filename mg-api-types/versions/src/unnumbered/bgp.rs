@@ -3,12 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::time::Duration;
 
 use crate::v1::bgp::peer::PeerId;
 use crate::v2::bgp::session::FsmEventRecord;
-use crate::v2::bgp::session::FsmStateKind;
 use crate::v2::bgp::session::MessageHistory;
 use crate::v4::bgp::messages::Afi;
 use schemars::JsonSchema;
@@ -17,15 +14,8 @@ use serde::Serialize;
 
 use crate::v2::bgp::history::FsmEventBuffer;
 use crate::v2::bgp::history::MessageDirection;
-use crate::v4::bgp::config::BgpCapability;
 use crate::v4::bgp::config::BgpPeerParameters;
-use crate::v4::bgp::config::DynamicTimerInfo;
-use crate::v4::bgp::config::Ipv4UnicastConfig;
-use crate::v4::bgp::config::Ipv6UnicastConfig;
-use crate::v4::bgp::config::JitterRange;
 use crate::v4::bgp::config::NeighborResetOp;
-use crate::v4::bgp::config::PeerCounters;
-use crate::v4::bgp::config::StaticTimerInfo;
 
 /// Unified neighbor selector supporting both numbered and unnumbered peers.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -120,34 +110,4 @@ pub struct UnnumberedNeighbor {
     pub act_as_a_default_ipv6_router: u16,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerTimers {
-    pub hold: DynamicTimerInfo,
-    pub keepalive: DynamicTimerInfo,
-    pub connect_retry: StaticTimerInfo,
-    pub connect_retry_jitter: Option<JitterRange>,
-    pub idle_hold: StaticTimerInfo,
-    pub idle_hold_jitter: Option<JitterRange>,
-    pub delay_open: StaticTimerInfo,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerInfo {
-    pub name: String,
-    pub peer_group: String,
-    pub fsm_state: FsmStateKind,
-    pub fsm_state_duration: Duration,
-    pub asn: Option<u32>,
-    pub id: Option<u32>,
-    pub local_ip: IpAddr,
-    pub remote_ip: IpAddr,
-    pub local_tcp_port: u16,
-    pub remote_tcp_port: u16,
-    pub received_capabilities: Vec<BgpCapability>,
-    pub timers: PeerTimers,
-    pub counters: PeerCounters,
-    pub ipv4_unicast: Ipv4UnicastConfig,
-    pub ipv6_unicast: Ipv6UnicastConfig,
 }

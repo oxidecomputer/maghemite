@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::v1::rdb::prefix::Prefix;
+use crate::v2::bgp::session::FsmStateKind;
 use crate::v2::bgp::session::MessageHistory;
 use crate::v4::bgp::messages::Afi;
 use crate::v4::bgp::policy::ImportExportPolicy4;
@@ -278,4 +279,114 @@ pub struct PeerCounters {
     pub tcp_connection_failure: u64,
     pub md5_auth_failures: u64,
     pub connector_panics: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerTimers {
+    pub hold: DynamicTimerInfo,
+    pub keepalive: DynamicTimerInfo,
+    pub connect_retry: StaticTimerInfo,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold: StaticTimerInfo,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub delay_open: StaticTimerInfo,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerInfo {
+    pub name: String,
+    pub peer_group: String,
+    pub fsm_state: FsmStateKind,
+    pub fsm_state_duration: Duration,
+    pub asn: Option<u32>,
+    pub id: Option<u32>,
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_tcp_port: u16,
+    pub remote_tcp_port: u16,
+    pub received_capabilities: Vec<BgpCapability>,
+    pub timers: PeerTimers,
+    pub counters: PeerCounters,
+    pub ipv4_unicast: Ipv4UnicastConfig,
+    pub ipv6_unicast: Ipv6UnicastConfig,
+}
+
+// ----- AfiSafi / BgpCapability conversions from v1 wire messages -----
+
+impl From<&crate::v1::bgp::messages::AddPathElement> for AfiSafi {
+    fn from(value: &crate::v1::bgp::messages::AddPathElement) -> Self {
+        let crate::v1::bgp::messages::AddPathElement {
+            afi,
+            safi,
+            // send_receive is wire-protocol metadata that does not
+            // belong on the schema-published AfiSafi shape.
+            send_receive: _,
+        } = value.clone();
+        Self { afi, safi }
+    }
+}
+
+impl From<&crate::v1::bgp::messages::Capability> for BgpCapability {
+    fn from(value: &crate::v1::bgp::messages::Capability) -> Self {
+        // BgpCapability has structured variants only for capabilities
+        // we actively implement (MultiprotocolExtensions, RouteRefresh,
+        // FourOctetAsn, AddPath). The remaining v1 Capability variants
+        // are deliberately collapsed into BgpCapability::Unknown(code)
+        // because there is no meaningful structured representation for
+        // them today — most are RFC-listed but not yet implemented in
+        // bgp.
+        //
+        // The match below names every v1 Capability variant explicitly
+        // rather than using a wildcard arm, so that adding a new v1
+        // variant fails to compile here. That forces a deliberate
+        // decision: add a structured BgpCapability variant for it, or
+        // route it to Unknown like the others.
+        use crate::v1::bgp::messages::Capability;
+        use crate::v1::bgp::messages::CapabilityCode;
+        match value {
+            Capability::MultiprotocolExtensions { afi, safi } => {
+                Self::MultiprotocolExtensions(AfiSafi {
+                    afi: *afi,
+                    safi: *safi,
+                })
+            }
+            Capability::RouteRefresh {} => Self::RouteRefresh,
+            Capability::FourOctetAs { asn } => Self::FourOctetAsn(*asn),
+            Capability::AddPath { elements } => Self::AddPath {
+                elements: elements
+                    .iter()
+                    .map(|e| AfiSafi {
+                        afi: e.afi,
+                        safi: e.safi,
+                    })
+                    .collect(),
+            },
+            // Capabilities without a structured BgpCapability shape.
+            c @ (Capability::OutboundRouteFiltering {}
+            | Capability::MultipleRoutesToDestination {}
+            | Capability::ExtendedNextHopEncoding { .. }
+            | Capability::BGPExtendedMessage {}
+            | Capability::BgpSec {}
+            | Capability::MultipleLabels {}
+            | Capability::BgpRole {}
+            | Capability::GracefulRestart {}
+            | Capability::DynamicCapability {}
+            | Capability::MultisessionBgp {}
+            | Capability::EnhancedRouteRefresh {}
+            | Capability::LongLivedGracefulRestart {}
+            | Capability::RoutingPolicyDistribution {}
+            | Capability::Fqdn {}
+            | Capability::PrestandardRouteRefresh {}
+            | Capability::PrestandardOrfAndPd {}
+            | Capability::PrestandardOutboundRouteFiltering {}
+            | Capability::PrestandardMultisession {}
+            | Capability::PrestandardFqdn {}
+            | Capability::PrestandardOperationalMessage {}
+            | Capability::Experimental { .. }
+            | Capability::Unassigned { .. }
+            | Capability::Reserved { .. }) => {
+                Self::Unknown(CapabilityCode::from(c.clone()) as u8)
+            }
+        }
+    }
 }

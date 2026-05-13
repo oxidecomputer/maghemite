@@ -18,58 +18,60 @@ progenitor::generate_api!(
     derives = [schemars::JsonSchema],
     replace = {
         // Routing-database shapes.
-        Prefix4 = mg_api_types::rdb::Prefix4,
-        Prefix6 = mg_api_types::rdb::Prefix6,
-        Prefix = mg_api_types::rdb::Prefix,
-        AddressFamily = mg_api_types::rdb::AddressFamily,
-        ProtocolFilter = mg_api_types::rdb::ProtocolFilter,
+        Prefix4 = mg_api_types_versions::latest::rdb::Prefix4,
+        Prefix6 = mg_api_types_versions::latest::rdb::Prefix6,
+        Prefix = mg_api_types_versions::latest::rdb::Prefix,
+        AddressFamily = mg_api_types_versions::latest::rdb::AddressFamily,
+        ProtocolFilter = mg_api_types_versions::latest::rdb::ProtocolFilter,
 
         // BGP policy and peer-identity shapes.
-        ImportExportPolicy4 = mg_api_types::bgp::ImportExportPolicy4,
-        ImportExportPolicy6 = mg_api_types::bgp::ImportExportPolicy6,
-        PeerId = mg_api_types::bgp::PeerId,
+        ImportExportPolicy4 = mg_api_types_versions::latest::bgp::ImportExportPolicy4,
+        ImportExportPolicy6 = mg_api_types_versions::latest::bgp::ImportExportPolicy6,
+        PeerId = mg_api_types_versions::latest::bgp::PeerId,
 
         // BGP admin shapes.
-        CheckerSource = mg_api_types::bgp::CheckerSource,
-        ExportedSelector = mg_api_types::bgp::ExportedSelector,
-        FsmEventBuffer = mg_api_types::bgp::FsmEventBuffer,
-        Ipv4UnicastConfig = mg_api_types::bgp::Ipv4UnicastConfig,
-        Ipv6UnicastConfig = mg_api_types::bgp::Ipv6UnicastConfig,
-        JitterRange = mg_api_types::bgp::JitterRange,
-        MessageDirection = mg_api_types::bgp::MessageDirection,
-        NeighborResetOp = mg_api_types::bgp::NeighborResetOp,
-        NeighborResetRequest = mg_api_types::bgp::NeighborResetRequest,
-        Origin4 = mg_api_types::bgp::Origin4,
-        Origin6 = mg_api_types::bgp::Origin6,
-        PeerInfo = mg_api_types::bgp::PeerInfo,
-        Router = mg_api_types::bgp::Router,
-        ShaperSource = mg_api_types::bgp::ShaperSource,
-        UnnumberedNeighborResetRequest = mg_api_types::bgp::UnnumberedNeighborResetRequest,
+        CheckerSource = mg_api_types_versions::latest::bgp::CheckerSource,
+        ExportedSelector = mg_api_types_versions::latest::bgp::ExportedSelector,
+        FsmEventBuffer = mg_api_types_versions::latest::bgp::FsmEventBuffer,
+        Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::Ipv4UnicastConfig,
+        Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::Ipv6UnicastConfig,
+        JitterRange = mg_api_types_versions::latest::bgp::JitterRange,
+        MessageDirection = mg_api_types_versions::latest::bgp::MessageDirection,
+        NeighborResetOp = mg_api_types_versions::latest::bgp::NeighborResetOp,
+        NeighborResetRequest = mg_api_types_versions::latest::bgp::NeighborResetRequest,
+        Origin4 = mg_api_types_versions::latest::bgp::Origin4,
+        Origin6 = mg_api_types_versions::latest::bgp::Origin6,
+        PeerInfo = mg_api_types_versions::latest::bgp::PeerInfo,
+        Router = mg_api_types_versions::latest::bgp::Router,
+        ShaperSource = mg_api_types_versions::latest::bgp::ShaperSource,
+        UnnumberedNeighborResetRequest = mg_api_types_versions::latest::bgp::UnnumberedNeighborResetRequest,
 
-        FsmStateKind = mg_api_types::bgp::session::FsmStateKind,
+        FsmStateKind = mg_api_types_versions::latest::bgp::session::FsmStateKind,
 
         // BGP wire-message shapes.
-        Afi = mg_api_types::bgp::messages::Afi,
+        Afi = mg_api_types_versions::latest::bgp::messages::Afi,
 
         // RIB shapes.
-        BestpathFanoutRequest = mg_api_types::rib::BestpathFanoutRequest,
+        BestpathFanoutRequest = mg_api_types_versions::latest::rib::BestpathFanoutRequest,
 
         // Static-route shapes.
-        AddStaticRoute4Request = mg_api_types::static_routes::AddStaticRoute4Request,
-        AddStaticRoute6Request = mg_api_types::static_routes::AddStaticRoute6Request,
-        DeleteStaticRoute4Request = mg_api_types::static_routes::DeleteStaticRoute4Request,
-        DeleteStaticRoute6Request = mg_api_types::static_routes::DeleteStaticRoute6Request,
-        StaticRoute4 = mg_api_types::static_routes::StaticRoute4,
-        StaticRoute4List = mg_api_types::static_routes::StaticRoute4List,
-        StaticRoute6 = mg_api_types::static_routes::StaticRoute6,
-        StaticRoute6List = mg_api_types::static_routes::StaticRoute6List,
+        AddStaticRoute4Request = mg_api_types_versions::latest::static_routes::AddStaticRoute4Request,
+        AddStaticRoute6Request = mg_api_types_versions::latest::static_routes::AddStaticRoute6Request,
+        DeleteStaticRoute4Request = mg_api_types_versions::latest::static_routes::DeleteStaticRoute4Request,
+        DeleteStaticRoute6Request = mg_api_types_versions::latest::static_routes::DeleteStaticRoute6Request,
+        StaticRoute4 = mg_api_types_versions::latest::static_routes::StaticRoute4,
+        StaticRoute4List = mg_api_types_versions::latest::static_routes::StaticRoute4List,
+        StaticRoute6 = mg_api_types_versions::latest::static_routes::StaticRoute6,
+        StaticRoute6List = mg_api_types_versions::latest::static_routes::StaticRoute6List,
 
         Duration = std::time::Duration,
     }
 );
 
 use colored::*;
-use mg_api_types::rdb::{AddressFamily, Prefix, ProtocolFilter};
+use mg_api_types_versions::latest::rdb::{
+    AddressFamily, Prefix, ProtocolFilter,
+};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
@@ -203,8 +205,12 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
                 None => path.nexthop.to_string(),
             };
             let peer_str = match &bgp.peer {
-                mg_api_types::bgp::PeerId::Ip(ip) => ip.to_string(),
-                mg_api_types::bgp::PeerId::Interface(iface) => iface.clone(),
+                mg_api_types_versions::latest::bgp::PeerId::Ip(ip) => {
+                    ip.to_string()
+                }
+                mg_api_types_versions::latest::bgp::PeerId::Interface(
+                    iface,
+                ) => iface.clone(),
             };
             writeln!(
                 &mut tw,

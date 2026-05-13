@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::v1;
 use crate::v4::bgp::messages::Message;
 
 /// Maximum number of historical messages retained per direction in
@@ -133,4 +134,26 @@ pub struct FsmEventRecord {
 
     /// Additional event details (e.g., "Received OPEN", "Admin command")
     pub details: Option<String>,
+}
+
+impl From<FsmStateKind> for v1::bgp::config::FsmStateKind {
+    fn from(kind: FsmStateKind) -> Self {
+        // The match exhausts all v2 variants; adding a v2 variant fails
+        // to compile here, forcing an explicit v1 mapping.
+        match kind {
+            FsmStateKind::Idle => Self::Idle,
+            FsmStateKind::Connect => Self::Connect,
+            FsmStateKind::Active => Self::Active,
+            FsmStateKind::OpenSent => Self::OpenSent,
+            FsmStateKind::OpenConfirm => Self::OpenConfirm,
+            // We convert ConnectionCollision to OpenSent, because one
+            // connection is always in OpenSent for the duration of
+            // the colliison (unless we've already transitioned out of
+            // ConnectionCollision), so this is technically correct, even if
+            // it's only correct from the perspective of just one connection.
+            FsmStateKind::ConnectionCollision => Self::OpenSent,
+            FsmStateKind::SessionSetup => Self::SessionSetup,
+            FsmStateKind::Established => Self::Established,
+        }
+    }
 }

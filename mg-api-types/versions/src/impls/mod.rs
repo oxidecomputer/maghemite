@@ -8,7 +8,6 @@ pub(crate) mod bgp;
 mod messages;
 mod path;
 mod peer;
-mod policy;
 mod prefix;
 pub(crate) mod rib;
 mod session;

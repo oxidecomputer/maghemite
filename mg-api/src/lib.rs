@@ -558,7 +558,10 @@ pub trait MgAdminApi {
     async fn get_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, v5::bgp::PeerInfo>>, HttpError>;
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, v4::bgp::config::PeerInfo>>,
+        HttpError,
+    >;
 
     #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP, operation_id = "get_neighbors" }]
     async fn get_neighbors_v2(

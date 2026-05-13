@@ -3709,7 +3709,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "colored",
- "mg-api-types",
+ "mg-api-types-versions",
  "progenitor 0.14.0",
  "reqwest 0.13.3",
  "schemars 0.8.22",

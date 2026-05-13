@@ -183,3 +183,20 @@ impl From<v4::bgp::messages::UpdateMessage> for UpdateMessage {
         }
     }
 }
+
+impl From<PeerInfo> for crate::v1::bgp::config::PeerInfo {
+    fn from(info: PeerInfo) -> Self {
+        let PeerInfo {
+            state,
+            asn,
+            duration_millis,
+            timers,
+        } = info;
+        Self {
+            state: crate::v1::bgp::config::FsmStateKind::from(state),
+            asn,
+            duration_millis,
+            timers,
+        }
+    }
+}

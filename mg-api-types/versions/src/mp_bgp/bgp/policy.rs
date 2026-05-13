@@ -38,6 +38,52 @@ pub enum ImportExportPolicy {
     V6(ImportExportPolicy6),
 }
 
+impl crate::v1::bgp::policy::ImportExportPolicy {
+    /// Combine v4-introduced per-AF policies back into the v1 mixed-AF
+    /// policy. Used by prior-version (v1) endpoints to project the
+    /// current per-AF configuration onto the legacy wire shape.
+    ///
+    /// - If both are `NoFiltering`, returns `NoFiltering`
+    /// - Otherwise, unions the allowed prefixes from both into a single set
+    pub fn from_per_af_policies(
+        v4: &ImportExportPolicy4,
+        v6: &ImportExportPolicy6,
+    ) -> Self {
+        use crate::v1::bgp::policy::ImportExportPolicy as V1;
+        match (v4, v6) {
+            (
+                ImportExportPolicy4::NoFiltering,
+                ImportExportPolicy6::NoFiltering,
+            ) => V1::NoFiltering,
+            (
+                ImportExportPolicy4::Allow(v4_prefixes),
+                ImportExportPolicy6::NoFiltering,
+            ) => {
+                let prefixes: BTreeSet<Prefix> =
+                    v4_prefixes.iter().map(|p| Prefix::V4(*p)).collect();
+                V1::Allow(prefixes)
+            }
+            (
+                ImportExportPolicy4::NoFiltering,
+                ImportExportPolicy6::Allow(v6_prefixes),
+            ) => {
+                let prefixes: BTreeSet<Prefix> =
+                    v6_prefixes.iter().map(|p| Prefix::V6(*p)).collect();
+                V1::Allow(prefixes)
+            }
+            (
+                ImportExportPolicy4::Allow(v4_prefixes),
+                ImportExportPolicy6::Allow(v6_prefixes),
+            ) => {
+                let mut prefixes: BTreeSet<Prefix> =
+                    v4_prefixes.iter().map(|p| Prefix::V4(*p)).collect();
+                prefixes.extend(v6_prefixes.iter().map(|p| Prefix::V6(*p)));
+                V1::Allow(prefixes)
+            }
+        }
+    }
+}
+
 impl From<crate::v1::bgp::policy::ImportExportPolicy> for ImportExportPolicy4 {
     fn from(value: crate::v1::bgp::policy::ImportExportPolicy) -> Self {
         match value {

@@ -208,7 +208,7 @@ pub async fn read_neighbors_v1(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| v1::bgp::config::Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x).into())
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -240,10 +240,8 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result = v1::bgp::config::Neighbor::from_rdb_neighbor_info(
-        rq.asn,
-        neighbor_info,
-    );
+    let result: v1::bgp::config::Neighbor =
+        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info).into();
     Ok(HttpResponseOk(result))
 }
 
@@ -1169,7 +1167,8 @@ pub async fn get_neighbors_v2(
 pub async fn get_neighbors_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, v5::bgp::PeerInfo>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, v4::bgp::config::PeerInfo>>, HttpError>
+{
     let rq = request.into_inner();
     let ctx = ctx.context();
 
