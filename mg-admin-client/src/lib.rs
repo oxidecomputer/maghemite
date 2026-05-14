@@ -18,9 +18,9 @@ progenitor::generate_api!(
     derives = [schemars::JsonSchema],
     replace = {
         // Routing-database shapes.
-        Prefix4 = mg_api_types_versions::latest::rdb::Prefix4,
-        Prefix6 = mg_api_types_versions::latest::rdb::Prefix6,
-        Prefix = mg_api_types_versions::latest::rdb::Prefix,
+        Prefix4 = mg_api_types_versions::latest::rdb::prefix::Prefix4,
+        Prefix6 = mg_api_types_versions::latest::rdb::prefix::Prefix6,
+        Prefix = mg_api_types_versions::latest::rdb::prefix::Prefix,
         AddressFamily = mg_api_types_versions::latest::rdb::AddressFamily,
         ProtocolFilter = mg_api_types_versions::latest::rdb::ProtocolFilter,
 
@@ -69,9 +69,8 @@ progenitor::generate_api!(
 );
 
 use colored::*;
-use mg_api_types_versions::latest::rdb::{
-    AddressFamily, Prefix, ProtocolFilter,
-};
+use mg_api_types_versions::latest::rdb::prefix::Prefix;
+use mg_api_types_versions::latest::rdb::{AddressFamily, ProtocolFilter};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;

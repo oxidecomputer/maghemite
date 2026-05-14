@@ -124,18 +124,6 @@ pub mod rdb {
     pub use crate::v1::rdb::AddressFamily;
     pub use crate::v1::rdb::ProtocolFilter;
 
-    // High-traffic submodule types hoisted for convenience. Submodule
-    // paths (e.g. `latest::rdb::prefix::Prefix`) remain valid.
-    pub use neighbor::BgpNeighborInfo;
-    pub use neighbor::BgpNeighborParameters;
-    pub use neighbor::BgpUnnumberedNeighborInfo;
-    pub use path::BgpPathProperties;
-    pub use path::Path;
-    pub use prefix::Prefix;
-    pub use prefix::Prefix4;
-    pub use prefix::Prefix6;
-    pub use router::BgpRouterInfo;
-
     pub mod neighbor {
         pub use crate::v4::rdb::neighbor::BgpNeighborInfo;
         pub use crate::v4::rdb::neighbor::BgpNeighborParameters;
