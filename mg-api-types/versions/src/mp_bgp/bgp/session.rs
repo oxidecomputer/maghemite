@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::messages::Message;
+use crate::v1;
 use crate::v2;
 use crate::v2::bgp::session::ConnectionId;
 
@@ -75,6 +76,47 @@ impl From<MessageHistory> for v2::bgp::history::MessageHistory {
             sent: sent
                 .into_iter()
                 .map(v2::bgp::history::MessageHistoryEntry::from)
+                .collect(),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Cross-version downgrade: v4 session-history shapes → v1 (no
+// connection_id, v1 `Message` enum). The v1 shapes are pre-IPV6_BASIC
+// and lack the `connection_id` field added at v2.
+// ----------------------------------------------------------------------------
+
+impl From<MessageHistoryEntry> for v1::bgp::session::MessageHistoryEntry {
+    fn from(entry: MessageHistoryEntry) -> Self {
+        // Compile barrier: a latest MessageHistoryEntry field addition
+        // will fail to bind here, forcing a deliberate decision about
+        // how (or whether) to surface it on the v1 form.
+        let MessageHistoryEntry {
+            timestamp,
+            message,
+            // v1 has no connection_id concept (added in v2 alongside
+            // multi-connection FSM history).
+            connection_id: _,
+        } = entry;
+        Self {
+            timestamp,
+            message: v1::bgp::messages::Message::from(message),
+        }
+    }
+}
+
+impl From<MessageHistory> for v1::bgp::session::MessageHistory {
+    fn from(history: MessageHistory) -> Self {
+        let MessageHistory { received, sent } = history;
+        Self {
+            received: received
+                .into_iter()
+                .map(v1::bgp::session::MessageHistoryEntry::from)
+                .collect(),
+            sent: sent
+                .into_iter()
+                .map(v1::bgp::session::MessageHistoryEntry::from)
                 .collect(),
         }
     }

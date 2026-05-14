@@ -18,7 +18,6 @@ use crate::latest::bgp::session::ConnectionId;
 use crate::latest::bgp::session::FsmStateKind;
 use crate::latest::bgp::session::MessageHistory;
 use crate::latest::bgp::session::MessageHistoryEntry;
-use crate::v1;
 
 use crate::latest::bgp::session::MAX_MESSAGE_HISTORY;
 
@@ -142,44 +141,5 @@ impl MessageHistory {
             timestamp: chrono::Utc::now(),
             connection_id,
         });
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Cross-version conversions: v2 (latest) → v1 (compat shapes).
-// ----------------------------------------------------------------------------
-
-impl From<MessageHistoryEntry> for v1::bgp::session::MessageHistoryEntry {
-    fn from(entry: MessageHistoryEntry) -> Self {
-        // Compile barrier: a v2 MessageHistoryEntry field addition will
-        // fail to bind here, forcing a deliberate decision about how
-        // (or whether) to surface it on the v1 form.
-        let MessageHistoryEntry {
-            timestamp,
-            message,
-            // v1 has no connection_id concept (added in v2 alongside
-            // multi-connection FSM history).
-            connection_id: _,
-        } = entry;
-        Self {
-            timestamp,
-            message: crate::v1::bgp::messages::Message::from(message),
-        }
-    }
-}
-
-impl From<MessageHistory> for v1::bgp::session::MessageHistory {
-    fn from(history: MessageHistory) -> Self {
-        let MessageHistory { received, sent } = history;
-        Self {
-            received: received
-                .into_iter()
-                .map(v1::bgp::session::MessageHistoryEntry::from)
-                .collect(),
-            sent: sent
-                .into_iter()
-                .map(v1::bgp::session::MessageHistoryEntry::from)
-                .collect(),
-        }
     }
 }
