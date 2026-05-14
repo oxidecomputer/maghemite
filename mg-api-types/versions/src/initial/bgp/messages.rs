@@ -13,8 +13,6 @@ use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v4::bgp::messages::ExtendedNexthopElement;
-
 /// Maximum BGP message size in octets per RFC 4271 §4.
 pub const MAX_MESSAGE_SIZE: usize = 4096;
 
@@ -286,6 +284,35 @@ pub enum AsPathType {
     AsSet = 1,
     /// The path is to be interpreted as a sequence
     AsSequence = 2,
+}
+
+// A self describing segment found in path sets and sequences of 4-byte ASNs.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct As4PathSegment {
+    // Indicates if this segment is a part of a set or sequence.
+    pub typ: AsPathType,
+    // 4 byte AS numbers in the segment.
+    pub value: Vec<u32>,
+}
+
+/// Element of the RFC 8950 Extended Next Hop Encoding capability advertising a
+/// supported (AFI, SAFI, NextHop AFI) tuple.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
+pub struct ExtendedNexthopElement {
+    pub afi: u16,
+    pub safi: u16,
+    pub nh_afi: u16,
 }
 
 /// This enumeration contains possible notification error codes.
@@ -575,6 +602,30 @@ pub struct Prefix {
     pub value: Vec<u8>,
 }
 
+impl From<super::super::rdb::prefix::Prefix> for Prefix {
+    fn from(prefix: super::super::rdb::prefix::Prefix) -> Self {
+        // Convert the rdb V4/V6 Prefix enum to the v1 wire shape:
+        // 1-byte length followed by ceil(length/8) octets. Direct
+        // encoding avoids a circular dep on `bgp::messages::BgpWireFormat`.
+        match prefix {
+            super::super::rdb::prefix::Prefix::V4(p) => {
+                let length = p.length;
+                let octet_count = (length as usize).div_ceil(8);
+                let octets = p.value.octets();
+                let value = octets[..octet_count].to_vec();
+                Self { length, value }
+            }
+            super::super::rdb::prefix::Prefix::V6(p) => {
+                let length = p.length;
+                let octet_count = (length as usize).div_ceil(8);
+                let octets = p.value.octets();
+                let value = octets[..octet_count].to_vec();
+                Self { length, value }
+            }
+        }
+    }
+}
+
 /// The value encoding of a path attribute (v1, pre-MP-BGP).
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -582,7 +633,7 @@ pub enum PathAttributeValue {
     /// The type of origin associated with a path
     Origin(PathOrigin),
     /// The AS set associated with a path
-    AsPath(Vec<crate::v4::bgp::messages::As4PathSegment>),
+    AsPath(Vec<As4PathSegment>),
     /// The nexthop associated with a path
     NextHop(IpAddr),
     /// A metric used for external (inter-AS) links to discriminate among
@@ -596,7 +647,7 @@ pub enum PathAttributeValue {
     /// Indicates communities associated with a path.
     Communities(Vec<Community>),
     /// The 4-byte encoded AS set associated with a path
-    As4Path(Vec<crate::v4::bgp::messages::As4PathSegment>),
+    As4Path(Vec<As4PathSegment>),
     /// This attribute is included in routes that are formed by aggregation.
     As4Aggregator([u8; 8]),
 }

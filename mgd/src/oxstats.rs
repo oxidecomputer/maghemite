@@ -7,7 +7,7 @@ use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::olog;
 use chrono::{DateTime, Utc};
-use mg_api_types::bgp::PeerId;
+use mg_api_types::bgp::peer::PeerId;
 use mg_common::lock;
 use mg_common::nexus::{local_underlay_address, run_oximeter};
 use mg_common::stats::MgLowerStats;

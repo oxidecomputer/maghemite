@@ -3,6 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Re-exports of the latest versions of types.
+//!
+//! Strict mirror of the source layout: for every published type
+//! defined at `crate::vN::AREA::SUBMODULE::Type`, the floating
+//! identifier is `crate::latest::AREA::SUBMODULE::Type` — replacing
+//! `vN` with `latest` leaves the rest of the path unchanged.
 
 pub mod bfd {
     pub use crate::v1::bfd::BfdPeerConfig;
@@ -13,55 +18,68 @@ pub mod bfd {
 }
 
 pub mod bgp {
-    pub use crate::v1::bgp::config::AsnSelector;
-    pub use crate::v1::bgp::config::CheckerSource;
-    pub use crate::v1::bgp::config::Origin4;
-    pub use crate::v1::bgp::config::Router;
-    pub use crate::v1::bgp::config::ShaperSource;
-    pub use crate::v1::bgp::peer::PeerId;
+    pub mod config {
+        pub use crate::v1::bgp::config::AsnSelector;
+        pub use crate::v1::bgp::config::CheckerSource;
+        pub use crate::v1::bgp::config::Origin4;
+        pub use crate::v1::bgp::config::Router;
+        pub use crate::v1::bgp::config::ShaperSource;
 
-    pub use crate::v2::bgp::history::FsmEventBuffer;
-    pub use crate::v2::bgp::history::MessageDirection;
-    pub use crate::v2::bgp::history::Origin6;
+        pub use crate::v4::bgp::config::AfiSafi;
+        pub use crate::v4::bgp::config::BgpCapability;
+        pub use crate::v4::bgp::config::DynamicTimerInfo;
+        pub use crate::v4::bgp::config::Ipv4UnicastConfig;
+        pub use crate::v4::bgp::config::Ipv6UnicastConfig;
+        pub use crate::v4::bgp::config::JitterRange;
+        pub use crate::v4::bgp::config::NeighborResetOp;
+        pub use crate::v4::bgp::config::NeighborResetRequest;
+        pub use crate::v4::bgp::config::PeerCounters;
+        pub use crate::v4::bgp::config::PeerInfo;
+        pub use crate::v4::bgp::config::PeerTimers;
+        pub use crate::v4::bgp::config::StaticTimerInfo;
 
-    pub use crate::v4::bgp::config::AfiSafi;
-    pub use crate::v4::bgp::config::BgpCapability;
-    pub use crate::v4::bgp::config::DynamicTimerInfo;
-    pub use crate::v4::bgp::config::Ipv4UnicastConfig;
-    pub use crate::v4::bgp::config::Ipv6UnicastConfig;
-    pub use crate::v4::bgp::config::JitterRange;
-    pub use crate::v4::bgp::config::NeighborResetOp;
-    pub use crate::v4::bgp::config::NeighborResetRequest;
-    pub use crate::v4::bgp::config::PeerCounters;
-    pub use crate::v4::bgp::config::PeerInfo;
-    pub use crate::v4::bgp::config::PeerTimers;
-    pub use crate::v4::bgp::config::StaticTimerInfo;
-    pub use crate::v4::bgp::policy::ImportExportPolicy;
-    pub use crate::v4::bgp::policy::ImportExportPolicy4;
-    pub use crate::v4::bgp::policy::ImportExportPolicy6;
+        pub use crate::v5::bgp::config::NeighborSelector;
+        pub use crate::v5::bgp::config::UnnumberedNeighborResetRequest;
+        pub use crate::v5::bgp::config::UnnumberedNeighborSelector;
 
-    pub use crate::v5::bgp::ExportedSelector;
-    pub use crate::v5::bgp::FsmHistoryRequest;
-    pub use crate::v5::bgp::FsmHistoryResponse;
-    pub use crate::v5::bgp::MessageHistoryRequest;
-    pub use crate::v5::bgp::MessageHistoryResponse;
-    pub use crate::v5::bgp::NeighborSelector;
-    pub use crate::v5::bgp::UnnumberedNeighborResetRequest;
-    pub use crate::v5::bgp::UnnumberedNeighborSelector;
+        pub use crate::v8::bgp::config::ApplyRequest;
+        pub use crate::v8::bgp::config::BgpPeerConfig;
+        pub use crate::v8::bgp::config::BgpPeerParameters;
+        pub use crate::v8::bgp::config::Neighbor;
+        pub use crate::v8::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v8::bgp::config::UnnumberedNeighbor;
+    }
 
-    pub use crate::v8::bgp::ApplyRequest;
-    pub use crate::v8::bgp::BgpPeerConfig;
-    pub use crate::v8::bgp::BgpPeerParameters;
-    pub use crate::v8::bgp::Neighbor;
-    pub use crate::v8::bgp::UnnumberedBgpPeerConfig;
-    pub use crate::v8::bgp::UnnumberedNeighbor;
+    pub mod peer {
+        pub use crate::v1::bgp::peer::PeerId;
+    }
 
-    pub use crate::impls::bgp::error;
-    pub use crate::impls::bgp::parse;
+    pub mod policy {
+        pub use crate::v4::bgp::policy::ImportExportPolicy4;
+        pub use crate::v4::bgp::policy::ImportExportPolicy6;
+    }
+
+    pub mod history {
+        pub use crate::v2::bgp::history::FsmEventBuffer;
+        pub use crate::v2::bgp::history::MessageDirection;
+        pub use crate::v2::bgp::history::Origin6;
+    }
+
+    pub mod error {
+        pub use crate::impls::bgp::error::MessageConvertError;
+        pub use crate::impls::bgp::error::WireError;
+    }
+
+    pub mod parse {
+        pub use crate::impls::bgp::parse::AttributeAction;
+        pub use crate::impls::bgp::parse::NlriSection;
+        pub use crate::impls::bgp::parse::UpdateParseErrorReason;
+    }
 
     pub mod messages {
         pub use crate::v1::bgp::messages::AS_TRANS;
         pub use crate::v1::bgp::messages::AddPathElement;
+        pub use crate::v1::bgp::messages::As4PathSegment;
         pub use crate::v1::bgp::messages::AsPathType;
         pub use crate::v1::bgp::messages::BGP4;
         pub use crate::v1::bgp::messages::Capability;
@@ -70,6 +88,7 @@ pub mod bgp {
         pub use crate::v1::bgp::messages::Community;
         pub use crate::v1::bgp::messages::ErrorCode;
         pub use crate::v1::bgp::messages::ErrorSubcode;
+        pub use crate::v1::bgp::messages::ExtendedNexthopElement;
         pub use crate::v1::bgp::messages::Header;
         pub use crate::v1::bgp::messages::HeaderErrorSubcode;
         pub use crate::v1::bgp::messages::MAX_MESSAGE_SIZE;
@@ -89,9 +108,7 @@ pub mod bgp {
         pub use crate::v4::bgp::messages::Afi;
         pub use crate::v4::bgp::messages::Aggregator;
         pub use crate::v4::bgp::messages::As4Aggregator;
-        pub use crate::v4::bgp::messages::As4PathSegment;
         pub use crate::v4::bgp::messages::BgpNexthop;
-        pub use crate::v4::bgp::messages::ExtendedNexthopElement;
         pub use crate::v4::bgp::messages::Ipv6DoubleNexthop;
         pub use crate::v4::bgp::messages::Message;
         pub use crate::v4::bgp::messages::MpReachIpv4Unicast;
@@ -118,12 +135,20 @@ pub mod bgp {
         pub use crate::v4::bgp::session::MAX_MESSAGE_HISTORY;
         pub use crate::v4::bgp::session::MessageHistory;
         pub use crate::v4::bgp::session::MessageHistoryEntry;
+
+        pub use crate::v5::bgp::session::ExportedSelector;
+        pub use crate::v5::bgp::session::FsmHistoryRequest;
+        pub use crate::v5::bgp::session::FsmHistoryResponse;
+        pub use crate::v5::bgp::session::MessageHistoryRequest;
+        pub use crate::v5::bgp::session::MessageHistoryResponse;
     }
 }
 
 pub mod rdb {
-    pub use crate::v1::rdb::AddressFamily;
-    pub use crate::v1::rdb::ProtocolFilter;
+    pub mod rib {
+        pub use crate::v1::rdb::rib::AddressFamily;
+        pub use crate::v1::rdb::rib::ProtocolFilter;
+    }
 
     pub mod neighbor {
         pub use crate::v4::rdb::neighbor::BgpNeighborInfo;

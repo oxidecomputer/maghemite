@@ -9,6 +9,7 @@ uuid.workspace = true
 
 [dependencies]
 ddm-admin-client = { path = "../ddm-admin-client" }
+ddm-api-types-versions.workspace = true
 mg-api-types = { path = "../mg-api-types" }
 rdb = { path = "../rdb" }
 dpd-client.workspace = true

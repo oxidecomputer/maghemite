@@ -8,7 +8,8 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_api_types::rdb::{AddressFamily, Prefix};
+use mg_api_types::rdb::prefix::Prefix;
+use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::GetRibResult;
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,

@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::v1::bgp::messages::AsPathType;
+use crate::v1::bgp::messages::As4PathSegment;
 use crate::v1::bgp::messages::Community;
 use crate::v1::bgp::messages::PathOrigin;
 
@@ -85,26 +85,6 @@ pub enum BgpNexthop {
     Ipv4(Ipv4Addr),
     Ipv6Single(Ipv6Addr),
     Ipv6Double(Ipv6DoubleNexthop),
-}
-
-/// Element of the RFC 8950 Extended Next Hop Encoding capability advertising a
-/// supported (AFI, SAFI, NextHop AFI) tuple.
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    PartialOrd,
-    Ord,
-)]
-pub struct ExtendedNexthopElement {
-    pub afi: u16,
-    pub safi: u16,
-    pub nh_afi: u16,
 }
 
 /// Path attribute flag bits (RFC 4271 §4.3).
@@ -188,15 +168,6 @@ pub struct As4Aggregator {
     pub asn: u32,
     /// IP address of the BGP speaker that formed the aggregate
     pub address: Ipv4Addr,
-}
-
-// A self describing segment found in path sets and sequences of 4-byte ASNs.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct As4PathSegment {
-    // Indicates if this segment is a part of a set or sequence.
-    pub typ: AsPathType,
-    // 4 byte AS numbers in the segment.
-    pub value: Vec<u32>,
 }
 
 /// IPv4 Unicast MP_REACH_NLRI contents.
@@ -406,6 +377,17 @@ pub struct UpdateMessage {
     /// SessionReset errors cause early return and are not collected here.
     /// Not serialized - only used for internal signaling.
     /// Use the treat_as_withdraw() method to check if any TreatAsWithdraw errors occurred.
+    //
+    // This field intentionally references `crate::impls::…` rather than a
+    // versioned identifier — the only documented deviation from RFD 619's
+    // "version modules only refer to versioned identifiers" rule. The
+    // carried types are `#[serde(skip)]`/`#[schemars(skip)]` and therefore
+    // not part of any OpenAPI surface; they exist solely for in-process
+    // RFC 7606 (treat-as-withdraw / discard) signaling between the BGP
+    // decoder in the `bgp` crate and its consumers. Keeping them adjacent
+    // to the latest-shape impls (rather than duplicating into every
+    // version) is the pragmatic trade-off; see `impls/bgp/parse.rs` for
+    // the full rationale.
     #[serde(skip, default)]
     #[schemars(skip)]
     pub errors: Vec<(
@@ -464,6 +446,166 @@ impl From<UpdateMessage> for crate::v2::bgp::history::UpdateMessage {
 
 impl From<Message> for crate::v2::bgp::history::Message {
     fn from(msg: Message) -> Self {
+        match msg {
+            Message::Open(open) => Self::Open(open),
+            Message::Update(update) => Self::Update(update.into()),
+            Message::Notification(notif) => Self::Notification(notif),
+            Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Cross-version downgrade: v4 PathAttribute family → v1 representations.
+// MP-BGP type codes / attribute values have no v1 equivalent and either
+// fall through to AS4 codes (type-code level) or are dropped (value
+// level, surfaced through the `Option`-returning value conversion).
+//
+// These v4 → v1 conversions skip the v2 hop that RFD 619 §4.5 prefers.
+// The skip is intentional: v2 introduces a `bgp::history` module whose
+// `Message`/`UpdateMessage` differ from v1's `bgp::messages::Message`
+// (v2 wraps v1's Open/Notification/RouteRefresh types but carries a
+// v2-local UpdateMessage on top of v1 PathAttributes). There is no
+// useful v2-`messages` shape to hop through, so v4 → v1 PathAttribute
+// translation lives here, next to the matching v4 → v2 history block.
+// ----------------------------------------------------------------------------
+
+impl From<PathAttributeTypeCode>
+    for crate::v1::bgp::messages::PathAttributeTypeCode
+{
+    fn from(code: PathAttributeTypeCode) -> Self {
+        use crate::v1::bgp::messages::PathAttributeTypeCode as V1Code;
+        match code {
+            PathAttributeTypeCode::Origin => V1Code::Origin,
+            PathAttributeTypeCode::AsPath => V1Code::AsPath,
+            PathAttributeTypeCode::NextHop => V1Code::NextHop,
+            PathAttributeTypeCode::MultiExitDisc => V1Code::MultiExitDisc,
+            PathAttributeTypeCode::LocalPref => V1Code::LocalPref,
+            PathAttributeTypeCode::AtomicAggregate => V1Code::AtomicAggregate,
+            PathAttributeTypeCode::Aggregator => V1Code::Aggregator,
+            PathAttributeTypeCode::Communities => V1Code::Communities,
+            // MP-BGP type codes have no v1 equivalent; map to As4Path as a
+            // fallback (they are filtered out before this conversion runs
+            // in the value-level mapping).
+            PathAttributeTypeCode::MpReachNlri
+            | PathAttributeTypeCode::MpUnreachNlri => V1Code::As4Path,
+            PathAttributeTypeCode::As4Path => V1Code::As4Path,
+            PathAttributeTypeCode::As4Aggregator => V1Code::As4Aggregator,
+        }
+    }
+}
+
+impl From<PathAttributeType> for crate::v1::bgp::messages::PathAttributeType {
+    fn from(t: PathAttributeType) -> Self {
+        let PathAttributeType { flags, type_code } = t;
+        Self {
+            flags,
+            type_code: crate::v1::bgp::messages::PathAttributeTypeCode::from(
+                type_code,
+            ),
+        }
+    }
+}
+
+impl From<PathAttributeValue>
+    for Option<crate::v1::bgp::messages::PathAttributeValue>
+{
+    fn from(val: PathAttributeValue) -> Self {
+        use crate::v1::bgp::messages::PathAttributeValue as V1Val;
+        use std::net::IpAddr;
+        match val {
+            PathAttributeValue::Origin(o) => Some(V1Val::Origin(o)),
+            PathAttributeValue::AsPath(p) => Some(V1Val::AsPath(p)),
+            PathAttributeValue::NextHop(nh) => {
+                Some(V1Val::NextHop(IpAddr::V4(nh)))
+            }
+            PathAttributeValue::MultiExitDisc(m) => {
+                Some(V1Val::MultiExitDisc(m))
+            }
+            PathAttributeValue::LocalPref(l) => Some(V1Val::LocalPref(l)),
+            PathAttributeValue::Aggregator(a) => {
+                Some(V1Val::Aggregator(a.to_bytes()))
+            }
+            PathAttributeValue::Communities(c) => Some(V1Val::Communities(c)),
+            // AtomicAggregate / MP-BGP attributes have no v1 representation.
+            PathAttributeValue::AtomicAggregate
+            | PathAttributeValue::MpReachNlri(_)
+            | PathAttributeValue::MpUnreachNlri(_) => None,
+            PathAttributeValue::As4Path(p) => Some(V1Val::As4Path(p)),
+            PathAttributeValue::As4Aggregator(a) => {
+                Some(V1Val::As4Aggregator(a.to_bytes()))
+            }
+        }
+    }
+}
+
+impl From<PathAttribute> for Option<crate::v1::bgp::messages::PathAttribute> {
+    fn from(attr: PathAttribute) -> Self {
+        let PathAttribute { typ, value } = attr;
+        let value_opt: Option<crate::v1::bgp::messages::PathAttributeValue> =
+            value.into();
+        value_opt.map(|value| crate::v1::bgp::messages::PathAttribute {
+            typ: crate::v1::bgp::messages::PathAttributeType::from(typ),
+            value,
+        })
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Cross-version downgrade: v4 `Message`/`UpdateMessage` → v1 wire shapes.
+// As with the PathAttribute block above, this skips v2 deliberately —
+// v2's `bgp::history::Message` is a sibling shape, not a v1 → v4
+// intermediate, so the v4 → v1 conversion cannot factor through it.
+// ----------------------------------------------------------------------------
+
+impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
+    fn from(msg: UpdateMessage) -> Self {
+        // Compile barrier: a latest UpdateMessage field addition will
+        // fail to bind here, forcing a deliberate decision about how
+        // (or whether) to surface it on the v1 form.
+        let UpdateMessage {
+            withdrawn,
+            path_attributes,
+            nlri,
+            // `errors` is the runtime parse-error trace (#[serde(skip)],
+            // #[schemars(skip)]); it never appears on the wire and has
+            // no v1 representation.
+            errors: _,
+        } = msg;
+        Self {
+            withdrawn: withdrawn
+                .into_iter()
+                .map(|p| {
+                    crate::v1::bgp::messages::Prefix::from(
+                        crate::v1::rdb::prefix::Prefix::V4(p),
+                    )
+                })
+                .collect(),
+            // Filter out attributes that don't have v1 equivalents (MP-BGP,
+            // AtomicAggregate).
+            path_attributes: path_attributes
+                .into_iter()
+                .filter_map(
+                    Option::<crate::v1::bgp::messages::PathAttribute>::from,
+                )
+                .collect(),
+            nlri: nlri
+                .into_iter()
+                .map(|p| {
+                    crate::v1::bgp::messages::Prefix::from(
+                        crate::v1::rdb::prefix::Prefix::V4(p),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<Message> for crate::v1::bgp::messages::Message {
+    fn from(msg: Message) -> Self {
+        // The match exhausts all latest Message variants; adding a
+        // variant fails to compile here, forcing an explicit v1 mapping.
         match msg {
             Message::Open(open) => Self::Open(open),
             Message::Update(update) => Self::Update(update.into()),

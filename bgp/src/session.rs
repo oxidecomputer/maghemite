@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::policy::ImportExportPolicy;
 use crate::{
     clock::SessionClock,
     clock::TimerConfig,
@@ -24,19 +25,18 @@ use crate::{
     router::Router,
     unnumbered::UnnumberedManager,
 };
-pub(crate) use mg_api_types::bgp::PeerId;
+use mg_api_types::bgp::config::{
+    BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
+    JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
+};
+pub(crate) use mg_api_types::bgp::peer::PeerId;
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 pub(crate) use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
 };
-use mg_api_types::bgp::{
-    BgpPeerParameters, DynamicTimerInfo, ImportExportPolicy,
-    ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
-    Ipv6UnicastConfig, JitterRange, PeerCounters, PeerInfo, PeerTimers,
-    StaticTimerInfo,
-};
-use mg_api_types::rdb::{
-    AddressFamily, BgpPathProperties, Prefix, Prefix4, Prefix6,
-};
+use mg_api_types::rdb::path::BgpPathProperties;
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
@@ -8483,7 +8483,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 let nexthop_interface =
                     derive_nexthop_interface(&self.peer_id(), nexthop);
-                let path = mg_api_types::rdb::Path {
+                let path = mg_api_types::rdb::path::Path {
                     nexthop,
                     nexthop_interface,
                     shutdown: update.graceful_shutdown(),
@@ -8558,7 +8558,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             &self.peer_id(),
                             mp_nexthop,
                         );
-                        let path4 = mg_api_types::rdb::Path {
+                        let path4 = mg_api_types::rdb::path::Path {
                             nexthop: mp_nexthop,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),
@@ -8638,7 +8638,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                         let nexthop_interface =
                             derive_nexthop_interface(&self.peer_id(), nexthop6);
-                        let path6 = mg_api_types::rdb::Path {
+                        let path6 = mg_api_types::rdb::path::Path {
                             nexthop: nexthop6,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),
@@ -9187,7 +9187,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let received_capabilities = pc
                         .caps
                         .iter()
-                        .map(mg_api_types::bgp::BgpCapability::from)
+                        .map(mg_api_types::bgp::config::BgpCapability::from)
                         .collect();
                     PeerInfo {
                         name,
@@ -9247,7 +9247,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 }
 
 // V1 message-history shapes live in `v1::bgp::session`. Cross-version
-// `From` conversions are in `mg_api_types_versions::impls::session`.
+// `From` conversions live alongside the latest definition in
+// `mg_api_types_versions::v4::bgp::session`.
 
 #[cfg(test)]
 mod tests {

@@ -5,8 +5,4 @@
 //! Functional code for the latest versions of types.
 
 pub(crate) mod bgp;
-mod messages;
-mod path;
-mod peer;
-mod prefix;
-mod session;
+mod rdb;

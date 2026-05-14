@@ -1,317 +1,454 @@
 # Maghemite type organization
 
-**Audience**: Developers landing in the codebase after the RFD 619 type
-migration who need to know where published types live and how to add new
-ones. Read this alongside [RFD 619] (canonical guidance) and
-`claude/rfd-619-migration-playbook.md` (lessons learned).
+This document is a tour, for someone new to the repo, of where
+Maghemite's HTTP-API types live and how they get from a versioned
+definition to a business-logic call site. The rules are
+[RFD 619 "Managing types across Dropshot API versions"][rfd619]
+applied to Maghemite. **RFD 619 is the source of truth**; if this
+guide and the RFD ever disagree, the RFD wins and this document is
+the bug.
 
-[RFD 619]: https://rfd.shared.oxide.computer/rfd/619
+[rfd619]: https://rfd.shared.oxide.computer/rfd/619
+[migrate-guide]: https://github.com/oxidecomputer/dropshot-api-manager/blob/main/guides/migrating-to-versions-crate.md
+[new-version-guide]: https://github.com/oxidecomputer/dropshot-api-manager/blob/main/guides/new-version.md
 
----
+## Why versioning matters here
 
-## Overview
+Maghemite exposes two Dropshot HTTP APIs that the rest of the Oxide
+control plane drives. Both are *server-side-versioned* per
+[RFD 532][rfd532]: a single server binary can talk to clients that
+were built against any blessed prior version of the schema. The
+schema lives in the workspace as code, and every prior wire shape we
+ever shipped must continue to compile so the server can decode and
+re-encode requests for older clients.
 
-Schema-published types (anything that appears in a Maghemite or DDM
-admin-API OpenAPI document) live in dedicated **versions** crates. Each
-versions crate is paired with a small **facade** crate that re-exports the
-`latest::*` items so business-logic call sites can stay version-agnostic.
+[rfd532]: https://rfd.shared.oxide.computer/rfd/532
 
-The workspace organizes published types around the *API* they belong to,
-not the domain abstraction they describe. Two API-shaped pairs cover the
-entire surface:
+RFD 619 prescribes a crate layout that keeps that property workable.
+The rest of this document is just that layout, made concrete.
 
-```
-+-------------------+        +---------------------------+
-| mg-api-types      | -----> | mg-api-types-versions     |
-| (facade re-export)|        | v1, v2, ..., v8, latest   |
-+-------------------+        +---------------------------+
+## The crate map
 
-+-------------------+        +---------------------------+
-| ddm-api-types     | -----> | ddm-api-types-versions    |
-| (facade re-export)|        | v1, latest                |
-+-------------------+        +---------------------------+
-```
+Each API gets four crates that play four different roles:
 
-Two structural rules from RFD 619 drive the organization:
+| Role             | mg-admin API              | ddm-admin API              |
+|------------------|---------------------------|----------------------------|
+| Versions crate   | `mg-api-types-versions`   | `ddm-api-types-versions`   |
+| Types crate      | `mg-api-types`            | `ddm-api-types`            |
+| API trait crate  | `mg-api`                  | `ddm-api`                  |
+| Progenitor client| `mg-admin-client`         | `ddm-admin-client`         |
 
-1. **Versions crates are leaves.** A `*-api-types-versions` crate may
-   depend on small leaf utilities (`schemars`, `serde`, `oxnet`, `nom`,
-   ...) but **not** on any business-logic crate (`bgp`, `rdb`, `mgd`,
-   `ddm`, `mg-common`). Code inside `vN/` modules must reference foreign
-   types through versioned identifiers (`crate::v1::...` or
-   `<other_versions_crate>::vN::...`), never through the facade.
-2. **`impls/` is for `latest::*` glue.** Cross-version `From` impls and
-   inherent methods on the latest form may live in
-   `<crate>/src/impls/`. Anything that needs to reach into a
-   business-logic crate must live in the facade crate or, if both source
-   and target are foreign, in the call-site crate.
-
-## Crate map
-
-| Facade crate     | Versions crate            | Schema-published surface                                                                                  |
-|------------------|---------------------------|-----------------------------------------------------------------------------------------------------------|
-| `mg-api-types`   | `mg-api-types-versions`   | Everything in the Maghemite admin API: BGP wire+session, BGP config, RIB, NDP, BFD, static routes, switch, plus the routing-database types (`Path`, `Prefix`, `PeerId`, ...) it shares with `rdb` |
-| `ddm-api-types`  | `ddm-api-types-versions`  | Everything in the DDM admin API: `PeerInfo`, `TunnelRoute`, exchange types, plus shared `TunnelOrigin`/`IpPrefix` net types |
-
-The facade crate of each pair is what the rest of the workspace imports.
-The versions crate is what the dropshot-apis crate uses to bind concrete
-shapes to specific API versions, and is what `mg-admin-client`'s
-progenitor `replace = {}` block points at.
-
-### Version modules per crate
-
-Each versions crate maps API-version identifiers (declared by the
-relevant `api_versions!` macro) to `vN` modules via `#[path = "..."]`:
-
-- `mg-api-types-versions`: `v1` (initial), `v2` (ipv6_basic), `v3`
-  (switch_identifiers), `v4` (mp_bgp), `v5` (unnumbered), `v6`
-  (rib_exported_string_key), `v7` (operation_id_cleanup), `v8`
-  (bgp_src_addr).
-- `ddm-api-types-versions`: `v1` (initial).
-
-`latest.rs` re-exports the canonical form of each type from the version
-where its current shape was first introduced, grouped by `pub mod
-<area>` blocks (`bfd`, `bgp`, `bgp::messages`, `bgp::session`, `ndp`,
-`rdb`, `rdb::neighbor`, ..., `rib`, `static_routes`, `switch`).
-
-### Internal layout of `mg-api-types-versions`
-
-Each `vN/` directory contains the API-shape sub-modules that
-introduced or changed types at that version — typically `bfd.rs`,
-`bgp/`, `rdb/`, `rib.rs`, `static_routes.rs`. The `bgp/` and `rdb/`
-sub-directories split further into `config`, `messages`, `session`,
-etc. Versions that introduced no new sub-area types (e.g. v6
-`rib_exported_string_key`, v7 `operation_id_cleanup`) typically
-contain only a single file or a `mod.rs`-only shape change.
-
-The crate root holds `parse.rs` and `error.rs` (non-published
-wire-parse helpers) and `impls/` (cross-version `From` impls and
-inherent methods on the latest forms; structured by area rather than
-by version).
-
-Versions that introduced no new wire-protocol types (v5 `unnumbered`,
-v8 `bgp_src_addr` — both admin-only) carry a flat `bgp.rs` rather than
-the `bgp/{config, messages, session}` sub-directory structure used by
-v1, v2, and v4. The directory split is added when a version genuinely
-introduces multi-kind content; otherwise a flat file is kept.
-
-As a worked example, v1's tree:
+The dependency graph (RFD 619 §"Determinations / Overview") looks
+like this:
 
 ```
-v1/
-  bfd.rs
-  bgp/{config,messages,session}.rs
-  rdb/{path,peer,policy,prefix,router,mod}.rs
-  rib.rs
-  static_routes.rs
+            +-------------------------+
+            | <api>-types-versions    |  canonical home of every
+            | (vN modules, impls,     |  published type, in every
+            |  latest re-exports)     |  version
+            +-------------------------+
+              ^         ^         ^
+              |         |         |
+   +----------------+ +-----+ +------------------+
+   | <api>-types    | | api | | progenitor       |
+   | (facade,       | | trait | client crate     |
+   |  wildcard      | | crate | (replace = ...   |
+   |  re-exports    | | (-api)| references       |
+   |  from `latest`)| |       | `latest::*`)     |
+   +----------------+ +-----+ +------------------+
+            ^
+            |
+   +--------------------+
+   | business logic     |
+   | (mgd, bgp, rdb,    |
+   |  mg-lower, mgadm,  |
+   |  ddm, ddmadm)      |
+   +--------------------+
 ```
 
-### `mg-api-types` facade
+Three rules fall out of this:
 
-`mg-api-types` exposes the latest forms via:
+1. **Every published type lives in a versions crate.** A "published
+   type" is anything that ends up in an OpenAPI document — directly,
+   or because a published type embeds it transitively. The types
+   crate is a thin facade; the API trait names types from the
+   versions crate; the client's `replace = { … }` block names types
+   from the versions crate. The versions crate is the *only* place
+   the type is defined.
+2. **Business logic never imports from a versions crate.** Code
+   under `bgp/`, `rdb/`, `mgd/`, `mg-lower/`, etc. imports through
+   the types crate (`use mg_api_types::bgp::config::Neighbor;`).
+   The facade wildcard-re-exports the `latest::*` namespace, so
+   business logic is automatically tracking the latest schema and
+   never has to think about prior versions.
+3. **Cross-version conversion code is self-contained.** It lives
+   in the versions crate, on the path between two `vN` modules.
+   The conversions never leak into business logic.
+4. **Floating paths mirror source paths exactly.** For every type
+   defined at `crate::vN::AREA::SUBMODULE::Type` in the versions
+   crate, replacing `vN` with `latest` yields the floating
+   identifier (`crate::latest::AREA::SUBMODULE::Type`), and
+   stripping the `_versions::latest` segment yields the facade
+   identifier (`mg_api_types::AREA::SUBMODULE::Type`). No type is
+   "hoisted" up a namespace at the facade — disk shape and consumer
+   shape are the same shape.
 
-- Domain modules: `mg_api_types::{bfd, bgp, ndp, rib, static_routes,
-  switch}` — each re-exports the corresponding `latest::<area>`.
-- Flat re-exports of routing-database types at the crate root, for the
-  benefit of consumers (notably `mg-admin-client`'s progenitor
-  `replace = {}` block):
-  `mg_api_types::{Prefix, Prefix4, Prefix6, AddressFamily,
-  ProtocolFilter, PeerId, Path, BgpPathProperties, BgpRouterInfo,
-  BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
-  ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6}`.
+## Inside `<api>-types-versions`
 
-### `ddm-api-types` facade
+This is the only crate in the workspace where a type's version
+matters. Once you understand its layout, the rest follows.
 
-`ddm-api-types` exposes `ddm_api_types::{admin, db, exchange, net}`,
-each re-exporting the matching `latest::<area>`. The `net` module
-contains `TunnelOrigin`, `IpPrefix`, `Ipv4Prefix`, `Ipv6Prefix` — types
-that previously lived in a separate `mg-common-types` crate but are
-DDM-specific in practice.
+### `lib.rs` — the version table
 
-### Import conventions for cross-version code
+```rust
+// mg-api-types-versions/src/lib.rs
+mod impls;
+pub mod latest;
+#[path = "initial/mod.rs"]            pub mod v1;
+#[path = "ipv6_basic/mod.rs"]         pub mod v2;
+#[path = "switch_identifiers/mod.rs"] pub mod v3;
+#[path = "mp_bgp/mod.rs"]             pub mod v4;
+#[path = "unnumbered/mod.rs"]         pub mod v5;
+#[path = "bgp_src_addr/mod.rs"]       pub mod v8;
+```
 
-When a file references types from multiple API versions, disambiguate
-through versioned module paths, not name-suffix or `as` renames:
+Two things this is doing:
 
-- Bring version roots into scope (`use ...::{v1, v4, ...};`) and
-  qualify conflicting names at the use site (`v1::area::Foo` vs
-  `v4::area::Foo`).
-- Items lists for non-conflicting bare names are fine.
-- Function-local `as` aliases are acceptable when terseness inside a
-  single match expression justifies them; external-crate name
-  collisions are fair game for `as` renames.
-- Do not introduce name-suffix renames (`as FooV1`, `as FooV6`,
-  `as LiveFoo`). The version path *is* the type's identity.
-- For latest-API types, prefer the `mg_api_types::area::Foo` facade.
-  Reach for `vN::area::Foo` only when you specifically need the
-  version-N shape (e.g. an older API endpoint or a downgrade path).
+- **The `vN` identifier is what everyone imports**
+  (`use mg_api_types_versions::{latest, v1, v4};`), but the
+  directory on disk uses the version's lowercase **named**
+  identifier from the `api_versions!` macro in `mg-api/src/lib.rs`.
+  RFD 619 picks this so two developers landing v9 and v10
+  concurrently hit the merge conflict in `lib.rs` (easy to resolve)
+  instead of inside `vN/` (where it would be much harder).
+- **Only versions that added or changed a published type get a
+  module.** mg-admin also has v6, v7, and v9 — endpoint renames and
+  operation-id cleanups that touched no schema, so no version
+  module exists.
 
-## Type to crate quick reference
+`lib.rs` is `mod`/`pub mod` declarations only; there is no code in
+it.
 
-Most common items, with their canonical version path. Facade access
-follows the rules above (`mg_api_types::<area>::<Type>` for namespaced,
-`mg_api_types::<Type>` for the flat routing-database surface).
+### A version module is a tree of `pub mod` declarations
 
-### RIB / paths / prefixes
+Each version module's `mod.rs` is a brief doc comment plus
+`pub mod` declarations — no logic, no type definitions. The
+submodule layout corresponds to API areas: `bfd`, `bgp`, `rdb`,
+`rib`, `ndp`, `switch`, `static_routes`. When an area is large,
+those split further: `bgp/{config, messages, peer, policy, session}`,
+`rdb/{path, prefix, router, neighbor}`.
 
-- `Path`, `BgpPathProperties`
-  - `mg_api_types_versions::v{1,5}::rdb::path::*` (latest = v5)
-  - facade: `mg_api_types::Path`, `mg_api_types::BgpPathProperties`
-- `Prefix`, `Prefix4`, `Prefix6`, `AddressFamily`, `ProtocolFilter`
-  - `mg_api_types_versions::v1::rdb::*`
-  - facade: `mg_api_types::{Prefix, Prefix4, Prefix6, AddressFamily,
-    ProtocolFilter}`
-- `PeerId` (peer-session identity)
-  - `mg_api_types_versions::v1::rdb::peer::PeerId`
-  - facade: `mg_api_types::PeerId`
-- `Rib`, `RibQuery`, `GetRibResult`, `BestpathFanoutRequest/Response`
-  - `mg_api_types_versions::v{1,2,5}::rib::*` (latest = v5)
-  - facade: `mg_api_types::rib::*`
-  - The runtime RIB shape is a re-export of the latest API alias, so
-    cross-version conversions live as intra-crate `From` impls in the
-    versions crate rather than as free functions in the facade.
+Inside a version module's leaf files, two rules govern paths to
+other types:
 
-### BGP wire messages and session history
+- **Same-version siblings: `super::`.**
+  `v1::bgp::config` writing `super::messages::OpenMessage` always
+  means "the v1 OpenMessage". You never see `crate::v1::…` from a
+  v1 submodule.
+- **Prior-version references: `crate::vN::…` (versioned).**
+  v4 referencing v1's prefix shape writes
+  `use crate::v1::rdb::prefix::Prefix;` — a fixed path that will
+  never resolve to anything else. **Never** use a floating
+  identifier (`crate::latest::…` or the facade `mg_api_types::…`)
+  inside a version module: the whole point of the version module is
+  that its shape is frozen, and a floating import would silently
+  change shape under it.
 
-- `Message`, `OpenMessage`, `UpdateMessage`, `NotificationMessage`,
-  `RouteRefreshMessage`, `Capability`, `OptionalParameter`,
-  `ErrorSubcode`, `MessageKind`, `MessageConvertError`
-  - `mg_api_types_versions::v{1,4}::bgp::messages::*` (latest = v4)
-  - facade: `mg_api_types::bgp::messages::*`
-- `MessageHistory`, `MessageHistoryEntry`, `FsmEventRecord`,
-  `FsmEventCategory`, `FsmStateKind`, `ConnectionId`,
-  `ConnectionDirection`
-  - `mg_api_types_versions::v{1,2}::bgp::session::*` (latest = v2)
-  - facade: `mg_api_types::bgp::session::*`
-- Internal wire-parse helpers (`UpdateParseError`, `AttributeAction`,
-  ...)
-  - `mg_api_types_versions::parse` — non-published, not re-exported by
-    the facade. They live in the versions crate because public-field
-    embeds in `UpdateMessage` keep them tightly coupled.
+### Cross-version conversions live in the newer version
 
-### Versioned BGP config and per-peer types
+When a type changes shape from `vN` to `vM` (M > N), the conversion
+code lives in `vM`, alongside the new shape. Older modules stay
+immutable — adding a v10 never requires editing the v9 module.
 
-- `Neighbor`, `UnnumberedNeighbor`, `BgpPeerConfig`,
-  `UnnumberedBgpPeerConfig`, `BgpPeerParameters`, `ApplyRequest`,
-  `BgpRouterInfo`
-  - `mg_api_types_versions::v{1,4,5,8}::bgp::*` (latest = v8 for most;
-    `UnnumberedNeighbor` / `UnnumberedBgpPeerConfig` first appear at v5)
-  - facade: `mg_api_types::bgp::*`
-- `PeerInfo`, `PeerTimers`, `DynamicTimerInfo`, `NeighborResetOp`
-  - `mg_api_types_versions::v{1,2,4,5}::bgp::*`
-  - facade: `mg_api_types::bgp::*`
-- `Router`, `Origin4`/`Origin6`, `AfiSafi`, `BgpCapability`,
-  `Ipv4UnicastConfig`/`Ipv6UnicastConfig`, `JitterRange`,
-  `PeerCounters`, `StaticTimerInfo`, `CheckerSource`, `ShaperSource`
-  - `mg_api_types_versions::v{1,2,4}::bgp::*`
-  - facade: `mg_api_types::bgp::*`
+The conversion direction is dictated by how the type is used:
 
-### BFD
+- **Request types**: older → newer (the server upgrades incoming
+  requests to the latest internal shape).
+- **Response types**: newer → older (the server downgrades outgoing
+  responses to the prior wire shape).
+- **Bidirectional types**: both.
 
-- `BfdPeerState`, `BfdPeerConfig`, `BfdPeerInfo`, `SessionMode`,
-  `DeleteBfdPeerPathParams`
-  - `mg_api_types_versions::v1::bfd::*`
-  - facade: `mg_api_types::bfd::*`
+`From` / `TryFrom` are the default. When a conversion needs data
+the type doesn't carry (e.g. server state from `Self::Context`), it
+becomes a named `from_vN` / `into_vN` method instead, and the
+corresponding API endpoint becomes a required method on the trait
+(see "API trait" below).
 
-### DDM admin
+Most of the time conversions only span one version — go through
+intermediate versions if you need to skip further. The
+[`v4::bgp::messages` → `v1::bgp::messages` PathAttribute downgrade][rfd-skip-example]
+is an annotated example of when the one-hop rule is consciously
+broken and why.
 
-- `PeerInfo`, `TunnelRoute`, `OriginatedRoute`, `PrefixMap`,
-  `PathVector`, `PathVectorV2`, ...
-  - `ddm_api_types_versions::v1::*`
-  - facade: `ddm_api_types::{admin, db, exchange}::*`
-- `TunnelOrigin`, `IpPrefix`, `Ipv4Prefix`, `Ipv6Prefix`
-  - `ddm_api_types_versions::v1::net::*`
-  - facade: `ddm_api_types::net::*`
+[rfd-skip-example]: ../mg-api-types/versions/src/mp_bgp/bgp/messages.rs
 
-### Static routes, NDP, switch
+### `latest.rs` — the floating-identifier table
 
-- `StaticRoute4`, `StaticRoute6`, `AddStaticRoute*Request`,
-  `DeleteStaticRoute*Request`
-  - `mg_api_types_versions::v{1,2}::static_routes::*`
-  - facade: `mg_api_types::static_routes::*`
-  - `StaticRouteN -> rdb::StaticRouteKey` conversions live as private
-    free fns in `mgd/src/static_admin.rs` (orphan-rule + leaf-crate
-    constraints rule out putting them in either versions crate or in
-    `rdb`).
-- NDP types: `mg_api_types_versions::v5::ndp::*`, facade
-  `mg_api_types::ndp::*`.
-- Switch identifiers: `mg_api_types_versions::v3::switch::*`, facade
-  `mg_api_types::switch::*`.
+`latest.rs` re-exports the newest version of every published type
+under a `latest::…` path. The facade points at it; progenitor
+`replace = { … }` blocks point at it; the API trait names latest
+endpoints through it.
 
-## Adding a new published type
+Two rules from RFD 619 §"Versions crates re-export the latest
+versions of each type":
 
-1. **Pick the canonical version.** The first API version where the new
-   type's current shape is exposed. Add the type definition to
-   `mg-api-types-versions/src/<version_dir>/<area>/<module>.rs` (or
-   create a new submodule there). Use only versioned identifiers in
-   field types — `crate::v<canon>::...` or
-   `<other_versions_crate>::v<canon>::...`.
-2. **Re-export from `latest`.** Add a `pub use crate::v<canon>::...`
-   line to the appropriate `pub mod <area>` block in
-   `mg-api-types-versions/src/latest.rs`.
-3. **Re-export from the facade.** Add the type to the corresponding
-   `mg-api-types/src/<area>.rs` (or `lib.rs`) re-export.
-4. **Cross-version conversions.** If older API versions need a separate
-   shape, define `<TypeName>V<N>` in the older module with
-   `#[schemars(rename = "<TypeName>")]` and add a `From` impl in
-   `mg-api-types-versions/src/impls/<module>.rs` between the latest
-   form and the older form. Conversions involving business-logic types
-   live in the facade crate or at the call site.
-5. **Schema/OpenAPI dance.** Run `cargo run -p xtask -- openapi check`
-   after each change; if you intentionally introduce a new schema name,
-   bless the new doc rather than editing a previous version's blessed
-   document.
+- **One re-export per line**, with the version it comes from
+  visible in the source path.
+- **Within each submodule, re-exports are grouped by version
+  ascending, separated by blank lines.** No wildcards.
 
-## Adding a new API version
+```rust
+// mg-api-types-versions/src/latest.rs (excerpt)
+pub mod bgp {
+    pub mod config {
+        pub use crate::v1::bgp::config::AsnSelector;
+        pub use crate::v1::bgp::config::Router;
+        // ...
 
-The lib.rs of each versions crate has the canonical recipe in its
-module-level doc comment; the short form:
+        pub use crate::v4::bgp::config::PeerInfo;
+        pub use crate::v4::bgp::config::PeerTimers;
+        // ...
 
-1. Bump `api_versions!` in the relevant trait (`mg-api`,
-   `ddm-admin-api`).
-2. Create `mg-api-types-versions/src/<version_dir>/mod.rs` mirroring
-   the prior version's structure. New types go in the new module;
-   types whose shapes did not change can be left at their existing
-   version path.
-3. Add `#[path = "<version_dir>/mod.rs"] pub mod vN;` at the bottom of
-   `lib.rs`.
-4. Update `latest.rs` so it re-exports from the new module wherever
-   the shape changed.
-5. Add cross-version `From` impls in `impls/` for every type whose
-   shape changed (latest <-> older form).
-6. Run the dropshot-apis manage tool and the OpenAPI check; bless the
-   new versioned document.
+        pub use crate::v8::bgp::config::Neighbor;
+        pub use crate::v8::bgp::config::UnnumberedNeighbor;
+        // ...
+    }
 
-## Internal vs published types
+    pub mod peer {
+        pub use crate::v1::bgp::peer::PeerId;
+    }
 
-A type is "published" when it appears in at least one blessed OpenAPI
-document. Published types live in a `*-api-types-versions` crate.
+    pub mod error {                                  // helper block:
+        pub use crate::impls::bgp::error::WireError; //   non-published
+        // ...                                       //   types re-exported
+    }                                                //   from impls/.
+}
+```
 
-A type is "internal" when it is used only by business-logic crates and
-never appears in a schema. Internal types stay in their owning
-business-logic crate (`bgp`, `rdb`, `ddm`, `mg-common`, `mgd`).
+The submodule namespaces in `latest.rs` exactly mirror the source
+submodule names in each `vN` directory. Adding a hoist (i.e.
+`pub use crate::v1::bgp::config::Router;` directly under
+`pub mod bgp`, dropping the `config` segment) would break the
+substitution property and is not allowed.
 
-A small grey zone exists: a type may be unpublished but reachable as a
-public field of a published type. Examples:
+Two practical consequences:
 
-- `mg_api_types_versions::parse` — contains `UpdateParseErrorReason`,
-  `AttributeAction`, etc. Referenced by `UpdateMessage::errors`, but
-  the field is `#[serde(skip)]` / `#[schemars(skip)]`, so the types
-  are not in any schema. They live in the versions crate because
-  moving them would force a `mg-api-types-versions -> bgp` dependency
-  edge, which the leaf-crate rule forbids.
-- `rdb::types::StaticRouteKey` — non-schema, stays in `rdb`.
-  Conversions to/from versioned shapes live at call sites in `mgd`.
+- You can read a type's canonical version at a glance.
+- Two PRs that both touch the same `pub mod` block will produce a
+  merge conflict in `latest.rs`, forcing a human decision instead of
+  silently dropping one side's re-export.
 
-When in doubt: if the type appears in `rg JsonSchema <file>` and shows
-up in any blessed OpenAPI doc's `components.schemas`, it's published.
+### `impls/` — functional code on the latest shape
 
-## Reference
+`impls/` is **private to the versions crate** (`mod impls;`, not
+`pub mod`). It mirrors the `latest::` submodule tree and holds:
 
-- [RFD 619] — canonical guidance.
-- `claude/rfd-619-migration-playbook.md` — lessons learned during the
-  migration, including chunk patterns and orphan-rule pitfalls.
-- `claude/api-shape-consolidation-plan.md` — the plan that drove the
-  six-pair → two-pair consolidation.
-- `docs/bgp-architecture.md` — BGP runtime architecture (separate
-  concern, but cross-references many of the types listed above).
+- inherent methods on the latest forms,
+- foreign-trait impls (`Display`, `FromStr`, `Ord`, `slog::Value`,
+  …),
+- helper types (e.g. wire-parse error enums) referenced by those
+  impls.
+
+Within `impls/`, types are always named through floating
+`crate::latest::…` identifiers — so when a type's canonical version
+changes, the impl blocks track it automatically with zero code
+edits.
+
+Two things that look like they belong in `impls/` but **don't**:
+
+- **Schema-bearing trait impls** (`Serialize`, `Deserialize`,
+  `JsonSchema`, `Debug`). These live next to each version's type
+  definition, so every version's schema is self-contained.
+- **Cross-version `From` / `TryFrom`.** Those live in the newer
+  version's module, as described above. `impls/` is reserved for
+  *latest-only* code.
+
+Helper types declared in `impls/` that need to be public (e.g.
+`MessageConvertError`, `UpdateParseErrorReason`) are re-exported by
+name from `latest.rs` in a trailing block after all `vN` groups.
+
+## Inside `<api>-types`
+
+The types crate is one file per area, each a single wildcard
+re-export:
+
+```rust
+// mg-api-types/src/bgp.rs
+pub use mg_api_types_versions::latest::bgp::*;
+```
+
+That is the whole file. Business logic writes
+`use mg_api_types::bgp::config::Neighbor;`, and the path mirrors
+`latest::` exactly with `_versions::latest` stripped out. When a
+type's canonical version bumps, the facade automatically follows.
+
+## Inside `<api>-api` (the API trait)
+
+The API trait imports both `latest` and any prior `vN` modules it
+needs:
+
+```rust
+// mg-api/src/lib.rs (excerpt)
+use mg_api_types_versions::{latest, v1, v2, v4, v5};
+```
+
+Two patterns:
+
+- **Latest endpoints** name types via `latest::…` paths and have
+  unsuffixed method names (`fn create_neighbor`).
+- **Prior-version endpoints** name types via `vN::…` paths, append
+  the *introducing* version as a suffix (`fn create_neighbor_v5`,
+  `fn create_neighbor_v4`, `fn create_neighbor_v1`), and set
+  `operation_id = "<base>"` in the endpoint attribute so the
+  generated client method covers all versions under one name.
+
+Prior-version endpoints come in two flavors:
+
+1. **Provided default methods**, when the type conversion can be
+   expressed structurally. The default forwards through
+   `Self::<latest_method>` and a `.map(Into::into)` / `.try_map(…)`.
+   The implementation never has to write a body for these.
+2. **Required methods**, when the conversion needs server state
+   (e.g. the live session table, the rdb). The implementation
+   provides the body; a comment on the trait method explains
+   *why* it can't be a provided default. The bulk of the v1/v2/v4
+   neighbor and history endpoints fall into this category because
+   the per-version response is computed from `Self::Context` at the
+   shape the older client expects.
+
+## Inside `<api>-admin-client`
+
+```rust
+// mg-admin-client/src/lib.rs (excerpt)
+progenitor::generate_api!(
+    spec = "../openapi/mg-admin/mg-admin-latest.json",
+    replace = {
+        Prefix4 = mg_api_types_versions::latest::rdb::prefix::Prefix4,
+        Neighbor = mg_api_types_versions::latest::bgp::config::Neighbor,
+        // ...
+    },
+);
+```
+
+`replace` always points at `latest::…` — the floating identifier —
+because the client is generated from the *latest* OpenAPI document.
+Pointing at a versioned identifier here would let the source type
+drift from the wire schema when the type bumps a version. (RFD 619
+§"In client crates, `replace` statements use identifiers matching
+the corresponding client version".)
+
+## Where does my type live?
+
+Open `mg-api-types-versions/src/latest.rs` and search for the
+type. The `pub use crate::vN::path::to::TypeName;` line points
+straight at the canonical version module on disk. That is the only
+place the type is defined.
+
+For the *facade* path business logic uses, strip
+`mg_api_types_versions::latest::` from the front:
+`mg_api_types_versions::latest::rdb::prefix::Prefix` is reached as
+`mg_api_types::rdb::prefix::Prefix`.
+
+## Walkthrough: adding a new published type to the latest version
+
+Say the latest version is v8 and you need a new `RouteHint` type on
+a request body that's already in v8.
+
+1. Add `pub struct RouteHint { … }` to the appropriate v8 submodule
+   on disk, e.g.
+   `mg-api-types/versions/src/bgp_src_addr/bgp/config.rs`. Field
+   types use `super::` (same version, same crate) or `crate::vN::…`
+   (prior versions / prior versions of other-crate types).
+2. Add `pub use crate::v8::bgp::config::RouteHint;` to the
+   matching `pub mod bgp { pub mod config { … } }` block in
+   `latest.rs`, in the v8 group within the `config` submodule.
+3. If the type needs inherent methods, a `Display` impl, etc., add
+   them under `impls/bgp/config.rs` (the mirrored `impls/` tree)
+   using `crate::latest::bgp::config::RouteHint` as the path.
+4. `mg_api_types::bgp::config::RouteHint` is now reachable from
+   business logic automatically — the facade re-exports
+   `latest::bgp::config::*`.
+5. `cargo xtask openapi generate` to refresh the OpenAPI document
+   that will be blessed when this PR merges.
+
+## Walkthrough: adding a new API version
+
+Say you're bumping the `Neighbor` shape and shipping it as version
+10, name `MULTIHOMING_SUPPORT`.
+
+1. **Declare the version.** Add `(10, MULTIHOMING_SUPPORT)` to the
+   `api_versions!` macro at the top of `mg-api/src/lib.rs`. Keep
+   the list sorted, newest first.
+2. **Create the version module.** Make
+   `mg-api-types/versions/src/multihoming_support/` containing a
+   `mod.rs` (only `pub mod` lines, summary doc comment naming the
+   change) and the submodules whose types changed (only those —
+   v10 does **not** mirror unchanged submodules from earlier
+   versions). The new `Neighbor` lives at
+   `multihoming_support/bgp/config.rs`.
+3. **Wire it into `lib.rs`.** Append
+   `#[path = "multihoming_support/mod.rs"] pub mod v10;` to the bottom
+   of `lib.rs`. **Do not** leave a blank line between this and the
+   prior `pub mod vN;` — rustfmt's stable sort keeps the list ordered
+   and the no-blank-line rule guarantees colliding additions merge-
+   conflict at this line.
+4. **Add conversions** between the new shape and the immediately-
+   prior shape. The conversions live in the v10 module (the newer
+   side). Request-shaped types convert old → new; response-shaped
+   types convert new → old; bidirectional types convert both.
+5. **Update `latest.rs`.** Move the affected
+   `pub use crate::v8::bgp::config::Neighbor;` line into a new v10
+   group (separated by a blank line).
+6. **Update the API trait.** The current `create_neighbor`
+   continues to use `latest::bgp::Neighbor` (which now resolves to
+   v10). Rename the previous `create_neighbor` to `create_neighbor_v8`,
+   set `operation_id = "create_neighbor"` on it, and change its
+   types to `v8::bgp::config::…`. If the conversion is structural,
+   make `create_neighbor_v8` a provided method that forwards through
+   `Self::create_neighbor`; if not, make it required and add a
+   comment to the trait explaining why.
+7. **Regenerate OpenAPI.**
+   `cargo run -p xtask -- openapi generate` and then
+   `cargo run -p xtask -- openapi check`. Bless the new
+   `mg-admin-10.0.0-….json`.
+
+The [new-version guide][new-version-guide] is the canonical
+walkthrough with more detail and edge cases.
+
+## Published vs. internal types
+
+A type is **published** when it is reachable, through any chain of
+serialized fields, from a Dropshot endpoint argument or return type
+— it ends up in an OpenAPI document. Published types live in a
+versions crate; nothing else does.
+
+A type is **internal** when only business-logic crates name it and
+it never crosses the API boundary. Internal types live in their
+owning business-logic crate (`bgp`, `rdb`, `mgd`, `ddm`, `mg-common`,
+…) and have no version awareness.
+
+There is a single acknowledged exception in this codebase: the
+`#[serde(skip)] errors: Vec<…>` field on
+`v4::bgp::messages::UpdateMessage`. It references types in
+`crate::impls::bgp::parse::*` from inside a version module, which
+RFD 619 normally forbids. The field is `schemars(skip)` too, so it
+is not part of any wire schema, and it exists only for in-process
+RFC 7606 signaling between the BGP decoder in the `bgp` crate and
+its consumers. The deviation is annotated at the use site. Treat
+it as a one-off, not a pattern.
+
+## Pointers
+
+- [RFD 619][rfd619] — canonical guidance. Read at least the
+  *Determinations* section before any structural change.
+- [Migrating to a versions crate][migrate-guide] and
+  [adding a new API version][new-version-guide] — the
+  dropshot-api-manager step-by-step guides.
+- `mg-api/src/lib.rs` — the `api_versions!` table and the
+  `MgAdminApi` trait. Authoritative source for which type belongs
+  to which endpoint at which version. `ddm-api/src/lib.rs` is the
+  same for ddm-admin.
+- `mg-api-types-versions/src/lib.rs` — the
+  version-number-to-named-directory map for mg-admin.
+- `mg-api-types-versions/src/latest.rs` — every floating
+  identifier the rest of the workspace uses, in one file.

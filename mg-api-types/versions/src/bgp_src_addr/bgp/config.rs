@@ -494,7 +494,7 @@ impl From<v4::bgp::config::ApplyRequest> for ApplyRequest {
 
 // ----- v5 (unnumbered, frozen) <-> v8 UnnumberedNeighbor -----
 
-impl From<UnnumberedNeighbor> for v5::bgp::UnnumberedNeighbor {
+impl From<UnnumberedNeighbor> for v5::bgp::config::UnnumberedNeighbor {
     fn from(n: UnnumberedNeighbor) -> Self {
         let UnnumberedNeighbor {
             asn,
@@ -515,14 +515,14 @@ impl From<UnnumberedNeighbor> for v5::bgp::UnnumberedNeighbor {
     }
 }
 
-impl From<v5::bgp::UnnumberedNeighbor> for UnnumberedNeighbor {
-    fn from(n: v5::bgp::UnnumberedNeighbor) -> Self {
+impl From<v5::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
+    fn from(n: v5::bgp::config::UnnumberedNeighbor) -> Self {
         // v5 is schema-stabilized; new schema fields cannot land here.
         // If this destructure stops compiling, either the addition is
         // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
         // add it to the destructure with `_:`) or the v5 contract has
         // been violated upstream.
-        let v5::bgp::UnnumberedNeighbor {
+        let v5::bgp::config::UnnumberedNeighbor {
             asn,
             name,
             group,

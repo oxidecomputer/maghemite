@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::v4::bgp::policy::ImportExportPolicy4;
-use crate::v4::bgp::policy::ImportExportPolicy6;
+use super::super::bgp::policy::ImportExportPolicy4;
+use super::super::bgp::policy::ImportExportPolicy6;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;

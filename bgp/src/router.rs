@@ -19,7 +19,7 @@ use crate::{
     },
     unnumbered::UnnumberedManager,
 };
-use mg_api_types::rdb::{Prefix4, Prefix6};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
 use rhai::AST;

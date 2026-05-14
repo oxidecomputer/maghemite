@@ -2,7 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use mg_api_types::bgp::{BgpPeerParameters, Neighbor, UnnumberedNeighbor};
+use mg_api_types::bgp::config::{
+    BgpPeerParameters, Neighbor, UnnumberedNeighbor,
+};
 use mg_api_types_versions::v1;
 use rdb::Asn;
 use schemars::JsonSchema;

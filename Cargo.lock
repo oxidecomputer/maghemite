@@ -1375,6 +1375,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
+ "ddm-api-types-versions",
  "oxnet",
  "progenitor 0.14.0",
  "reqwest 0.13.3",
@@ -1419,6 +1420,7 @@ dependencies = [
  "clap",
  "colored",
  "ddm-admin-client",
+ "ddm-api-types-versions",
  "mg-common",
  "oxide-tokio-rt",
  "oxnet",
@@ -3811,6 +3813,7 @@ name = "mg-lower"
 version = "0.1.0"
 dependencies = [
  "ddm-admin-client",
+ "ddm-api-types-versions",
  "dpd-client",
  "libnet",
  "mg-api-types",
@@ -3842,6 +3845,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
+ "ddm-api-types-versions",
  "slog",
  "slog-async",
  "slog-envlogger",

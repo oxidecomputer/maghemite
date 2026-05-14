@@ -6,12 +6,12 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use mg_admin_client::{Client, types};
-use mg_api_types::bgp::messages::Afi;
-use mg_api_types::bgp::{
-    ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
-    Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
+use mg_api_types::bgp::config::{
+    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
 };
-use mg_api_types::rdb::{Prefix4, Prefix6};
+use mg_api_types::bgp::messages::Afi;
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -206,23 +206,25 @@ pub enum SoftDirection {
     },
 }
 
-impl From<NeighborOperation> for mg_api_types::bgp::NeighborResetOp {
+impl From<NeighborOperation> for mg_api_types::bgp::config::NeighborResetOp {
     fn from(op: NeighborOperation) -> Self {
         match op {
-            NeighborOperation::Hard => mg_api_types::bgp::NeighborResetOp::Hard,
+            NeighborOperation::Hard => {
+                mg_api_types::bgp::config::NeighborResetOp::Hard
+            }
             NeighborOperation::Soft { direction } => direction.into(),
         }
     }
 }
 
-impl From<SoftDirection> for mg_api_types::bgp::NeighborResetOp {
+impl From<SoftDirection> for mg_api_types::bgp::config::NeighborResetOp {
     fn from(direction: SoftDirection) -> Self {
         match direction {
             SoftDirection::Inbound { afi } => {
-                mg_api_types::bgp::NeighborResetOp::SoftInbound(afi)
+                mg_api_types::bgp::config::NeighborResetOp::SoftInbound(afi)
             }
             SoftDirection::Outbound { afi } => {
-                mg_api_types::bgp::NeighborResetOp::SoftOutbound(afi)
+                mg_api_types::bgp::config::NeighborResetOp::SoftOutbound(afi)
             }
         }
     }
@@ -970,7 +972,7 @@ async fn read_routers(c: Client) -> Result<()> {
 }
 
 async fn create_router(cfg: RouterConfig, c: Client) -> Result<()> {
-    c.create_router(&mg_api_types::bgp::Router {
+    c.create_router(&mg_api_types::bgp::config::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
@@ -981,7 +983,7 @@ async fn create_router(cfg: RouterConfig, c: Client) -> Result<()> {
 }
 
 async fn update_router(cfg: RouterConfig, c: Client) -> Result<()> {
-    c.update_router(&mg_api_types::bgp::Router {
+    c.update_router(&mg_api_types::bgp::config::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
@@ -1037,7 +1039,7 @@ fn format_duration_human(d: Duration) -> String {
 }
 
 fn display_neighbors_summary(
-    neighbors: &[(&String, &mg_api_types::bgp::PeerInfo)],
+    neighbors: &[(&String, &mg_api_types::bgp::config::PeerInfo)],
 ) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
@@ -1072,7 +1074,7 @@ fn display_neighbors_summary(
 }
 
 fn display_neighbors_detail(
-    neighbors: &[(&String, &mg_api_types::bgp::PeerInfo)],
+    neighbors: &[(&String, &mg_api_types::bgp::config::PeerInfo)],
 ) -> Result<()> {
     for (i, (addr, info)) in neighbors.iter().enumerate() {
         if i > 0 {
@@ -1257,13 +1259,13 @@ async fn get_exported(
 ) -> Result<()> {
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.map(|p| {
-        let bgp_peer_id: mg_api_types::bgp::PeerId =
+        let bgp_peer_id: mg_api_types::bgp::peer::PeerId =
             p.parse().expect("PeerId::from_str should always succeed");
         bgp_peer_id
     });
 
     let exported = c
-        .get_exported(&mg_api_types::bgp::ExportedSelector {
+        .get_exported(&mg_api_types::bgp::session::ExportedSelector {
             asn,
             peer: peer_id,
             afi,
@@ -1389,7 +1391,7 @@ async fn clear_nbr(
         }
         PeerType::Unnumbered(interface) => {
             c.clear_unnumbered_neighbor(
-                &mg_api_types::bgp::UnnumberedNeighborResetRequest {
+                &mg_api_types::bgp::config::UnnumberedNeighborResetRequest {
                     asn,
                     interface,
                     op: operation.into(),
@@ -1402,7 +1404,7 @@ async fn clear_nbr(
 }
 
 async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
-    c.create_origin4(&mg_api_types::bgp::Origin4 {
+    c.create_origin4(&mg_api_types::bgp::config::Origin4 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1416,7 +1418,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
 }
 
 async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
-    c.update_origin4(&mg_api_types::bgp::Origin4 {
+    c.update_origin4(&mg_api_types::bgp::config::Origin4 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1441,7 +1443,7 @@ async fn read_origin4(asn: u32, c: Client) -> Result<()> {
 }
 
 async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
-    c.create_origin6(&mg_api_types::bgp::Origin6 {
+    c.create_origin6(&mg_api_types::bgp::history::Origin6 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1455,7 +1457,7 @@ async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
 }
 
 async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
-    c.update_origin6(&mg_api_types::bgp::Origin6 {
+    c.update_origin6(&mg_api_types::bgp::history::Origin6 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1492,7 +1494,7 @@ async fn create_chk(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_checker(&code)?;
 
-    c.create_checker(&mg_api_types::bgp::CheckerSource { asn, code })
+    c.create_checker(&mg_api_types::bgp::config::CheckerSource { asn, code })
         .await?;
     Ok(())
 }
@@ -1509,7 +1511,7 @@ async fn update_chk(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_checker(&code)?;
 
-    c.update_checker(&mg_api_types::bgp::CheckerSource { asn, code })
+    c.update_checker(&mg_api_types::bgp::config::CheckerSource { asn, code })
         .await?;
     Ok(())
 }
@@ -1525,7 +1527,7 @@ async fn create_shp(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_shaper(&code)?;
 
-    c.create_shaper(&mg_api_types::bgp::ShaperSource { asn, code })
+    c.create_shaper(&mg_api_types::bgp::config::ShaperSource { asn, code })
         .await?;
     Ok(())
 }
@@ -1542,7 +1544,7 @@ async fn update_shp(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_shaper(&code).unwrap();
 
-    c.update_shaper(&mg_api_types::bgp::ShaperSource { asn, code })
+    c.update_shaper(&mg_api_types::bgp::config::ShaperSource { asn, code })
         .await?;
     Ok(())
 }
@@ -1562,8 +1564,8 @@ async fn get_fsm_history(
 ) -> Result<()> {
     // Parse buffer type for server-side filtering
     let buffer_type = match buffer {
-        "all" => Some(mg_api_types::bgp::FsmEventBuffer::All),
-        _ => Some(mg_api_types::bgp::FsmEventBuffer::Major), // Default to major
+        "all" => Some(mg_api_types::bgp::history::FsmEventBuffer::All),
+        _ => Some(mg_api_types::bgp::history::FsmEventBuffer::Major), // Default to major
     };
 
     let buffer_name = match buffer {
@@ -1573,7 +1575,7 @@ async fn get_fsm_history(
 
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.as_ref().map(|p| {
-        let bgp_peer_id: mg_api_types::bgp::PeerId =
+        let bgp_peer_id: mg_api_types::bgp::peer::PeerId =
             p.parse().expect("PeerId::from_str should always succeed");
         bgp_peer_id
     });
@@ -1699,8 +1701,10 @@ async fn get_message_history(
 ) -> Result<()> {
     // Parse direction filter
     let dir = match direction {
-        "sent" => Some(mg_api_types::bgp::MessageDirection::Sent),
-        "received" => Some(mg_api_types::bgp::MessageDirection::Received),
+        "sent" => Some(mg_api_types::bgp::history::MessageDirection::Sent),
+        "received" => {
+            Some(mg_api_types::bgp::history::MessageDirection::Received)
+        }
         _ => None, // "both" or any other value means no filter
     };
 
@@ -1716,7 +1720,7 @@ async fn get_message_history(
     };
 
     // Parse peer and convert to API type
-    let bgp_peer_id: mg_api_types::bgp::PeerId = peer
+    let bgp_peer_id: mg_api_types::bgp::peer::PeerId = peer
         .parse()
         .expect("PeerId::from_str should always succeed");
     let peer_id = bgp_peer_id;

@@ -25,7 +25,7 @@ use std::net::IpAddr;
 ///
 /// # Route Tracking
 ///
-/// This type is used in [`BgpPathProperties`](crate::BgpPathProperties) to track
+/// This type is used in [`BgpPathProperties`](crate::v5::rdb::path::BgpPathProperties) to track
 /// which peer advertised a route. Using `PeerId` instead of `IpAddr` ensures:
 /// - Unnumbered peers are properly distinguished even if they share link-local IPs
 /// - Route cleanup correctly removes only the routes from the intended peer
@@ -33,8 +33,8 @@ use std::net::IpAddr;
 ///
 /// # Examples
 ///
-/// ```
-/// use rdb_types::PeerId;
+/// ```ignore
+/// use mg_api_types::bgp::PeerId;
 /// use std::net::IpAddr;
 ///
 /// // Numbered peer

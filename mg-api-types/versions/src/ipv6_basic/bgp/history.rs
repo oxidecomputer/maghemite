@@ -10,6 +10,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::session::ConnectionId;
+use super::session::FsmEventRecord;
+use super::session::FsmStateKind;
 use crate::v1::bgp::config::PeerTimers;
 use crate::v1::bgp::messages::NotificationMessage;
 use crate::v1::bgp::messages::OpenMessage;
@@ -17,9 +20,6 @@ use crate::v1::bgp::messages::PathAttribute;
 use crate::v1::bgp::messages::RouteRefreshMessage;
 use crate::v1::rdb::prefix::Prefix;
 use crate::v1::rdb::prefix::Prefix6;
-use crate::v2::bgp::session::ConnectionId;
-use crate::v2::bgp::session::FsmEventRecord;
-use crate::v2::bgp::session::FsmStateKind;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]

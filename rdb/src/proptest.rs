@@ -9,10 +9,9 @@
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
 use crate::types::StaticRouteKey;
-use mg_api_types::bgp::{ImportExportPolicy4, ImportExportPolicy6};
-use mg_api_types::rdb::{
-    BgpNeighborInfo, BgpNeighborParameters, Prefix, Prefix4, Prefix6,
-};
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use proptest::{prelude::*, strategy::Just};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 

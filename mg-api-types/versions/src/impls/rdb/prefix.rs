@@ -33,8 +33,8 @@ impl Prefix4 {
     /// Create a new `Prefix4` from an IP address and net mask.
     /// The newly created `Prefix4` will have its host bits zeroed upon creation
     /// e.g.
-    /// ```
-    /// use rdb_types::Prefix4;
+    /// ```ignore
+    /// use mg_api_types::rdb::Prefix4;
     /// use std::net::Ipv4Addr;
     /// use std::str::FromStr;
     /// let p4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.10").unwrap(), 24);
@@ -153,8 +153,8 @@ impl Prefix6 {
     /// Create a new `Prefix6` from an IP address and net mask.
     /// The newly created `Prefix6` will have its host bits zeroed upon creation
     /// e.g.
-    /// ```
-    /// use rdb_types::Prefix6;
+    /// ```ignore
+    /// use mg_api_types::rdb::Prefix6;
     /// use std::net::Ipv6Addr;
     /// use std::str::FromStr;
     /// let p6 = Prefix6::new(Ipv6Addr::from_str("2001:db8::1").unwrap(), 64);

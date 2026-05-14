@@ -30,7 +30,20 @@ use crate::messages::{
     CapabilityCode, Message, OpenMessage, Prefix, UpdateMessage,
 };
 use crate::rhai_integration::*;
-use mg_api_types::rdb::{Prefix4, Prefix6};
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+
+/// Address-family-specific import/export policy wrapper for internal session
+/// signaling. Carries either an IPv4 or IPv6 policy so per-AF policy-change
+/// events (see `bgp::session::SessionEvent::ExportPolicyChanged`) can be
+/// dispatched without losing AF information. Not part of the wire schema;
+/// distinct from the API-facing `mg_api_types::bgp::ImportExportPolicy`
+/// (v1) and the per-AF `ImportExportPolicy{4,6}` published types.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ImportExportPolicy {
+    V4(ImportExportPolicy4),
+    V6(ImportExportPolicy6),
+}
 use rhai::{
     AST, Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
     Scope,

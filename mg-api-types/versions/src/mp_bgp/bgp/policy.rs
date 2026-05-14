@@ -30,14 +30,6 @@ pub enum ImportExportPolicy6 {
     Allow(BTreeSet<Prefix6>),
 }
 
-/// Address-family-specific import/export policy wrapper for internal use.
-/// This is distinct from the API-facing `ImportExportPolicy` type.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum ImportExportPolicy {
-    V4(ImportExportPolicy4),
-    V6(ImportExportPolicy6),
-}
-
 impl crate::v1::bgp::policy::ImportExportPolicy {
     /// Combine v4-introduced per-AF policies back into the v1 mixed-AF
     /// policy. Used by prior-version (v1) endpoints to project the

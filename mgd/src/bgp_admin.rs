@@ -27,27 +27,30 @@ use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
-use mg_api_types::bgp::PeerId;
+use mg_api_types::bgp::config::{
+    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetOp,
+    NeighborResetRequest, NeighborSelector, Origin4, PeerInfo, ShaperSource,
+    UnnumberedNeighbor, UnnumberedNeighborResetRequest,
+    UnnumberedNeighborSelector,
+};
+use mg_api_types::bgp::history::{FsmEventBuffer, MessageDirection, Origin6};
 use mg_api_types::bgp::messages::Afi;
+use mg_api_types::bgp::peer::PeerId;
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::bgp::session::{
+    ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
+    MessageHistoryRequest, MessageHistoryResponse,
+};
 use mg_api_types::bgp::session::{
     FsmEventRecord, FsmStateKind, MessageHistory,
 };
-use mg_api_types::bgp::{
-    ApplyRequest, AsnSelector, CheckerSource, ExportedSelector, FsmEventBuffer,
-    FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
-    MessageHistoryRequest, MessageHistoryResponse, Neighbor, NeighborResetOp,
-    NeighborResetRequest, NeighborSelector, Origin4, Origin6, PeerInfo,
-    ShaperSource, UnnumberedNeighbor, UnnumberedNeighborResetRequest,
-    UnnumberedNeighborSelector,
-};
-use mg_api_types::bgp::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_api_types::rdb::{
-    AddressFamily, BgpRouterInfo, Prefix, Prefix4, Prefix6,
-};
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
+use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
 use rdb::{Asn, RibExt};
@@ -100,7 +103,7 @@ macro_rules! get_router {
 
 pub async fn read_routers(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<Vec<mg_api_types::bgp::Router>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<mg_api_types::bgp::config::Router>>, HttpError> {
     let ctx = ctx.context();
     let routers = ctx
         .db
@@ -109,7 +112,7 @@ pub async fn read_routers(
     let mut result = Vec::new();
 
     for (asn, info) in routers.iter() {
-        result.push(mg_api_types::bgp::Router {
+        result.push(mg_api_types::bgp::config::Router {
             asn: *asn,
             id: info.id,
             listen: info.listen.clone(),
@@ -122,7 +125,7 @@ pub async fn read_routers(
 
 pub async fn create_router(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<mg_api_types::bgp::Router>,
+    request: TypedBody<mg_api_types::bgp::config::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
@@ -141,7 +144,7 @@ pub async fn create_router(
 pub async fn read_router(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<mg_api_types::bgp::Router>, HttpError> {
+) -> Result<HttpResponseOk<mg_api_types::bgp::config::Router>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
 
@@ -155,7 +158,7 @@ pub async fn read_router(
         format!("asn: {} not found in db", rq.asn),
     ))?;
 
-    Ok(HttpResponseOk(mg_api_types::bgp::Router {
+    Ok(HttpResponseOk(mg_api_types::bgp::config::Router {
         asn: rq.asn,
         id: info.id,
         listen: info.listen.clone(),
@@ -165,7 +168,7 @@ pub async fn read_router(
 
 pub async fn update_router(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<mg_api_types::bgp::Router>,
+    request: TypedBody<mg_api_types::bgp::config::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
@@ -885,7 +888,7 @@ pub async fn get_exported_v1(
 // MP-BGP + BGP unnumbered
 pub async fn get_exported_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v5::bgp::ExportedSelector>,
+    request: TypedBody<v5::bgp::session::ExportedSelector>,
 ) -> Result<
     HttpResponseOk<
         HashMap<v1::bgp::peer::PeerId, Vec<v1::rdb::prefix::Prefix>>,
@@ -1305,7 +1308,7 @@ async fn do_bgp_apply(
 
     helpers::ensure_router(
         ctx.clone(),
-        mg_api_types::bgp::Router {
+        mg_api_types::bgp::config::Router {
             asn: rq.asn,
             id: rq.asn,
             listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
@@ -1315,7 +1318,9 @@ async fn do_bgp_apply(
     .await?;
 
     for (group, peers) in &upeers {
-        let current: Vec<mg_api_types::rdb::BgpUnnumberedNeighborInfo> = ctx
+        let current: Vec<
+            mg_api_types::rdb::neighbor::BgpUnnumberedNeighborInfo,
+        > = ctx
             .db
             .get_unnumbered_bgp_neighbors()
             .map_err(Error::Db)?
@@ -1413,7 +1418,7 @@ async fn do_bgp_apply(
     }
 
     for (group, peers) in &peers {
-        let current: Vec<mg_api_types::rdb::BgpNeighborInfo> = ctx
+        let current: Vec<mg_api_types::rdb::neighbor::BgpNeighborInfo> = ctx
             .db
             .get_bgp_neighbors()
             .map_err(Error::Db)?
@@ -1851,13 +1856,13 @@ pub async fn delete_shaper(
 
 pub(crate) mod helpers {
     use bgp::router::{EnsureSessionResult, UnloadPolicyError};
-    use mg_api_types::rdb::BgpNeighborParameters;
+    use mg_api_types::rdb::neighbor::BgpNeighborParameters;
 
     use super::*;
 
     pub(crate) async fn ensure_router(
         ctx: Arc<HandlerContext>,
-        rq: mg_api_types::bgp::Router,
+        rq: mg_api_types::bgp::config::Router,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let mut guard = lock!(ctx.bgp.router);
         if let Some(current) = guard.get(&rq.asn) {
@@ -1949,8 +1954,8 @@ pub(crate) mod helpers {
             true
         };
 
-        ctx.db
-            .add_bgp_neighbor(mg_api_types::rdb::BgpNeighborInfo {
+        ctx.db.add_bgp_neighbor(
+            mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,
                 name: rq.name.clone(),
                 group: rq.group.clone(),
@@ -1986,7 +1991,8 @@ pub(crate) mod helpers {
                     src_addr: None,
                     src_port: None,
                 },
-            })?;
+            },
+        )?;
 
         if start_session {
             start_bgp_session(&event_tx)?;
@@ -2064,8 +2070,8 @@ pub(crate) mod helpers {
                 ),
             };
 
-        ctx.db
-            .add_bgp_neighbor(mg_api_types::rdb::BgpNeighborInfo {
+        ctx.db.add_bgp_neighbor(
+            mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,
                 group: rq.group.clone(),
                 name: rq.name.clone(),
@@ -2099,7 +2105,8 @@ pub(crate) mod helpers {
                     src_addr: rq.parameters.src_addr,
                     src_port: rq.parameters.src_port,
                 },
-            })?;
+            },
+        )?;
 
         if start_session {
             start_bgp_session(&event_tx)?;
@@ -2189,7 +2196,7 @@ pub(crate) mod helpers {
             };
 
         ctx.db.add_unnumbered_bgp_neighbor(
-            mg_api_types::rdb::BgpUnnumberedNeighborInfo {
+            mg_api_types::rdb::neighbor::BgpUnnumberedNeighborInfo {
                 asn: rq.asn,
                 name: rq.name.clone(),
                 group: rq.group.clone(),
@@ -2360,7 +2367,7 @@ pub(crate) mod helpers {
 
     pub(crate) fn add_router(
         ctx: Arc<HandlerContext>,
-        rq: mg_api_types::bgp::Router,
+        rq: mg_api_types::bgp::config::Router,
         routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let cfg = RouterConfig {

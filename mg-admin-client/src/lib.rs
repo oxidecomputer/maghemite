@@ -21,30 +21,30 @@ progenitor::generate_api!(
         Prefix4 = mg_api_types_versions::latest::rdb::prefix::Prefix4,
         Prefix6 = mg_api_types_versions::latest::rdb::prefix::Prefix6,
         Prefix = mg_api_types_versions::latest::rdb::prefix::Prefix,
-        AddressFamily = mg_api_types_versions::latest::rdb::AddressFamily,
-        ProtocolFilter = mg_api_types_versions::latest::rdb::ProtocolFilter,
+        AddressFamily = mg_api_types_versions::latest::rdb::rib::AddressFamily,
+        ProtocolFilter = mg_api_types_versions::latest::rdb::rib::ProtocolFilter,
 
         // BGP policy and peer-identity shapes.
-        ImportExportPolicy4 = mg_api_types_versions::latest::bgp::ImportExportPolicy4,
-        ImportExportPolicy6 = mg_api_types_versions::latest::bgp::ImportExportPolicy6,
-        PeerId = mg_api_types_versions::latest::bgp::PeerId,
+        ImportExportPolicy4 = mg_api_types_versions::latest::bgp::policy::ImportExportPolicy4,
+        ImportExportPolicy6 = mg_api_types_versions::latest::bgp::policy::ImportExportPolicy6,
+        PeerId = mg_api_types_versions::latest::bgp::peer::PeerId,
 
         // BGP admin shapes.
-        CheckerSource = mg_api_types_versions::latest::bgp::CheckerSource,
-        ExportedSelector = mg_api_types_versions::latest::bgp::ExportedSelector,
-        FsmEventBuffer = mg_api_types_versions::latest::bgp::FsmEventBuffer,
-        Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::Ipv4UnicastConfig,
-        Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::Ipv6UnicastConfig,
-        JitterRange = mg_api_types_versions::latest::bgp::JitterRange,
-        MessageDirection = mg_api_types_versions::latest::bgp::MessageDirection,
-        NeighborResetOp = mg_api_types_versions::latest::bgp::NeighborResetOp,
-        NeighborResetRequest = mg_api_types_versions::latest::bgp::NeighborResetRequest,
-        Origin4 = mg_api_types_versions::latest::bgp::Origin4,
-        Origin6 = mg_api_types_versions::latest::bgp::Origin6,
-        PeerInfo = mg_api_types_versions::latest::bgp::PeerInfo,
-        Router = mg_api_types_versions::latest::bgp::Router,
-        ShaperSource = mg_api_types_versions::latest::bgp::ShaperSource,
-        UnnumberedNeighborResetRequest = mg_api_types_versions::latest::bgp::UnnumberedNeighborResetRequest,
+        CheckerSource = mg_api_types_versions::latest::bgp::config::CheckerSource,
+        ExportedSelector = mg_api_types_versions::latest::bgp::session::ExportedSelector,
+        FsmEventBuffer = mg_api_types_versions::latest::bgp::history::FsmEventBuffer,
+        Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv4UnicastConfig,
+        Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv6UnicastConfig,
+        JitterRange = mg_api_types_versions::latest::bgp::config::JitterRange,
+        MessageDirection = mg_api_types_versions::latest::bgp::history::MessageDirection,
+        NeighborResetOp = mg_api_types_versions::latest::bgp::config::NeighborResetOp,
+        NeighborResetRequest = mg_api_types_versions::latest::bgp::config::NeighborResetRequest,
+        Origin4 = mg_api_types_versions::latest::bgp::config::Origin4,
+        Origin6 = mg_api_types_versions::latest::bgp::history::Origin6,
+        PeerInfo = mg_api_types_versions::latest::bgp::config::PeerInfo,
+        Router = mg_api_types_versions::latest::bgp::config::Router,
+        ShaperSource = mg_api_types_versions::latest::bgp::config::ShaperSource,
+        UnnumberedNeighborResetRequest = mg_api_types_versions::latest::bgp::config::UnnumberedNeighborResetRequest,
 
         FsmStateKind = mg_api_types_versions::latest::bgp::session::FsmStateKind,
 
@@ -70,7 +70,7 @@ progenitor::generate_api!(
 
 use colored::*;
 use mg_api_types_versions::latest::rdb::prefix::Prefix;
-use mg_api_types_versions::latest::rdb::{AddressFamily, ProtocolFilter};
+use mg_api_types_versions::latest::rdb::rib::{AddressFamily, ProtocolFilter};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
@@ -204,10 +204,10 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
                 None => path.nexthop.to_string(),
             };
             let peer_str = match &bgp.peer {
-                mg_api_types_versions::latest::bgp::PeerId::Ip(ip) => {
+                mg_api_types_versions::latest::bgp::peer::PeerId::Ip(ip) => {
                     ip.to_string()
                 }
-                mg_api_types_versions::latest::bgp::PeerId::Interface(
+                mg_api_types_versions::latest::bgp::peer::PeerId::Interface(
                     iface,
                 ) => iface.clone(),
             };

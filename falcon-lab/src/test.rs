@@ -21,9 +21,11 @@ use mg_admin_client::{
     Client as MgdClient,
     types::{BfdPeerConfig, BfdPeerState, SessionMode},
 };
+use mg_api_types::bgp::config::{Origin4, Router};
+use mg_api_types::bgp::history::Origin6;
 use mg_api_types::bgp::session::FsmStateKind;
-use mg_api_types::bgp::{Origin4, Origin6, Router};
-use mg_api_types::rdb::{AddressFamily, Prefix4, Prefix6};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::BestpathFanoutRequest;
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, StaticRoute4,

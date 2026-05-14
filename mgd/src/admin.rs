@@ -12,15 +12,19 @@ use dropshot::{
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
 use mg_api_types::bfd::{BfdPeerConfig, BfdPeerInfo, DeleteBfdPeerPathParams};
-use mg_api_types::bgp::{
-    ApplyRequest, AsnSelector, CheckerSource, ExportedSelector,
-    FsmHistoryRequest, FsmHistoryResponse, MessageHistoryRequest,
-    MessageHistoryResponse, Neighbor, NeighborResetRequest, NeighborSelector,
-    Origin4, Origin6, PeerInfo, Router, ShaperSource, UnnumberedNeighbor,
-    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
+use mg_api_types::bgp::config::{
+    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetRequest,
+    NeighborSelector, Origin4, PeerInfo, Router, ShaperSource,
+    UnnumberedNeighbor, UnnumberedNeighborResetRequest,
+    UnnumberedNeighborSelector,
+};
+use mg_api_types::bgp::history::Origin6;
+use mg_api_types::bgp::session::{
+    ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
+    MessageHistoryRequest, MessageHistoryResponse,
 };
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
-use mg_api_types::rdb::Prefix;
+use mg_api_types::rdb::prefix::Prefix;
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
@@ -367,7 +371,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_exported_v5(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v5::bgp::ExportedSelector>,
+        request: TypedBody<v5::bgp::session::ExportedSelector>,
     ) -> Result<
         HttpResponseOk<
             HashMap<v1::bgp::peer::PeerId, Vec<v1::rdb::prefix::Prefix>>,

@@ -3,8 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{BGP_VERSION, error::Error};
-pub(crate) use mg_api_types::rdb::Prefix;
-use mg_api_types::rdb::{AddressFamily, Prefix4, Prefix6};
+pub(crate) use mg_api_types::rdb::prefix::Prefix;
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
 use nom::{
     bytes::complete::take,
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
@@ -2532,7 +2533,7 @@ impl Display for MessageParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mg_api_types::rdb::Prefix;
+    use mg_api_types::rdb::prefix::Prefix;
     use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
@@ -4688,7 +4689,7 @@ mod tests {
             path_attribute_value_from_wire, path_attribute_value_to_wire,
             treat_as_withdraw, update_message_from_wire,
         };
-        use mg_api_types::rdb::Prefix6;
+        use mg_api_types::rdb::prefix::Prefix6;
 
         /// Build an UPDATE message wire format with the given path attributes bytes.
         fn build_update_wire(path_attrs: &[u8], nlri: &[u8]) -> Vec<u8> {

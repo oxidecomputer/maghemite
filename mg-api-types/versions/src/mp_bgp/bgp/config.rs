@@ -7,13 +7,13 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use super::messages::Afi;
 use crate::v1::rdb::prefix::Prefix;
 use crate::v2::bgp::session::FsmStateKind;
-use crate::v4::bgp::messages::Afi;
 
+use super::policy::ImportExportPolicy4;
+use super::policy::ImportExportPolicy6;
 use super::session::MessageHistory;
-use crate::v4::bgp::policy::ImportExportPolicy4;
-use crate::v4::bgp::policy::ImportExportPolicy6;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;

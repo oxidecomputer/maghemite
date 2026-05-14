@@ -4,7 +4,7 @@
 
 use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
-use ddm_admin_client::types::TunnelOrigin;
+use ddm_api_types_versions::latest::net::TunnelOrigin;
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;

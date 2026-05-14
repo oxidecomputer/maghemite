@@ -5,7 +5,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::Client;
-use mg_api_types::rdb::{Prefix4, Prefix6};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use oxnet::{Ipv4Net, Ipv6Net};
 use rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use std::net::{Ipv4Addr, Ipv6Addr};

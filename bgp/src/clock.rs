@@ -4,7 +4,7 @@
 
 use crate::connection::{BgpConnection, ConnectionId};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent, SessionInfo};
-use mg_api_types::bgp::{DynamicTimerInfo, JitterRange};
+use mg_api_types::bgp::config::{DynamicTimerInfo, JitterRange};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
 use schemars::JsonSchema;

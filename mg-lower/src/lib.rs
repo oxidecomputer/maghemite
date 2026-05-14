@@ -12,10 +12,10 @@ use crate::dendrite::{
 };
 use crate::error::Error;
 use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
-use ddm_admin_client::types::TunnelOrigin;
+use ddm_api_types_versions::latest::net::TunnelOrigin;
 use dendrite::link_is_up;
 use log::mgl_log;
-use mg_api_types::rdb::Prefix;
+use mg_api_types::rdb::prefix::Prefix;
 use mg_common::stats::MgLowerStats as Stats;
 use platform::{Ddm, Dpd, SwitchZone};
 use rdb::Rib;
