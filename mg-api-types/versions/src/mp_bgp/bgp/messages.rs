@@ -425,3 +425,51 @@ pub enum Message {
     KeepAlive,
     RouteRefresh(crate::v1::bgp::messages::RouteRefreshMessage),
 }
+
+// ----------------------------------------------------------------------------
+// Cross-version downgrade: v4 `Message`/`UpdateMessage` → v2 history-module
+// wire shapes. The v2 shapes carry the V4/V6 rdb `Prefix` enum, so
+// `withdrawn`/`nlri` are routed through `Prefix::V4(...)`; v4 path
+// attributes that have no v1 representation (MP_REACH/UNREACH,
+// AtomicAggregate) are dropped via `Option::<v1::PathAttribute>::from`.
+// ----------------------------------------------------------------------------
+
+impl From<UpdateMessage> for crate::v2::bgp::history::UpdateMessage {
+    fn from(msg: UpdateMessage) -> Self {
+        // The latest UpdateMessage carries IPv4-only NLRI in its body; IPv6
+        // NLRI lives in MP_REACH/UNREACH path attributes, which v2 does not
+        // surface. Converting v4 prefixes back into the V4/V6 enum gives the
+        // pre-MP-BGP wire shape.
+        Self {
+            withdrawn: msg
+                .withdrawn
+                .into_iter()
+                .map(crate::v1::rdb::prefix::Prefix::V4)
+                .collect(),
+            path_attributes: msg
+                .path_attributes
+                .into_iter()
+                .filter_map(
+                    Option::<crate::v1::bgp::messages::PathAttribute>::from,
+                )
+                .collect(),
+            nlri: msg
+                .nlri
+                .into_iter()
+                .map(crate::v1::rdb::prefix::Prefix::V4)
+                .collect(),
+        }
+    }
+}
+
+impl From<Message> for crate::v2::bgp::history::Message {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Open(open) => Self::Open(open),
+            Message::Update(update) => Self::Update(update.into()),
+            Message::Notification(notif) => Self::Notification(notif),
+            Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
+        }
+    }
+}

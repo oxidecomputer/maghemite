@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use crate::v1::rdb::prefix::Prefix;
 use crate::v2::bgp::session::FsmStateKind;
-use crate::v2::bgp::session::MessageHistory;
 use crate::v4::bgp::messages::Afi;
+
+use super::session::MessageHistory;
 use crate::v4::bgp::policy::ImportExportPolicy4;
 use crate::v4::bgp::policy::ImportExportPolicy6;
 use schemars::JsonSchema;

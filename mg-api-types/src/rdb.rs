@@ -15,5 +15,7 @@ pub use mg_api_types_versions::latest::rdb::neighbor::{
     BgpNeighborInfo, BgpNeighborParameters, BgpUnnumberedNeighborInfo,
 };
 pub use mg_api_types_versions::latest::rdb::path::{BgpPathProperties, Path};
-pub use mg_api_types_versions::latest::rdb::prefix::{Prefix, Prefix4, Prefix6};
+pub use mg_api_types_versions::latest::rdb::prefix::{
+    Prefix, Prefix4, Prefix6,
+};
 pub use mg_api_types_versions::latest::rdb::router::BgpRouterInfo;

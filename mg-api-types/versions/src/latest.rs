@@ -114,9 +114,10 @@ pub mod bgp {
         pub use crate::v2::bgp::session::FsmEventCategory;
         pub use crate::v2::bgp::session::FsmEventRecord;
         pub use crate::v2::bgp::session::FsmStateKind;
-        pub use crate::v2::bgp::session::MAX_MESSAGE_HISTORY;
-        pub use crate::v2::bgp::session::MessageHistory;
-        pub use crate::v2::bgp::session::MessageHistoryEntry;
+
+        pub use crate::v4::bgp::session::MAX_MESSAGE_HISTORY;
+        pub use crate::v4::bgp::session::MessageHistory;
+        pub use crate::v4::bgp::session::MessageHistoryEntry;
     }
 }
 

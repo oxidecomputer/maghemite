@@ -3,11 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Session-related types added in the IPV6_BASIC (v2) admin API version:
-//! `ConnectionId`, `ConnectionDirection`, the latest `FsmStateKind`,
-//! the v2 `MessageHistory` / `MessageHistoryEntry` (carrying a `ConnectionId`),
-//! and the FSM event record types.
+//! `ConnectionId`, `ConnectionDirection`, the latest `FsmStateKind`, and
+//! the FSM event record types.
 
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 
 use schemars::JsonSchema;
@@ -15,11 +13,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::v1;
-use crate::v4::bgp::messages::Message;
-
-/// Maximum number of historical messages retained per direction in
-/// `MessageHistory`.
-pub const MAX_MESSAGE_HISTORY: usize = 1024;
 
 /// Creator of a BGP connection
 #[derive(
@@ -85,21 +78,6 @@ pub enum FsmStateKind {
 
     /// Able to exchange update, notification and keepliave messages with peers.
     Established,
-}
-
-/// A message history entry is a BGP message with an associated timestamp and connection ID
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryEntry {
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub message: Message,
-    pub connection_id: ConnectionId,
-}
-
-/// Message history for a BGP session
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistory {
-    pub received: VecDeque<MessageHistoryEntry>,
-    pub sent: VecDeque<MessageHistoryEntry>,
 }
 
 /// Category of FSM event for filtering and display purposes

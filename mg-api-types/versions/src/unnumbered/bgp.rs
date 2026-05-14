@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use crate::v1::bgp::peer::PeerId;
 use crate::v2::bgp::session::FsmEventRecord;
-use crate::v2::bgp::session::MessageHistory;
 use crate::v4::bgp::messages::Afi;
+use crate::v4::bgp::session::MessageHistory;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
