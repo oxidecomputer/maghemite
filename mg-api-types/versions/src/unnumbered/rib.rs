@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::v1;
 use crate::v5::rdb::path::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,9 +19,25 @@ pub type GetRibResult = BTreeMap<String, BTreeSet<Path>>;
 /// pre-UNNUMBERED `static_list_v{4,6}_routes` shims.
 pub fn get_rib_result_into_v1(
     value: GetRibResult,
-) -> crate::v1::rib::GetRibResult {
+) -> v1::rib::GetRibResult {
     value
         .into_iter()
         .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
         .collect()
+}
+
+impl From<Rib> for v1::rib::Rib {
+    fn from(value: Rib) -> Self {
+        let Rib(inner) = value;
+        v1::rib::Rib(
+            inner
+                .into_iter()
+                .map(|(k, v)| {
+                    let paths_v1: BTreeSet<v1::rdb::path::Path> =
+                        v.into_iter().map(v1::rdb::path::Path::from).collect();
+                    (k, paths_v1)
+                })
+                .collect(),
+        )
+    }
 }

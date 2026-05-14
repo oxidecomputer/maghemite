@@ -9,5 +9,4 @@ mod messages;
 mod path;
 mod peer;
 mod prefix;
-pub(crate) mod rib;
 mod session;
