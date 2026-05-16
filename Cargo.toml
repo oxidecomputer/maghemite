@@ -7,19 +7,18 @@ default-members = [
     "ddmd",
     "ddm-admin-client",
     "ddm-api",
-    "ddm-types",
-    "ddm-types/versions",
+    "ddm-api-types",
+    "ddm-api-types/versions",
     "dropshot-apis",
     "bfd",
     "util",
     "mg-ddm-verify",
     "tests",
     "rdb",
-    "rdb-types",
     "bgp",
     "mg-api",
-    "mg-types",
-    "mg-types/versions",
+    "mg-api-types",
+    "mg-api-types/versions",
     "mg-admin-client",
     "mgadm",
     "mgd",
@@ -37,8 +36,8 @@ members = [
     "ddmd",
     "ddm-admin-client",
     "ddm-api",
-    "ddm-types",
-    "ddm-types/versions",
+    "ddm-api-types",
+    "ddm-api-types/versions",
     "dropshot-apis",
     "bfd",
     "package",
@@ -50,7 +49,6 @@ members = [
     "mg-admin-client",
     "mgadm",
     "rdb",
-    "rdb-types",
     "mgd",
     "mg-lower",
     "mg-common",
@@ -62,10 +60,9 @@ members = [
 [workspace.dependencies]
 # Local
 mg-api = { path = "mg-api" }
-mg-types = { path = "mg-types" }
-mg-types-versions = { path = "mg-types/versions" }
+mg-api-types = { path = "mg-api-types" }
+mg-api-types-versions = { path = "mg-api-types/versions" }
 mg-common = { path = "mg-common" }
-rdb-types = { path = "rdb-types" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
 bfd = { path = "bfd" }
@@ -73,8 +70,8 @@ mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }
 rdb = { path = "rdb", features = ["clap"] }
 ddm-api = { path = "ddm-api" }
-ddm-types = { path = "ddm-types" }
-ddm-types-versions = { path = "ddm-types/versions" }
+ddm-api-types = { path = "ddm-api-types" }
+ddm-api-types-versions = { path = "ddm-api-types/versions" }
 
 # External
 slog = { version = "2.8.2", features = ["max_level_trace", "release_max_level_debug"] }

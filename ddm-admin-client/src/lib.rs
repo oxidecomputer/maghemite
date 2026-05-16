@@ -17,25 +17,11 @@ progenitor::generate_api!(
     },
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
-    })
+    }),
+    replace = {
+        TunnelOrigin = ddm_api_types_versions::latest::net::TunnelOrigin,
+        IpPrefix = ddm_api_types_versions::latest::net::IpPrefix,
+        Ipv4Prefix = ddm_api_types_versions::latest::net::Ipv4Prefix,
+        Ipv6Prefix = ddm_api_types_versions::latest::net::Ipv6Prefix,
+    }
 );
-
-impl std::cmp::PartialEq for types::TunnelOrigin {
-    fn eq(&self, other: &Self) -> bool {
-        self.overlay_prefix.eq(&other.overlay_prefix)
-            && self.boundary_addr.eq(&other.boundary_addr)
-            && self.vni.eq(&other.vni)
-            && self.metric.eq(&other.metric)
-    }
-}
-
-impl std::cmp::Eq for types::TunnelOrigin {}
-
-impl std::hash::Hash for types::TunnelOrigin {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.overlay_prefix.hash(state);
-        self.boundary_addr.hash(state);
-        self.vni.hash(state);
-        self.metric.hash(state);
-    }
-}

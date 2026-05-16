@@ -326,6 +326,7 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mg-api-types",
  "mg-common",
  "num_enum 0.7.6",
  "pretty_assertions",
@@ -350,6 +351,8 @@ dependencies = [
  "lazy_static",
  "libc",
  "libnet",
+ "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "nom 8.0.0",
  "num_enum 0.7.6",
@@ -1340,7 +1343,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "ddm-api",
- "ddm-types",
+ "ddm-api-types",
  "dpd-client",
  "dropshot",
  "hostname 0.4.2",
@@ -1372,6 +1375,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
+ "ddm-api-types-versions",
  "oxnet",
  "progenitor 0.14.0",
  "reqwest 0.13.3",
@@ -1384,28 +1388,23 @@ dependencies = [
 name = "ddm-api"
 version = "0.1.0"
 dependencies = [
- "ddm-types-versions",
+ "ddm-api-types-versions",
  "dropshot",
  "dropshot-api-manager-types",
- "mg-common",
  "oxnet",
- "schemars 0.8.22",
- "serde",
- "uuid",
 ]
 
 [[package]]
-name = "ddm-types"
+name = "ddm-api-types"
 version = "0.1.0"
 dependencies = [
- "ddm-types-versions",
+ "ddm-api-types-versions",
 ]
 
 [[package]]
-name = "ddm-types-versions"
+name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
- "mg-common",
  "oxnet",
  "schemars 0.8.22",
  "serde",
@@ -1421,6 +1420,7 @@ dependencies = [
  "clap",
  "colored",
  "ddm-admin-client",
+ "ddm-api-types-versions",
  "mg-common",
  "oxide-tokio-rt",
  "oxnet",
@@ -1439,7 +1439,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ddm",
- "ddm-types",
+ "ddm-api-types",
  "dpd-client",
  "hostname 0.4.2",
  "mg-common",
@@ -1925,9 +1925,9 @@ dependencies = [
  "dpd-client",
  "libfalcon",
  "mg-admin-client 0.1.0",
+ "mg-api-types",
  "oxide-tokio-rt",
  "oxnet",
- "rdb-types 0.1.0",
  "serde",
  "serde_json",
  "slog",
@@ -3711,8 +3711,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "colored",
+ "mg-api-types-versions",
  "progenitor 0.14.0",
- "rdb-types 0.1.0",
  "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
@@ -3730,7 +3730,7 @@ dependencies = [
  "chrono",
  "colored",
  "progenitor 0.13.0",
- "rdb-types 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=7696ee48d5ee29a917dea459e281fe2e8ff20513)",
+ "rdb-types",
  "reqwest 0.13.3",
  "schemars 0.8.22",
  "serde",
@@ -3744,13 +3744,32 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
- "bgp",
  "dropshot",
  "dropshot-api-manager-types",
- "mg-types-versions",
- "rdb",
+ "mg-api-types-versions",
+]
+
+[[package]]
+name = "mg-api-types"
+version = "0.1.0"
+dependencies = [
+ "mg-api-types-versions",
+]
+
+[[package]]
+name = "mg-api-types-versions"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "nom 8.0.0",
+ "num_enum 0.7.6",
+ "oxnet",
  "schemars 0.8.22",
  "serde",
+ "slog",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -3761,6 +3780,7 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
+ "ddm-api-types",
  "libc",
  "libnet",
  "oximeter",
@@ -3780,7 +3800,7 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ddm-types",
+ "ddm-api-types",
  "oxide-tokio-rt",
  "oxnet",
  "reqwest 0.13.3",
@@ -3793,8 +3813,10 @@ name = "mg-lower"
 version = "0.1.0"
 dependencies = [
  "ddm-admin-client",
+ "ddm-api-types-versions",
  "dpd-client",
  "libnet",
+ "mg-api-types",
  "mg-common",
  "oxnet",
  "progenitor-client 0.14.0",
@@ -3823,6 +3845,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
+ "ddm-api-types-versions",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -3834,26 +3857,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mg-types"
-version = "0.1.0"
-dependencies = [
- "mg-types-versions",
- "rdb",
-]
-
-[[package]]
-name = "mg-types-versions"
-version = "0.1.0"
-dependencies = [
- "bfd",
- "bgp",
- "chrono",
- "rdb",
- "schemars 0.8.22",
- "serde",
-]
-
-[[package]]
 name = "mgadm"
 version = "0.1.0"
 dependencies = [
@@ -3862,6 +3865,7 @@ dependencies = [
  "clap",
  "colored",
  "mg-admin-client 0.1.0",
+ "mg-api-types",
  "mg-common",
  "natord",
  "oxide-tokio-rt",
@@ -3889,10 +3893,10 @@ dependencies = [
  "hostname 0.4.2",
  "http",
  "mg-api",
+ "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "mg-lower",
- "mg-types",
- "mg-types-versions",
  "ndp",
  "network-interface",
  "omicron-common",
@@ -5974,27 +5978,17 @@ dependencies = [
  "ciborium",
  "clap",
  "itertools 0.14.0",
+ "mg-api-types",
  "mg-common",
  "ndp",
  "oxnet",
  "proptest",
- "rdb-types 0.1.0",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "sled",
  "slog",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rdb-types"
-version = "0.1.0"
-dependencies = [
- "clap",
- "oxnet",
- "schemars 0.8.22",
- "serde",
 ]
 
 [[package]]

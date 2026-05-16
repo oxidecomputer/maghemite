@@ -5,7 +5,8 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm_admin_client::{Client, types};
+use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
