@@ -6,13 +6,13 @@ use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_types::db::RouterKind;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -103,14 +103,14 @@ struct Arg {
     #[arg(long)]
     sled_uuid: Option<Uuid>,
 
-    /// Skip the routing state machine (discovery, exchange, route
-    /// synchronization). Only the admin API server runs, allowing test
-    /// fixtures to obtain a real ddmd admin endpoint without the kernel-level
+    /// Serve only the admin API. Skips the routing state machine
+    /// (discovery, exchange, route synchronization), allowing test fixtures
+    /// to obtain a real `ddmd` admin endpoint without the kernel-level
     /// networking the state machine requires.
     ///
     /// Analogous to `mgd --no-bgp-dispatcher`.
     #[arg(long, default_value_t = false, conflicts_with = "addr")]
-    no_state_machine: bool,
+    api_only: bool,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -204,11 +204,11 @@ async fn run() {
 /// Build, wire, and start the per-address routing state machines.
 ///
 /// Returns the running [`StateMachine`] handles plus the sender side of each
-/// machine's event channel. When `--no-state-machine` is set the function
+/// machine's event channel. When `--api-only` is set the function
 /// short-circuits to empty vectors, leaving the daemon to serve only its
 /// admin API. The illumos and non-illumos variants share that early-exit
-/// branch; only the actual machine setup is platform-specific.
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+/// branch, only the actual machine setup is platform-specific.
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 fn start_state_machines(
     arg: &Arg,
     db: &Db,
@@ -220,7 +220,7 @@ fn start_state_machines(
     Vec<StateMachine>,
     Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
 ) {
-    if arg.no_state_machine {
+    if arg.api_only {
         return (Vec::new(), Vec::new());
     }
 
@@ -283,7 +283,7 @@ fn start_state_machines(
 /// Non-illumos variant: the routing state machine depends on illumos
 /// kernel networking, so on every other platform the function returns
 /// empty vectors and the daemon serves only its admin API.
-#[cfg(not(all(feature = "state-machine", target_os = "illumos")))]
+#[cfg(not(all(feature = "backend", target_os = "illumos")))]
 fn start_state_machines(
     _arg: &Arg,
     _db: &Db,
@@ -313,7 +313,7 @@ fn termination_handler(
             .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
 
-        #[cfg(all(feature = "state-machine", target_os = "illumos"))]
+        #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
             let imported = db.imported();
             let routes: Vec<Route> =
@@ -335,7 +335,7 @@ fn termination_handler(
                 error!(log, "shutdown tunnel routes: {e}");
             }
         }
-        #[cfg(not(all(feature = "state-machine", target_os = "illumos")))]
+        #[cfg(not(all(feature = "backend", target_os = "illumos")))]
         let _ = (db, dendrite, rt, log);
 
         std::process::exit(SIGTERM_EXIT);

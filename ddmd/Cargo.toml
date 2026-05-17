@@ -21,5 +21,5 @@ uuid.workspace = true
 smf.workspace = true
 
 [features]
-default = ["state-machine"]
-state-machine = ["ddm/state-machine"]
+default = ["backend"]
+backend = ["ddm/backend"]

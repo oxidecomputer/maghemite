@@ -8,7 +8,7 @@ pub mod discovery;
 pub mod exchange;
 pub mod oxstats;
 pub mod sm;
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod sys;
 
 pub const COMPONENT_DDM: &str = "ddm";

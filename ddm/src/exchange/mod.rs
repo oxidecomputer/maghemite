@@ -28,10 +28,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use thiserror::Error;
 
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 mod runtime;
 
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::{
     announce_tunnel, announce_underlay, do_pull, handler, pull,
     withdraw_tunnel, withdraw_underlay,

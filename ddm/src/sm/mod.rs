@@ -21,7 +21,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 mod state;
 
 #[derive(Debug)]

@@ -15,7 +15,7 @@
 //! [`Version`] and [`DiscoveryError`] are platform-agnostic and stay in this
 //! module so the state machine type definitions in [`crate::sm`] continue to
 //! compile when the routing runtime is gated out (e.g. Linux test fixtures
-//! running ddmd with `--no-state-machine`). The runtime helpers that drive
+//! running `ddmd` with `--api-only`). The runtime helpers that drive
 //! the protocol over UDPv6 sockets live in the [`runtime`] submodule and
 //! are illumos-only.
 //!
@@ -94,10 +94,10 @@
 
 use thiserror::Error;
 
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 mod runtime;
 
-#[cfg(all(feature = "state-machine", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
 #[derive(Debug, Copy, Clone)]
