@@ -16,4 +16,4 @@ set -o pipefail
 
 source .github/buildomat/test-common.sh
 banner ddm
-cargo nextest run -p ddm --nocapture
+cargo nextest run -p ddm -p ddm-api-types -p ddm-api-types-versions --nocapture

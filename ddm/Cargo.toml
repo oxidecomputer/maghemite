@@ -23,6 +23,7 @@ http-body-util.workspace = true
 serde_json.workspace = true
 sled.workspace = true
 mg-common.workspace = true
+ddm-api-types.workspace = true
 chrono.workspace = true
 omicron-common.workspace = true
 oximeter.workspace = true
@@ -30,7 +31,6 @@ oximeter-producer.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 ddm-api.workspace = true
-ddm-types.workspace = true
 
 # illumos-only deps used by the routing state machine and platform sys layer.
 # Gated by the `backend` feature so stub builds (e.g. Linux test fixtures

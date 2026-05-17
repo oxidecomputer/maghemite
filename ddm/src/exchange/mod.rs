@@ -21,8 +21,9 @@
 //! program forwarding state live in the [`runtime`] submodule and are
 //! illumos-only, since they call into [`crate::sys`] to install routes.
 
-use ddm_types::exchange::{PathVector, PathVectorV2};
-use mg_common::net::{TunnelOrigin, TunnelOriginV2};
+use ddm_api_types::exchange::{PathVector, PathVectorV2};
+use ddm_api_types::net::TunnelOrigin;
+use mg_common::net::TunnelOriginV2;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

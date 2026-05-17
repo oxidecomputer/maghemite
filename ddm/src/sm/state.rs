@@ -13,8 +13,8 @@ use super::{
 };
 use crate::exchange::{TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
-use ddm_types::db::RouterKind;
-use ddm_types::exchange::PathVector;
+use ddm_api_types::db::RouterKind;
+use ddm_api_types::exchange::PathVector;
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
@@ -26,7 +26,7 @@ use std::thread::{sleep, spawn};
 use std::time::Duration;
 
 use crate::discovery::Version;
-use mg_common::net::TunnelOrigin;
+use ddm_api_types::net::TunnelOrigin;
 use std::net::Ipv6Addr;
 
 impl StateMachine {

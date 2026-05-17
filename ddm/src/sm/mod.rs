@@ -10,8 +10,8 @@
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use crate::exchange::Update;
-use ddm_types::db::RouterKind;
-use mg_common::net::TunnelOrigin;
+use ddm_api_types::db::RouterKind;
+use ddm_api_types::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;

@@ -8,7 +8,7 @@ use ddm::db::Db;
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
-use ddm_types::db::RouterKind;
+use ddm_api_types::db::RouterKind;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};

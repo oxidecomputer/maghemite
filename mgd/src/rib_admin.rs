@@ -7,11 +7,11 @@ use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
     RequestContext, TypedBody,
 };
-use mg_types::rib::{
+use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery,
-    filter_rib_by_protocol,
 };
-use mg_types_versions::{v1, v2};
+use mg_api_types_versions::{v1, v2};
+use rdb::RibExt;
 use std::sync::Arc;
 
 // Prior version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
@@ -23,8 +23,10 @@ pub async fn get_rib_imported_v2(
     let ctx = ctx.context();
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
-    let filtered = filter_rib_by_protocol(imported, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    let filtered = imported.filter_by_protocol(query.protocol);
+    Ok(HttpResponseOk(v1::rib::Rib::from(
+        filtered.into_latest_api_rib(),
+    )))
 }
 
 pub async fn get_rib_selected_v2(
@@ -34,8 +36,10 @@ pub async fn get_rib_selected_v2(
     let ctx = ctx.context();
     let query = query.into_inner();
     let selected = ctx.db.loc_rib(query.address_family);
-    let filtered = filter_rib_by_protocol(selected, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    let filtered = selected.filter_by_protocol(query.protocol);
+    Ok(HttpResponseOk(v1::rib::Rib::from(
+        filtered.into_latest_api_rib(),
+    )))
 }
 
 // Latest version (VERSION_UNNUMBERED+): BgpPathProperties.peer is PeerId enum.
@@ -46,8 +50,8 @@ pub async fn get_rib_imported(
     let ctx = ctx.context();
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
-    let filtered = filter_rib_by_protocol(imported, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    let filtered = imported.filter_by_protocol(query.protocol);
+    Ok(HttpResponseOk(filtered.into_latest_api_rib()))
 }
 
 pub async fn get_rib_selected(
@@ -57,8 +61,8 @@ pub async fn get_rib_selected(
     let ctx = ctx.context();
     let query = query.into_inner();
     let selected = ctx.db.loc_rib(query.address_family);
-    let filtered = filter_rib_by_protocol(selected, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    let filtered = selected.filter_by_protocol(query.protocol);
+    Ok(HttpResponseOk(filtered.into_latest_api_rib()))
 }
 
 pub async fn read_bestpath_fanout(

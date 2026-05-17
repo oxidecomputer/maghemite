@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_types_versions::latest;
+use ddm_api_types_versions::latest;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -10,7 +10,6 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
-use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use std::collections::{HashMap, HashSet};
 
@@ -64,7 +63,7 @@ pub trait DdmAdminApi {
     #[endpoint { method = GET, path = "/originated_tunnel_endpoints" }]
     async fn get_originated_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<TunnelOrigin>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashSet<latest::net::TunnelOrigin>>, HttpError>;
 
     #[endpoint { method = GET, path = "/prefixes" }]
     async fn get_prefixes(
@@ -85,7 +84,7 @@ pub trait DdmAdminApi {
     #[endpoint { method = PUT, path = "/tunnel_endpoint" }]
     async fn advertise_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<TunnelOrigin>>,
+        request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/prefix" }]
@@ -97,7 +96,7 @@ pub trait DdmAdminApi {
     #[endpoint { method = DELETE, path = "/tunnel_endpoint" }]
     async fn withdraw_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<TunnelOrigin>>,
+        request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = PUT, path = "/sync" }]

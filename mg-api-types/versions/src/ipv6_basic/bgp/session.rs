@@ -1,0 +1,137 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+//! Session-related types added in the IPV6_BASIC (v2) admin API version:
+//! `ConnectionId`, `ConnectionDirection`, the latest `FsmStateKind`, and
+//! the FSM event record types.
+
+use std::net::SocketAddr;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::v1;
+
+/// Creator of a BGP connection
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub enum ConnectionDirection {
+    /// Connection was created by the dispatcher (listener)
+    Inbound,
+    /// Connection was created by the connector
+    Outbound,
+}
+
+/// Unique identifier for a BGP connection instance
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+pub struct ConnectionId {
+    /// Unique identifier for this connection instance
+    pub(crate) uuid: Uuid,
+    /// Local socket address for this connection
+    pub(crate) local: SocketAddr,
+    /// Remote socket address for this connection
+    pub(crate) remote: SocketAddr,
+}
+
+/// Simplified representation of a BGP state without having to carry a
+/// connection.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+pub enum FsmStateKind {
+    /// Initial state. Refuse all incomming BGP connections. No resources
+    /// allocated to peer.
+    Idle,
+
+    /// Waiting for the TCP connection to be completed.
+    Connect,
+
+    /// Trying to acquire peer by listening for and accepting a TCP connection.
+    Active,
+
+    /// Waiting for open message from peer.
+    OpenSent,
+
+    /// Waiting for keepalive or notification from peer.
+    OpenConfirm,
+
+    /// Handler for Connection Collisions (RFC 4271 6.8)
+    ConnectionCollision,
+
+    /// Sync up with peers.
+    SessionSetup,
+
+    /// Able to exchange update, notification and keepliave messages with peers.
+    Established,
+}
+
+/// Category of FSM event for filtering and display purposes
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum FsmEventCategory {
+    Admin,
+    Connection,
+    Session,
+    StateTransition,
+}
+
+/// Serializable record of an FSM event with full context
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FsmEventRecord {
+    /// UTC timestamp when event occurred
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+
+    /// High-level event category
+    pub event_category: FsmEventCategory,
+
+    /// Specific event type as string (e.g., "ManualStart", "HoldTimerExpires")
+    pub event_type: String,
+
+    /// FSM state at time of event
+    pub current_state: FsmStateKind,
+
+    /// Previous state if this caused a transition
+    pub previous_state: Option<FsmStateKind>,
+
+    /// Connection ID if event is connection-specific
+    pub connection_id: Option<ConnectionId>,
+
+    /// Additional event details (e.g., "Received OPEN", "Admin command")
+    pub details: Option<String>,
+}
+
+impl From<FsmStateKind> for v1::bgp::config::FsmStateKind {
+    fn from(kind: FsmStateKind) -> Self {
+        // The match exhausts all v2 variants; adding a v2 variant fails
+        // to compile here, forcing an explicit v1 mapping.
+        match kind {
+            FsmStateKind::Idle => Self::Idle,
+            FsmStateKind::Connect => Self::Connect,
+            FsmStateKind::Active => Self::Active,
+            FsmStateKind::OpenSent => Self::OpenSent,
+            FsmStateKind::OpenConfirm => Self::OpenConfirm,
+            // We convert ConnectionCollision to OpenSent, because one
+            // connection is always in OpenSent for the duration of
+            // the colliison (unless we've already transitioned out of
+            // ConnectionCollision), so this is technically correct, even if
+            // it's only correct from the perspective of just one connection.
+            FsmStateKind::ConnectionCollision => Self::OpenSent,
+            FsmStateKind::SessionSetup => Self::SessionSetup,
+            FsmStateKind::Established => Self::Established,
+        }
+    }
+}
