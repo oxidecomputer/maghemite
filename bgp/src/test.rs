@@ -8,10 +8,10 @@ use crate::{
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
-    router::{EnsureSessionResult, Router},
+    router::{EnsureSessionResult, Router, SessionMap},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
-        SessionEndpoint, SessionInfo, SessionRunner,
+        SessionInfo, SessionRunner,
     },
     unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
@@ -27,7 +27,7 @@ use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::Asn;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::{
         Arc, Mutex,
@@ -328,16 +328,14 @@ where
         let _ = std::fs::remove_dir_all(&db_path);
         let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
 
-        // Create dispatcher
-        // Phase 4: Use PeerId instead of IpAddr
-        let peer_to_session: Arc<
-            Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>,
-        > = Arc::new(Mutex::new(BTreeMap::new()));
+        // Create shared session map
+        let sessions: Arc<Mutex<SessionMap<Cnx>>> =
+            Arc::new(Mutex::new(SessionMap::new()));
         let dispatcher = Arc::new(Dispatcher::new(
-            peer_to_session.clone(),
+            sessions.clone(),
             logical_router.listen_addr.to_string(),
             log.clone(),
-            None, // No unnumbered manager for tests
+            None,
         ));
 
         // Create router
@@ -348,7 +346,7 @@ where
             },
             log.clone(),
             db.clone(),
-            peer_to_session.clone(),
+            sessions.clone(),
         ));
 
         // Start router and dispatcher
@@ -1812,12 +1810,10 @@ fn unnumbered_peering_helper(
     }
 
     // Create session maps
-    let p2s1: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
-    let p2s2: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
+    let sessions1: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+    let sessions2: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
 
     // Create one Dispatcher per interface for each router.
     // Each Dispatcher binds to a unique link-local address with its interface's scope_id,
@@ -1834,7 +1830,7 @@ fn unnumbered_peering_helper(
             *scope_id,
         ));
         let disp1 = Arc::new(Dispatcher::new(
-            p2s1.clone(),
+            sessions1.clone(),
             r1_addr.to_string(),
             log.clone(),
             Some(mock_ndp1.clone()),
@@ -1859,7 +1855,7 @@ fn unnumbered_peering_helper(
             *scope_id,
         ));
         let disp2 = Arc::new(Dispatcher::new(
-            p2s2.clone(),
+            sessions2.clone(),
             r2_addr.to_string(),
             log.clone(),
             Some(mock_ndp2.clone()),
@@ -1885,7 +1881,7 @@ fn unnumbered_peering_helper(
         },
         log.clone(),
         db1.db().clone(),
-        p2s1.clone(),
+        sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
         RouterConfig {
@@ -1894,7 +1890,7 @@ fn unnumbered_peering_helper(
         },
         log.clone(),
         db2.db().clone(),
-        p2s2.clone(),
+        sessions2.clone(),
     ));
 
     router1.run();
@@ -2620,22 +2616,20 @@ fn unnumbered_pair(
         SocketAddr::V6(SocketAddrV6::new(r2_ip, TEST_BGP_PORT, 0, scope_id));
 
     // Create session maps
-    let p2s1: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
-    let p2s2: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
+    let sessions1: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+    let sessions2: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
 
     // Create dispatchers
     let dispatcher1 = Arc::new(Dispatcher::new(
-        p2s1.clone(),
+        sessions1.clone(),
         r1_addr.to_string(),
         log.clone(),
         Some(mock_ndp1.clone()),
     ));
     let dispatcher2 = Arc::new(Dispatcher::new(
-        p2s2.clone(),
+        sessions2.clone(),
         r2_addr.to_string(),
         log.clone(),
         Some(mock_ndp2.clone()),
@@ -2666,7 +2660,7 @@ fn unnumbered_pair(
         },
         log.clone(),
         db1.db().clone(),
-        p2s1.clone(),
+        sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
         RouterConfig {
@@ -2675,7 +2669,7 @@ fn unnumbered_pair(
         },
         log.clone(),
         db2.db().clone(),
-        p2s2.clone(),
+        sessions2.clone(),
     ));
 
     router1.run();
@@ -2858,19 +2852,16 @@ fn unnumbered_three_router_chain(
     ));
 
     // Create session maps
-    let p2s1: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
-    let p2s2: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
-    let p2s3: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
+    let sessions1: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+    let sessions2: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+    let sessions3: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
 
     // Create Dispatcher for R1 (single interface)
     let disp1 = Arc::new(Dispatcher::new(
-        p2s1.clone(),
+        sessions1.clone(),
         r1_addr.to_string(),
         log.clone(),
         Some(mock_ndp1.clone()),
@@ -2885,7 +2876,7 @@ fn unnumbered_three_router_chain(
 
     // Create Dispatchers for R2 (two interfaces)
     let disp2_eth0 = Arc::new(Dispatcher::new(
-        p2s2.clone(),
+        sessions2.clone(),
         r2_eth0_addr.to_string(),
         log.clone(),
         Some(mock_ndp2.clone()),
@@ -2899,7 +2890,7 @@ fn unnumbered_three_router_chain(
         .expect("spawn r2 eth0 dispatcher");
 
     let disp2_eth1 = Arc::new(Dispatcher::new(
-        p2s2.clone(),
+        sessions2.clone(),
         r2_eth1_addr.to_string(),
         log.clone(),
         Some(mock_ndp2.clone()),
@@ -2914,7 +2905,7 @@ fn unnumbered_three_router_chain(
 
     // Create Dispatcher for R3 (single interface)
     let disp3 = Arc::new(Dispatcher::new(
-        p2s3.clone(),
+        sessions3.clone(),
         r3_addr.to_string(),
         log.clone(),
         Some(mock_ndp3.clone()),
@@ -2935,7 +2926,7 @@ fn unnumbered_three_router_chain(
         },
         log.clone(),
         db1.db().clone(),
-        p2s1.clone(),
+        sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
         RouterConfig {
@@ -2944,7 +2935,7 @@ fn unnumbered_three_router_chain(
         },
         log.clone(),
         db2.db().clone(),
-        p2s2.clone(),
+        sessions2.clone(),
     ));
     let router3 = Arc::new(Router::new(
         RouterConfig {
@@ -2953,7 +2944,7 @@ fn unnumbered_three_router_chain(
         },
         log.clone(),
         db3.db().clone(),
-        p2s3.clone(),
+        sessions3.clone(),
     ));
 
     router1.run();
@@ -3844,12 +3835,10 @@ fn test_unnumbered_interface_lifecycle() {
     mock_ndp2.configure_interface("eth0".to_string(), scope_id);
 
     // Create session maps
-    let p2s1: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
-    let p2s2: Arc<
-        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-    > = Arc::new(Mutex::new(BTreeMap::new()));
+    let sessions1: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+    let sessions2: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
 
     // Create dispatchers (needed for inbound connections)
     let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
@@ -3860,13 +3849,13 @@ fn test_unnumbered_interface_lifecycle() {
         SocketAddr::V6(SocketAddrV6::new(r2_ip, TEST_BGP_PORT, 0, scope_id));
 
     let disp1 = Arc::new(Dispatcher::new(
-        p2s1.clone(),
+        sessions1.clone(),
         r1_addr.to_string(),
         log.clone(),
         Some(mock_ndp1.clone()),
     ));
     let disp2 = Arc::new(Dispatcher::new(
-        p2s2.clone(),
+        sessions2.clone(),
         r2_addr.to_string(),
         log.clone(),
         Some(mock_ndp2.clone()),
@@ -3892,7 +3881,7 @@ fn test_unnumbered_interface_lifecycle() {
         },
         log.clone(),
         db1.db().clone(),
-        p2s1.clone(),
+        sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
         RouterConfig {
@@ -3901,7 +3890,7 @@ fn test_unnumbered_interface_lifecycle() {
         },
         log.clone(),
         db2.db().clone(),
-        p2s2.clone(),
+        sessions2.clone(),
     ));
 
     router1.run();
