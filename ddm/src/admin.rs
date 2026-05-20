@@ -23,7 +23,7 @@ use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info};
+use slog::{Logger, error, info, o};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -34,6 +34,8 @@ use tokio::spawn;
 use tokio::task::JoinHandle;
 
 pub const DDM_STATS_PORT: u16 = 8001;
+
+const UNIT_API_SERVER: &str = "api_server";
 
 #[derive(Default)]
 pub struct RouterStats {
@@ -68,11 +70,18 @@ pub fn handler(
         ..Default::default()
     };
 
+    // TODO(#740): unify dropshot logger level handling with `mgd`, which
+    // runs its dropshot logger at the parent log level.
     let ds_log = ConfigLogging::StderrTerminal {
         level: ConfigLoggingLevel::Error,
     }
     .to_logger("admin")
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?
+    .new(o!(
+        "component" => crate::COMPONENT_DDM,
+        "module" => crate::MOD_ADMIN,
+        "unit" => UNIT_API_SERVER,
+    ));
 
     let api = api_description().map_err(|e| e.to_string())?;
 

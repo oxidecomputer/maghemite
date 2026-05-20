@@ -21,10 +21,6 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
-libnet.workspace = true
-dpd-client.workspace = true
-opte-ioctl.workspace = true
-oxide-vpc.workspace = true
 sled.workspace = true
 mg-common.workspace = true
 ddm-api-types.workspace = true
@@ -35,3 +31,15 @@ oximeter-producer.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 ddm-api.workspace = true
+
+# illumos-only deps used by the routing state machine and platform sys layer.
+# Gated by the `backend` feature so stub builds (e.g. Linux test fixtures
+# running `ddmd` with `--api-only`) link cleanly.
+libnet = { workspace = true, optional = true }
+dpd-client = { workspace = true, optional = true }
+opte-ioctl = { workspace = true, optional = true }
+oxide-vpc = { workspace = true, optional = true }
+
+[features]
+default = ["backend"]
+backend = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc"]
