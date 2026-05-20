@@ -115,11 +115,13 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
         for sm in &ctx.peers {
+            // Compute status first so peer_status() never runs while we hold
+            // any of the InterfaceState mutexes below.
+            let status = sm.iface.peer_status();
             let if_index = *lock!(sm.iface.if_index);
             let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
                 continue;
             };
-            let status = sm.iface.peer_status();
             result.insert(
                 if_index,
                 PeerInfo {
