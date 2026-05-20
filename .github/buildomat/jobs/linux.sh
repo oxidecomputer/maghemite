@@ -28,6 +28,26 @@
 #: series = "linux"
 #: name = "mgadm.sha256.txt"
 #: from_output = "/work/release/mgadm.sha256.txt"
+#:
+#: [[publish]]
+#: series = "linux"
+#: name = "ddmd"
+#: from_output = "/work/release/ddmd"
+#:
+#: [[publish]]
+#: series = "linux"
+#: name = "ddmd.sha256.txt"
+#: from_output = "/work/release/ddmd.sha256.txt"
+#:
+#: [[publish]]
+#: series = "linux"
+#: name = "ddmadm"
+#: from_output = "/work/release/ddmadm"
+#:
+#: [[publish]]
+#: series = "linux"
+#: name = "ddmadm.sha256.txt"
+#: from_output = "/work/release/ddmadm.sha256.txt"
 
 set -o errexit
 set -o pipefail
@@ -64,3 +84,21 @@ popd
 cp target/debug/mgadm /work/debug
 cp target/release/mgadm /work/release
 digest /work/release/mgadm > /work/release/mgadm.sha256.txt
+
+banner "ddmd"
+pushd ddmd
+cargo build --bin ddmd --no-default-features
+cargo build --bin ddmd --no-default-features --release
+popd
+cp target/debug/ddmd /work/debug
+cp target/release/ddmd /work/release
+digest /work/release/ddmd > /work/release/ddmd.sha256.txt
+
+banner "ddmadm"
+pushd ddmadm
+cargo build --bin ddmadm
+cargo build --bin ddmadm --release
+popd
+cp target/debug/ddmadm /work/debug
+cp target/release/ddmadm /work/release
+digest /work/release/ddmadm > /work/release/ddmadm.sha256.txt
