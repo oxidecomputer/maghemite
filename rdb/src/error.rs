@@ -33,3 +33,15 @@ pub enum Error {
     #[error("Validation error: {0}")]
     Validation(String),
 }
+
+impl From<mg_api_types::mrib::MulticastError> for Error {
+    fn from(value: mg_api_types::mrib::MulticastError) -> Self {
+        match value {
+            mg_api_types::mrib::MulticastError::Validation(s) => {
+                Self::Validation(s)
+            }
+            mg_api_types::mrib::MulticastError::Parsing(s) => Self::Parsing(s),
+            mg_api_types::mrib::MulticastError::DbKey(s) => Self::DbKey(s),
+        }
+    }
+}

@@ -9,15 +9,17 @@ use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
-use bgp::params::{BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig};
 use clap::{Parser, Subcommand};
+use mg_api_types::bfd::BfdPeerConfig;
+use mg_api_types::bgp::config::{
+    BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig,
+};
+use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
+use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
-use rdb::{
-    BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, BgpUnnumberedNeighborInfo,
-};
 use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
@@ -308,7 +310,7 @@ fn start_bgp_routers(
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
             context.clone(),
-            bgp::params::Router {
+            mg_api_types::bgp::config::Router {
                 asn,
                 id: info.id,
                 listen: info.listen.clone(),
@@ -323,7 +325,7 @@ fn start_bgp_routers(
     for nbr in neighbors {
         bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp::params::Neighbor {
+            mg_api_types::bgp::config::Neighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
                 name: nbr.name.clone(),
@@ -379,7 +381,7 @@ fn start_bgp_routers(
     for nbr in uneighbors {
         bgp_admin::helpers::add_unnumbered_neighbor(
             context.clone(),
-            bgp::params::UnnumberedNeighbor {
+            mg_api_types::bgp::config::UnnumberedNeighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
                 name: nbr.name.clone(),
@@ -517,7 +519,8 @@ fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rdb::{Prefix, Prefix4, Prefix6, StaticRouteKey};
+    use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+    use rdb::StaticRouteKey;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
     use tempfile::TempDir;

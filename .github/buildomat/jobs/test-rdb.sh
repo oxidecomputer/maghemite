@@ -14,6 +14,11 @@ set -x
 set -e
 
 source .github/buildomat/test-common.sh
+
 pushd rdb
-cargo nextest run
+cargo nextest run \
+    -p rdb \
+    -p mg-api-types \
+    -p mg-api-types-versions
 cp *.log /work/
+popd

@@ -1,0 +1,145 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+//! Display, helper, and cross-version conversion impls for the versioned BGP
+//! session-history types.
+
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::{self};
+use std::net::SocketAddr;
+
+use uuid::Uuid;
+
+use crate::latest::bgp::messages::Message;
+use crate::latest::bgp::session::ConnectionDirection;
+use crate::latest::bgp::session::ConnectionId;
+use crate::latest::bgp::session::FsmStateKind;
+use crate::latest::bgp::session::MessageHistory;
+use crate::latest::bgp::session::MessageHistoryEntry;
+
+use crate::latest::bgp::session::MAX_MESSAGE_HISTORY;
+
+impl ConnectionDirection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConnectionDirection::Inbound => "inbound",
+            ConnectionDirection::Outbound => "outbound",
+        }
+    }
+}
+
+impl Display for ConnectionDirection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl slog::Value for ConnectionDirection {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
+    }
+}
+
+impl ConnectionId {
+    /// Create a new ConnectionId
+    pub fn new(local: SocketAddr, remote: SocketAddr) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            local,
+            remote,
+        }
+    }
+
+    /// Get a short, human-readable identifier for this connection
+    pub fn short(&self) -> String {
+        self.uuid.to_string()[0..8].to_string()
+    }
+
+    /// Get the local socket address
+    pub fn local(&self) -> SocketAddr {
+        self.local
+    }
+
+    /// Get the remote socket address
+    pub fn remote(&self) -> SocketAddr {
+        self.remote
+    }
+}
+
+impl FsmStateKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            FsmStateKind::Idle => "idle",
+            FsmStateKind::Connect => "connect",
+            FsmStateKind::Active => "active",
+            FsmStateKind::OpenSent => "open sent",
+            FsmStateKind::OpenConfirm => "open confirm",
+            FsmStateKind::ConnectionCollision => "connection collision",
+            FsmStateKind::SessionSetup => "session setup",
+            FsmStateKind::Established => "established",
+        }
+    }
+}
+
+impl Display for FsmStateKind {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl MessageHistoryEntry {
+    pub fn new(
+        timestamp: chrono::DateTime<chrono::Utc>,
+        message: Message,
+        connection_id: ConnectionId,
+    ) -> Self {
+        Self {
+            timestamp,
+            message,
+            connection_id,
+        }
+    }
+
+    pub fn timestamp(&self) -> chrono::DateTime<chrono::Utc> {
+        self.timestamp
+    }
+
+    pub fn message(&self) -> &Message {
+        &self.message
+    }
+
+    pub fn connection_id(&self) -> &ConnectionId {
+        &self.connection_id
+    }
+}
+
+impl MessageHistory {
+    pub fn receive(&mut self, msg: Message, connection_id: ConnectionId) {
+        if self.received.len() >= MAX_MESSAGE_HISTORY {
+            self.received.pop_back();
+        }
+        self.received.push_front(MessageHistoryEntry {
+            message: msg,
+            timestamp: chrono::Utc::now(),
+            connection_id,
+        });
+    }
+
+    pub fn send(&mut self, msg: Message, connection_id: ConnectionId) {
+        if self.sent.len() >= MAX_MESSAGE_HISTORY {
+            self.sent.pop_back();
+        }
+        self.sent.push_front(MessageHistoryEntry {
+            message: msg,
+            timestamp: chrono::Utc::now(),
+            connection_id,
+        });
+    }
+}

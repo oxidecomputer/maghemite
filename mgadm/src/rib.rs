@@ -6,9 +6,9 @@ use std::num::NonZeroU8;
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use mg_admin_client::types::BestpathFanoutRequest;
 use mg_admin_client::{Client, print_rib};
-use rdb::types::{AddressFamily, ProtocolFilter};
+use mg_api_types::rdb::rib::{AddressFamily, ProtocolFilter};
+use mg_api_types::rib::BestpathFanoutRequest;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {

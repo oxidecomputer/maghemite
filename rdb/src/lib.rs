@@ -6,10 +6,12 @@
 
 pub mod db;
 pub mod mrib;
+pub mod rib;
 pub mod types;
 
 pub use db::Db;
 pub use mrib::Mrib;
+pub use rib::{Rib, Rib4, Rib6, RibExt};
 pub use types::*;
 pub mod bestpath;
 pub mod error;

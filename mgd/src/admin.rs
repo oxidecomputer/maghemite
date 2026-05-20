@@ -6,7 +6,6 @@
 
 use crate::{bfd_admin, bgp_admin, mrib_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
-use bgp::params::*;
 use bgp_admin::BgpContext;
 use dropshot::{
     ApiDescription, ConfigDropshot, HttpError, HttpResponseDeleted,
@@ -14,29 +13,35 @@ use dropshot::{
     TypedBody,
 };
 use mg_api::{MgAdminApi, mg_admin_api_mod};
-use mg_common::stats::MgLowerStats;
-use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
-use mg_types::bgp::{
-    AsnSelector, ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
-    MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,
-    NeighborSelector, UnnumberedNeighborResetRequest,
+use mg_api_types::bfd::{BfdPeerConfig, BfdPeerInfo, DeleteBfdPeerPathParams};
+use mg_api_types::bgp::config::{
+    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetRequest,
+    NeighborSelector, Origin4, PeerInfo, Router, ShaperSource,
+    UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
-use mg_types::mrib::{
+use mg_api_types::bgp::history::Origin6;
+use mg_api_types::bgp::session::{
+    ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
+    MessageHistoryRequest, MessageHistoryResponse,
+};
+use mg_api_types::mrib::{
     MribAddStaticRequest, MribDeleteStaticRequest, MribQuery,
     MribRpfRebuildIntervalRequest, MribRpfRebuildIntervalResponse,
 };
-use mg_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
-use mg_types::rib::{
+use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
+use mg_api_types::rdb::prefix::Prefix;
+use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
-use mg_types::static_routes::{
+use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
     DeleteStaticRoute6Request,
 };
-use mg_types::switch::SwitchIdentifiers;
-use mg_types_versions::{v1, v2, v5};
-use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
+use mg_api_types::switch::SwitchIdentifiers;
+use mg_api_types_versions::{v1, v2, v4, v5};
+use mg_common::stats::MgLowerStats;
+use rdb::Db;
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
 #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
@@ -219,28 +224,28 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn create_neighbor_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV1>,
+        request: TypedBody<v1::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_neighbor_v1(ctx, request).await
     }
 
     async fn read_neighbor_v1(
         ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::NeighborSelector>,
-    ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
+        request: Query<v1::bgp::config::NeighborSelector>,
+    ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
         bgp_admin::read_neighbor_v1(ctx, request).await
     }
 
     async fn read_neighbors_v1(
         ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError> {
         bgp_admin::read_neighbors_v1(ctx, request).await
     }
 
     async fn update_neighbor_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborV1>,
+        request: TypedBody<v1::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_neighbor_v1(ctx, request).await
     }
@@ -258,45 +263,45 @@ impl MgAdminApi for MgAdminApiImpl {
 
     // Latest (VERSION_BGP_SRC_ADDR..)
 
-    async fn read_unnumbered_neighbors_v2(
+    async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
         bgp_admin::read_unnumbered_neighbors(rqctx, request).await
     }
 
-    async fn create_unnumbered_neighbor_v2(
+    async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn read_unnumbered_neighbor_v2(
+    async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError> {
         bgp_admin::read_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn update_unnumbered_neighbor_v2(
+    async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_unnumbered_neighbor(rqctx, request).await
     }
 
-    async fn delete_unnumbered_neighbor_v2(
+    async fn delete_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
     }
 
-    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - read_unnumbered_neighbors,
-    // create_unnumbered_neighbor, read_unnumbered_neighbor,
-    // update_unnumbered_neighbor, and delete_unnumbered_neighbor are provided
-    // methods.
+    // V5 (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) -
+    // read_unnumbered_neighbors_v5, create_unnumbered_neighbor_v5,
+    // read_unnumbered_neighbor_v5, update_unnumbered_neighbor_v5, and
+    // delete_unnumbered_neighbor_v5 are provided methods.
 
     async fn clear_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -372,15 +377,23 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_exported_v5(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v5::bgp::ExportedSelector>,
-    ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
+        request: TypedBody<v5::bgp::session::ExportedSelector>,
+    ) -> Result<
+        HttpResponseOk<
+            HashMap<v1::bgp::peer::PeerId, Vec<v1::rdb::prefix::Prefix>>,
+        >,
+        HttpError,
+    > {
         bgp_admin::get_exported_v5(ctx, request).await
     }
 
     async fn get_exported_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
+        request: TypedBody<v1::bgp::config::AsnSelector>,
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, Vec<v1::rdb::prefix::Prefix>>>,
+        HttpError,
+    > {
         bgp_admin::get_exported_v1(ctx, request).await
     }
 
@@ -400,7 +413,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_imported_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::AsnSelector>,
+        request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
         bgp_admin::get_imported_v1(ctx, request).await
     }
@@ -421,7 +434,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_selected_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::AsnSelector>,
+        request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
         bgp_admin::get_selected_v1(ctx, request).await
     }
@@ -435,33 +448,42 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_neighbors_v4(
         ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, v4::bgp::config::PeerInfo>>,
+        HttpError,
+    > {
         bgp_admin::get_neighbors_v4(ctx, request).await
     }
 
     async fn get_neighbors_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, v2::bgp::history::PeerInfo>>,
+        HttpError,
+    > {
         bgp_admin::get_neighbors_v2(ctx, request).await
     }
 
     async fn get_neighbors_v1(
         ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<
+        HttpResponseOk<HashMap<IpAddr, v1::bgp::config::PeerInfo>>,
+        HttpError,
+    > {
         bgp_admin::get_neighbors_v1(ctx, request).await
     }
 
-    async fn bgp_apply_v2(
+    async fn bgp_apply(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::bgp_apply(ctx, request).await
     }
 
-    // bgp_apply and bgp_apply_v1 are provided methods.
+    // bgp_apply_v4 and bgp_apply_v1 are provided methods.
 
     async fn message_history(
         ctx: RequestContext<Self::Context>,
@@ -470,19 +492,33 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::message_history(ctx, request).await
     }
 
+    async fn message_history_v4(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v4::bgp::config::MessageHistoryResponse>,
+        HttpError,
+    > {
+        bgp_admin::message_history_v4(ctx, request).await
+    }
+
     async fn message_history_v2(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v2::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v2::bgp::MessageHistoryResponse>, HttpError>
-    {
+        request: TypedBody<v2::bgp::history::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v2::bgp::history::MessageHistoryResponse>,
+        HttpError,
+    > {
         bgp_admin::message_history_v2(ctx, request).await
     }
 
     async fn message_history_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<v1::bgp::MessageHistoryResponse>, HttpError>
-    {
+        request: TypedBody<v1::bgp::config::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v1::bgp::config::MessageHistoryResponse>,
+        HttpError,
+    > {
         bgp_admin::message_history_v1(ctx, request).await
     }
 
@@ -495,8 +531,9 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn fsm_history_v2(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<v2::bgp::FsmHistoryRequest>,
-    ) -> Result<HttpResponseOk<v2::bgp::FsmHistoryResponse>, HttpError> {
+        request: TypedBody<v2::bgp::history::FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<v2::bgp::history::FsmHistoryResponse>, HttpError>
+    {
         bgp_admin::fsm_history_v2(ctx, request).await
     }
 

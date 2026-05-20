@@ -21,7 +21,8 @@ use mg_admin_client::types::{
     MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
     RouteOriginFilter, Vni,
 };
-use rdb::types::{AddressFamily, DEFAULT_MULTICAST_VNI};
+use mg_api_types::mrib::DEFAULT_MULTICAST_VNI;
+use mg_api_types::rdb::rib::AddressFamily;
 
 const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI.as_u32();
 
@@ -71,7 +72,7 @@ pub enum StatusCmd {
         source: Option<IpAddr>,
 
         /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
-        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(rdb::Vni::MAX_VNI as i64)))]
+        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::Vni::MAX_VNI as i64)))]
         vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
@@ -98,7 +99,7 @@ pub enum StatusCmd {
         source: Option<IpAddr>,
 
         /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
-        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(rdb::Vni::MAX_VNI as i64)))]
+        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::Vni::MAX_VNI as i64)))]
         vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
