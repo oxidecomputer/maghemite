@@ -17,15 +17,14 @@ use crate::{
     error::Error,
     log::{connection_log, connection_log_lite},
     messages::Message,
-    session::{
-        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionInfo,
-    },
+    router::SessionMap,
+    session::{ConnectionEvent, FsmEvent, PeerId, SessionInfo},
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::{Logger, info};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     net::{SocketAddr, ToSocketAddrs},
     sync::{
         Arc, Mutex,
@@ -84,6 +83,7 @@ impl std::fmt::Display for Network {
 #[derive(Debug)]
 struct Listener {
     rx: Receiver<(SocketAddr, Endpoint<Message>)>,
+    addr: SocketAddr,
 }
 
 impl Listener {
@@ -95,6 +95,12 @@ impl Listener {
             RecvTimeoutError::Timeout => Error::Timeout,
             RecvTimeoutError::Disconnected => Error::Disconnected,
         })
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        NET.unbind(&self.addr);
     }
 }
 
@@ -113,7 +119,12 @@ impl Network {
     fn bind(&self, sa: SocketAddr) -> Listener {
         let (tx, rx) = mpsc_channel();
         lock!(self.endpoints).insert(sa, tx);
-        Listener { rx }
+        Listener { rx, addr: sa }
+    }
+
+    /// Remove a bound address from the network.
+    fn unbind(&self, addr: &SocketAddr) {
+        lock!(self.endpoints).remove(addr);
     }
 
     /// Send a copy of the provided endpoint to the endpoint identified by the
@@ -232,38 +243,32 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn accept(
         &self,
         log: Logger,
-        peer_to_session: Arc<
-            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
-        >,
+        sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>>,
         timeout: Duration,
     ) -> Result<BgpConnectionChannel, Error> {
         let (peer, endpoint) = self.listener.accept(timeout)?;
 
-        // For channel-based test connections, we use the bind address as the local
-        // address. In a real network scenario (like TCP), we would need to get the
-        // actual connection's local address to handle dual-stack correctly, but for
-        // testing purposes with channels, the bind address is the connection address.
         let local = self.bind_addr;
 
         // Resolve peer address to appropriate PeerId (IP or Interface)
         let key = self.resolve_session_key(peer);
 
-        match lock!(peer_to_session).get(&key) {
-            Some(session_endpoint) => {
-                let config = lock!(session_endpoint.config);
-                Ok(BgpConnectionChannel::with_conn(
-                    local,
-                    peer,
-                    endpoint,
-                    session_endpoint.event_tx.clone(),
-                    IO_TIMEOUT,
-                    log,
-                    ConnectionDirection::Inbound,
-                    &config,
-                ))
-            }
-            None => Err(Error::UnknownPeer(peer.ip())),
-        }
+        let runner = lock!(sessions)
+            .get(&key)
+            .cloned()
+            .ok_or(Error::UnknownPeer(peer.ip()))?;
+
+        let config = lock!(runner.session);
+        Ok(BgpConnectionChannel::with_conn(
+            local,
+            peer,
+            endpoint,
+            runner.event_tx.clone(),
+            IO_TIMEOUT,
+            log,
+            ConnectionDirection::Inbound,
+            &config,
+        ))
     }
 
     fn apply_policy(

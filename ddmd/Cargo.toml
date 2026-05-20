@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ddm = { path = "../ddm" }
+ddm = { path = "../ddm", default-features = false }
 mg-common = { path = "../mg-common" }
 anyhow.workspace = true
 clap.workspace = true
@@ -19,3 +19,7 @@ dpd-client.workspace = true
 anstyle.workspace = true
 uuid.workspace = true
 smf.workspace = true
+
+[features]
+default = ["backend"]
+backend = ["ddm/backend"]

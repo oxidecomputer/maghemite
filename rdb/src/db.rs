@@ -2038,6 +2038,7 @@ mod test {
     use mg_api_types::rdb::path::Path;
     use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
     use mg_api_types::rdb::rib::AddressFamily;
+    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
     use mg_common::test::DEFAULT_INTERVAL;
     use mg_common::wait_for;
@@ -2063,15 +2064,15 @@ mod test {
     ) -> bool {
         let curr_rib_in_paths = db.get_prefix_paths(prefix);
         if !path_vecs_equal(&curr_rib_in_paths, &rib_in_paths) {
-            eprintln!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
-            eprintln!("rib_in_paths: {:?}", rib_in_paths);
+            eprintln_nopipe!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
+            eprintln_nopipe!("rib_in_paths: {:?}", rib_in_paths);
             return false;
         }
 
         let curr_loc_rib_paths = db.get_selected_prefix_paths(prefix);
         if !path_vecs_equal(&curr_loc_rib_paths, &loc_rib_paths) {
-            eprintln!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
-            eprintln!("loc_rib_paths: {:?}", loc_rib_paths);
+            eprintln_nopipe!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
+            eprintln_nopipe!("loc_rib_paths: {:?}", loc_rib_paths);
             return false;
         }
         true

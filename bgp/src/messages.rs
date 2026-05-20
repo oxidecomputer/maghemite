@@ -2534,7 +2534,7 @@ impl Display for MessageParseError {
 mod tests {
     use super::*;
     use mg_api_types::rdb::prefix::Prefix;
-    use mg_common::{cidr, ip, parse};
+    use mg_common::{cidr, ip, parse, println_nopipe};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -2589,7 +2589,7 @@ mod tests {
         };
 
         let buf = h0.to_wire();
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         assert_eq!(
             buf,
@@ -2610,7 +2610,7 @@ mod tests {
         let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, false);
 
         let buf = open_message_to_wire(&om0).expect("open message to wire");
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         let om1 = open_message_from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
@@ -2621,7 +2621,7 @@ mod tests {
         let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, true);
 
         let buf = open_message_to_wire(&om0).expect("open message to wire");
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         let om1 = open_message_from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
@@ -2670,7 +2670,7 @@ mod tests {
         };
 
         let buf = update_message_to_wire(&um0).expect("update message to wire");
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         let um1 =
             update_message_from_wire(&buf).expect("update message from wire");

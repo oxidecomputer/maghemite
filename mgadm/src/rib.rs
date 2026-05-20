@@ -2,13 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::num::NonZeroU8;
-
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::{Client, print_rib};
 use mg_api_types::rdb::rib::{AddressFamily, ProtocolFilter};
 use mg_api_types::rib::BestpathFanoutRequest;
+use mg_common::println_nopipe;
+use std::num::NonZeroU8;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -120,13 +120,13 @@ async fn get_selected(
 
 async fn read_bestpath_fanout(c: Client) -> Result<()> {
     let result = c.read_bestpath_fanout().await?;
-    println!("{}", result.into_inner().fanout);
+    println_nopipe!("{}", result.into_inner().fanout);
     Ok(())
 }
 
 async fn update_bestpath_fanout(fanout: NonZeroU8, c: Client) -> Result<()> {
     c.update_bestpath_fanout(&BestpathFanoutRequest { fanout })
         .await?;
-    println!("Updated bestpath fanout to: {}", fanout);
+    println_nopipe!("Updated bestpath fanout to: {}", fanout);
     Ok(())
 }
