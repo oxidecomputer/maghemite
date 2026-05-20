@@ -89,7 +89,7 @@ use crate::db::Db;
 use crate::sm::{Config, Event, NeighborEvent, SessionStats};
 use crate::util::u8_slice_assume_init_ref;
 use crate::{dbg, err, inf, trc, wrn};
-use ddm_types::db::{PeerInfo, PeerStatus, RouterKind};
+use ddm_api_types::db::{PeerInfo, PeerStatus, RouterKind};
 use mg_common::lock;
 use serde::{Deserialize, Serialize};
 use slog::Logger;

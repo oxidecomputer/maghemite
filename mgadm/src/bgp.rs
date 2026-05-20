@@ -3,17 +3,15 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use bgp::{messages::Afi, params::JitterRange};
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
-use mg_admin_client::{
-    Client,
-    types::{
-        self, ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
-        Ipv6UnicastConfig, NeighborResetRequest,
-    },
+use mg_admin_client::{Client, types};
+use mg_api_types::bgp::config::{
+    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
 };
-use rdb::types::{PeerId, Prefix4, Prefix6};
+use mg_api_types::bgp::messages::Afi;
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -21,29 +19,6 @@ use std::{
     time::Duration,
 };
 use tabwriter::TabWriter;
-
-fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
-    types::JitterRange {
-        min: j.min,
-        max: j.max,
-    }
-}
-
-fn afi_to_api(afi: Afi) -> types::Afi {
-    match afi {
-        Afi::Ipv4 => types::Afi::Ipv4,
-        Afi::Ipv6 => types::Afi::Ipv6,
-    }
-}
-
-fn peer_id_to_api(peer_id: bgp::session::PeerId) -> PeerId {
-    match peer_id {
-        bgp::session::PeerId::Ip(ip) => PeerId::Ip(ip),
-        bgp::session::PeerId::Interface(interface) => {
-            PeerId::Interface(interface)
-        }
-    }
-}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -231,23 +206,25 @@ pub enum SoftDirection {
     },
 }
 
-impl From<NeighborOperation> for types::NeighborResetOp {
+impl From<NeighborOperation> for mg_api_types::bgp::config::NeighborResetOp {
     fn from(op: NeighborOperation) -> Self {
         match op {
-            NeighborOperation::Hard => types::NeighborResetOp::Hard,
+            NeighborOperation::Hard => {
+                mg_api_types::bgp::config::NeighborResetOp::Hard
+            }
             NeighborOperation::Soft { direction } => direction.into(),
         }
     }
 }
 
-impl From<SoftDirection> for types::NeighborResetOp {
+impl From<SoftDirection> for mg_api_types::bgp::config::NeighborResetOp {
     fn from(direction: SoftDirection) -> Self {
         match direction {
             SoftDirection::Inbound { afi } => {
-                types::NeighborResetOp::SoftInbound(afi.map(afi_to_api))
+                mg_api_types::bgp::config::NeighborResetOp::SoftInbound(afi)
             }
             SoftDirection::Outbound { afi } => {
-                types::NeighborResetOp::SoftOutbound(afi.map(afi_to_api))
+                mg_api_types::bgp::config::NeighborResetOp::SoftOutbound(afi)
             }
         }
     }
@@ -769,10 +746,8 @@ impl Neighbor {
             ipv4_unicast,
             ipv6_unicast,
             vlan_id: self.vlan_id,
-            connect_retry_jitter: self
-                .connect_retry_jitter
-                .map(jitter_range_to_api),
-            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            connect_retry_jitter: self.connect_retry_jitter,
+            idle_hold_jitter: self.idle_hold_jitter,
             deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
@@ -854,10 +829,8 @@ impl Neighbor {
             ipv4_unicast,
             ipv6_unicast,
             vlan_id: self.vlan_id,
-            connect_retry_jitter: self
-                .connect_retry_jitter
-                .map(jitter_range_to_api),
-            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            connect_retry_jitter: self.connect_retry_jitter,
+            idle_hold_jitter: self.idle_hold_jitter,
             deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
@@ -999,7 +972,7 @@ async fn read_routers(c: Client) -> Result<()> {
 }
 
 async fn create_router(cfg: RouterConfig, c: Client) -> Result<()> {
-    c.create_router(&types::Router {
+    c.create_router(&mg_api_types::bgp::config::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
@@ -1010,7 +983,7 @@ async fn create_router(cfg: RouterConfig, c: Client) -> Result<()> {
 }
 
 async fn update_router(cfg: RouterConfig, c: Client) -> Result<()> {
-    c.update_router(&types::Router {
+    c.update_router(&mg_api_types::bgp::config::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
@@ -1066,7 +1039,7 @@ fn format_duration_human(d: Duration) -> String {
 }
 
 fn display_neighbors_summary(
-    neighbors: &[(&String, &types::PeerInfo)],
+    neighbors: &[(&String, &mg_api_types::bgp::config::PeerInfo)],
 ) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
@@ -1101,7 +1074,7 @@ fn display_neighbors_summary(
 }
 
 fn display_neighbors_detail(
-    neighbors: &[(&String, &types::PeerInfo)],
+    neighbors: &[(&String, &mg_api_types::bgp::config::PeerInfo)],
 ) -> Result<()> {
     for (i, (addr, info)) in neighbors.iter().enumerate() {
         if i > 0 {
@@ -1286,16 +1259,16 @@ async fn get_exported(
 ) -> Result<()> {
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.map(|p| {
-        let bgp_peer_id: bgp::session::PeerId =
+        let bgp_peer_id: mg_api_types::bgp::peer::PeerId =
             p.parse().expect("PeerId::from_str should always succeed");
-        peer_id_to_api(bgp_peer_id)
+        bgp_peer_id
     });
 
     let exported = c
-        .get_exported(&types::ExportedSelector {
+        .get_exported(&mg_api_types::bgp::session::ExportedSelector {
             asn,
             peer: peer_id,
-            afi: afi.map(afi_to_api),
+            afi,
         })
         .await?
         .into_inner();
@@ -1307,7 +1280,7 @@ async fn get_exported(
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
     // Get both numbered and unnumbered neighbors
     let numbered = c.read_neighbors(asn).await?.into_inner();
-    let unnumbered = c.read_unnumbered_neighbors_v2(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
 
     if numbered.is_empty() && unnumbered.is_empty() {
         println!("No neighbors configured for ASN {}", asn);
@@ -1353,7 +1326,7 @@ async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
             c.create_neighbor(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.create_unnumbered_neighbor_v2(&n).await?;
+            c.create_unnumbered_neighbor(&n).await?;
         }
     }
     Ok(())
@@ -1368,7 +1341,7 @@ async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
         }
         PeerType::Unnumbered(interface) => {
             let nbr = c
-                .read_unnumbered_neighbor_v2(asn, &interface)
+                .read_unnumbered_neighbor(asn, &interface)
                 .await?
                 .into_inner();
             println!("{nbr:#?}");
@@ -1383,7 +1356,7 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
             c.update_neighbor(&n).await?;
         }
         ApiNeighborType::Unnumbered(n) => {
-            c.update_unnumbered_neighbor_v2(&n).await?;
+            c.update_unnumbered_neighbor(&n).await?;
         }
     }
     Ok(())
@@ -1395,7 +1368,7 @@ async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
             c.delete_neighbor(asn, &addr.to_string()).await?;
         }
         PeerType::Unnumbered(interface) => {
-            c.delete_unnumbered_neighbor_v2(asn, &interface).await?;
+            c.delete_unnumbered_neighbor(asn, &interface).await?;
         }
     }
     Ok(())
@@ -1418,7 +1391,7 @@ async fn clear_nbr(
         }
         PeerType::Unnumbered(interface) => {
             c.clear_unnumbered_neighbor(
-                &types::UnnumberedNeighborResetRequest {
+                &mg_api_types::bgp::config::UnnumberedNeighborResetRequest {
                     asn,
                     interface,
                     op: operation.into(),
@@ -1431,7 +1404,7 @@ async fn clear_nbr(
 }
 
 async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
-    c.create_origin4(&types::Origin4 {
+    c.create_origin4(&mg_api_types::bgp::config::Origin4 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1445,7 +1418,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
 }
 
 async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
-    c.update_origin4(&types::Origin4 {
+    c.update_origin4(&mg_api_types::bgp::config::Origin4 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1470,7 +1443,7 @@ async fn read_origin4(asn: u32, c: Client) -> Result<()> {
 }
 
 async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
-    c.create_origin6(&types::Origin6 {
+    c.create_origin6(&mg_api_types::bgp::history::Origin6 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1484,7 +1457,7 @@ async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
 }
 
 async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
-    c.update_origin6(&types::Origin6 {
+    c.update_origin6(&mg_api_types::bgp::history::Origin6 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -1511,7 +1484,7 @@ async fn read_origin6(asn: u32, c: Client) -> Result<()> {
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
-    c.bgp_apply_v2(&request).await?;
+    c.bgp_apply(&request).await?;
     Ok(())
 }
 
@@ -1521,7 +1494,7 @@ async fn create_chk(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_checker(&code)?;
 
-    c.create_checker(&types::CheckerSource { asn, code })
+    c.create_checker(&mg_api_types::bgp::config::CheckerSource { asn, code })
         .await?;
     Ok(())
 }
@@ -1538,7 +1511,7 @@ async fn update_chk(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_checker(&code)?;
 
-    c.update_checker(&types::CheckerSource { asn, code })
+    c.update_checker(&mg_api_types::bgp::config::CheckerSource { asn, code })
         .await?;
     Ok(())
 }
@@ -1554,7 +1527,8 @@ async fn create_shp(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_shaper(&code)?;
 
-    c.create_shaper(&types::ShaperSource { asn, code }).await?;
+    c.create_shaper(&mg_api_types::bgp::config::ShaperSource { asn, code })
+        .await?;
     Ok(())
 }
 
@@ -1570,7 +1544,8 @@ async fn update_shp(filename: String, asn: u32, c: Client) -> Result<()> {
     // check that the program is loadable first
     bgp::policy::load_shaper(&code).unwrap();
 
-    c.update_shaper(&types::ShaperSource { asn, code }).await?;
+    c.update_shaper(&mg_api_types::bgp::config::ShaperSource { asn, code })
+        .await?;
     Ok(())
 }
 
@@ -1589,8 +1564,8 @@ async fn get_fsm_history(
 ) -> Result<()> {
     // Parse buffer type for server-side filtering
     let buffer_type = match buffer {
-        "all" => Some(types::FsmEventBuffer::All),
-        _ => Some(types::FsmEventBuffer::Major), // Default to major
+        "all" => Some(mg_api_types::bgp::history::FsmEventBuffer::All),
+        _ => Some(mg_api_types::bgp::history::FsmEventBuffer::Major), // Default to major
     };
 
     let buffer_name = match buffer {
@@ -1600,9 +1575,9 @@ async fn get_fsm_history(
 
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.as_ref().map(|p| {
-        let bgp_peer_id: bgp::session::PeerId =
+        let bgp_peer_id: mg_api_types::bgp::peer::PeerId =
             p.parse().expect("PeerId::from_str should always succeed");
-        peer_id_to_api(bgp_peer_id)
+        bgp_peer_id
     });
 
     let result = c
@@ -1726,8 +1701,10 @@ async fn get_message_history(
 ) -> Result<()> {
     // Parse direction filter
     let dir = match direction {
-        "sent" => Some(types::MessageDirection::Sent),
-        "received" => Some(types::MessageDirection::Received),
+        "sent" => Some(mg_api_types::bgp::history::MessageDirection::Sent),
+        "received" => {
+            Some(mg_api_types::bgp::history::MessageDirection::Received)
+        }
         _ => None, // "both" or any other value means no filter
     };
 
@@ -1743,10 +1720,10 @@ async fn get_message_history(
     };
 
     // Parse peer and convert to API type
-    let bgp_peer_id: bgp::session::PeerId = peer
+    let bgp_peer_id: mg_api_types::bgp::peer::PeerId = peer
         .parse()
         .expect("PeerId::from_str should always succeed");
-    let peer_id = peer_id_to_api(bgp_peer_id);
+    let peer_id = bgp_peer_id;
 
     let result = c
         .message_history(&types::MessageHistoryRequest {

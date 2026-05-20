@@ -1,0 +1,11 @@
+[package]
+name = "ddm-api-types-versions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oxnet.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_repr.workspace = true
+uuid.workspace = true

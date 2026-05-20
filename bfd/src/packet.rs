@@ -346,14 +346,6 @@ pub enum State {
     Unknown(u8),
 }
 
-impl crate::BfdPeerState {
-    /// A helper function to transition between enumm and wire representations
-    /// for peer states.
-    fn wire_format(&self) -> u8 {
-        (*self as u8) << 6
-    }
-}
-
 /// An optional authentication section for BFD control packets.
 ///
 /// ```text

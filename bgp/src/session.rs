@@ -2,14 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::policy::ImportExportPolicy;
 use crate::{
     clock::SessionClock,
+    clock::TimerConfig,
     config::PeerConfig,
     connection::{
         BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
     },
     error::{Error, ExpectationMismatch},
-    fanout::{Fanout4, Fanout6},
+    fanout::{Egress, Fanout4, Fanout6},
     log::{collision_log, session_log, session_log_lite},
     messages::{
         AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
@@ -18,22 +20,27 @@ use crate::{
         OpenErrorSubcode, OpenMessage, PathAttributeValue, RouteRefreshMessage,
         Safi, UpdateMessage,
     },
-    params::{
-        BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
-        DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
-        PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
-    },
-    policy::{CheckerResult, ShaperResult},
+    policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
     router::Router,
     unnumbered::UnnumberedManager,
 };
-use mg_common::{lock, read_lock, write_lock};
-use rdb::{
-    AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
-    ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
+use mg_api_types::bgp::config::{
+    BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
+    JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
 };
-pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY, PeerId};
+pub(crate) use mg_api_types::bgp::peer::PeerId;
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+pub(crate) use mg_api_types::bgp::session::{
+    FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
+};
+use mg_api_types::rdb::path::BgpPathProperties;
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
+use mg_api_types_versions::v1;
+use mg_common::{lock, read_lock, write_lock};
+use rdb::{Asn, Db};
+pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -338,7 +345,7 @@ pub enum FsmState<Cnx: BgpConnection> {
 
 impl<Cnx: BgpConnection> FsmState<Cnx> {
     fn kind(&self) -> FsmStateKind {
-        FsmStateKind::from(self)
+        fsm_state_kind_of(self)
     }
 }
 
@@ -348,73 +355,22 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
     }
 }
 
-/// Simplified representation of a BGP state without having to carry a
-/// connection.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-pub enum FsmStateKind {
-    /// Initial state. Refuse all incomming BGP connections. No resources
-    /// allocated to peer.
-    Idle,
-
-    /// Waiting for the TCP connection to be completed.
-    Connect,
-
-    /// Trying to acquire peer by listening for and accepting a TCP connection.
-    Active,
-
-    /// Waiting for open message from peer.
-    OpenSent,
-
-    /// Waiting for keepalive or notification from peer.
-    OpenConfirm,
-
-    /// Handler for Connection Collisions (RFC 4271 6.8)
-    ConnectionCollision,
-
-    /// Sync up with peers.
-    SessionSetup,
-
-    /// Able to exchange update, notification and keepliave messages with peers.
-    Established,
-}
-
-impl FsmStateKind {
-    fn as_str(&self) -> &str {
-        match self {
-            FsmStateKind::Idle => "idle",
-            FsmStateKind::Connect => "connect",
-            FsmStateKind::Active => "active",
-            FsmStateKind::OpenSent => "open sent",
-            FsmStateKind::OpenConfirm => "open confirm",
-            FsmStateKind::ConnectionCollision => "connection collision",
-            FsmStateKind::SessionSetup => "session setup",
-            FsmStateKind::Established => "established",
-        }
-    }
-}
-
-impl Display for FsmStateKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
-    fn from(s: &FsmState<Cnx>) -> FsmStateKind {
-        match s {
-            FsmState::Idle => FsmStateKind::Idle,
-            FsmState::Connect => FsmStateKind::Connect,
-            FsmState::Active => FsmStateKind::Active,
-            FsmState::OpenSent(_) => FsmStateKind::OpenSent,
-            FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
-            FsmState::ConnectionCollision(_) => {
-                FsmStateKind::ConnectionCollision
-            }
-            FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
-            FsmState::Established(_) => FsmStateKind::Established,
-        }
+/// Convert an FSM state (which carries a generic connection) into the
+/// connection-free `FsmStateKind`. Free fn because the generic bound on
+/// `BgpConnection` (a trait local to this crate) prevents this from living
+/// alongside `FsmStateKind` in `bgp-types-versions`.
+pub fn fsm_state_kind_of<Cnx: BgpConnection>(
+    s: &FsmState<Cnx>,
+) -> FsmStateKind {
+    match s {
+        FsmState::Idle => FsmStateKind::Idle,
+        FsmState::Connect => FsmStateKind::Connect,
+        FsmState::Active => FsmStateKind::Active,
+        FsmState::OpenSent(_) => FsmStateKind::OpenSent,
+        FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
+        FsmState::ConnectionCollision(_) => FsmStateKind::ConnectionCollision,
+        FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
+        FsmState::Established(_) => FsmStateKind::Established,
     }
 }
 
@@ -933,56 +889,108 @@ impl SessionInfo {
 
 impl From<&BgpPeerParameters> for SessionInfo {
     fn from(value: &BgpPeerParameters) -> Self {
+        // Destructure exists as a compile barrier: adding a
+        // BgpPeerParameters field will fail to bind here, forcing a
+        // deliberate decision about how (or whether) to thread it
+        // through to runtime SessionInfo.
+        let BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            ipv4_unicast,
+            ipv6_unicast,
+            deterministic_collision_resolution,
+            idle_hold_jitter,
+            connect_retry_jitter,
+            src_addr,
+            src_port,
+        } = value.clone();
+
         SessionInfo {
-            passive_tcp_establishment: value.passive,
-            remote_asn: value.remote_asn,
-            min_ttl: value.min_ttl,
-            md5_auth_key: value.md5_auth_key.clone(),
-            multi_exit_discriminator: value.multi_exit_discriminator,
-            communities: value.communities.clone().into_iter().collect(),
-            local_pref: value.local_pref,
-            enforce_first_as: value.enforce_first_as,
-            vlan_id: value.vlan_id,
+            passive_tcp_establishment: passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities: communities.into_iter().collect(),
+            local_pref,
+            enforce_first_as,
+            vlan_id,
             remote_id: None,
-            bind_addr: value
-                .src_addr
-                .map(|addr| SocketAddr::new(addr, value.src_port.unwrap_or(0))),
-            connect_retry_time: Duration::from_secs(value.connect_retry),
-            keepalive_time: Duration::from_secs(value.keepalive),
-            hold_time: Duration::from_secs(value.hold_time),
-            idle_hold_time: Duration::from_secs(value.idle_hold_time),
-            delay_open_time: Duration::from_secs(value.delay_open),
-            resolution: Duration::from_millis(value.resolution),
-            idle_hold_jitter: value.idle_hold_jitter,
-            connect_retry_jitter: value.connect_retry_jitter,
-            deterministic_collision_resolution: value
-                .deterministic_collision_resolution,
-            ipv4_unicast: value.ipv4_unicast.clone(),
-            ipv6_unicast: value.ipv6_unicast.clone(),
+            bind_addr: src_addr
+                .map(|addr| SocketAddr::new(addr, src_port.unwrap_or(0))),
+            connect_retry_time: Duration::from_secs(connect_retry),
+            keepalive_time: Duration::from_secs(keepalive),
+            hold_time: Duration::from_secs(hold_time),
+            idle_hold_time: Duration::from_secs(idle_hold_time),
+            delay_open_time: Duration::from_secs(delay_open),
+            resolution: Duration::from_millis(resolution),
+            idle_hold_jitter,
+            connect_retry_jitter,
+            deterministic_collision_resolution,
+            ipv4_unicast,
+            ipv6_unicast,
         }
     }
 }
 
-impl From<&BgpPeerParametersV1> for SessionInfo {
-    fn from(value: &BgpPeerParametersV1) -> Self {
+impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
+    fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
+        // v1 is schema-stabilized; new schema fields cannot land here.
+        // If this destructure stops compiling, either the addition is
+        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
+        // add it to the destructure with `_:`) or the v1 contract has
+        // been violated upstream.
+        let v1::bgp::config::BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            allow_import,
+            allow_export,
+            vlan_id,
+        } = value.clone();
+
         SessionInfo {
-            passive_tcp_establishment: value.passive,
-            remote_asn: value.remote_asn,
-            min_ttl: value.min_ttl,
-            md5_auth_key: value.md5_auth_key.clone(),
-            multi_exit_discriminator: value.multi_exit_discriminator,
-            communities: value.communities.clone().into_iter().collect(),
-            local_pref: value.local_pref,
-            enforce_first_as: value.enforce_first_as,
-            vlan_id: value.vlan_id,
+            passive_tcp_establishment: passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities: communities.into_iter().collect(),
+            local_pref,
+            enforce_first_as,
+            vlan_id,
             remote_id: None,
             bind_addr: None,
-            connect_retry_time: Duration::from_secs(value.connect_retry),
-            keepalive_time: Duration::from_secs(value.keepalive),
-            hold_time: Duration::from_secs(value.hold_time),
-            idle_hold_time: Duration::from_secs(value.idle_hold_time),
-            delay_open_time: Duration::from_secs(value.delay_open),
-            resolution: Duration::from_millis(value.resolution),
+            connect_retry_time: Duration::from_secs(connect_retry),
+            keepalive_time: Duration::from_secs(keepalive),
+            hold_time: Duration::from_secs(hold_time),
+            idle_hold_time: Duration::from_secs(idle_hold_time),
+            delay_open_time: Duration::from_secs(delay_open),
+            resolution: Duration::from_millis(resolution),
             idle_hold_jitter: None,
             connect_retry_jitter: Some(JitterRange {
                 min: 0.75,
@@ -991,8 +999,8 @@ impl From<&BgpPeerParametersV1> for SessionInfo {
             deterministic_collision_resolution: false,
             ipv4_unicast: Some(Ipv4UnicastConfig {
                 nexthop: None,
-                import_policy: value.allow_import.as_ipv4_policy().clone(),
-                export_policy: value.allow_export.as_ipv4_policy().clone(),
+                import_policy: ImportExportPolicy4::from(allow_import),
+                export_policy: ImportExportPolicy4::from(allow_export),
             }),
             ipv6_unicast: None,
         }
@@ -1028,83 +1036,8 @@ impl<Cnx: BgpConnection> Clone for SessionEndpoint<Cnx> {
     }
 }
 
-pub const MAX_MESSAGE_HISTORY: usize = 1024;
-
-/// A message history entry is a BGP message with an associated timestamp and connection ID
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryEntry {
-    timestamp: chrono::DateTime<chrono::Utc>,
-    message: Message,
-    connection_id: ConnectionId,
-}
-
-/// Message history for a BGP session
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistory {
-    pub received: VecDeque<MessageHistoryEntry>,
-    pub sent: VecDeque<MessageHistoryEntry>,
-}
-
-impl MessageHistory {
-    fn receive(&mut self, msg: Message, connection_id: ConnectionId) {
-        if self.received.len() >= MAX_MESSAGE_HISTORY {
-            self.received.pop_back();
-        }
-        self.received.push_front(MessageHistoryEntry {
-            message: msg,
-            timestamp: chrono::Utc::now(),
-            connection_id,
-        });
-    }
-
-    fn send(&mut self, msg: Message, connection_id: ConnectionId) {
-        if self.sent.len() >= MAX_MESSAGE_HISTORY {
-            self.sent.pop_back();
-        }
-        self.sent.push_front(MessageHistoryEntry {
-            message: msg,
-            timestamp: chrono::Utc::now(),
-            connection_id,
-        });
-    }
-}
-
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
 pub const MAX_FSM_HISTORY_MAJOR: usize = 1024;
-
-/// Category of FSM event for filtering and display purposes
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub enum FsmEventCategory {
-    Admin,
-    Connection,
-    Session,
-    StateTransition,
-}
-
-/// Serializable record of an FSM event with full context
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FsmEventRecord {
-    /// UTC timestamp when event occurred
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-
-    /// High-level event category
-    pub event_category: FsmEventCategory,
-
-    /// Specific event type as string (e.g., "ManualStart", "HoldTimerExpires")
-    pub event_type: String,
-
-    /// FSM state at time of event
-    pub current_state: FsmStateKind,
-
-    /// Previous state if this caused a transition
-    pub previous_state: Option<FsmStateKind>,
-
-    /// Connection ID if event is connection-specific
-    pub connection_id: Option<ConnectionId>,
-
-    /// Additional event details (e.g., "Received OPEN", "Admin command")
-    pub details: Option<String>,
-}
 
 /// Dual-buffer FSM event history for comprehensive and strategic visibility
 ///
@@ -1212,6 +1145,124 @@ pub struct SessionCounters {
     pub tcp_connection_failure: AtomicU64,
     pub md5_auth_failures: AtomicU64,
     pub connector_panics: AtomicU64,
+}
+
+impl From<&SessionCounters> for PeerCounters {
+    fn from(value: &SessionCounters) -> Self {
+        Self {
+            connection_retries: value
+                .connection_retries
+                .load(Ordering::Relaxed),
+            active_connections_accepted: value
+                .active_connections_accepted
+                .load(Ordering::Relaxed),
+            active_connections_declined: value
+                .active_connections_declined
+                .load(Ordering::Relaxed),
+            passive_connections_accepted: value
+                .passive_connections_accepted
+                .load(Ordering::Relaxed),
+            passive_connections_declined: value
+                .passive_connections_declined
+                .load(Ordering::Relaxed),
+            transitions_to_idle: value
+                .transitions_to_idle
+                .load(Ordering::Relaxed),
+            transitions_to_connect: value
+                .transitions_to_connect
+                .load(Ordering::Relaxed),
+            transitions_to_active: value
+                .transitions_to_active
+                .load(Ordering::Relaxed),
+            transitions_to_open_sent: value
+                .transitions_to_open_sent
+                .load(Ordering::Relaxed),
+            transitions_to_open_confirm: value
+                .transitions_to_open_confirm
+                .load(Ordering::Relaxed),
+            transitions_to_connection_collision: value
+                .transitions_to_connection_collision
+                .load(Ordering::Relaxed),
+            transitions_to_session_setup: value
+                .transitions_to_session_setup
+                .load(Ordering::Relaxed),
+            transitions_to_established: value
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            hold_timer_expirations: value
+                .hold_timer_expirations
+                .load(Ordering::Relaxed),
+            idle_hold_timer_expirations: value
+                .idle_hold_timer_expirations
+                .load(Ordering::Relaxed),
+            prefixes_advertised: value
+                .prefixes_advertised
+                .load(Ordering::Relaxed),
+            prefixes_imported: value.prefixes_imported.load(Ordering::Relaxed),
+            keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
+            keepalives_received: value
+                .keepalives_received
+                .load(Ordering::Relaxed),
+            route_refresh_sent: value
+                .route_refresh_sent
+                .load(Ordering::Relaxed),
+            route_refresh_received: value
+                .route_refresh_received
+                .load(Ordering::Relaxed),
+            opens_sent: value.opens_sent.load(Ordering::Relaxed),
+            opens_received: value.opens_received.load(Ordering::Relaxed),
+            notifications_sent: value
+                .notifications_sent
+                .load(Ordering::Relaxed),
+            notifications_received: value
+                .notifications_received
+                .load(Ordering::Relaxed),
+            updates_sent: value.updates_sent.load(Ordering::Relaxed),
+            updates_received: value.updates_received.load(Ordering::Relaxed),
+            unexpected_update_message: value
+                .unexpected_update_message
+                .load(Ordering::Relaxed),
+            unexpected_keepalive_message: value
+                .unexpected_keepalive_message
+                .load(Ordering::Relaxed),
+            unexpected_open_message: value
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            unexpected_route_refresh_message: value
+                .unexpected_route_refresh_message
+                .load(Ordering::Relaxed),
+            unexpected_notification_message: value
+                .unexpected_notification_message
+                .load(Ordering::Relaxed),
+            update_nexhop_missing: value
+                .update_nexhop_missing
+                .load(Ordering::Relaxed),
+            open_handle_failures: value
+                .open_handle_failures
+                .load(Ordering::Relaxed),
+            unnegotiated_address_family: value
+                .unnegotiated_address_family
+                .load(Ordering::Relaxed),
+            notification_send_failure: value
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            open_send_failure: value.open_send_failure.load(Ordering::Relaxed),
+            keepalive_send_failure: value
+                .keepalive_send_failure
+                .load(Ordering::Relaxed),
+            route_refresh_send_failure: value
+                .route_refresh_send_failure
+                .load(Ordering::Relaxed),
+            update_send_failure: value
+                .update_send_failure
+                .load(Ordering::Relaxed),
+            tcp_connection_failure: value
+                .tcp_connection_failure
+                .load(Ordering::Relaxed),
+            md5_auth_failures: value.md5_auth_failures.load(Ordering::Relaxed),
+            connector_panics: value.connector_panics.load(Ordering::Relaxed),
+        }
+    }
 }
 
 pub enum ShaperApplication {
@@ -6063,7 +6114,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).add_egress(
                 peer_id.clone(),
-                crate::fanout::Egress {
+                Egress {
                     event_tx: Some(self.event_tx.clone()),
                     log: self.log.clone(),
                 },
@@ -6072,7 +6123,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if pc.ipv6_unicast.negotiated() {
             write_lock!(self.fanout6).add_egress(
                 peer_id,
-                crate::fanout::Egress {
+                Egress {
                     event_tx: Some(self.event_tx.clone()),
                     log: self.log.clone(),
                 },
@@ -7506,7 +7557,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 PeerId::Ip(ip) => ip,
                 PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             };
-            Ok(crate::policy::shape_outgoing_update(
+            Ok(shape_outgoing_update(
                 update.clone(),
                 shaper,
                 peer_as,
@@ -7530,7 +7581,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         let former = match previous {
-            Some(shaper) => crate::policy::shape_outgoing_update(
+            Some(shaper) => shape_outgoing_update(
                 update.clone(),
                 &shaper,
                 peer_as,
@@ -8179,7 +8230,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ///
     /// Structural errors (duplicate attributes, malformed wire format,
     /// unsupported AFI/SAFI values) are caught during parsing in
-    /// `UpdateMessage::from_wire()` and `connection_tcp.rs`, which triggers
+    /// `update_message_from_wire()` and `connection_tcp.rs`, which triggers
     /// appropriate error handling per RFC 7606. This function only handles
     /// the negotiation state check.
     fn check_afi_safi_negotiation(
@@ -8202,12 +8253,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // RFC 4760 §3: Check reserved byte (must be 0, but must be ignored)
                     let reserved = match mp_reach {
-                        crate::messages::MpReachNlri::Ipv4Unicast(inner) => {
-                            inner.reserved
-                        }
-                        crate::messages::MpReachNlri::Ipv6Unicast(inner) => {
-                            inner.reserved
-                        }
+                        MpReachNlri::Ipv4Unicast(inner) => inner.reserved,
+                        MpReachNlri::Ipv6Unicast(inner) => inner.reserved,
                     };
                     if reserved != 0 {
                         session_log!(
@@ -8436,7 +8483,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 let nexthop_interface =
                     derive_nexthop_interface(&self.peer_id(), nexthop);
-                let path = rdb::Path {
+                let path = mg_api_types::rdb::path::Path {
                     nexthop,
                     nexthop_interface,
                     shutdown: update.graceful_shutdown(),
@@ -8511,7 +8558,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             &self.peer_id(),
                             mp_nexthop,
                         );
-                        let path4 = rdb::Path {
+                        let path4 = mg_api_types::rdb::path::Path {
                             nexthop: mp_nexthop,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),
@@ -8591,7 +8638,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                         let nexthop_interface =
                             derive_nexthop_interface(&self.peer_id(), nexthop6);
-                        let path6 = rdb::Path {
+                        let path6 = mg_api_types::rdb::path::Path {
                             nexthop: nexthop6,
                             nexthop_interface,
                             shutdown: update.graceful_shutdown(),
@@ -9048,7 +9095,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let session_conf = lock!(self.session);
             let ipv4 = session_conf.ipv4_unicast.clone().unwrap_or_default();
             let ipv6 = session_conf.ipv6_unicast.clone().unwrap_or_default();
-            let timers = TimerConfig::from_session_info(&session_conf);
+            let timers = TimerConfig::from(&*session_conf);
             (ipv4, ipv6, timers)
         }; // Lock dropped here!
 
@@ -9137,8 +9184,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 ConnectionKind::Full(pc) => {
                     let local = pc.conn.local();
                     let remote = pc.conn.peer();
-                    let received_capabilities =
-                        pc.caps.iter().map(BgpCapability::from).collect();
+                    let received_capabilities = pc
+                        .caps
+                        .iter()
+                        .map(mg_api_types::bgp::config::BgpCapability::from)
+                        .collect();
                     PeerInfo {
                         name,
                         peer_group: peer_group.clone(),
@@ -9196,54 +9246,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 }
 
-// ============================================================================
-// API Compatibility Types (VERSION_INITIAL / v1.0.0)
-// ============================================================================
-// These types maintain backward compatibility with the INITIAL API version.
-// They support IPv4-only message history via the /bgp/message-history endpoint (v1).
-// Never used internally - always convert from current types at API boundary.
-//
-// Delete these types when VERSION_INITIAL is retired.
-
-// V1 API compatibility type for message history entry (IPv4-only with MessageV1)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryEntryV1 {
-    timestamp: chrono::DateTime<chrono::Utc>,
-    message: crate::messages::MessageV1,
-}
-
-impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
-    fn from(entry: MessageHistoryEntry) -> Self {
-        Self {
-            timestamp: entry.timestamp,
-            message: crate::messages::MessageV1::from(entry.message),
-        }
-    }
-}
-
-// V1 API compatibility type for message history collection
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryV1 {
-    pub received: VecDeque<MessageHistoryEntryV1>,
-    pub sent: VecDeque<MessageHistoryEntryV1>,
-}
-
-impl From<MessageHistory> for MessageHistoryV1 {
-    fn from(history: MessageHistory) -> Self {
-        Self {
-            received: history
-                .received
-                .into_iter()
-                .map(MessageHistoryEntryV1::from)
-                .collect(),
-            sent: history
-                .sent
-                .into_iter()
-                .map(MessageHistoryEntryV1::from)
-                .collect(),
-        }
-    }
-}
+// V1 message-history shapes live in `v1::bgp::session`. Cross-version
+// `From` conversions live alongside the latest definition in
+// `mg_api_types_versions::v4::bgp::session`.
 
 #[cfg(test)]
 mod tests {
