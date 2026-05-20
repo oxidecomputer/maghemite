@@ -5,6 +5,7 @@
 // Copyright 2025 Oxide Computer Company
 
 use clap::{Parser, Subcommand};
+use mg_common::eprintln_nopipe;
 
 mod external;
 
@@ -34,7 +35,7 @@ async fn main() {
         XtaskCommands::Openapi(external) => external
             .exec_bin("maghemite-dropshot-apis", "maghemite-dropshot-apis"),
     } {
-        eprintln!("failed: {e}");
+        eprintln_nopipe!("failed: {e}");
         std::process::exit(-1);
     }
 }

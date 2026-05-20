@@ -3712,6 +3712,7 @@ dependencies = [
  "chrono",
  "colored",
  "mg-api-types-versions",
+ "mg-common",
  "progenitor 0.14.0",
  "reqwest 0.13.3",
  "schemars 0.8.22",
@@ -3801,6 +3802,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-api-types",
+ "mg-common",
  "oxide-tokio-rt",
  "oxnet",
  "reqwest 0.13.3",
@@ -3846,6 +3848,7 @@ dependencies = [
  "anyhow",
  "ddm-admin-client",
  "ddm-api-types-versions",
+ "mg-common",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -9411,6 +9414,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "mg-common",
  "tokio",
 ]
 

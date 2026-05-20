@@ -9,6 +9,7 @@ ddm-admin-client = { path = "../ddm-admin-client" }
 ddm-api-types-versions.workspace = true
 
 anyhow.workspace = true
+mg-common.workspace = true
 slog.workspace = true
 slog-term.workspace = true
 slog-envlogger.workspace = true
