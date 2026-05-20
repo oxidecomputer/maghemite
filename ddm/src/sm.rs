@@ -197,6 +197,11 @@ impl InterfaceState {
         *lock!(self.peer_identity) = None;
     }
 
+    pub fn set_if_info(&self, index: u32, name: String) {
+        *lock!(self.if_index) = index;
+        *lock!(self.if_name) = name;
+    }
+
     pub fn peer_status(&self) -> PeerStatus {
         let elapsed = lock!(self.last_fsm_state_change).elapsed();
         lock!(self.fsm_state).to_peer_status(elapsed)
@@ -325,8 +330,9 @@ impl State for Init {
             self.ctx.config.if_name.clone_from(&info.ifname);
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
-            *lock!(self.ctx.iface.if_index) = info.index as u32;
-            *lock!(self.ctx.iface.if_name) = info.ifname.clone();
+            self.ctx
+                .iface
+                .set_if_info(info.index as u32, info.ifname.clone());
             inf!(
                 self.log,
                 self.ctx.config.if_name,
