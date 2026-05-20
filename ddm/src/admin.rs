@@ -13,6 +13,8 @@ use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -68,7 +70,14 @@ pub fn handler(
         ..Default::default()
     };
 
-    let ds_log = log.new(o!(
+    // TODO(#740): unify dropshot logger level handling with `mgd`, which
+    // runs its dropshot logger at the parent log level.
+    let ds_log = ConfigLogging::StderrTerminal {
+        level: ConfigLoggingLevel::Error,
+    }
+    .to_logger("admin")
+    .map_err(|e| e.to_string())?
+    .new(o!(
         "component" => crate::COMPONENT_DDM,
         "module" => crate::MOD_ADMIN,
         "unit" => UNIT_API_SERVER,

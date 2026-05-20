@@ -20,6 +20,8 @@ use ddm_api_types::exchange::{PathVector, PathVectorV2};
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -297,7 +299,12 @@ pub fn handler(
         ..Default::default()
     };
 
-    let ds_log = log.new(o!(
+    let ds_log = ConfigLogging::StderrTerminal {
+        level: ConfigLoggingLevel::Error,
+    }
+    .to_logger("exchange")
+    .map_err(|e| e.to_string())?
+    .new(o!(
         "component" => crate::COMPONENT_DDM,
         "module" => crate::MOD_EXCHANGE,
         "unit" => UNIT_EXCHANGE_SERVER,
