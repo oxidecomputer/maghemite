@@ -9,6 +9,7 @@ use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
+use mg_common::format_duration_human;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
 use std::io::{Write, stdout};
@@ -139,7 +140,7 @@ async fn run() -> Result<()> {
                         ddm_api_types_versions::latest::db::RouterKind::Transit => "Transit",
                     },
                     state,
-                    format_duration(duration),
+                    format_duration_human(*duration),
                 )?;
             }
             tw.flush()?;
@@ -259,19 +260,6 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn format_duration(d: &std::time::Duration) -> String {
-    let secs = d.as_secs();
-    let mins = secs / 60;
-    let hours = mins / 60;
-    if hours > 0 {
-        format!("{}h {}m {}s", hours, mins % 60, secs % 60)
-    } else if mins > 0 {
-        format!("{}m {}s", mins, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
 }
 
 fn init_logger() -> Logger {
