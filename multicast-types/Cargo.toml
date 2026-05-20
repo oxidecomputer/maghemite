@@ -1,0 +1,17 @@
+[package]
+name = "multicast-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+omicron-common.workspace = true
+proptest = { workspace = true, optional = true }
+schemars.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+proptest = ["dep:proptest"]

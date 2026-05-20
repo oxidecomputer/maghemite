@@ -6,8 +6,8 @@ use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::olog;
-use bgp::session::PeerId;
 use chrono::{DateTime, Utc};
+use mg_api_types::bgp::peer::PeerId;
 use mg_common::lock;
 use mg_common::nexus::{local_underlay_address, run_oximeter};
 use mg_common::stats::MgLowerStats;
@@ -284,7 +284,7 @@ impl Stats {
         for (asn, r) in &*routers {
             let mut session_counters = BTreeMap::new();
             let sessions = lock!(r.sessions);
-            for (key, session) in &*sessions {
+            for (key, session) in sessions.iter() {
                 // Only include IP-based sessions in metrics (unnumbered sessions use interface names)
                 if let PeerId::Ip(addr) = key {
                     session_counters.insert(*addr, session.counters.clone());

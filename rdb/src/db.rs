@@ -34,6 +34,13 @@ use crate::mrib::rpf::RpfTable;
 use crate::mrib::{Mrib, spawn_rpf_revalidator};
 use crate::types::*;
 use chrono::Utc;
+use mg_api_types::bfd::BfdPeerConfig;
+use mg_api_types::bgp::peer::PeerId;
+use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
+use mg_api_types::rdb::path::Path;
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
+use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::{lock, read_lock, write_lock};
 use sled::Tree;
 use slog::{Logger, debug, error};
@@ -108,9 +115,7 @@ const MRIB_RPF_REVALIDATION_INTERVAL: &str = "mrib_rpf_revalidation_interval";
 /// expensive. During rebuilds, RPF verification falls back to linear scan.
 const DEFAULT_MRIB_RPF_REBUILD_INTERVAL_MS: u64 = 1000;
 
-pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
-pub type Rib4 = BTreeMap<Prefix4, BTreeSet<Path>>;
-pub type Rib6 = BTreeMap<Prefix6, BTreeSet<Path>>;
+use crate::rib::{Rib, Rib4, Rib6};
 
 /// Cached configuration values for low-overhead reads.
 ///
@@ -1886,7 +1891,7 @@ impl Db {
 
         let key_bytes: Vec<Vec<u8>> = keys
             .iter()
-            .map(|key| key.db_key())
+            .map(|key| key.db_key().map_err(Error::from))
             .collect::<Result<_, Error>>()?;
 
         // Remove from persistence atomically first.
@@ -2033,17 +2038,20 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
-        Prefix6, StaticRouteKey,
+        DEFAULT_MULTICAST_VNI, DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey,
         db::Db,
         test::{TEST_WAIT_ITERATIONS, TestDb},
         types::{
             MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
             MulticastRouteKey, MulticastSourceProtocol, PrefixDbKey,
-            UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6, Vni,
+            UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
             test_helpers::path_vecs_equal,
         },
     };
+    use mg_api_types::rdb::path::Path;
+    use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+    use mg_api_types::rdb::rib::AddressFamily;
+    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
     use mg_common::test::DEFAULT_INTERVAL;
     use mg_common::wait_for;
@@ -2069,15 +2077,15 @@ mod test {
     ) -> bool {
         let curr_rib_in_paths = db.get_prefix_paths(prefix);
         if !path_vecs_equal(&curr_rib_in_paths, &rib_in_paths) {
-            eprintln!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
-            eprintln!("rib_in_paths: {:?}", rib_in_paths);
+            eprintln_nopipe!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
+            eprintln_nopipe!("rib_in_paths: {:?}", rib_in_paths);
             return false;
         }
 
         let curr_loc_rib_paths = db.get_selected_prefix_paths(prefix);
         if !path_vecs_equal(&curr_loc_rib_paths, &loc_rib_paths) {
-            eprintln!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
-            eprintln!("loc_rib_paths: {:?}", loc_rib_paths);
+            eprintln_nopipe!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
+            eprintln_nopipe!("loc_rib_paths: {:?}", loc_rib_paths);
             return false;
         }
         true
@@ -2087,9 +2095,11 @@ mod test {
     fn test_rib() {
         use crate::StaticRouteKey;
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4, db::Db,
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC, db::Db,
         };
+        use mg_api_types::bgp::peer::PeerId;
+        use mg_api_types::rdb::path::{BgpPathProperties, Path};
+        use mg_api_types::rdb::prefix::{Prefix, Prefix4};
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
@@ -2398,7 +2408,7 @@ mod test {
             let key = MulticastRouteKey::new(
                 Some(s_ip),
                 group,
-                Vni::DEFAULT_MULTICAST_VNI,
+                DEFAULT_MULTICAST_VNI,
             )
             .expect("AF match");
             let route = MulticastRoute::new(
@@ -3109,10 +3119,12 @@ mod test {
     #[test]
     fn test_set_nexthop_shutdown_replaces_path() {
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4,
-            Prefix6, StaticRouteKey,
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+            StaticRouteKey,
         };
+        use mg_api_types::bgp::peer::PeerId;
+        use mg_api_types::rdb::path::{BgpPathProperties, Path};
+        use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 
         let db = get_test_db();
 

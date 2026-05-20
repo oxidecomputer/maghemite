@@ -21,9 +21,11 @@ use mg_admin_client::types::{
     MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
     RouteOriginFilter, Vni,
 };
-use rdb::types::AddressFamily;
+use mg_api_types::mrib::DEFAULT_MULTICAST_VNI;
+use mg_api_types::rdb::rib::AddressFamily;
+use mg_common::println_nopipe;
 
-const DEFAULT_VNI: u32 = rdb::Vni::DEFAULT_MULTICAST_VNI.as_u32();
+const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI.as_u32();
 
 fn parse_route_origin(s: &str) -> Result<RouteOriginFilter, String> {
     match s.to_lowercase().as_str() {
@@ -71,7 +73,7 @@ pub enum StatusCmd {
         source: Option<IpAddr>,
 
         /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
-        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(rdb::Vni::MAX_VNI as i64)))]
+        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::Vni::MAX_VNI as i64)))]
         vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
@@ -98,7 +100,7 @@ pub enum StatusCmd {
         source: Option<IpAddr>,
 
         /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
-        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(rdb::Vni::MAX_VNI as i64)))]
+        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::Vni::MAX_VNI as i64)))]
         vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
@@ -209,7 +211,7 @@ async fn get_route(
         .await?
         .into_inner();
     if let Some(route) = routes.first() {
-        println!("{route:#?}");
+        println_nopipe!("{route:#?}");
     } else {
         anyhow::bail!("route not found");
     }
@@ -234,7 +236,7 @@ async fn get_route_selected(
         .await?
         .into_inner();
     if let Some(route) = routes.first() {
-        println!("{route:#?}");
+        println_nopipe!("{route:#?}");
     } else {
         anyhow::bail!("route not found in mrib_loc");
     }
@@ -243,7 +245,7 @@ async fn get_route_selected(
 
 async fn get_rpf_interval(c: Client) -> Result<()> {
     let result = c.read_mrib_rpf_rebuild_interval().await?.into_inner();
-    println!("RPF rebuild interval: {}ms", result.interval_ms);
+    println_nopipe!("RPF rebuild interval: {}ms", result.interval_ms);
     Ok(())
 }
 
@@ -252,13 +254,13 @@ async fn set_rpf_interval(c: Client, interval_ms: u64) -> Result<()> {
         interval_ms,
     })
     .await?;
-    println!("Updated RPF rebuild interval to: {interval_ms}ms");
+    println_nopipe!("Updated RPF rebuild interval to: {interval_ms}ms");
     Ok(())
 }
 
 fn print_routes(routes: &[MulticastRoute]) {
     if routes.is_empty() {
-        println!("No multicast routes");
+        println_nopipe!("No multicast routes");
         return;
     }
     for route in routes {
@@ -274,9 +276,11 @@ fn print_routes(routes: &[MulticastRoute]) {
                 (src, grp, k.vni.clone())
             }
         };
-        println!(
+        println_nopipe!(
             "({source_str},{group_str}) vni={vni} underlay={} rpf={:?} source={:?}",
-            route.underlay_group, route.rpf_neighbor, route.source,
+            route.underlay_group,
+            route.rpf_neighbor,
+            route.source,
         );
     }
 }

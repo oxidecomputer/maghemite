@@ -4,10 +4,12 @@
 
 use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
-use ddm_admin_client::types::{
-    MulticastOrigin, PeerInfo, PeerStatus, PutPeerRequest, RouterKind,
-    TunnelOrigin, Vni,
+use ddm_api_types_versions::latest::admin::PutPeerRequest;
+use ddm_api_types_versions::latest::db::{PeerInfo, PeerStatus, RouterKind};
+use ddm_api_types_versions::latest::net::{
+    MulticastOrigin, TunnelOrigin, UnderlayMulticastIpv6, Vni,
 };
+use mg_common::{eprintln_nopipe, println_nopipe};
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;
@@ -115,16 +117,17 @@ impl<'a> SoftnpuZone<'a> {
 impl Drop for SoftnpuZone<'_> {
     fn drop(&mut self) {
         if let Err(e) = self.zone.zexec("pkill softnpu") {
-            eprintln!("failed to stop softnpu: {}", e);
+            eprintln_nopipe!("failed to stop softnpu: {}", e);
         }
         if let Err(e) = self.zfs.copy_from_zone(
             &self.zone.name,
             "opt/softnpu.log",
             &format!("/work/{}-softnpu.log", self.zone.name),
         ) {
-            eprintln!(
+            eprintln_nopipe!(
                 "failed to copy zone log file for {}: {}",
-                self.zone.name, e,
+                self.zone.name,
+                e,
             );
         }
     }
@@ -226,7 +229,7 @@ impl<'a> RouterZone<'a> {
                 self.zone.zexec("svcadm refresh dendrite:default")?;
                 self.zone.zexec("svcadm enable dendrite:default")?;
                 // wait for dendrite to come up
-                println!("wait 10s for dendrite to come up ...");
+                println_nopipe!("wait 10s for dendrite to come up ...");
                 sleep(Duration::from_secs(10));
                 self.zone.zexec(
                     "svccfg -s tfport setprop config/pkt_source = none",
@@ -253,7 +256,7 @@ impl<'a> RouterZone<'a> {
     }
 
     fn setup(&self, index: u8) -> Result<()> {
-        println!("running zone {} setup", self.zone.name);
+        println_nopipe!("running zone {} setup", self.zone.name);
 
         let z = Zlogin::new(&self.zone.name);
         self.zone.wait_for_network()?;
@@ -300,7 +303,9 @@ impl<'a> RouterZone<'a> {
             // Wait for these files to show up in the zone. Testing has shown
             // that this is not instant and subsequent steps can fail if the
             // copy is not complete.
-            println!("waiting 3s for copy of files to zone to complete ...");
+            println_nopipe!(
+                "waiting 3s for copy of files to zone to complete ..."
+            );
             sleep(Duration::from_secs(3));
             self.zone.zcmd(
                 &z,
@@ -331,16 +336,17 @@ impl std::ops::Deref for RouterZone<'_> {
 impl Drop for RouterZone<'_> {
     fn drop(&mut self) {
         if let Err(e) = self.zone.zexec("pkill ddmd") {
-            eprintln!("failed to stop ddmd: {}", e);
+            eprintln_nopipe!("failed to stop ddmd: {}", e);
         }
         if let Err(e) = self.zfs.copy_from_zone(
             &self.zone.name,
             "opt/ddmd.log",
             &format!("/work/{}.log", self.zone.name),
         ) {
-            eprintln!(
+            eprintln_nopipe!(
                 "failed to copy zone log file for {}: {}",
-                self.zone.name, e,
+                self.zone.name,
+                e,
             );
         }
         if self.transit
@@ -350,9 +356,10 @@ impl Drop for RouterZone<'_> {
                 &format!("/work/{}-dpd.log", self.zone.name),
             )
         {
-            eprintln!(
+            eprintln_nopipe!(
                 "failed to copy zone dpd log file for {}: {}",
-                self.zone.name, e,
+                self.zone.name,
+                e,
             );
         }
     }
@@ -363,11 +370,11 @@ macro_rules! run_topo {
         if env::var("TEST_INTERACTIVE").is_err() {
             $fn
         } else {
-            println!("running interactive test");
+            println_nopipe!("running interactive test");
             let mut line = String::new();
             let result = $fn;
-            println!("test result {:?}", result);
-            println!("press enter to continue");
+            println_nopipe!("test result {:?}", result);
+            println_nopipe!("press enter to continue");
             std::io::stdin().read_line(&mut line).unwrap();
             result
         }
@@ -423,11 +430,11 @@ async fn test_trio() -> Result<()> {
         "trio",
     )?;
 
-    println!("start zone s1");
+    println_nopipe!("start zone s1");
     let s1 = RouterZone::server("s1.trio", &zfs, &mg2.name, &[&sl0_sw0.end_a])?;
-    println!("start zone s2");
+    println_nopipe!("start zone s2");
     let s2 = RouterZone::server("s2.trio", &zfs, &mg3.name, &[&sl1_sw1.end_a])?;
-    println!("start zone t1");
+    println_nopipe!("start zone t1");
     let t1 = RouterZone::transit(
         "t1.trio",
         &zfs,
@@ -436,7 +443,7 @@ async fn test_trio() -> Result<()> {
         "trio",
     )?;
 
-    println!("waiting for zones to come up");
+    println_nopipe!("waiting for zones to come up");
     sleep(Duration::from_secs(10));
 
     sidecar.setup()?;
@@ -463,7 +470,7 @@ async fn run_trio_tests(
     wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
     wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 2);
 
-    println!("initial peering test passed");
+    println_nopipe!("initial peering test passed");
 
     // PUT /peer smoke against a running ddmd. Use an unused interface
     // index so the live discovery handler does not race the injection
@@ -472,9 +479,7 @@ async fn run_trio_tests(
         status: PeerStatus::Active,
         addr: "fd00::dead:beef".parse().unwrap(),
         host: "synthetic".to_string(),
-        // RouterKind is integer-encoded in the generated client schema;
-        // 0 is `Server`. See ddm-types::initial::db::RouterKind.
-        kind: RouterKind::try_from(0_i64).unwrap(),
+        kind: RouterKind::Server,
         if_name: Some("synthetic0".to_string()),
     };
 
@@ -488,7 +493,7 @@ async fn run_trio_tests(
     let peers = t1.get_peers().await?;
     assert_eq!(peers["9999"].host, "synthetic");
 
-    println!("put_peer synthetic injection passed");
+    println_nopipe!("put_peer synthetic injection passed");
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
@@ -497,7 +502,7 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 1);
 
-    println!("advertise from one passed");
+    println_nopipe!("advertise from one passed");
 
     s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
         .await?;
@@ -506,12 +511,12 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
-    println!("advertise from two passed");
+    println_nopipe!("advertise from two passed");
 
     retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
-    println!("connectivity test passed");
+    println_nopipe!("connectivity test passed");
 
     zt1.stop_router()?;
     wait_for_eq!(prefix_count(&s1).await?, 0);
@@ -523,7 +528,7 @@ async fn run_trio_tests(
     retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
-    println!("transit router restart passed");
+    println_nopipe!("transit router restart passed");
 
     softnpu_dump!(softnpu);
     zs1.stop_router()?;
@@ -565,7 +570,7 @@ async fn run_trio_tests(
     );
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
-    println!("server router restart passed");
+    println_nopipe!("server router restart passed");
 
     let peers = t1.get_peers().await?;
     let p0: Ipv6Addr = peers
@@ -593,7 +598,7 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
-    println!("peer expiration recovery passed");
+    println_nopipe!("peer expiration recovery passed");
 
     s2.advertise_prefixes(&vec![
         "fd00:2::/64".parse().unwrap(),
@@ -608,7 +613,7 @@ async fn run_trio_tests(
     let kernel_count = zs1.zexec("netstat -nrf inet6 | grep fd00 | wc -l")?;
     assert_eq!(kernel_count, "3");
 
-    println!("redundant advertise passed");
+    println_nopipe!("redundant advertise passed");
 
     wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
 
@@ -625,7 +630,7 @@ async fn run_trio_tests(
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
     wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
 
-    println!("tunnel endpoint advertise passed");
+    println_nopipe!("tunnel endpoint advertise passed");
 
     // redundant advertise should not change things
 
@@ -644,7 +649,7 @@ async fn run_trio_tests(
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
     wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
 
-    println!("redundant tunnel endpoint advertise passed");
+    println_nopipe!("redundant tunnel endpoint advertise passed");
 
     zs1.stop_router()?;
     sleep(Duration::from_secs(5));
@@ -653,7 +658,7 @@ async fn run_trio_tests(
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
 
-    println!("tunnel router restart passed");
+    println_nopipe!("tunnel router restart passed");
 
     t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
         overlay_prefix: "203.0.113.0/24".parse().unwrap(),
@@ -668,7 +673,7 @@ async fn run_trio_tests(
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 0);
     wait_for_eq!(tunnel_endpoint_count(&s2).await?, 0);
 
-    println!("tunnel endpoint withdraw passed");
+    println_nopipe!("tunnel endpoint withdraw passed");
 
     // Multicast group advertise/withdraw across the trio. Mirrors how
     // mg-lower in the switch zone publishes overlay→underlay multicast
@@ -678,8 +683,11 @@ async fn run_trio_tests(
 
     let mcast_origin = MulticastOrigin {
         overlay_group: "233.252.0.1".parse().unwrap(),
-        underlay_group: "ff04::100".parse().unwrap(),
-        vni: Vni(77),
+        underlay_group: UnderlayMulticastIpv6::new(
+            "ff04::100".parse().unwrap(),
+        )
+        .unwrap(),
+        vni: Vni::try_from(77u32).unwrap(),
         source: None,
         metric: 0,
     };
@@ -692,7 +700,7 @@ async fn run_trio_tests(
     wait_for_eq!(multicast_group_count(&s1).await?, 1);
     wait_for_eq!(multicast_group_count(&s2).await?, 1);
 
-    println!("multicast group advertise passed");
+    println_nopipe!("multicast group advertise passed");
 
     // Server router restart: s1's view of the multicast group must
     // converge again after ddmd restarts. wait_for_eq tolerates the
@@ -702,7 +710,7 @@ async fn run_trio_tests(
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
     wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 1);
 
-    println!("multicast router restart passed");
+    println_nopipe!("multicast router restart passed");
 
     t1.withdraw_multicast_groups(&vec![mcast_origin]).await?;
 
@@ -711,7 +719,7 @@ async fn run_trio_tests(
     wait_for_eq!(multicast_group_count(&s1).await?, 0);
     wait_for_eq!(multicast_group_count(&s2).await?, 0);
 
-    println!("multicast group withdraw passed");
+    println_nopipe!("multicast group withdraw passed");
 
     Ok(())
 }
@@ -775,16 +783,16 @@ async fn test_quartet() -> Result<()> {
         "quartet",
     )?;
 
-    println!("start zone s1");
+    println_nopipe!("start zone s1");
     let s1 =
         RouterZone::server("s1.quartet", &zfs, &mgs1.name, &[&sl0_sw0.end_a])?;
-    println!("start zone s2");
+    println_nopipe!("start zone s2");
     let s2 =
         RouterZone::server("s2.quartet", &zfs, &mgs2.name, &[&sl1_sw1.end_a])?;
-    println!("start zone s3");
+    println_nopipe!("start zone s3");
     let s3 =
         RouterZone::server("s3.quartet", &zfs, &mgs3.name, &[&sl2_sw2.end_a])?;
-    println!("start zone t1");
+    println_nopipe!("start zone t1");
     let t1 = RouterZone::transit(
         "t1.quartet",
         &zfs,
@@ -793,7 +801,7 @@ async fn test_quartet() -> Result<()> {
         "quartet",
     )?;
 
-    println!("waiting for zones to come up");
+    println_nopipe!("waiting for zones to come up");
     sleep(Duration::from_secs(10));
 
     sidecar.setup()?;
@@ -825,7 +833,7 @@ async fn run_quartet_tests(
     wait_for_eq!(s3.get_peers().await.map_or(99, |x| x.len()), 1);
     wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
 
-    println!("initial peering test passed");
+    println_nopipe!("initial peering test passed");
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;

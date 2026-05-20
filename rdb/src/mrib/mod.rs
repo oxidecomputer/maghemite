@@ -34,9 +34,10 @@ use mg_common::{lock, read_lock, write_lock};
 
 use crate::error::Error;
 use crate::types::{
-    AddressFamily, MribChangeNotification, MulticastAddr, MulticastRoute,
-    MulticastRouteKey, MulticastSourceProtocol,
+    MribChangeNotification, MulticastAddr, MulticastRoute, MulticastRouteKey,
+    MulticastSourceProtocol,
 };
+use mg_api_types::rdb::rib::AddressFamily;
 
 pub mod rpf;
 

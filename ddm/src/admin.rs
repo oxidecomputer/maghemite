@@ -6,14 +6,17 @@ use crate::db::Db;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
-use ddm_types::admin::{
+use ddm_api_types::admin::{
     EnableStatsRequest, ExpirePathParams, PrefixMap, PutPeerRequest,
 };
-use ddm_types::db::{MulticastRoute, PeerInfo, TunnelRoute};
-use ddm_types::exchange::PathVector;
+use ddm_api_types::db::{MulticastRoute, PeerInfo, TunnelRoute};
+use ddm_api_types::exchange::PathVector;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -21,7 +24,6 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
-use mg_common::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use std::collections::{HashMap, HashSet};
@@ -70,7 +72,14 @@ pub fn handler(
         ..Default::default()
     };
 
-    let ds_log = log.new(o!(
+    // TODO(#740): unify dropshot logger level handling with `mgd`, which
+    // runs its dropshot logger at the parent log level.
+    let ds_log = ConfigLogging::StderrTerminal {
+        level: ConfigLoggingLevel::Error,
+    }
+    .to_logger("admin")
+    .map_err(|e| e.to_string())?
+    .new(o!(
         "component" => crate::COMPONENT_DDM,
         "module" => crate::MOD_ADMIN,
         "unit" => UNIT_API_SERVER,
@@ -120,7 +129,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     async fn get_peers_v1(
         ctx: RequestContext<Self::Context>,
     ) -> Result<
-        HttpResponseOk<HashMap<u32, ddm_types_versions::v1::db::PeerInfo>>,
+        HttpResponseOk<HashMap<u32, ddm_api_types_versions::v1::db::PeerInfo>>,
         HttpError,
     > {
         let ctx = lock!(ctx.context());
@@ -515,8 +524,8 @@ pub(crate) fn do_put_peer(
 mod tests {
     use super::{HandlerContext, RouterStats, do_get_peers, do_put_peer};
     use crate::db::Db;
-    use ddm_types::admin::PutPeerRequest;
-    use ddm_types::db::{PeerInfo, PeerStatus, RouterKind};
+    use ddm_api_types::admin::PutPeerRequest;
+    use ddm_api_types::db::{PeerInfo, PeerStatus, RouterKind};
     use slog::{Discard, Logger, o};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;

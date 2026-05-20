@@ -10,40 +10,28 @@
 //! correctness and consistency of prefix operations (excluding wire format
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
-use crate::{
-    BgpNeighborParameters,
-    types::{
-        BgpNeighborInfo, ImportExportPolicy4, ImportExportPolicy6,
-        MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
-        MulticastRouteKey, MulticastRouteKeyV4, MulticastRouteKeyV6,
-        MulticastSourceProtocol, Prefix, Prefix4, Prefix6, StaticRouteKey,
-        UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
-    },
+use crate::types::{
+    MulticastAddrV4, MulticastAddrV6, MulticastRoute, MulticastRouteKey,
+    MulticastSourceProtocol, StaticRouteKey, UnderlayMulticastIpv6,
+    UnicastAddrV4,
 };
+use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::mrib::{
+    admin_local_multicast_strategy, invalid_vni_strategy,
+    ipv4_asm_group_strategy, ipv4_ssm_group_strategy, ipv4_unicast_strategy,
+    ipv6_asm_group_strategy, ipv6_ssm_group_strategy,
+    non_admin_local_multicast_strategy, routable_ipv6_unicast_strategy,
+    valid_vni_strategy,
+};
+use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use omicron_common::address::{
-    IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET, IPV6_ADMIN_SCOPED_MULTICAST_PREFIX,
-    IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET, IPV6_LINK_LOCAL_MULTICAST_SUBNET,
-    IPV6_MULTICAST_PREFIX, IPV6_SSM_SUBNET,
+    IPV4_MULTICAST_RANGE, IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET,
+    IPV6_LINK_LOCAL_MULTICAST_SUBNET,
 };
 use omicron_common::api::external::Vni;
-use proptest::{prelude::*, strategy::Just};
+use proptest::prelude::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-
-/// Minimum valid IPv6 multicast scope for proptest strategies.
-///
-/// Scopes 0 (reserved), 1 (interface-local), and 2 (link-local) are
-/// rejected by `MulticastAddrV6::new`, so generated addresses start
-/// at scope 3 (realm-local).
-const MIN_MULTICAST_SCOPE: u8 = 0x3;
-
-/// Maximum IPv6 multicast scope value (4 bits).
-const MAX_MULTICAST_SCOPE: u8 = 0xf;
-
-/// Maximum IPv6 multicast flags value (4 bits).
-const MAX_MULTICAST_FLAGS: u8 = 0xf;
-
-/// SSM flags nibble (RFC 4607). SSM addresses have flags = 3.
-const SSM_FLAGS: u8 = 0x3;
 
 // Strategy for generating valid IPv4 prefixes
 fn ipv4_prefix_strategy() -> impl Strategy<Value = Prefix4> {
@@ -528,36 +516,17 @@ proptest! {
     }
 }
 
-// ============================================================================
-// Multicast address and route-key property tests and setup
-// ============================================================================
-
-// Strategy for generating IPv4 unicast addresses (non-multicast, non-loopback)
-// Generates directly in valid ranges to avoid filter rejection limits
-fn ipv4_unicast_strategy() -> impl Strategy<Value = UnicastAddrV4> {
-    prop_oneof![
-        // 1.x.x.x - 126.x.x.x (skip 0.x.x.x and 127.x.x.x loopback)
-        (1u8..=126, any::<u8>(), any::<u8>(), any::<u8>())
-            .prop_map(|(a, b, c, d)| Ipv4Addr::new(a, b, c, d)),
-        // 128.x.x.x - 223.x.x.x (before multicast range)
-        (128u8..=223, any::<u8>(), any::<u8>(), any::<u8>())
-            .prop_map(|(a, b, c, d)| Ipv4Addr::new(a, b, c, d)),
-    ]
-    .prop_filter_map("must be valid unicast", |addr| {
-        UnicastAddrV4::new(addr).ok()
-    })
-}
-
-// Strategy for generating IPv6 addresses that are not multicast or loopback.
+// Generate IPv6 addresses that are not multicast or loopback.
 //
 // Returns raw Ipv6Addr, not UnicastAddrV6. Use this for tests that need
 // a non-multicast address but don't require a routable unicast source
 // (e.g., AF mismatch tests, RPF neighbor fields, multicast addr rejection).
 //
-// For multicast route key sources, use routable_ipv6_unicast_strategy().
+// For multicast route key sources, use routable_ipv6_unicast_strategy()
+// from mg_api_types::mrib.
 fn ipv6_unicast_strategy() -> impl Strategy<Value = Ipv6Addr> {
-    // Generate any address except ff00::/8 (multicast) and ::1 (loopback)
-    // Multicast is only 1/256 of address space, so filter rejection is fine
+    // Generate any address except ff00::/8 (multicast) and ::1 (loopback).
+    // Multicast is only 1/256 of address space, so filter rejection is fine.
     any::<u128>().prop_filter_map("skip multicast/loopback", |bits| {
         let addr = Ipv6Addr::from(bits);
         if addr.is_multicast() || addr.is_loopback() {
@@ -566,363 +535,6 @@ fn ipv6_unicast_strategy() -> impl Strategy<Value = Ipv6Addr> {
             Some(addr)
         }
     })
-}
-
-// Strategy for generating valid VNIs (0 to Vni::MAX_VNI)
-fn valid_vni_strategy() -> impl Strategy<Value = Vni> {
-    (0u32..=Vni::MAX_VNI).prop_map(|v| Vni::try_from(v).unwrap())
-}
-
-// Strategy for generating invalid VNIs (> Vni::MAX_VNI)
-fn invalid_vni_strategy() -> impl Strategy<Value = u32> {
-    (Vni::MAX_VNI + 1)..=u32::MAX
-}
-
-// Strategy for underlay multicast addresses within ff04::/64.
-fn admin_local_multicast_strategy()
--> impl Strategy<Value = UnderlayMulticastIpv6> {
-    any::<u64>().prop_map(|bits| {
-        let addr = Ipv6Addr::new(
-            IPV6_ADMIN_SCOPED_MULTICAST_PREFIX,
-            0,
-            0,
-            0,
-            (bits >> 48) as u16,
-            (bits >> 32) as u16,
-            (bits >> 16) as u16,
-            bits as u16,
-        );
-        UnderlayMulticastIpv6::new(addr).expect("valid underlay address")
-    })
-}
-
-// Strategy for generating IPv6 multicast addresses that are not admin-local
-// Admin-local scope is derived from IPV6_ADMIN_SCOPED_MULTICAST_PREFIX
-// Scopes 0-2 are rejected by MulticastAddrV6::new (reserved, interface-local,
-// link-local), so we use scope 3 or 5-15.
-fn non_admin_local_multicast_strategy() -> impl Strategy<Value = MulticastAddrV6>
-{
-    // Extract admin-local scope from the constant (0xff04 -> 4)
-    let admin_local_scope = (IPV6_ADMIN_SCOPED_MULTICAST_PREFIX & 0xf) as u8;
-    // Scope must be valid (3+) and not admin-local
-    let scope = prop_oneof![
-        Just(MIN_MULTICAST_SCOPE),
-        (admin_local_scope + 1)..=MAX_MULTICAST_SCOPE
-    ];
-    (any::<u8>(), scope, any::<[u16; 7]>()).prop_map(|(flags, scope, segs)| {
-        let first = IPV6_MULTICAST_PREFIX
-            | ((flags as u16 & MAX_MULTICAST_FLAGS as u16) << 4)
-            | (scope as u16);
-        MulticastAddrV6::new(Ipv6Addr::new(
-            first, segs[0], segs[1], segs[2], segs[3], segs[4], segs[5],
-            segs[6],
-        ))
-        .expect("non-admin-local multicast is valid")
-    })
-}
-
-// Strategy for routable IPv6 unicast (not link-local, loopback, unspecified)
-fn routable_ipv6_unicast_strategy() -> impl Strategy<Value = UnicastAddrV6> {
-    any::<u128>().prop_filter_map("must be valid unicast", |bits| {
-        UnicastAddrV6::new(Ipv6Addr::from(bits)).ok()
-    })
-}
-
-// ============================================================================
-// Arbitrary implementations for multicast types
-// ============================================================================
-//
-// These allow using `any::<MulticastAddrV4>()` etc. in property tests,
-// generating only valid instances of each type
-
-impl Arbitrary for MulticastAddrV4 {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // Derive range boundaries from constants
-        let mcast_base = IPV4_MULTICAST_RANGE.addr().octets()[0];
-        let mcast_end = mcast_base + 15; // /4 prefix = 16 values
-        let ssm_first = IPV4_SSM_SUBNET.addr().octets()[0];
-
-        // Generate directly in valid multicast ranges for efficiency
-        // Valid: 224.0.1.0 - 239.255.255.255 (excluding 224.0.0.x link-local)
-        prop_oneof![
-            // mcast_base.0.1.0 - mcast_base.0.255.255 (skip link-local)
-            (1u8..=u8::MAX, any::<u8>()).prop_map(move |(c, d)| {
-                MulticastAddrV4::new(Ipv4Addr::new(mcast_base, 0, c, d))
-                    .expect("mcast_base.0.1+ is valid multicast")
-            }),
-            // mcast_base.1.0.0 - mcast_base.255.255.255
-            (1u8..=u8::MAX, any::<u8>(), any::<u8>()).prop_map(
-                move |(b, c, d)| {
-                    MulticastAddrV4::new(Ipv4Addr::new(mcast_base, b, c, d))
-                        .expect("mcast_base.1+ is valid multicast")
-                }
-            ),
-            // (mcast_base+1).x.x.x - (ssm_first-1).x.x.x (globally routable)
-            (
-                (mcast_base + 1)..=ssm_first - 1,
-                any::<u8>(),
-                any::<u8>(),
-                any::<u8>()
-            )
-                .prop_map(|(a, b, c, d)| {
-                    MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d))
-                        .expect("pre-SSM range is valid multicast")
-                }),
-            // ssm_first.x.x.x (SSM range)
-            (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(
-                move |(b, c, d)| {
-                    MulticastAddrV4::new(Ipv4Addr::new(ssm_first, b, c, d))
-                        .expect("SSM is valid")
-                }
-            ),
-            // (ssm_first+1).x.x.x - (mcast_end-1).x.x.x (GLOP, etc.)
-            (
-                (ssm_first + 1)..=mcast_end - 1,
-                any::<u8>(),
-                any::<u8>(),
-                any::<u8>()
-            )
-                .prop_map(|(a, b, c, d)| {
-                    MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d))
-                        .expect("post-SSM range is valid multicast")
-                }),
-            // mcast_end.x.x.x (admin-scoped)
-            (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(
-                move |(b, c, d)| {
-                    MulticastAddrV4::new(Ipv4Addr::new(mcast_end, b, c, d))
-                        .expect("admin-scoped is valid")
-                }
-            ),
-        ]
-        .boxed()
-    }
-}
-
-impl Arbitrary for MulticastAddrV6 {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // Generate with all valid flag/scope combinations
-        // Format: ff<flags><scope>::
-        // Valid scopes: 3-f (excluding 0=reserved, 1=if-local, 2=link-local)
-        // Flags: 0-f (all combinations valid)
-        (
-            0x0u8..=MAX_MULTICAST_FLAGS,
-            MIN_MULTICAST_SCOPE..=MAX_MULTICAST_SCOPE,
-            any::<[u16; 7]>(),
-        )
-            .prop_map(|(flags, scope, segs)| {
-                let first_segment = IPV6_MULTICAST_PREFIX
-                    | ((flags as u16) << 4)
-                    | (scope as u16);
-                let addr = Ipv6Addr::new(
-                    first_segment,
-                    segs[0],
-                    segs[1],
-                    segs[2],
-                    segs[3],
-                    segs[4],
-                    segs[5],
-                    segs[6],
-                );
-                MulticastAddrV6::new(addr)
-                    .expect("scope 3-f with any flags is valid")
-            })
-            .boxed()
-    }
-}
-
-impl Arbitrary for MulticastAddr {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            any::<MulticastAddrV4>().prop_map(crate::types::MulticastAddr::V4),
-            any::<MulticastAddrV6>().prop_map(crate::types::MulticastAddr::V6),
-        ]
-        .boxed()
-    }
-}
-
-// Strategy for generating ASM (non-SSM) IPv4 multicast addresses directly
-fn ipv4_asm_group_strategy() -> impl Strategy<Value = MulticastAddrV4> {
-    // Derive range boundaries from constants
-    let mcast_base = IPV4_MULTICAST_RANGE.addr().octets()[0];
-    let mcast_end = mcast_base + 15; // /4 prefix = 16 values
-    let ssm_first = IPV4_SSM_SUBNET.addr().octets()[0];
-
-    // ASM ranges: mcast_base.0.1+ through (ssm_first-1), plus (ssm_first+1)-mcast_end
-    prop_oneof![
-        // mcast_base.0.1.0 - mcast_base.0.255.255 (skip link-local)
-        (1u8..=u8::MAX, any::<u8>()).prop_map(move |(c, d)| {
-            MulticastAddrV4::new(Ipv4Addr::new(mcast_base, 0, c, d))
-                .expect("mcast_base.0.1+ is valid")
-        }),
-        // mcast_base.1.0.0 - mcast_base.255.255.255
-        (1u8..=u8::MAX, any::<u8>(), any::<u8>()).prop_map(move |(b, c, d)| {
-            MulticastAddrV4::new(Ipv4Addr::new(mcast_base, b, c, d))
-                .expect("mcast_base.1+ is valid")
-        }),
-        // (mcast_base+1).x.x.x - (ssm_first-1).x.x.x
-        (
-            (mcast_base + 1)..=ssm_first - 1,
-            any::<u8>(),
-            any::<u8>(),
-            any::<u8>()
-        )
-            .prop_map(|(a, b, c, d)| {
-                MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d))
-                    .expect("pre-SSM ASM is valid")
-            }),
-        // (ssm_first+1).x.x.x - mcast_end.x.x.x (skip SSM)
-        (
-            (ssm_first + 1)..=mcast_end,
-            any::<u8>(),
-            any::<u8>(),
-            any::<u8>()
-        )
-            .prop_map(|(a, b, c, d)| {
-                MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d))
-                    .expect("post-SSM ASM is valid")
-            }),
-    ]
-}
-
-// Strategy for generating SSM IPv4 multicast addresses directly (232.x.x.x)
-fn ipv4_ssm_group_strategy() -> impl Strategy<Value = MulticastAddrV4> {
-    let ssm_first_octet = IPV4_SSM_SUBNET.addr().octets()[0];
-    (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(move |(b, c, d)| {
-        MulticastAddrV4::new(Ipv4Addr::new(ssm_first_octet, b, c, d))
-            .expect("SSM range is valid multicast")
-    })
-}
-
-// Strategy for generating ASM (non-SSM) IPv6 multicast addresses directly
-fn ipv6_asm_group_strategy() -> impl Strategy<Value = MulticastAddrV6> {
-    // ASM: ff<flags><scope>:: where flags != SSM_FLAGS, scope in 3-f
-    let flags = prop_oneof![
-        Just(0x0u8),
-        Just(0x1u8),
-        Just(0x2u8),
-        ((SSM_FLAGS + 1)..=MAX_MULTICAST_FLAGS),
-    ];
-    (
-        flags,
-        MIN_MULTICAST_SCOPE..=MAX_MULTICAST_SCOPE,
-        any::<[u16; 7]>(),
-    )
-        .prop_map(|(f, s, segs)| {
-            let first = IPV6_MULTICAST_PREFIX | ((f as u16) << 4) | (s as u16);
-            MulticastAddrV6::new(Ipv6Addr::new(
-                first, segs[0], segs[1], segs[2], segs[3], segs[4], segs[5],
-                segs[6],
-            ))
-            .expect("ASM is valid")
-        })
-}
-
-// Strategy for generating SSM IPv6 multicast addresses directly (ff3x::)
-fn ipv6_ssm_group_strategy() -> impl Strategy<Value = MulticastAddrV6> {
-    // SSM: ff3<scope>:: where scope in 3-f (link-local and above)
-    // IPV6_SSM_SUBNET is ff30::/12, so base segment is 0xff30
-    let ssm_base = IPV6_SSM_SUBNET.addr().segments()[0];
-    (MIN_MULTICAST_SCOPE..=MAX_MULTICAST_SCOPE, any::<[u16; 7]>()).prop_map(
-        move |(scope, segs)| {
-            let first = ssm_base | (scope as u16);
-            MulticastAddrV6::new(Ipv6Addr::new(
-                first, segs[0], segs[1], segs[2], segs[3], segs[4], segs[5],
-                segs[6],
-            ))
-            .expect("SSM is valid")
-        },
-    )
-}
-
-impl Arbitrary for MulticastRouteKey {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // Generate directly without filtering for efficiency with high case counts
-        let vni = (0u32..=Vni::MAX_VNI).prop_map(|v| Vni::try_from(v).unwrap());
-
-        prop_oneof![
-            // V4 ASM (*,G)
-            (ipv4_asm_group_strategy(), vni.clone()).prop_map(|(grp, vni)| {
-                MulticastRouteKey::V4(MulticastRouteKeyV4 {
-                    source: None,
-                    group: grp,
-                    vni,
-                })
-            }),
-            // V4 ASM (S,G)
-            (
-                ipv4_unicast_strategy(),
-                ipv4_asm_group_strategy(),
-                vni.clone()
-            )
-                .prop_map(|(src, grp, vni)| {
-                    MulticastRouteKey::V4(MulticastRouteKeyV4 {
-                        source: Some(src),
-                        group: grp,
-                        vni,
-                    })
-                }),
-            // V4 SSM (S,G) - SSM requires source
-            (
-                ipv4_unicast_strategy(),
-                ipv4_ssm_group_strategy(),
-                vni.clone()
-            )
-                .prop_map(|(src, grp, vni)| {
-                    MulticastRouteKey::V4(MulticastRouteKeyV4 {
-                        source: Some(src),
-                        group: grp,
-                        vni,
-                    })
-                }),
-            // V6 ASM (*,G)
-            (ipv6_asm_group_strategy(), vni.clone()).prop_map(|(grp, vni)| {
-                MulticastRouteKey::V6(MulticastRouteKeyV6 {
-                    source: None,
-                    group: grp,
-                    vni,
-                })
-            }),
-            // V6 ASM (S,G)
-            (
-                routable_ipv6_unicast_strategy(),
-                ipv6_asm_group_strategy(),
-                vni.clone()
-            )
-                .prop_map(|(src, grp, vni)| {
-                    MulticastRouteKey::V6(MulticastRouteKeyV6 {
-                        source: Some(src),
-                        group: grp,
-                        vni,
-                    })
-                }),
-            // V6 SSM (S,G) - SSM requires source
-            (
-                routable_ipv6_unicast_strategy(),
-                ipv6_ssm_group_strategy(),
-                vni
-            )
-                .prop_map(|(src, grp, vni)| {
-                    MulticastRouteKey::V6(MulticastRouteKeyV6 {
-                        source: Some(src),
-                        group: grp,
-                        vni,
-                    })
-                }),
-        ]
-        .boxed()
-    }
 }
 
 proptest! {

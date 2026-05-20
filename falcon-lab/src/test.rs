@@ -19,15 +19,19 @@ use dpd_client::{
 use libfalcon::Runner;
 use mg_admin_client::{
     Client as MgdClient,
-    types::{
-        AddStaticRoute4Request, AddStaticRoute6Request, BestpathFanoutRequest,
-        BfdPeerConfig, BfdPeerState, FsmStateKind, Origin4, Origin6, Router,
-        SessionMode, StaticRoute4, StaticRoute4List, StaticRoute6,
-        StaticRoute6List,
-    },
+    types::{BfdPeerConfig, BfdPeerState, SessionMode},
+};
+use mg_api_types::bgp::config::{Origin4, Router};
+use mg_api_types::bgp::history::Origin6;
+use mg_api_types::bgp::session::FsmStateKind;
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use mg_api_types::rdb::rib::AddressFamily;
+use mg_api_types::rib::BestpathFanoutRequest;
+use mg_api_types::static_routes::{
+    AddStaticRoute4Request, AddStaticRoute6Request, StaticRoute4,
+    StaticRoute4List, StaticRoute6, StaticRoute6List,
 };
 use oxnet::{Ipv4Net, Ipv6Net};
-use rdb_types::{AddressFamily, Prefix4, Prefix6};
 use slog::info;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -218,7 +222,7 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create router")?;
 
-    mgd.create_unnumbered_neighbor_v2(&basic_unnumbered_neighbor(
+    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
         "cr1",
         "test",
         "tfportqsfp0_0",
@@ -228,7 +232,7 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create cr1 unnumbered neighbor")?;
 
-    mgd.create_unnumbered_neighbor_v2(&basic_unnumbered_neighbor(
+    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
         "cr2",
         "test",
         "tfportqsfp1_0",

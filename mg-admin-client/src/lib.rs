@@ -17,18 +17,61 @@ progenitor::generate_api!(
     }),
     derives = [schemars::JsonSchema],
     replace = {
-        Prefix4 = rdb_types::Prefix4,
-        Prefix6 = rdb_types::Prefix6,
-        Prefix = rdb_types::Prefix,
-        AddressFamily = rdb_types::AddressFamily,
-        ProtocolFilter = rdb_types::ProtocolFilter,
-        PeerId = rdb_types::PeerId,
+        // Routing-database shapes.
+        Prefix4 = mg_api_types_versions::latest::rdb::prefix::Prefix4,
+        Prefix6 = mg_api_types_versions::latest::rdb::prefix::Prefix6,
+        Prefix = mg_api_types_versions::latest::rdb::prefix::Prefix,
+        AddressFamily = mg_api_types_versions::latest::rdb::rib::AddressFamily,
+        ProtocolFilter = mg_api_types_versions::latest::rdb::rib::ProtocolFilter,
+
+        // BGP policy and peer-identity shapes.
+        ImportExportPolicy4 = mg_api_types_versions::latest::bgp::policy::ImportExportPolicy4,
+        ImportExportPolicy6 = mg_api_types_versions::latest::bgp::policy::ImportExportPolicy6,
+        PeerId = mg_api_types_versions::latest::bgp::peer::PeerId,
+
+        // BGP admin shapes.
+        CheckerSource = mg_api_types_versions::latest::bgp::config::CheckerSource,
+        ExportedSelector = mg_api_types_versions::latest::bgp::session::ExportedSelector,
+        FsmEventBuffer = mg_api_types_versions::latest::bgp::history::FsmEventBuffer,
+        Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv4UnicastConfig,
+        Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv6UnicastConfig,
+        JitterRange = mg_api_types_versions::latest::bgp::config::JitterRange,
+        MessageDirection = mg_api_types_versions::latest::bgp::history::MessageDirection,
+        NeighborResetOp = mg_api_types_versions::latest::bgp::config::NeighborResetOp,
+        NeighborResetRequest = mg_api_types_versions::latest::bgp::config::NeighborResetRequest,
+        Origin4 = mg_api_types_versions::latest::bgp::config::Origin4,
+        Origin6 = mg_api_types_versions::latest::bgp::history::Origin6,
+        PeerInfo = mg_api_types_versions::latest::bgp::config::PeerInfo,
+        Router = mg_api_types_versions::latest::bgp::config::Router,
+        ShaperSource = mg_api_types_versions::latest::bgp::config::ShaperSource,
+        UnnumberedNeighborResetRequest = mg_api_types_versions::latest::bgp::config::UnnumberedNeighborResetRequest,
+
+        FsmStateKind = mg_api_types_versions::latest::bgp::session::FsmStateKind,
+
+        // BGP wire-message shapes.
+        Afi = mg_api_types_versions::latest::bgp::messages::Afi,
+
+        // RIB shapes.
+        BestpathFanoutRequest = mg_api_types_versions::latest::rib::BestpathFanoutRequest,
+
+        // Static-route shapes.
+        AddStaticRoute4Request = mg_api_types_versions::latest::static_routes::AddStaticRoute4Request,
+        AddStaticRoute6Request = mg_api_types_versions::latest::static_routes::AddStaticRoute6Request,
+        DeleteStaticRoute4Request = mg_api_types_versions::latest::static_routes::DeleteStaticRoute4Request,
+        DeleteStaticRoute6Request = mg_api_types_versions::latest::static_routes::DeleteStaticRoute6Request,
+        StaticRoute4 = mg_api_types_versions::latest::static_routes::StaticRoute4,
+        StaticRoute4List = mg_api_types_versions::latest::static_routes::StaticRoute4List,
+        StaticRoute6 = mg_api_types_versions::latest::static_routes::StaticRoute6,
+        StaticRoute6List = mg_api_types_versions::latest::static_routes::StaticRoute6List,
+
         Duration = std::time::Duration,
     }
 );
 
 use colored::*;
-use rdb_types::{AddressFamily, Prefix, ProtocolFilter};
+use mg_api_types_versions::latest::rdb::prefix::Prefix;
+use mg_api_types_versions::latest::rdb::rib::{AddressFamily, ProtocolFilter};
+use mg_common::{eprintln_nopipe, println_nopipe};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
@@ -52,7 +95,7 @@ pub fn print_rib(
         let pfx: Prefix = match prefix.parse() {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("failed to parse prefix [{prefix}]: {e}");
+                eprintln_nopipe!("failed to parse prefix [{prefix}]: {e}");
                 continue;
             }
         };
@@ -131,8 +174,8 @@ fn print_static_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         }
     }
 
-    println!("{}", title.dimmed());
-    println!("{}", "=".repeat(title.len()).dimmed());
+    println_nopipe!("{}", title.dimmed());
+    println_nopipe!("{}", "=".repeat(title.len()).dimmed());
     tw.flush().unwrap();
 }
 
@@ -162,8 +205,12 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
                 None => path.nexthop.to_string(),
             };
             let peer_str = match &bgp.peer {
-                rdb_types::PeerId::Ip(ip) => ip.to_string(),
-                rdb_types::PeerId::Interface(iface) => iface.clone(),
+                mg_api_types_versions::latest::bgp::peer::PeerId::Ip(ip) => {
+                    ip.to_string()
+                }
+                mg_api_types_versions::latest::bgp::peer::PeerId::Interface(
+                    iface,
+                ) => iface.clone(),
             };
             writeln!(
                 &mut tw,
@@ -181,7 +228,7 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         }
     }
 
-    println!("{}", title.dimmed());
-    println!("{}", "=".repeat(title.len()).dimmed());
+    println_nopipe!("{}", title.dimmed());
+    println_nopipe!("{}", "=".repeat(title.len()).dimmed());
     tw.flush().unwrap();
 }

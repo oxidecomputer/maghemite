@@ -4,11 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ddm-types-versions.workspace = true
+ddm-api-types-versions.workspace = true
 dropshot.workspace = true
 dropshot-api-manager-types.workspace = true
-mg-common.workspace = true
 oxnet.workspace = true
-schemars.workspace = true
-serde.workspace = true
-uuid.workspace = true

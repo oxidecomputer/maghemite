@@ -79,9 +79,10 @@ use slog::{Logger, debug, error};
 use mg_common::{lock, write_lock};
 
 use crate::bestpath::bestpaths;
-use crate::db::{Rib4, Rib6};
-use crate::types::{Path, Prefix, PrefixContains};
-use crate::{Prefix4, Prefix6};
+use crate::rib::{Rib4, Rib6};
+use crate::types::PrefixContains;
+use mg_api_types::rdb::path::Path;
+use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 
 /// Default interval for periodic RPF revalidation sweeps.
 pub const DEFAULT_REVALIDATION_INTERVAL: Duration = Duration::from_secs(60);
@@ -610,9 +611,8 @@ impl RpfTable {
 
         let source_bits = u32::from(source);
         for (prefix, paths) in rib.iter() {
-            let prefix_bits = u32::from(prefix.value);
             let mask = prefix.mask();
-            if (prefix_bits & mask) == (source_bits & mask)
+            if (u32::from(prefix.value) & mask) == (source_bits & mask)
                 && prefix.length > best_len
             {
                 best_len = prefix.length;
@@ -640,9 +640,8 @@ impl RpfTable {
 
         let source_bits = u128::from(source);
         for (prefix, paths) in rib.iter() {
-            let prefix_bits = u128::from(prefix.value);
             let mask = prefix.mask();
-            if (prefix_bits & mask) == (source_bits & mask)
+            if (u128::from(prefix.value) & mask) == (source_bits & mask)
                 && prefix.length > best_len
             {
                 best_len = prefix.length;

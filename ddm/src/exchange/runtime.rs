@@ -15,12 +15,15 @@ use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
-use ddm_types::db::{MulticastRoute, RouterKind, TunnelRoute};
-use ddm_types::exchange::{
+use ddm_api_types::db::{MulticastRoute, RouterKind, TunnelRoute};
+use ddm_api_types::exchange::{
     MulticastPathHop, MulticastPathVector, PathVector, PathVectorV2,
 };
+use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -32,7 +35,7 @@ use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use mg_common::net::{TunnelOrigin, TunnelOriginV2};
+use mg_common::net::TunnelOriginV2;
 use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
@@ -308,7 +311,14 @@ pub fn handler(
         ..Default::default()
     };
 
-    let ds_log = log.new(o!(
+    // TODO(#740): unify dropshot logger level handling with `mgd`, which
+    // runs its dropshot logger at the parent log level.
+    let ds_log = ConfigLogging::StderrTerminal {
+        level: ConfigLoggingLevel::Error,
+    }
+    .to_logger("exchange")
+    .map_err(|e| e.to_string())?
+    .new(o!(
         "component" => crate::COMPONENT_DDM,
         "module" => crate::MOD_EXCHANGE,
         "unit" => UNIT_EXCHANGE_SERVER,
@@ -419,19 +429,18 @@ async fn pull_handler_v2(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = PathVector {
+            let mut path_vector = PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
-            underlay.insert(pv);
+            path_vector.path.push(ctx.ctx.hostname.clone());
+            underlay.insert(path_vector);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let tv = route.origin;
-            tunnel.insert(tv);
+            tunnel.insert(route.origin);
         }
     }
     let originated = ctx
@@ -440,11 +449,11 @@ async fn pull_handler_v2(
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = PathVector {
+        let path_vector = PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
-        underlay.insert(pv);
+        underlay.insert(path_vector);
     }
 
     let originated_tunnel = ctx
@@ -488,12 +497,12 @@ fn collect_underlay_tunnel(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = PathVector {
+            let mut path_vector = PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
-            underlay.insert(pv);
+            path_vector.path.push(ctx.ctx.hostname.clone());
+            underlay.insert(path_vector);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer {
@@ -804,34 +813,38 @@ fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
     let hostname = &ctx.ctx.hostname;
 
     let mut import = HashSet::new();
-    for pv in &update.announce {
+    for path_vector in &update.announce {
         // Path-vector RPF: drop if our router_id appears in the path,
         // indicating the announcement has already traversed us.
-        if pv.path.iter().any(|hop| &hop.router_id == hostname) {
+        if path_vector
+            .path
+            .iter()
+            .any(|hop| &hop.router_id == hostname)
+        {
             dbg!(
                 ctx.log,
                 ctx.ctx.config.if_name,
                 "dropping multicast announce for {:?} - loop detected \
                  (path length {})",
-                pv.origin.overlay_group,
-                pv.path.len(),
+                path_vector.origin.overlay_group,
+                path_vector.path.len(),
             );
             continue;
         }
 
         import.insert(MulticastRoute {
-            origin: pv.origin.clone(),
+            origin: path_vector.origin.clone(),
             nexthop: ctx.peer,
-            path: pv.path.clone(),
+            path: path_vector.path.clone(),
         });
     }
 
     let mut remove = HashSet::new();
-    for pv in &update.withdraw {
+    for path_vector in &update.withdraw {
         // Empty path is safe: MulticastRoute's PartialEq/Hash exclude
         // the path field, so this matches by (origin, nexthop) only.
         remove.insert(MulticastRoute {
-            origin: pv.origin.clone(),
+            origin: path_vector.origin.clone(),
             nexthop: ctx.peer,
             path: Vec::new(),
         });

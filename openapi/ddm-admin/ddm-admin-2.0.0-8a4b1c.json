@@ -1,0 +1,837 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DDM Admin",
+    "contact": {
+      "url": "https://oxide.computer",
+      "email": "api@oxide.computer"
+    },
+    "version": "2.0.0"
+  },
+  "paths": {
+    "/disable-stats": {
+      "post": {
+        "operationId": "disable_stats",
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/enable-stats": {
+      "post": {
+        "operationId": "enable_stats",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnableStatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/multicast_group": {
+      "put": {
+        "operationId": "advertise_multicast_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_MulticastOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MulticastOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdraw_multicast_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_MulticastOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MulticastOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/multicast_groups": {
+      "get": {
+        "operationId": "get_multicast_groups",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/originated": {
+      "get": {
+        "operationId": "get_originated",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_Ipv6Net",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Ipv6Net"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/originated_multicast_groups": {
+      "get": {
+        "operationId": "get_originated_multicast_groups",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_MulticastOrigin",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastOrigin"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/originated_tunnel_endpoints": {
+      "get": {
+        "operationId": "get_originated_tunnel_endpoints",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_TunnelOrigin",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TunnelOrigin"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/peer": {
+      "put": {
+        "summary": "Set peer information for a given interface index, bypassing the state machine.",
+        "description": "Intended for test fixtures that run `ddmd` with `--api-only`. In a normal run, discovery writes peer entries keyed by interface index whenever it processes an advertisement, so any directly-injected entry for an active interface will be overwritten the next time a peer is observed there.",
+        "operationId": "put_peer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutPeerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/peers": {
+      "get": {
+        "operationId": "get_peers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/peers/{addr}": {
+      "delete": {
+        "operationId": "expire_peer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ipv6"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/prefix": {
+      "put": {
+        "operationId": "advertise_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_Ipv6Net",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Ipv6Net"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdraw_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_Ipv6Net",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Ipv6Net"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/prefixes": {
+      "get": {
+        "operationId": "get_prefixes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Set_of_PathVector",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PathVector"
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync": {
+      "put": {
+        "operationId": "sync",
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/tunnel_endpoint": {
+      "put": {
+        "operationId": "advertise_tunnel_endpoints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_TunnelOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TunnelOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdraw_tunnel_endpoints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_TunnelOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TunnelOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/tunnel_endpoints": {
+      "get": {
+        "operationId": "get_tunnel_endpoints",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_TunnelRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TunnelRoute"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EnableStatsRequest": {
+        "type": "object",
+        "properties": {
+          "rack_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sled_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "rack_id",
+          "sled_id"
+        ]
+      },
+      "Error": {
+        "description": "Error information from a response.",
+        "type": "object",
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "request_id"
+        ]
+      },
+      "IpNet": {
+        "x-rust-type": {
+          "crate": "oxnet",
+          "path": "oxnet::IpNet",
+          "version": "0.1.0"
+        },
+        "oneOf": [
+          {
+            "title": "v4",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4Net"
+              }
+            ]
+          },
+          {
+            "title": "v6",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6Net"
+              }
+            ]
+          }
+        ]
+      },
+      "Ipv4Net": {
+        "example": "192.168.1.0/24",
+        "title": "An IPv4 subnet",
+        "description": "An IPv4 subnet, including prefix and prefix length",
+        "x-rust-type": {
+          "crate": "oxnet",
+          "path": "oxnet::Ipv4Net",
+          "version": "0.1.0"
+        },
+        "type": "string",
+        "pattern": "^(([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])/([0-9]|1[0-9]|2[0-9]|3[0-2])$"
+      },
+      "Ipv6Net": {
+        "example": "fd12:3456::/64",
+        "title": "An IPv6 subnet",
+        "description": "An IPv6 subnet, including prefix and subnet mask",
+        "x-rust-type": {
+          "crate": "oxnet",
+          "path": "oxnet::Ipv6Net",
+          "version": "0.1.0"
+        },
+        "type": "string",
+        "pattern": "^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$"
+      },
+      "MulticastOrigin": {
+        "description": "Origin information for a multicast group announcement.\n\nAnalogous to `TunnelOrigin` but for multicast groups. Represents a subscription to a multicast group that should be advertised via DDM. `overlay_group` is the application-visible multicast address (e.g., 233.252.0.1 or ff0e::1), while `underlay_group` is the mapped admin-local scoped IPv6 address (ff04::X) used in the underlay network.",
+        "type": "object",
+        "properties": {
+          "metric": {
+            "description": "Metric for path selection (lower is better).\n\nUsed for multi-rack replication optimization. Excluded from identity (Hash/Eq) so that metric changes update an existing entry rather than creating a duplicate.",
+            "default": 0,
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "overlay_group": {
+            "description": "The overlay multicast group address (IPv4 or IPv6). This is the group address visible to applications.",
+            "type": "string",
+            "format": "ip"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Optional source address for Source-Specific Multicast (S,G) routes. `None` for Any-Source Multicast (*,G) routes.",
+            "default": null,
+            "type": "string",
+            "format": "ip"
+          },
+          "underlay_group": {
+            "description": "The underlay multicast group address (ff04::X). Validated at construction to be within ff04::/64.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "vni": {
+            "description": "VNI for this multicast group (identifies the VPC/network context).",
+            "default": 77,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
+          }
+        },
+        "required": [
+          "overlay_group",
+          "underlay_group"
+        ]
+      },
+      "MulticastPathHop": {
+        "description": "A single hop in the multicast path, carrying metadata needed for replication optimization.",
+        "type": "object",
+        "properties": {
+          "downstream_subscriber_count": {
+            "description": "Number of downstream subscribers reachable via this hop. Used for load-aware replication decisions in multi-rack topologies.",
+            "default": 0,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "router_id": {
+            "description": "Router identifier (hostname).",
+            "type": "string"
+          },
+          "underlay_addr": {
+            "description": "The underlay address of this router (for replication targeting).",
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "router_id",
+          "underlay_addr"
+        ]
+      },
+      "MulticastRoute": {
+        "description": "A multicast route learned via DDM.\n\nCarries a `MulticastOrigin` (overlay group + ff04::/64 underlay mapping) and the path vector from the originating subscriber through intermediate transit routers.",
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "description": "Underlay nexthop address (DDM peer that advertised this route). Used to associate the route with a peer for expiration.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "origin": {
+            "description": "The multicast group origin information.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastOrigin"
+              }
+            ]
+          },
+          "path": {
+            "description": "Path vector from the originating subscriber outward. Each hop records the router that redistributed this subscription announcement. Used for loop detection on pull and for future replication optimization in multi-rack topologies.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MulticastPathHop"
+            }
+          }
+        },
+        "required": [
+          "nexthop",
+          "origin"
+        ]
+      },
+      "PathVector": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Ipv6Net"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "destination",
+          "path"
+        ]
+      },
+      "PeerInfo": {
+        "description": "Peer information with an optional interface name.",
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "host": {
+            "type": "string"
+          },
+          "if_name": {
+            "nullable": true,
+            "description": "Interface name the peer was discovered on (e.g., \"tfportrear0_0\").",
+            "default": null,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RouterKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeerStatus"
+          }
+        },
+        "required": [
+          "addr",
+          "host",
+          "kind",
+          "status"
+        ]
+      },
+      "PeerStatus": {
+        "type": "string",
+        "enum": [
+          "NoContact",
+          "Active",
+          "Expired"
+        ]
+      },
+      "PutPeerRequest": {
+        "description": "Body for `PUT /peer`. Sets `info` at the slot keyed by `if_index` (interface index) in the in-memory peer map.",
+        "type": "object",
+        "properties": {
+          "if_index": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "info": {
+            "$ref": "#/components/schemas/PeerInfo"
+          }
+        },
+        "required": [
+          "if_index",
+          "info"
+        ]
+      },
+      "RouterKind": {
+        "type": "integer",
+        "enum": [
+          0,
+          1
+        ]
+      },
+      "TunnelOrigin": {
+        "type": "object",
+        "properties": {
+          "boundary_addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "metric": {
+            "default": 0,
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "overlay_prefix": {
+            "$ref": "#/components/schemas/IpNet"
+          },
+          "vni": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "boundary_addr",
+          "overlay_prefix",
+          "vni"
+        ]
+      },
+      "TunnelRoute": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TunnelOrigin"
+          }
+        },
+        "required": [
+          "nexthop",
+          "origin"
+        ]
+      },
+      "Vni": {
+        "description": "A Geneve Virtual Network Identifier",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

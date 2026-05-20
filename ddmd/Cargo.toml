@@ -8,7 +8,7 @@ ddm = { path = "../ddm", default-features = false }
 mg-common = { path = "../mg-common" }
 anyhow.workspace = true
 clap.workspace = true
-ddm-types.workspace = true
+ddm-api-types.workspace = true
 oxide-tokio-rt.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
@@ -21,5 +21,5 @@ uuid.workspace = true
 smf.workspace = true
 
 [features]
-default = ["illumos"]
-illumos = ["ddm/illumos"]
+default = ["backend"]
+backend = ["ddm/backend"]

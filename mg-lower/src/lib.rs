@@ -12,13 +12,14 @@ use crate::dendrite::{
 };
 use crate::error::Error;
 use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
-use ddm_admin_client::types::TunnelOrigin;
+use ddm_api_types_versions::latest::net::TunnelOrigin;
 use dendrite::link_is_up;
 use log::mgl_log;
+use mg_api_types::rdb::prefix::Prefix;
 use mg_common::stats::MgLowerStats as Stats;
 use platform::{Ddm, Dpd, SwitchZone};
-use rdb::db::Rib;
-use rdb::{DEFAULT_ROUTE_PRIORITY, Db, Prefix, PrefixChangeNotification};
+use rdb::Rib;
+use rdb::{DEFAULT_ROUTE_PRIORITY, Db, PrefixChangeNotification};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
