@@ -12,7 +12,7 @@ use crate::{
     policy::{CheckerResult, ShaperResult},
 };
 use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
-use rhai::{Module, export_module, plugin::*};
+use rhai::export_module;
 
 macro_rules! create_enum_module {
     ($module:ident : $typ:ty => $($variant:ident),+) => {

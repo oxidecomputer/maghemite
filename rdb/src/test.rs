@@ -5,7 +5,7 @@
 //! Test utilities for rdb tests.
 
 use crate::{Db, error::Error};
-use mg_common::eprintln_nopipe;
+use client_common::eprintln_nopipe;
 use slog::Logger;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};

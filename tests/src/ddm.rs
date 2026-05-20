@@ -3,9 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::{Result, anyhow};
+use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
-use mg_common::{eprintln_nopipe, println_nopipe};
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;

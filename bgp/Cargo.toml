@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+client-common.workspace = true
 rdb = { path = "../rdb" }
 mg-api-types.workspace = true
 mg-api-types-versions.workspace = true
