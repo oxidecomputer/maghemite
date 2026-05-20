@@ -217,6 +217,7 @@ pub enum AddPeerError {
 #[cfg(test)]
 mod test {
     use super::*;
+    use mg_common::eprintln_nopipe;
     use pretty_assertions::assert_eq;
     use slog::Drain;
     use std::net::IpAddr;
@@ -277,11 +278,11 @@ mod test {
                                 tx.send((addr, msg)).unwrap();
                             }
                             None => {
-                                eprintln!("no egress for {}", addr);
+                                eprintln_nopipe!("no egress for {}", addr);
                             }
                         },
                         Err(e) => {
-                            eprintln!("recv: {}", e);
+                            eprintln_nopipe!("recv: {}", e);
                         }
                     }
                 }

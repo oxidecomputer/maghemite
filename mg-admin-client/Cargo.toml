@@ -16,5 +16,6 @@ schemars.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 mg-api-types-versions.workspace = true
+mg-common.workspace = true
 tabwriter.workspace = true
 colored.workspace = true

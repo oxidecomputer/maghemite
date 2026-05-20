@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::{Client, types};
 use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use mg_common::println_nopipe;
 use oxnet::{Ipv4Net, Ipv6Net};
 use rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -50,7 +51,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetV4Routes => {
             let routes = client.static_list_v4_routes().await?;
-            println!("{:#?}", routes);
+            println_nopipe!("{:#?}", routes);
         }
         Commands::AddV4Route(route) => {
             let arg = mg_api_types::static_routes::AddStaticRoute4Request {
@@ -86,7 +87,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         }
         Commands::GetV6Routes => {
             let routes = client.static_list_v6_routes().await?;
-            println!("{:#?}", routes);
+            println_nopipe!("{:#?}", routes);
         }
         Commands::AddV6Route(route) => {
             let arg = mg_api_types::static_routes::AddStaticRoute6Request {
@@ -123,7 +124,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         Commands::GetMroutes => {
             let routes = client.static_list_mcast_routes().await?.into_inner();
             if routes.is_empty() {
-                println!("No static multicast routes");
+                println_nopipe!("No static multicast routes");
             } else {
                 print_mroutes(&routes);
             }
@@ -146,7 +147,7 @@ fn print_mroutes(routes: &[types::MulticastRoute]) {
                 (src, grp, k.vni.clone())
             }
         };
-        println!(
+        println_nopipe!(
             "({source_str}, {group_str}) vni={vni} underlay={}",
             route.underlay_group,
         );

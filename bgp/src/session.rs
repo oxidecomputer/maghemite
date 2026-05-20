@@ -1016,26 +1016,6 @@ pub struct NeighborInfo {
     pub port: u16,
 }
 
-/// Session endpoint that combines the event sender with session configuration.
-/// This is used in peer_to_session map to provide both communication channel
-/// and policy information for each peer.
-pub struct SessionEndpoint<Cnx: BgpConnection> {
-    /// Event sender for FSM events to this session
-    pub event_tx: Sender<FsmEvent<Cnx>>,
-
-    /// Session configuration including policy settings
-    pub config: Arc<Mutex<SessionInfo>>,
-}
-
-impl<Cnx: BgpConnection> Clone for SessionEndpoint<Cnx> {
-    fn clone(&self) -> Self {
-        Self {
-            event_tx: self.event_tx.clone(),
-            config: Arc::clone(&self.config),
-        }
-    }
-}
-
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
 pub const MAX_FSM_HISTORY_MAJOR: usize = 1024;
 

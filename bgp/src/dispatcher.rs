@@ -5,13 +5,13 @@
 use crate::{
     IO_TIMEOUT,
     connection::{BgpConnection, BgpListener},
-    session::{FsmEvent, PeerId, SessionEndpoint, SessionEvent},
+    router::SessionMap,
+    session::{FsmEvent, PeerId, SessionEvent},
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::{Logger, debug, error, info, warn};
 use std::{
-    collections::BTreeMap,
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
@@ -21,10 +21,9 @@ use std::{
 
 const UNIT_DISPATCHER: &str = "dispatcher";
 
-pub struct Dispatcher<Cnx: BgpConnection> {
-    /// Session endpoint map indexed by PeerId (IP or interface name)
-    /// This unified map supports both numbered and unnumbered BGP sessions
-    pub peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
+pub struct Dispatcher<Cnx: BgpConnection + 'static> {
+    /// Session map shared with all Routers, indexed by PeerId.
+    pub sessions: Arc<Mutex<SessionMap<Cnx>>>,
 
     /// Optional unnumbered neighbor manager for link-local connection routing.
     /// When present, enables routing of IPv6 link-local connections to
@@ -38,7 +37,7 @@ pub struct Dispatcher<Cnx: BgpConnection> {
 
 impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     pub fn new(
-        peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
+        sessions: Arc<Mutex<SessionMap<Cnx>>>,
         listen: String,
         log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
@@ -50,7 +49,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
         ));
 
         Self {
-            peer_to_session,
+            sessions,
             unnumbered_manager,
             listen,
             log: Mutex::new(log),
@@ -145,7 +144,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
                 let accepted = match listener.accept(
                     log.clone(),
-                    self.peer_to_session.clone(),
+                    self.sessions.clone(),
                     IO_TIMEOUT,
                 ) {
                     Ok(c) => {
@@ -171,41 +170,40 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     "session_key" => format!("{key:?}"),
                 ));
 
-                match lock!(self.peer_to_session).get(&key).cloned() {
-                    Some(session_endpoint) => {
-                        // Apply connection policy from the session configuration
-                        let min_ttl = lock!(session_endpoint.config).min_ttl;
-                        let md5_key =
-                            lock!(session_endpoint.config).md5_auth_key.clone();
-
-                        if let Err(e) =
-                            Listener::apply_policy(&accepted, min_ttl, md5_key)
-                        {
-                            warn!(session_log,
-                                "failed to apply policy for connection";
-                                "error" => format!("{e}")
-                            );
-                        }
-
-                        if let Err(e) =
-                            session_endpoint.event_tx.send(FsmEvent::Session(
-                                SessionEvent::TcpConnectionAcked(accepted),
-                            ))
-                        {
-                            error!(session_log,
-                                "failed to send connected event to session";
-                                "error" => format!("{e}")
-                            );
-                            continue 'listener;
-                        }
-                    }
-                    None => {
+                let (runner, min_ttl, md5_key) = {
+                    let sessions = lock!(self.sessions);
+                    let Some(runner) = sessions.get(&key).cloned() else {
                         debug!(
                             session_log,
                             "no session found for peer, dropping connection"
                         );
                         continue 'accept;
-                    }
+                    };
+                    let config = lock!(runner.session);
+                    (
+                        runner.clone(),
+                        config.min_ttl,
+                        config.md5_auth_key.clone(),
+                    )
+                };
+
+                if let Err(e) =
+                    Listener::apply_policy(&accepted, min_ttl, md5_key)
+                {
+                    warn!(session_log,
+                        "failed to apply policy for connection";
+                        "error" => format!("{e}")
+                    );
+                }
+
+                if let Err(e) = runner.event_tx.send(FsmEvent::Session(
+                    SessionEvent::TcpConnectionAcked(accepted),
+                )) {
+                    error!(session_log,
+                        "failed to send connected event to session";
+                        "error" => format!("{e}")
+                    );
+                    continue 'listener;
                 }
             }
         }
@@ -225,7 +223,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     }
 }
 
-impl<Cnx: BgpConnection> Drop for Dispatcher<Cnx> {
+impl<Cnx: BgpConnection + 'static> Drop for Dispatcher<Cnx> {
     fn drop(&mut self) {
         debug!(lock!(self.log), "dropping dispatcher");
     }

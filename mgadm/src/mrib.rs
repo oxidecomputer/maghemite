@@ -23,6 +23,7 @@ use mg_admin_client::types::{
 };
 use mg_api_types::mrib::DEFAULT_MULTICAST_VNI;
 use mg_api_types::rdb::rib::AddressFamily;
+use mg_common::println_nopipe;
 
 const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI.as_u32();
 
@@ -210,7 +211,7 @@ async fn get_route(
         .await?
         .into_inner();
     if let Some(route) = routes.first() {
-        println!("{route:#?}");
+        println_nopipe!("{route:#?}");
     } else {
         anyhow::bail!("route not found");
     }
@@ -235,7 +236,7 @@ async fn get_route_selected(
         .await?
         .into_inner();
     if let Some(route) = routes.first() {
-        println!("{route:#?}");
+        println_nopipe!("{route:#?}");
     } else {
         anyhow::bail!("route not found in mrib_loc");
     }
@@ -244,7 +245,7 @@ async fn get_route_selected(
 
 async fn get_rpf_interval(c: Client) -> Result<()> {
     let result = c.read_mrib_rpf_rebuild_interval().await?.into_inner();
-    println!("RPF rebuild interval: {}ms", result.interval_ms);
+    println_nopipe!("RPF rebuild interval: {}ms", result.interval_ms);
     Ok(())
 }
 
@@ -253,13 +254,13 @@ async fn set_rpf_interval(c: Client, interval_ms: u64) -> Result<()> {
         interval_ms,
     })
     .await?;
-    println!("Updated RPF rebuild interval to: {interval_ms}ms");
+    println_nopipe!("Updated RPF rebuild interval to: {interval_ms}ms");
     Ok(())
 }
 
 fn print_routes(routes: &[MulticastRoute]) {
     if routes.is_empty() {
-        println!("No multicast routes");
+        println_nopipe!("No multicast routes");
         return;
     }
     for route in routes {
@@ -275,9 +276,11 @@ fn print_routes(routes: &[MulticastRoute]) {
                 (src, grp, k.vni.clone())
             }
         };
-        println!(
+        println_nopipe!(
             "({source_str},{group_str}) vni={vni} underlay={} rpf={:?} source={:?}",
-            route.underlay_group, route.rpf_neighbor, route.source,
+            route.underlay_group,
+            route.rpf_neighbor,
+            route.source,
         );
     }
 }

@@ -16,10 +16,9 @@ use bgp::{
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     policy::{PolicyKind, PolicySource},
-    router::{LoadPolicyError, Router},
+    router::{LoadPolicyError, Router, SessionMap},
     session::{
-        AdminEvent, ConnectionKind, FsmEvent, SessionEndpoint, SessionInfo,
-        SessionRunner,
+        AdminEvent, ConnectionKind, FsmEvent, SessionInfo, SessionRunner,
     },
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -71,23 +70,20 @@ const DEFAULT_BGP_LISTEN: SocketAddr =
 #[derive(Clone)]
 pub struct BgpContext {
     pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
-    peer_to_session:
-        Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>>,
+    pub(crate) sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
     pub(crate) unnumbered_manager: Arc<UnnumberedManagerNdp>,
 }
 
 impl BgpContext {
     pub fn new(
-        peer_to_session: Arc<
-            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
-        >,
+        sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
         let unnumbered_manager = UnnumberedManagerNdp::new(router.clone(), log);
         Self {
             router,
-            peer_to_session,
+            sessions,
             unnumbered_manager,
         }
     }
@@ -2381,7 +2377,7 @@ pub(crate) mod helpers {
             cfg,
             ctx.log.clone(),
             db.clone(),
-            ctx.bgp.peer_to_session.clone(),
+            ctx.bgp.sessions.clone(),
         ));
 
         router.run();
@@ -2618,16 +2614,17 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
+    use bgp::router::SessionMap;
     use mg_api_types_versions::v1;
     use mg_api_types_versions::v1::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
     };
-    use mg_common::stats::MgLowerStats;
+    use mg_common::{println_nopipe, stats::MgLowerStats};
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     use std::net::Ipv6Addr;
     use std::{
-        collections::{BTreeMap, HashMap},
+        collections::HashMap,
         env::temp_dir,
         fs::{create_dir_all, remove_dir_all},
         net::SocketAddr,
@@ -2645,7 +2642,7 @@ mod tests {
             remove_dir_all(&tmpdir).unwrap();
         }
         create_dir_all(&tmpdir).unwrap();
-        println!("tmpdir is {tmpdir}");
+        println_nopipe!("tmpdir is {tmpdir}");
         let log =
             mg_common::log::init_file_logger("apply_remove_entire_group.log");
 
@@ -2654,7 +2651,7 @@ mod tests {
             #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
             tep: Ipv6Addr::UNSPECIFIED,
             bgp: BgpContext::new(
-                Arc::new(Mutex::new(BTreeMap::new())),
+                Arc::new(Mutex::new(SessionMap::new())),
                 log.clone(),
             ),
             bfd: BfdContext::new(log.clone()),
