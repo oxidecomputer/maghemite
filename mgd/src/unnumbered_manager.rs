@@ -280,7 +280,7 @@ impl UnnumberedManagerNdp {
 
                 // Store scope_id mapping for Dispatcher routing
                 lock!(self.interface_scope_map)
-                    .insert(ifx.index, ifx.name.clone());
+                    .insert_overwrite(ifx.index, ifx.name.clone());
 
                 // Track as active
                 lock!(self.active_interfaces)
@@ -360,7 +360,7 @@ impl UnnumberedManagerNdp {
 
                 // Store scope_id mapping for Dispatcher routing
                 lock!(self.interface_scope_map)
-                    .insert(ifx.index, ifx.name.clone());
+                    .insert_overwrite(ifx.index, ifx.name.clone());
 
                 // Track as active
                 lock!(self.active_interfaces).insert(interface_str.to_string());

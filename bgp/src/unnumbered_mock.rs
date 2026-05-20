@@ -106,7 +106,7 @@ impl UnnumberedManagerMock {
     /// Use `add_system_interface()` separately to simulate the interface
     /// appearing on the system.
     pub fn configure_interface(&self, interface: String, scope_id: u32) {
-        lock!(self.scope_map).insert(scope_id, interface);
+        lock!(self.scope_map).insert_overwrite(scope_id, interface);
     }
 
     /// Remove interface configuration.

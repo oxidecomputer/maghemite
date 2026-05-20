@@ -70,8 +70,13 @@ impl<Cnx: BgpConnection + 'static> SessionMap<Cnx> {
         self.0.get(peer).map(|h| &h.0)
     }
 
-    pub fn insert(&mut self, session: Arc<SessionRunner<Cnx>>) {
-        self.0.insert_overwrite(SessionHandle(session));
+    /// Inserts `session`, overwriting any existing entry for the same
+    /// `PeerId`. Returns the displaced session if one was present.
+    pub fn insert_overwrite(
+        &mut self,
+        session: Arc<SessionRunner<Cnx>>,
+    ) -> Option<Arc<SessionRunner<Cnx>>> {
+        self.0.insert_overwrite(SessionHandle(session)).map(|h| h.0)
     }
 
     pub fn remove(&mut self, peer: &PeerId) -> Option<Arc<SessionRunner<Cnx>>> {
@@ -442,7 +447,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             unnumbered_manager,
         ));
 
-        sessions.insert(runner.clone());
+        sessions.insert_overwrite(runner.clone());
         drop(sessions);
 
         self.spawn_session_thread(runner.clone());

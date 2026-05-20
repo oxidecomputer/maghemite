@@ -47,11 +47,22 @@ impl ScopeMap {
         Self::default()
     }
 
-    pub fn insert(&mut self, scope_id: u32, interface: String) {
-        self.0.insert_overwrite(ScopeEntry {
-            scope_id,
-            interface,
-        });
+    /// Inserts a `scope_id ↔ interface` mapping, overwriting any existing
+    /// entries that collide on either key. Returns the displaced entries
+    /// (up to two: one per key dimension) as `(scope_id, interface)` pairs.
+    pub fn insert_overwrite(
+        &mut self,
+        scope_id: u32,
+        interface: String,
+    ) -> Vec<(u32, String)> {
+        self.0
+            .insert_overwrite(ScopeEntry {
+                scope_id,
+                interface,
+            })
+            .into_iter()
+            .map(|e| (e.scope_id, e.interface))
+            .collect()
     }
 
     pub fn remove_by_interface(&mut self, interface: &str) -> Option<u32> {
