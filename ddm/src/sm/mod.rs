@@ -10,8 +10,8 @@
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use crate::exchange::Update;
-use ddm_types::db::RouterKind;
-use mg_common::net::{MulticastOrigin, TunnelOrigin};
+use ddm_api_types::db::RouterKind;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
@@ -21,7 +21,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 mod state;
 
 #[derive(Debug)]

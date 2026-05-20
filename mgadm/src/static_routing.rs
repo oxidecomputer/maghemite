@@ -7,8 +7,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::{Client, types};
+use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use mg_common::println_nopipe;
 use oxnet::{Ipv4Net, Ipv6Net};
-use rdb::{DEFAULT_RIB_PRIORITY_STATIC, Prefix4, Prefix6};
+use rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
@@ -49,12 +51,12 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetV4Routes => {
             let routes = client.static_list_v4_routes().await?;
-            println!("{:#?}", routes);
+            println_nopipe!("{:#?}", routes);
         }
         Commands::AddV4Route(route) => {
-            let arg = types::AddStaticRoute4Request {
-                routes: types::StaticRoute4List {
-                    list: vec![types::StaticRoute4 {
+            let arg = mg_api_types::static_routes::AddStaticRoute4Request {
+                routes: mg_api_types::static_routes::StaticRoute4List {
+                    list: vec![mg_api_types::static_routes::StaticRoute4 {
                         prefix: Prefix4::new(
                             route.destination.addr(),
                             route.destination.width(),
@@ -68,9 +70,9 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             client.static_add_v4_route(&arg).await?;
         }
         Commands::RemoveV4Routes(route) => {
-            let arg = types::DeleteStaticRoute4Request {
-                routes: types::StaticRoute4List {
-                    list: vec![types::StaticRoute4 {
+            let arg = mg_api_types::static_routes::DeleteStaticRoute4Request {
+                routes: mg_api_types::static_routes::StaticRoute4List {
+                    list: vec![mg_api_types::static_routes::StaticRoute4 {
                         prefix: Prefix4::new(
                             route.destination.addr(),
                             route.destination.width(),
@@ -85,12 +87,12 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         }
         Commands::GetV6Routes => {
             let routes = client.static_list_v6_routes().await?;
-            println!("{:#?}", routes);
+            println_nopipe!("{:#?}", routes);
         }
         Commands::AddV6Route(route) => {
-            let arg = types::AddStaticRoute6Request {
-                routes: types::StaticRoute6List {
-                    list: vec![types::StaticRoute6 {
+            let arg = mg_api_types::static_routes::AddStaticRoute6Request {
+                routes: mg_api_types::static_routes::StaticRoute6List {
+                    list: vec![mg_api_types::static_routes::StaticRoute6 {
                         prefix: Prefix6 {
                             value: route.destination.addr(),
                             length: route.destination.width(),
@@ -104,9 +106,9 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             client.static_add_v6_route(&arg).await?;
         }
         Commands::RemoveV6Routes(route) => {
-            let arg = types::DeleteStaticRoute6Request {
-                routes: types::StaticRoute6List {
-                    list: vec![types::StaticRoute6 {
+            let arg = mg_api_types::static_routes::DeleteStaticRoute6Request {
+                routes: mg_api_types::static_routes::StaticRoute6List {
+                    list: vec![mg_api_types::static_routes::StaticRoute6 {
                         prefix: Prefix6 {
                             value: route.destination.addr(),
                             length: route.destination.width(),
@@ -122,7 +124,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         Commands::GetMroutes => {
             let routes = client.static_list_mcast_routes().await?.into_inner();
             if routes.is_empty() {
-                println!("No static multicast routes");
+                println_nopipe!("No static multicast routes");
             } else {
                 print_mroutes(&routes);
             }
@@ -145,7 +147,7 @@ fn print_mroutes(routes: &[types::MulticastRoute]) {
                 (src, grp, k.vni.clone())
             }
         };
-        println!(
+        println_nopipe!(
             "({source_str}, {group_str}) vni={vni} underlay={}",
             route.underlay_group,
         );
@@ -167,7 +169,7 @@ mod tests {
             rib_priority: 50,
         };
 
-        let api_route4 = types::StaticRoute4 {
+        let api_route4 = mg_api_types::static_routes::StaticRoute4 {
             prefix: Prefix4::new(
                 route4.destination.addr(),
                 route4.destination.width(),
@@ -194,7 +196,7 @@ mod tests {
             rib_priority: 75,
         };
 
-        let api_route6 = types::StaticRoute6 {
+        let api_route6 = mg_api_types::static_routes::StaticRoute6 {
             prefix: Prefix6::new(
                 route6.destination.addr(),
                 route6.destination.width(),

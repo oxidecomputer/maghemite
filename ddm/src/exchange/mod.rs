@@ -22,19 +22,20 @@
 //! [`runtime`] submodule and are illumos-only, since they call into
 //! [`crate::sys`] to install routes.
 
-use ddm_types::exchange::{
+use ddm_api_types::exchange::{
     MulticastPathHop, MulticastPathVector, PathVector, PathVectorV2,
 };
-use mg_common::net::{TunnelOrigin, TunnelOriginV2};
+use ddm_api_types::net::TunnelOrigin;
+use mg_common::net::TunnelOriginV2;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use thiserror::Error;
 
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 mod runtime;
 
-#[cfg(all(feature = "illumos", target_os = "illumos"))]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::{
     announce_multicast, announce_tunnel, announce_underlay, do_pull_v4,
     handler, pull, withdraw_multicast, withdraw_tunnel, withdraw_underlay,
@@ -294,18 +295,18 @@ impl UnderlayUpdate {
                 .announce
                 .iter()
                 .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(element.clone());
-                    pv
+                    let mut path_vector = x.clone();
+                    path_vector.path.push(element.clone());
+                    path_vector
                 })
                 .collect(),
             withdraw: self
                 .withdraw
                 .iter()
                 .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(element.clone());
-                    pv
+                    let mut path_vector = x.clone();
+                    path_vector.path.push(element.clone());
+                    path_vector
                 })
                 .collect(),
         }
@@ -382,7 +383,7 @@ impl TunnelUpdate {
 /// [`MulticastOrigin`] (overlay group + ff04::/64 underlay mapping)
 /// and the path vector for loop detection.
 ///
-/// [`MulticastOrigin`]: mg_common::net::MulticastOrigin
+/// [`MulticastOrigin`]: ddm_api_types::net::MulticastOrigin
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct MulticastUpdate {
     pub announce: HashSet<MulticastPathVector>,
@@ -441,8 +442,8 @@ pub enum ExchangeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ddm_types::exchange::MulticastPathHop;
-    use mg_common::net::{MulticastOrigin, UnderlayMulticastIpv6, Vni};
+    use ddm_api_types::exchange::MulticastPathHop;
+    use ddm_api_types::net::{MulticastOrigin, UnderlayMulticastIpv6, Vni};
     use std::net::Ipv6Addr;
 
     fn sample_multicast_update() -> MulticastUpdate {

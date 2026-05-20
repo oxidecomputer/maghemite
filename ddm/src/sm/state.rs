@@ -13,8 +13,9 @@ use super::{
 };
 use crate::exchange::{MulticastUpdate, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
-use ddm_types::db::RouterKind;
-use ddm_types::exchange::{MulticastPathHop, PathVector};
+use ddm_api_types::db::RouterKind;
+use ddm_api_types::exchange::{MulticastPathHop, PathVector};
+use ddm_api_types::net::TunnelOrigin;
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
@@ -26,7 +27,6 @@ use std::thread::{sleep, spawn};
 use std::time::Duration;
 
 use crate::discovery::Version;
-use mg_common::net::TunnelOrigin;
 use std::net::Ipv6Addr;
 
 impl StateMachine {
@@ -359,9 +359,11 @@ impl Exchange {
                 );
                 MulticastUpdate::withdraw(
                     set.iter()
-                        .map(|route| ddm_types::exchange::MulticastPathVector {
-                            origin: route.origin.clone(),
-                            path: vec![hop.clone()],
+                        .map(|route| {
+                            ddm_api_types::exchange::MulticastPathVector {
+                                origin: route.origin.clone(),
+                                path: vec![hop.clone()],
+                            }
                         })
                         .collect(),
                 )
@@ -594,7 +596,7 @@ impl State for Exchange {
                     let pvs: HashSet<_> = groups
                         .iter()
                         .map(|origin| {
-                            ddm_types::exchange::MulticastPathVector {
+                            ddm_api_types::exchange::MulticastPathVector {
                                 origin: origin.clone(),
                                 path: vec![hop.clone()],
                             }
@@ -643,7 +645,7 @@ impl State for Exchange {
                     let pvs: HashSet<_> = groups
                         .iter()
                         .map(|origin| {
-                            ddm_types::exchange::MulticastPathVector {
+                            ddm_api_types::exchange::MulticastPathVector {
                                 origin: origin.clone(),
                                 path: vec![hop.clone()],
                             }

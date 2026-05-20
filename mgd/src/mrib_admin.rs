@@ -12,13 +12,11 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 
-use mg_types::mrib::{
+use mg_api_types::mrib::{
     MribAddStaticRequest, MribDeleteStaticRequest, MribQuery,
     MribRpfRebuildIntervalRequest, MribRpfRebuildIntervalResponse,
-    RouteOriginFilter,
-};
-use rdb::types::{
     MulticastAddr, MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
+    RouteOriginFilter,
 };
 
 use crate::admin::HandlerContext;

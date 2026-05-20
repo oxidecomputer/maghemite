@@ -1,0 +1,17 @@
+[package]
+name = "ddm-api-types-versions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+multicast-types.workspace = true
+omicron-common.workspace = true
+oxnet.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_repr.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

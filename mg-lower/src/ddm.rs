@@ -5,7 +5,7 @@
 use crate::log::ddm_log;
 #[cfg(target_os = "illumos")]
 use ddm_admin_client::Client;
-use ddm_admin_client::types::{MulticastOrigin, TunnelOrigin};
+use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::{net::Ipv6Addr, sync::Arc};

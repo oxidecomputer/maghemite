@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 rdb = { path = "../rdb" }
+mg-api-types.workspace = true
+mg-api-types-versions.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true
@@ -21,6 +23,7 @@ itertools.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 rand.workspace = true
+iddqd.workspace = true
 clap = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "illumos")'.dependencies]
@@ -35,3 +38,4 @@ serial_test.workspace = true
 
 [features]
 default = ["libnet"]
+clap = ["dep:clap", "mg-api-types-versions/clap"]

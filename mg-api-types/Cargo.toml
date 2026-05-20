@@ -1,0 +1,11 @@
+[package]
+name = "mg-api-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mg-api-types-versions.workspace = true
+
+[features]
+clap = ["mg-api-types-versions/clap"]
+proptest = ["mg-api-types-versions/proptest"]

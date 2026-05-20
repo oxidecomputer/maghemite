@@ -8,14 +8,56 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_types::rib::GetRibResult;
-use mg_types::static_routes::{
+use mg_api_types::rdb::prefix::Prefix;
+use mg_api_types::rdb::rib::AddressFamily;
+use mg_api_types::rib::GetRibResult;
+use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
-    DeleteStaticRoute6Request,
+    DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
-use mg_types::switch::SwitchIdentifiers;
-use rdb::{AddressFamily, Prefix, StaticRouteKey};
+use mg_api_types::switch::SwitchIdentifiers;
+use rdb::StaticRouteKey;
 use std::{collections::BTreeMap, sync::Arc};
+
+// `From<StaticRouteN>` impls cannot live in `mg-api-types-versions` (would
+// force a `rdb` dep) nor in `rdb` (would force an `mg-api-types-versions` dep).
+// Both source and target types are foreign to `mgd`, so we expose the
+// conversion as free fns here at the call site.
+fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
+    // Compile barrier: a new StaticRoute4 field will fail to bind here,
+    // forcing a deliberate decision about how (or whether) it should
+    // appear in the rdb runtime key.
+    let StaticRoute4 {
+        prefix,
+        nexthop,
+        vlan_id,
+        rib_priority,
+    } = v;
+    StaticRouteKey {
+        prefix: prefix.into(),
+        nexthop: nexthop.into(),
+        vlan_id,
+        rib_priority,
+    }
+}
+
+fn static_route_key_from_v6(v: StaticRoute6) -> StaticRouteKey {
+    // Compile barrier: a new StaticRoute6 field will fail to bind here,
+    // forcing a deliberate decision about how (or whether) it should
+    // appear in the rdb runtime key.
+    let StaticRoute6 {
+        prefix,
+        nexthop,
+        vlan_id,
+        rib_priority,
+    } = v;
+    StaticRouteKey {
+        prefix: prefix.into(),
+        nexthop: nexthop.into(),
+        vlan_id,
+        rib_priority,
+    }
+}
 
 pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -26,7 +68,7 @@ pub async fn static_add_v4_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v4)
         .collect();
 
     // Validate that all prefixes have host bits unset
@@ -49,7 +91,7 @@ pub async fn static_remove_v4_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v4)
         .collect();
     ctx.context()
         .db
@@ -86,7 +128,7 @@ pub async fn static_add_v6_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v6)
         .collect();
 
     // Validate that all prefixes have host bits unset
@@ -109,7 +151,7 @@ pub async fn static_remove_v6_route(
         .routes
         .list
         .into_iter()
-        .map(Into::into)
+        .map(static_route_key_from_v6)
         .collect();
     ctx.context()
         .db

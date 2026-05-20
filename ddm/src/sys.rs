@@ -4,7 +4,7 @@
 
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use ddm_types::db::TunnelRoute;
+use ddm_api_types::db::TunnelRoute;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use dpd_client::types;

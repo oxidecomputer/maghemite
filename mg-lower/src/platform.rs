@@ -7,7 +7,8 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use ddm_admin_client::types::{Error as DdmError, *};
+use ddm_admin_client::types::Error as DdmError;
+use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin};
 use dpd_client::types::{Error as DpdError, *};
 // Use the crate-specific re-exports of progenitor_client types to avoid
 // version conflicts: dpd_client re-exports from progenitor-client 0.11 (via

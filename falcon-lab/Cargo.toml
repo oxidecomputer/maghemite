@@ -18,4 +18,4 @@ oxnet.workspace = true
 oxide-tokio-rt.workspace = true
 bgp.workspace = true
 colored.workspace = true
-rdb-types.workspace = true
+mg-api-types.workspace = true

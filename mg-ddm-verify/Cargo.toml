@@ -12,4 +12,5 @@ oxide-tokio-rt.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 oxnet.workspace = true
-ddm-types.workspace = true
+ddm-api-types.workspace = true
+mg-common.workspace = true

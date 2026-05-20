@@ -15,20 +15,18 @@ use crate::{
         ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, HeaderParseError,
         MAX_MESSAGE_SIZE, Message, MessageParseError, MessageType,
         NotificationMessage, NotificationParseError,
-        NotificationParseErrorReason, OpenErrorSubcode, OpenMessage,
-        OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
-        RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
+        NotificationParseErrorReason, OpenErrorSubcode, OpenParseError,
+        OpenParseErrorReason, RouteRefreshParseError,
+        RouteRefreshParseErrorReason, notification_message_from_wire,
+        open_message_from_wire, route_refresh_message_from_wire,
     },
-    session::{
-        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
-        SessionInfo,
-    },
+    router::SessionMap,
+    session::{ConnectionEvent, FsmEvent, PeerId, SessionEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::{Logger, info};
 use std::{
-    collections::BTreeMap,
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
@@ -137,9 +135,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
-        peer_to_session: Arc<
-            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
-        >,
+        sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
         let start = Instant::now();
@@ -171,23 +167,24 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     // Resolve peer address to appropriate PeerId (IP or Interface)
                     let key = self.resolve_session_key(peer);
 
-                    // Check if we have a session for this peer
-                    match lock!(peer_to_session).get(&key) {
-                        Some(session_endpoint) => {
-                            let config = lock!(session_endpoint.config);
-                            return BgpConnectionTcp::with_conn(
-                                local,
-                                peer,
-                                conn,
-                                IO_TIMEOUT,
-                                session_endpoint.event_tx.clone(),
-                                log,
-                                ConnectionDirection::Inbound,
-                                &config,
-                            );
-                        }
-                        None => return Err(Error::UnknownPeer(ip)),
-                    }
+                    // Look up the session runner, clone the Arc, then release
+                    // the sessions lock before accessing session config.
+                    let runner = lock!(sessions)
+                        .get(&key)
+                        .cloned()
+                        .ok_or(Error::UnknownPeer(ip))?;
+
+                    let config = lock!(runner.session);
+                    return BgpConnectionTcp::with_conn(
+                        local,
+                        peer,
+                        conn,
+                        IO_TIMEOUT,
+                        runner.event_tx.clone(),
+                        log,
+                        ConnectionDirection::Inbound,
+                        &config,
+                    );
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // Check if we've exceeded the timeout
@@ -559,6 +556,8 @@ impl BgpConnectionTcp {
         direction: ConnectionDirection,
         config: &SessionInfo,
     ) -> Result<Self, Error> {
+        conn.set_nodelay(true)?;
+
         let id = ConnectionId::new(source, peer);
 
         let dropped = Arc::new(AtomicBool::new(false));
@@ -839,7 +838,7 @@ impl BgpConnectionTcp {
         }
 
         let msg = match hdr.typ {
-            MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
+            MessageType::Open => match open_message_from_wire(&msgbuf) {
                 Ok(m) => m.into(),
                 Err(e) => {
                     connection_log_lite!(log,
@@ -905,23 +904,25 @@ impl BgpConnectionTcp {
                     )));
                 }
             },
-            MessageType::Update => match UpdateMessage::from_wire(&msgbuf) {
-                Ok(m) => m.into(),
-                Err(update_err) => {
-                    connection_log_lite!(log,
-                        error,
-                        "UPDATE parse error: {}", update_err;
-                        "direction" => direction,
-                        "connection" => format!("{stream:?}"),
-                        "error" => format!("{update_err}")
-                    );
-                    return Err(RecvError::Parse(MessageParseError::Update(
-                        update_err,
-                    )));
+            MessageType::Update => {
+                match crate::messages::update_message_from_wire(&msgbuf) {
+                    Ok(m) => Message::from(m),
+                    Err(update_err) => {
+                        connection_log_lite!(log,
+                            error,
+                            "UPDATE parse error: {}", update_err;
+                            "direction" => direction,
+                            "connection" => format!("{stream:?}"),
+                            "error" => format!("{update_err}")
+                        );
+                        return Err(RecvError::Parse(
+                            MessageParseError::Update(update_err),
+                        ));
+                    }
                 }
-            },
+            }
             MessageType::Notification => {
-                match NotificationMessage::from_wire(&msgbuf) {
+                match notification_message_from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(e) => {
                         connection_log_lite!(log,
@@ -975,7 +976,7 @@ impl BgpConnectionTcp {
                 return Ok(Message::KeepAlive);
             }
             MessageType::RouteRefresh => {
-                match RouteRefreshMessage::from_wire(&msgbuf) {
+                match route_refresh_message_from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(e) => {
                         connection_log_lite!(log,
@@ -1018,7 +1019,7 @@ impl BgpConnectionTcp {
             "message" => msg.title(),
             "message_contents" => format!("{msg}")
         );
-        let msg_buf = msg.to_wire()?;
+        let msg_buf = crate::messages::message_to_wire(&msg)?;
         let header = Header {
             length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
                 |_| {

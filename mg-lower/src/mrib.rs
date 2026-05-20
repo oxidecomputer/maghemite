@@ -26,8 +26,7 @@ use crate::ddm::{
     add_multicast_routes, new_ddm_client, remove_multicast_routes,
 };
 use crate::platform::{Ddm, ProductionDdm};
-use ddm_admin_client::types::MulticastOrigin;
-use mg_common::net::Vni;
+use ddm_api_types_versions::latest::net::{MulticastOrigin, Vni};
 use rdb::Mrib;
 use rdb::types::{MribChangeNotification, MulticastAddr, MulticastRoute};
 use slog::{Logger, debug, error, info};
@@ -45,8 +44,9 @@ const MG_LOWER_MRIB_TAG: &str = "mg-lower-mrib";
 fn ddm_origin(route: &MulticastRoute) -> MulticastOrigin {
     MulticastOrigin {
         overlay_group: route.key.group().ip(),
-        underlay_group: route.underlay_group.ip(),
-        vni: ddm_admin_client::types::Vni(route.key.vni().as_u32()),
+        underlay_group: route.underlay_group,
+        vni: Vni::try_from(route.key.vni().as_u32())
+            .expect("MRIB Vni is within Vni::MAX_VNI"),
         metric: 0,
         source: route.key.source(),
     }

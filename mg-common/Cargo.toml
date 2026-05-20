@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 clap.workspace = true
 anyhow.workspace = true
+ddm-api-types.workspace = true
 anstyle.workspace = true
 serde.workspace = true
 schemars.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
 slog-async.workspace = true
-thiserror.workspace = true
 oximeter-producer.workspace = true
 oximeter.workspace = true
 oxnet.workspace = true

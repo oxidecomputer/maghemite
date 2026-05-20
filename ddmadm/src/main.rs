@@ -5,7 +5,9 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm_admin_client::{Client, types};
+use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::db::RouterKind;
+use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
@@ -125,7 +127,15 @@ struct Peer {
 }
 
 fn main() -> Result<()> {
-    oxide_tokio_rt::run(run())
+    match oxide_tokio_rt::run(run()) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if mg_common::is_broken_pipe(&e) {
+                std::process::exit(0);
+            }
+            Err(e)
+        }
+    }
 }
 
 async fn run() -> Result<()> {
@@ -158,10 +168,9 @@ async fn run() -> Result<()> {
                     index,
                     info.host,
                     info.addr,
-                    match *info.kind {
-                        0 => "Server",
-                        1 => "Transit",
-                        _ => "?",
+                    match info.kind {
+                        RouterKind::Server => "Server",
+                        RouterKind::Transit => "Transit",
                     },
                     info.status,
                 )?;
@@ -313,7 +322,7 @@ async fn run() -> Result<()> {
                     "{}\t{}\t{}\t{}\t{}\t{}",
                     route.origin.overlay_group,
                     route.origin.underlay_group,
-                    route.origin.vni,
+                    u32::from(route.origin.vni),
                     route.origin.metric,
                     source,
                     path.join(" "),
@@ -349,7 +358,7 @@ async fn run() -> Result<()> {
                     "{}\t{}\t{}\t{}\t{}",
                     origin.overlay_group,
                     origin.underlay_group,
-                    origin.vni,
+                    u32::from(origin.vni),
                     origin.metric,
                     source,
                 )?;
@@ -360,8 +369,8 @@ async fn run() -> Result<()> {
             client
                 .advertise_multicast_groups(&vec![types::MulticastOrigin {
                     overlay_group: mg.overlay_group,
-                    underlay_group: mg.underlay_group,
-                    vni: types::Vni(mg.vni),
+                    underlay_group: mg.underlay_group.try_into()?,
+                    vni: types::Vni::try_from(mg.vni)?,
                     metric: mg.metric,
                     source: mg.source,
                 }])
@@ -371,8 +380,8 @@ async fn run() -> Result<()> {
             client
                 .withdraw_multicast_groups(&vec![types::MulticastOrigin {
                     overlay_group: mg.overlay_group,
-                    underlay_group: mg.underlay_group,
-                    vni: types::Vni(mg.vni),
+                    underlay_group: mg.underlay_group.try_into()?,
+                    vni: types::Vni::try_from(mg.vni)?,
                     metric: mg.metric,
                     source: mg.source,
                 }])
