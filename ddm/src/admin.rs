@@ -6,10 +6,12 @@ use crate::db::Db;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
-use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::admin::{
+    EnableStatsRequest, ExpirePathParams, PrefixMap, PutPeerRequest,
+};
+use ddm_api_types::db::{MulticastRoute, PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
@@ -121,8 +123,23 @@ impl DdmAdminApi for DdmAdminApiImpl {
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
+        Ok(HttpResponseOk(do_get_peers(ctx.context())))
+    }
+
+    async fn get_peers_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<u32, ddm_api_types_versions::v1::db::PeerInfo>>,
+        HttpError,
+    > {
         let ctx = lock!(ctx.context());
-        Ok(HttpResponseOk(ctx.db.peers()))
+        let peers = ctx
+            .db
+            .peers()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        Ok(HttpResponseOk(peers))
     }
 
     async fn expire_peer(
@@ -141,6 +158,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 })?;
         }
 
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn put_peer(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<PutPeerRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        do_put_peer(ctx.context(), request.into_inner());
         Ok(HttpResponseUpdatedNoContent())
     }
 
@@ -342,6 +367,71 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseUpdatedNoContent())
     }
 
+    async fn get_originated_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastOrigin>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let originated = ctx
+            .db
+            .originated_mcast()
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        Ok(HttpResponseOk(originated))
+    }
+
+    async fn get_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastRoute>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let imported = ctx.db.imported_mcast();
+        Ok(HttpResponseOk(imported))
+    }
+
+    async fn advertise_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let groups = request.into_inner();
+        slog::info!(ctx.log, "advertise multicast groups: {groups:#?}");
+        ctx.db
+            .originate_mcast(&groups)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+        for e in &ctx.event_channels {
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Multicast(
+                groups.clone(),
+            ))))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn withdraw_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let groups = request.into_inner();
+        slog::info!(ctx.log, "withdraw multicast groups: {groups:#?}");
+        ctx.db
+            .withdraw_mcast(&groups)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+        for e in &ctx.event_channels {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Multicast(
+                groups.clone(),
+            ))))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
     async fn sync(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -408,4 +498,94 @@ pub fn api_description()
 -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, ApiDescriptionBuildErrors>
 {
     ddm_admin_api_mod::api_description::<DdmAdminApiImpl>()
+}
+
+/// Snapshot the current peer table, keyed by interface index.
+pub(crate) fn do_get_peers(
+    ctx: &Arc<Mutex<HandlerContext>>,
+) -> HashMap<u32, PeerInfo> {
+    let ctx = lock!(ctx);
+    ctx.db.peers()
+}
+
+/// Insert or replace the peer entry at `request.if_index`. Tests bypass
+/// the dropshot endpoint and call this directly; production goes through
+/// [`DdmAdminApiImpl::put_peer`].
+pub(crate) fn do_put_peer(
+    ctx: &Arc<Mutex<HandlerContext>>,
+    request: PutPeerRequest,
+) {
+    let PutPeerRequest { if_index, info } = request;
+    let ctx = lock!(ctx);
+    ctx.db.set_peer(if_index, info);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HandlerContext, RouterStats, do_get_peers, do_put_peer};
+    use crate::db::Db;
+    use ddm_api_types::admin::PutPeerRequest;
+    use ddm_api_types::db::{PeerInfo, PeerStatus, RouterKind};
+    use slog::{Discard, Logger, o};
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    fn build_context(tmpdir: &TempDir) -> Arc<Mutex<HandlerContext>> {
+        let log = Logger::root(Discard, o!());
+        let db_path = tmpdir.path().join("ddm").to_str().unwrap().to_string();
+        let db = Db::new(&db_path, log.clone()).expect("open db");
+        Arc::new(Mutex::new(HandlerContext {
+            event_channels: vec![],
+            db,
+            stats: Arc::new(RouterStats::default()),
+            peers: vec![],
+            stats_handler: Arc::new(Mutex::new(None)),
+            log,
+        }))
+    }
+
+    #[test]
+    fn put_peer_round_trips() {
+        let tmpdir = TempDir::new().expect("tempdir");
+        let ctx = build_context(&tmpdir);
+
+        let info = PeerInfo {
+            status: PeerStatus::Active,
+            addr: "fd00::1".parse().unwrap(),
+            host: "test-sled-1".to_string(),
+            kind: RouterKind::Server,
+            if_name: Some("tfportrear0_0".to_string()),
+        };
+
+        do_put_peer(
+            &ctx,
+            PutPeerRequest {
+                if_index: 7,
+                info: info.clone(),
+            },
+        );
+
+        let peers = do_get_peers(&ctx);
+        assert_eq!(peers.len(), 1);
+        let got = peers.get(&7).expect("peer at if_index 7");
+        assert_eq!(got, &info);
+
+        // Overwriting at the same `if_index` replaces the entry rather
+        // than creating a second one.
+        let info2 = PeerInfo {
+            addr: "fd00::2".parse().unwrap(),
+            host: "test-sled-1-replaced".to_string(),
+            ..info
+        };
+        do_put_peer(
+            &ctx,
+            PutPeerRequest {
+                if_index: 7,
+                info: info2.clone(),
+            },
+        );
+        let peers = do_get_peers(&ctx);
+        assert_eq!(peers.len(), 1, "overwrite at same if_index keeps map size",);
+        assert_eq!(peers[&7].addr, info2.addr);
+    }
 }

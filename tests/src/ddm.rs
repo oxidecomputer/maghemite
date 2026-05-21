@@ -4,7 +4,11 @@
 
 use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::admin::PutPeerRequest;
+use ddm_api_types_versions::latest::db::{PeerInfo, PeerStatus, RouterKind};
+use ddm_api_types_versions::latest::net::{
+    MulticastOrigin, TunnelOrigin, UnderlayMulticastIpv6, Vni,
+};
 use mg_common::{eprintln_nopipe, println_nopipe};
 use slog::{Drain, Logger};
 use std::env;
@@ -468,6 +472,29 @@ async fn run_trio_tests(
 
     println_nopipe!("initial peering test passed");
 
+    // PUT /peer smoke against a running ddmd. Use an unused interface
+    // index so the live discovery handler does not race the injection
+    // on a real interface.
+    let synthetic = PeerInfo {
+        status: PeerStatus::Active,
+        addr: "fd00::dead:beef".parse().unwrap(),
+        host: "synthetic".to_string(),
+        kind: RouterKind::Server,
+        if_name: Some("synthetic0".to_string()),
+    };
+
+    t1.put_peer(&PutPeerRequest {
+        if_index: 9999,
+        info: synthetic.clone(),
+    })
+    .await?;
+
+    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
+    let peers = t1.get_peers().await?;
+    assert_eq!(peers["9999"].host, "synthetic");
+
+    println_nopipe!("put_peer synthetic injection passed");
+
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
 
@@ -648,6 +675,52 @@ async fn run_trio_tests(
 
     println_nopipe!("tunnel endpoint withdraw passed");
 
+    // Multicast group advertise/withdraw across the trio. Mirrors how
+    // mg-lower in the switch zone publishes overlay→underlay multicast
+    // bindings: the transit router originates an advertisement, and the
+    // server routers learn it via DDM exchange.
+    wait_for_eq!(multicast_originated_count(&t1).await?, 0);
+
+    let mcast_origin = MulticastOrigin {
+        overlay_group: "233.252.0.1".parse().unwrap(),
+        underlay_group: UnderlayMulticastIpv6::new(
+            "ff04::100".parse().unwrap(),
+        )
+        .unwrap(),
+        vni: Vni::try_from(77u32).unwrap(),
+        source: None,
+        metric: 0,
+    };
+
+    t1.advertise_multicast_groups(&vec![mcast_origin.clone()])
+        .await?;
+
+    wait_for_eq!(multicast_originated_count(&t1).await?, 1);
+    wait_for_eq!(multicast_group_count(&t1).await?, 0);
+    wait_for_eq!(multicast_group_count(&s1).await?, 1);
+    wait_for_eq!(multicast_group_count(&s2).await?, 1);
+
+    println_nopipe!("multicast group advertise passed");
+
+    // Server router restart: s1's view of the multicast group must
+    // converge again after ddmd restarts. wait_for_eq tolerates the
+    // restart window via unwrap_or sentinel.
+    zs1.stop_router()?;
+    zs1.start_router(false)?;
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 1);
+
+    println_nopipe!("multicast router restart passed");
+
+    t1.withdraw_multicast_groups(&vec![mcast_origin]).await?;
+
+    wait_for_eq!(multicast_originated_count(&t1).await?, 0);
+    wait_for_eq!(multicast_group_count(&t1).await?, 0);
+    wait_for_eq!(multicast_group_count(&s1).await?, 0);
+    wait_for_eq!(multicast_group_count(&s2).await?, 0);
+
+    println_nopipe!("multicast group withdraw passed");
+
     Ok(())
 }
 
@@ -816,6 +889,14 @@ async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
 
 async fn tunnel_originated_endpoint_count(c: &Client) -> Result<usize> {
     Ok(c.get_originated_tunnel_endpoints().await?.len())
+}
+
+async fn multicast_group_count(c: &Client) -> Result<usize> {
+    Ok(c.get_multicast_groups().await?.len())
+}
+
+async fn multicast_originated_count(c: &Client) -> Result<usize> {
+    Ok(c.get_originated_multicast_groups().await?.len())
 }
 
 fn init_logger() -> Logger {

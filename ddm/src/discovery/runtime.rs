@@ -49,7 +49,7 @@ struct DiscoveryPacket {
 impl DiscoveryPacket {
     fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::V4 as u8,
             flags: SOLICIT,
             hostname,
             kind,
@@ -57,7 +57,7 @@ impl DiscoveryPacket {
     }
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::V4 as u8,
             flags: ADVERTISE,
             hostname,
             kind,
@@ -368,12 +368,12 @@ fn handle_advertisement(
     let version = match version {
         2 => Version::V2,
         3 => Version::V3,
+        4 => Version::V4,
         x => {
             err!(
                 ctx.log,
                 ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
-                x
+                "unknown protocol version {x}, known versions are: 2, 3, 4"
             );
             return;
         }
@@ -433,6 +433,7 @@ fn handle_advertisement(
             addr: *sender,
             host: hostname,
             kind,
+            if_name: Some(ctx.config.if_name.clone()),
         },
     );
     if updated {

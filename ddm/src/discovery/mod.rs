@@ -105,6 +105,7 @@ pub(crate) use runtime::handler;
 pub enum Version {
     V2 = 2,
     V3 = 3,
+    V4 = 4,
 }
 
 #[derive(Error, Debug)]

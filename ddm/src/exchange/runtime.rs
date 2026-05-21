@@ -8,15 +8,17 @@
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
 use super::{
-    ExchangeError, PullResponse, PullResponseV2, TunnelUpdate, UnderlayUpdate,
-    Update, UpdateV2,
+    ExchangeError, MulticastUpdate, PullResponse, PullResponseV2,
+    PullResponseV3, TunnelUpdate, UnderlayUpdate, Update, UpdateV2, UpdateV3,
 };
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
-use ddm_api_types::db::{RouterKind, TunnelRoute};
-use ddm_api_types::exchange::{PathVector, PathVectorV2};
+use ddm_api_types::db::{MulticastRoute, RouterKind, TunnelRoute};
+use ddm_api_types::exchange::{
+    MulticastPathHop, MulticastPathVector, PathVector, PathVectorV2,
+};
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -53,13 +55,14 @@ pub struct HandlerContext {
 }
 
 impl Update {
-    /// Build an `Update` whose underlay/tunnel halves carry the announcements
-    /// from `pr`. Used by [`pull`] to project a pull response back into the
-    /// update event stream.
+    /// Build an `Update` whose underlay/tunnel/multicast halves carry the
+    /// announcements from `pr`. Used by [`pull`] to project a pull response
+    /// back into the update event stream.
     fn announce(pr: PullResponse) -> Self {
         Self {
             underlay: pr.underlay.map(UnderlayUpdate::announce),
             tunnel: pr.tunnel.map(TunnelUpdate::announce),
+            multicast: pr.multicast.map(MulticastUpdate::announce),
         }
     }
 }
@@ -116,15 +119,52 @@ pub(crate) fn withdraw_tunnel(
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
-pub(crate) fn do_pull(
+pub(crate) fn announce_multicast(
+    ctx: &SmContext,
+    config: Config,
+    groups: HashSet<MulticastPathVector>,
+    addr: Ipv6Addr,
+    version: Version,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = MulticastUpdate::announce(groups);
+    send_update(ctx, config, update.into(), addr, version, rt, log)
+}
+
+pub(crate) fn withdraw_multicast(
+    ctx: &SmContext,
+    config: Config,
+    groups: HashSet<MulticastPathVector>,
+    addr: Ipv6Addr,
+    version: Version,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = MulticastUpdate::withdraw(groups);
+    send_update(ctx, config, update.into(), addr, version, rt, log)
+}
+
+pub(crate) fn do_pull_v4(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponse, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/pull",
-        addr, ctx.config.if_index, ctx.config.exchange_port,
-    );
+    let if_index = ctx.config.if_index;
+    let port = ctx.config.exchange_port;
+    let uri = format!("http://[{addr}%{if_index}]:{port}/v4/pull");
+    let body = do_pull_common(uri, rt)?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
+pub(crate) fn do_pull_v3(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<PullResponseV3, ExchangeError> {
+    let if_index = ctx.config.if_index;
+    let port = ctx.config.exchange_port;
+    let uri = format!("http://[{addr}%{if_index}]:{port}/v3/pull");
     let body = do_pull_common(uri, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
@@ -176,7 +216,8 @@ pub(crate) fn pull(
 ) -> Result<(), ExchangeError> {
     let pr: PullResponse = match version {
         Version::V2 => do_pull_v2(&ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull(&ctx, &addr, &rt)?,
+        Version::V3 => do_pull_v3(&ctx, &addr, &rt)?.into(),
+        Version::V4 => do_pull_v4(&ctx, &addr, &rt)?,
     };
 
     let update = Update::announce(pr);
@@ -201,43 +242,14 @@ fn send_update(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
-    match version {
-        Version::V2 => {
-            send_update_v2(ctx, config, update.into(), addr, rt, log)
-        }
-        Version::V3 => send_update_v3(ctx, config, update, addr, rt, log),
-    }
-}
-
-fn send_update_v2(
-    ctx: &SmContext,
-    config: Config,
-    update: UpdateV2,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v2/push",
-        addr, config.if_index, config.exchange_port,
-    );
-    send_update_common(ctx, uri, payload, config, rt, log)
-}
-
-fn send_update_v3(
-    ctx: &SmContext,
-    config: Config,
-    update: Update,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/push",
-        addr, config.if_index, config.exchange_port,
-    );
+    let (payload, path) = match version {
+        Version::V2 => (serde_json::to_string(&UpdateV2::from(update))?, "v2"),
+        Version::V3 => (serde_json::to_string(&UpdateV3::from(update))?, "v3"),
+        Version::V4 => (serde_json::to_string(&update)?, "v4"),
+    };
+    let if_index = config.if_index;
+    let port = config.exchange_port;
+    let uri = format!("http://[{addr}%{if_index}]:{port}/{path}/push");
     send_update_common(ctx, uri, payload, config, rt, log)
 }
 
@@ -299,6 +311,8 @@ pub fn handler(
         ..Default::default()
     };
 
+    // TODO(#740): unify dropshot logger level handling with `mgd`, which
+    // runs its dropshot logger at the parent log level.
     let ds_log = ConfigLogging::StderrTerminal {
         level: ConfigLoggingLevel::Error,
     }
@@ -347,9 +361,11 @@ pub fn api_description() -> Result<
 > {
     let mut api = ApiDescription::new();
     api.register(push_handler_v2)?;
-    api.register(push_handler)?;
+    api.register(push_handler_v3)?;
+    api.register(push_handler_v4)?;
     api.register(pull_handler_v2)?;
-    api.register(pull_handler)?;
+    api.register(pull_handler_v3)?;
+    api.register(pull_handler_v4)?;
     Ok(api)
 }
 
@@ -364,7 +380,16 @@ async fn push_handler_v2(
 }
 
 #[endpoint { method = PUT, path = "/v3/push" }]
-async fn push_handler(
+async fn push_handler_v3(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<UpdateV3>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let update = Update::from(request.into_inner());
+    push_handler_common(ctx, update).await
+}
+
+#[endpoint { method = PUT, path = "/v4/push" }]
+async fn push_handler_v4(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -404,19 +429,18 @@ async fn pull_handler_v2(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = PathVector {
+            let mut path_vector = PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
-            underlay.insert(pv);
+            path_vector.path.push(ctx.ctx.hostname.clone());
+            underlay.insert(path_vector);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let tv = route.origin;
-            tunnel.insert(tv);
+            tunnel.insert(route.origin);
         }
     }
     let originated = ctx
@@ -425,11 +449,11 @@ async fn pull_handler_v2(
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = PathVector {
+        let path_vector = PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
-        underlay.insert(pv);
+        underlay.insert(path_vector);
     }
 
     let originated_tunnel = ctx
@@ -461,48 +485,43 @@ async fn pull_handler_v2(
     }))
 }
 
-#[endpoint { method = GET, path = "/v3/pull" }]
-async fn pull_handler(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
-
+/// Collect underlay and tunnel routes for pull responses (shared by V3/V4).
+fn collect_underlay_tunnel(
+    ctx: &HandlerContext,
+) -> Result<(HashSet<PathVector>, HashSet<TunnelOrigin>), HttpError> {
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
 
-    // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
-            // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = PathVector {
+            let mut path_vector = PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
-            underlay.insert(pv);
+            path_vector.path.push(ctx.ctx.hostname.clone());
+            underlay.insert(path_vector);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let tv = route.origin;
-            tunnel.insert(tv);
+            tunnel.insert(route.origin);
         }
     }
+
     let originated = ctx
         .ctx
         .db
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = PathVector {
+        underlay.insert(PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
-        };
-        underlay.insert(pv);
+        });
     }
 
     let originated_tunnel = ctx
@@ -511,26 +530,83 @@ async fn pull_handler(
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated_tunnel {
-        let tv = TunnelOrigin {
+        tunnel.insert(TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
             vni: prefix.vni,
             metric: prefix.metric,
-        };
-        tunnel.insert(tv);
+        });
     }
 
+    Ok((underlay, tunnel))
+}
+
+/// Collect multicast routes for V4 pull responses.
+fn collect_multicast(
+    ctx: &HandlerContext,
+) -> Result<HashSet<MulticastPathVector>, HttpError> {
+    let mut multicast = HashSet::new();
+
+    if ctx.ctx.config.kind == RouterKind::Transit {
+        for route in &ctx.ctx.db.imported_mcast() {
+            if route.nexthop == ctx.peer {
+                continue;
+            }
+            let hop = MulticastPathHop::new(
+                ctx.ctx.hostname.clone(),
+                ctx.ctx.config.addr,
+            );
+            let mut path = route.path.clone();
+            path.push(hop);
+            multicast.insert(MulticastPathVector {
+                origin: route.origin.clone(),
+                path,
+            });
+        }
+    }
+
+    let originated_mcast = ctx
+        .ctx
+        .db
+        .originated_mcast()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for origin in &originated_mcast {
+        let hop = MulticastPathHop::new(
+            ctx.ctx.hostname.clone(),
+            ctx.ctx.config.addr,
+        );
+        multicast.insert(MulticastPathVector {
+            origin: origin.clone(),
+            path: vec![hop],
+        });
+    }
+
+    Ok(multicast)
+}
+
+#[endpoint { method = GET, path = "/v3/pull" }]
+async fn pull_handler_v3(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<PullResponseV3>, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+    let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
+    Ok(HttpResponseOk(PullResponseV3 {
+        underlay: crate::non_empty(underlay),
+        tunnel: crate::non_empty(tunnel),
+    }))
+}
+
+#[endpoint { method = GET, path = "/v4/pull" }]
+async fn pull_handler_v4(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<PullResponse>, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+    let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
+    let multicast = collect_multicast(&ctx)?;
     Ok(HttpResponseOk(PullResponse {
-        underlay: if underlay.is_empty() {
-            None
-        } else {
-            Some(underlay)
-        },
-        tunnel: if tunnel.is_empty() {
-            None
-        } else {
-            Some(tunnel)
-        },
+        underlay: crate::non_empty(underlay),
+        tunnel: crate::non_empty(tunnel),
+        multicast: crate::non_empty(multicast),
     }))
 }
 
@@ -548,6 +624,10 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         handle_tunnel_update(tunnel_update, ctx);
     }
 
+    if let Some(multicast_update) = &update.multicast {
+        handle_multicast_update(multicast_update, ctx);
+    }
+
     // distribute updates
 
     if ctx.ctx.config.kind == RouterKind::Transit {
@@ -563,13 +643,24 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             .as_ref()
             .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
 
-        let push = Update {
+        // Add our hop info to multicast path vectors before redistribution
+        let multicast = update.multicast.as_ref().map(|update| {
+            let hop = MulticastPathHop::new(
+                ctx.ctx.hostname.clone(),
+                ctx.ctx.config.addr,
+            );
+            update.with_hop(hop)
+        });
+
+        let push = Arc::new(Update {
             underlay,
             tunnel: update.tunnel.clone(),
-        };
+            multicast,
+        });
 
         for ec in &ctx.ctx.event_channels {
-            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+            ec.send(Event::Peer(PeerEvent::Push(Arc::clone(&push))))
+                .unwrap();
         }
     }
 }
@@ -715,4 +806,55 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
         .stats
         .imported_underlay_prefixes
         .store(ctx.ctx.db.imported_count() as u64, Ordering::Relaxed);
+}
+
+fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
+    let db = &ctx.ctx.db;
+    let hostname = &ctx.ctx.hostname;
+
+    let mut import = HashSet::new();
+    for path_vector in &update.announce {
+        // Path-vector RPF: drop if our router_id appears in the path,
+        // indicating the announcement has already traversed us.
+        if path_vector
+            .path
+            .iter()
+            .any(|hop| &hop.router_id == hostname)
+        {
+            dbg!(
+                ctx.log,
+                ctx.ctx.config.if_name,
+                "dropping multicast announce for {:?} - loop detected \
+                 (path length {})",
+                path_vector.origin.overlay_group,
+                path_vector.path.len(),
+            );
+            continue;
+        }
+
+        import.insert(MulticastRoute {
+            origin: path_vector.origin.clone(),
+            nexthop: ctx.peer,
+            path: path_vector.path.clone(),
+        });
+    }
+
+    let mut remove = HashSet::new();
+    for path_vector in &update.withdraw {
+        // Empty path is safe: MulticastRoute's PartialEq/Hash exclude
+        // the path field, so this matches by (origin, nexthop) only.
+        remove.insert(MulticastRoute {
+            origin: path_vector.origin.clone(),
+            nexthop: ctx.peer,
+            path: Vec::new(),
+        });
+    }
+
+    // Atomic import + delete + diff under a single lock.
+    //
+    // DDM stores learned multicast state, which feeds back into Omicron, as
+    // the latter owns OPTE M2P programming via sled-agent (the M2P table is
+    // global to xde).
+    // Learned state is queryable via the DDM admin API (get_multicast_groups).
+    db.update_imported_mcast(&import, &remove);
 }

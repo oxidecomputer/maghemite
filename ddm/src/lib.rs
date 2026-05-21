@@ -15,6 +15,14 @@ pub const COMPONENT_DDM: &str = "ddm";
 pub const MOD_ADMIN: &str = "admin";
 pub const MOD_EXCHANGE: &str = "exchange";
 
+/// Returns `None` if the set is empty, otherwise `Some(s)`.
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub(crate) fn non_empty<T>(
+    set: std::collections::HashSet<T>,
+) -> Option<std::collections::HashSet<T>> {
+    (!set.is_empty()).then_some(set)
+}
+
 #[macro_export]
 macro_rules! err {
     ($log:expr, $index:expr, $($args:tt)+) => {

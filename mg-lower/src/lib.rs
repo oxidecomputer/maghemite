@@ -40,6 +40,7 @@ mod ddm;
 mod dendrite;
 mod error;
 mod log;
+pub mod mrib;
 mod platform;
 
 #[cfg(test)]

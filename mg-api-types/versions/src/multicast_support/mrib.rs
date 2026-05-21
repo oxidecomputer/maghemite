@@ -4,25 +4,18 @@
 
 // Copyright 2026 Oxide Computer Company
 
-//! MRIB (Multicast Routing Information Base) types for version
-//! `MULTICAST_SUPPORT`.
-//!
-//! Covers the public API request and response shapes, validated wire
-//! address types (unicast and multicast, IPv4/IPv6, plus the underlay
-//! IPv6 group within `ff04::/64`), and the multicast route and route key
-//! types stored in the MRIB.
-
 use std::collections::BTreeSet;
 use std::fmt::{self, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+use multicast_types::UnderlayMulticastError;
+pub use multicast_types::UnderlayMulticastIpv6;
 use omicron_common::address::{
     IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET,
     IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET, IPV6_LINK_LOCAL_MULTICAST_SUBNET,
     IPV6_MULTICAST_RANGE, IPV6_RESERVED_SCOPE_MULTICAST_SUBNET,
-    IPV6_SSM_SUBNET, UNDERLAY_MULTICAST_SUBNET,
+    IPV6_SSM_SUBNET,
 };
 pub use omicron_common::api::external::Vni;
 use schemars::JsonSchema;
@@ -47,6 +40,25 @@ pub enum MulticastError {
     /// A database key could not be decoded.
     #[error("db key error {0}")]
     DbKey(String),
+}
+
+// Bridge errors from the shared `multicast-types` crate so call sites
+// using `?` with `UnderlayMulticastIpv6::new` continue to surface
+// validation failures through `MulticastError`.
+impl From<UnderlayMulticastError> for MulticastError {
+    fn from(value: UnderlayMulticastError) -> Self {
+        match value {
+            UnderlayMulticastError::NotInSubnet { addr } => {
+                MulticastError::Validation(format!(
+                    "underlay address {addr} is not within \
+                     UNDERLAY_MULTICAST_SUBNET"
+                ))
+            }
+            UnderlayMulticastError::InvalidIpv6(e) => {
+                MulticastError::Validation(format!("invalid IPv6 address: {e}"))
+            }
+        }
+    }
 }
 
 /// Input for adding static multicast routes.
@@ -444,92 +456,6 @@ impl TryFrom<Ipv6Addr> for MulticastAddrV6 {
 impl From<MulticastAddrV6> for Ipv6Addr {
     fn from(addr: MulticastAddrV6) -> Self {
         addr.0
-    }
-}
-
-/// A validated underlay multicast IPv6 address within ff04::/64.
-///
-/// The Oxide rack maps overlay multicast groups 1:1 to admin-local scoped
-/// IPv6 multicast addresses in `UNDERLAY_MULTICAST_SUBNET` (ff04::/64).
-/// This type enforces that invariant at construction time.
-// TODO: Duplicates `dpd_types::mcast::UnderlayMulticastIpv6` in dendrite.
-// Both should be consolidated into `omicron_common` so maghemite, dendrite,
-// and omicron share a single definition.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
-#[schemars(transparent)]
-pub struct UnderlayMulticastIpv6(Ipv6Addr);
-
-impl UnderlayMulticastIpv6 {
-    /// Create a new validated underlay multicast address.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the address is not within `UNDERLAY_MULTICAST_SUBNET`
-    /// (ff04::/64).
-    pub fn new(value: Ipv6Addr) -> Result<Self, MulticastError> {
-        if !UNDERLAY_MULTICAST_SUBNET.contains(value) {
-            return Err(MulticastError::Validation(format!(
-                "underlay address {value} is not within \
-                 {UNDERLAY_MULTICAST_SUBNET}"
-            )));
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the underlying IPv6 address.
-    #[inline]
-    pub const fn ip(&self) -> Ipv6Addr {
-        self.0
-    }
-}
-
-impl fmt::Display for UnderlayMulticastIpv6 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<Ipv6Addr> for UnderlayMulticastIpv6 {
-    type Error = MulticastError;
-
-    fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<UnderlayMulticastIpv6> for Ipv6Addr {
-    fn from(addr: UnderlayMulticastIpv6) -> Self {
-        addr.0
-    }
-}
-
-impl From<UnderlayMulticastIpv6> for IpAddr {
-    fn from(addr: UnderlayMulticastIpv6) -> Self {
-        IpAddr::V6(addr.0)
-    }
-}
-
-impl FromStr for UnderlayMulticastIpv6 {
-    type Err = MulticastError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let addr: Ipv6Addr = s.parse().map_err(|_| {
-            MulticastError::Validation(format!("invalid IPv6 address: {s}"))
-        })?;
-        Self::new(addr)
     }
 }
 

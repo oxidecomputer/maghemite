@@ -5,6 +5,7 @@ edition = "2024"
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+tempfile = "3"
 
 [dependencies]
 slog.workspace = true
@@ -24,6 +25,7 @@ serde_json.workspace = true
 sled.workspace = true
 mg-common.workspace = true
 ddm-api-types.workspace = true
+ddm-api-types-versions.workspace = true
 chrono.workspace = true
 omicron-common.workspace = true
 oximeter.workspace = true

@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use ddm_api_types_versions::latest;
+use ddm_api_types_versions::v1;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -25,6 +26,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (2, MULTICAST_SUPPORT),
     (1, INITIAL),
 ]);
 
@@ -44,15 +46,46 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
-    #[endpoint { method = GET, path = "/peers" }]
+    #[endpoint {
+        method = GET,
+        path = "/peers",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, latest::db::PeerInfo>>, HttpError>;
+
+    /// Returns peers without interface name information.
+    #[endpoint {
+        method = GET,
+        path = "/peers",
+        versions = ..VERSION_MULTICAST_SUPPORT
+    }]
+    async fn get_peers_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v1::db::PeerInfo>>, HttpError>;
 
     #[endpoint { method = DELETE, path = "/peers/{addr}" }]
     async fn expire_peer(
         ctx: RequestContext<Self::Context>,
         params: Path<latest::admin::ExpirePathParams>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Set peer information for a given interface index, bypassing the state machine.
+    ///
+    /// Intended for test fixtures that run `ddmd` with `--api-only`.
+    /// In a normal run, discovery writes peer entries keyed by interface
+    /// index whenever it processes an advertisement, so any directly-injected
+    /// entry for an active interface will be overwritten the next time a
+    /// peer is observed there.
+    #[endpoint {
+        method = PUT,
+        path = "/peer",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn put_peer(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::admin::PutPeerRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/originated" }]
@@ -97,6 +130,44 @@ pub trait DdmAdminApi {
     async fn withdraw_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/originated_multicast_groups",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn get_originated_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<latest::net::MulticastOrigin>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/multicast_groups",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn get_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<latest::db::MulticastRoute>>, HttpError>;
+
+    #[endpoint {
+        method = PUT,
+        path = "/multicast_group",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn advertise_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<latest::net::MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = DELETE,
+        path = "/multicast_group",
+        versions = VERSION_MULTICAST_SUPPORT..
+    }]
+    async fn withdraw_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<latest::net::MulticastOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = PUT, path = "/sync" }]

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 chrono.workspace = true
 clap = { workspace = true, optional = true }
+multicast-types.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 omicron-common.workspace = true
@@ -20,4 +21,4 @@ uuid.workspace = true
 
 [features]
 clap = ["dep:clap"]
-proptest = ["dep:proptest"]
+proptest = ["dep:proptest", "multicast-types/proptest"]

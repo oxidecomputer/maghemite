@@ -1345,6 +1345,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "dpd-client",
  "dropshot",
  "hostname 0.4.2",
@@ -1367,6 +1368,7 @@ dependencies = [
  "sled",
  "slog",
  "socket2",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "uuid",
@@ -1406,10 +1408,14 @@ dependencies = [
 name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
+ "multicast-types",
+ "omicron-common",
  "oxnet",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "serde_repr",
+ "thiserror 2.0.18",
  "uuid",
 ]
 
@@ -3764,6 +3770,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "multicast-types",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "omicron-common",
@@ -3788,11 +3795,13 @@ dependencies = [
  "ddm-api-types",
  "libc",
  "libnet",
+ "omicron-common",
  "oximeter",
  "oximeter-producer",
  "oxnet",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -3987,6 +3996,18 @@ dependencies = [
  "mime",
  "spin 0.9.8",
  "version_check",
+]
+
+[[package]]
+name = "multicast-types"
+version = "0.1.0"
+dependencies = [
+ "omicron-common",
+ "proptest",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -24,6 +24,7 @@ default-members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "multicast-types",
     "ndp",
     "xtask",
     "falcon-lab",
@@ -52,6 +53,7 @@ members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "multicast-types",
     "ndp",
     "xtask",
     "falcon-lab",
@@ -63,6 +65,7 @@ mg-api = { path = "mg-api" }
 mg-api-types = { path = "mg-api-types" }
 mg-api-types-versions = { path = "mg-api-types/versions" }
 mg-common = { path = "mg-common" }
+multicast-types = { path = "multicast-types" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
 bfd = { path = "bfd" }

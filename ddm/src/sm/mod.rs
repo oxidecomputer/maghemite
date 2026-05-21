@@ -11,7 +11,7 @@ use crate::db::Db;
 use crate::discovery::{self, Version};
 use crate::exchange::Update;
 use ddm_api_types::db::RouterKind;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
@@ -43,11 +43,12 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
+    Multicast(HashSet<MulticastOrigin>),
 }
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(Update),
+    Push(Arc<Update>),
 }
 
 #[derive(Debug)]
