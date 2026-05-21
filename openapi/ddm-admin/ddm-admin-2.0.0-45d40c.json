@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "1.0.0"
+    "version": "2.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -359,6 +359,25 @@
   },
   "components": {
     "schemas": {
+      "Duration": {
+        "type": "object",
+        "properties": {
+          "nanos": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "secs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nanos",
+          "secs"
+        ]
+      },
       "EnableStatsRequest": {
         "type": "object",
         "properties": {
@@ -463,6 +482,7 @@
         ]
       },
       "PeerInfo": {
+        "description": "Information about a DDM peer.",
         "type": "object",
         "properties": {
           "addr": {
@@ -487,11 +507,80 @@
         ]
       },
       "PeerStatus": {
-        "type": "string",
-        "enum": [
-          "NoContact",
-          "Active",
-          "Expired"
+        "description": "Status of a DDM peer, including how long the peer has been in its current state.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "duration": {
+                "$ref": "#/components/schemas/Duration"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Init"
+                ]
+              }
+            },
+            "required": [
+              "duration",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "duration": {
+                "$ref": "#/components/schemas/Duration"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Solicit"
+                ]
+              }
+            },
+            "required": [
+              "duration",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "duration": {
+                "$ref": "#/components/schemas/Duration"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Exchange"
+                ]
+              }
+            },
+            "required": [
+              "duration",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "duration": {
+                "$ref": "#/components/schemas/Duration"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Expired"
+                ]
+              }
+            },
+            "required": [
+              "duration",
+              "type"
+            ]
+          }
         ]
       },
       "RouterKind": {
