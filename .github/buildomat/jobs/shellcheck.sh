@@ -1,14 +1,8 @@
 #!/bin/bash
 #:
-#: name = "linux"
+#: name = "shellcheck"
 #: variety = "basic"
 #: target = "ubuntu-22.04"
-#: rust_toolchain = "stable"
-#: output_rules = [
-#:   "/work/debug/*",
-#:   "/work/release/*",
-#: ]
-#:
 
 banner "packages"
 sudo apt update -y
