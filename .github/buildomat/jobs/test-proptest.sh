@@ -34,7 +34,7 @@ source .github/buildomat/test-common.sh
 # RDB proptest suite
 pushd rdb
 PROPTEST_CASES=1000000 cargo nextest run --lib proptest
-cp *.log /work/ 2>/dev/null || true
+cp ./*.log /work/ 2>/dev/null || true
 if [ -d proptest-regressions ]; then
     cp -r proptest-regressions /work/rdb-proptest-regressions
 fi
@@ -43,7 +43,7 @@ popd
 # BGP proptest suite
 pushd bgp
 PROPTEST_CASES=1000000 cargo nextest run --lib proptest
-cp *.log /work/ 2>/dev/null || true
+cp ./*.log /work/ 2>/dev/null || true
 if [ -d proptest-regressions ]; then
     cp -r proptest-regressions /work/bgp-proptest-regressions
 fi

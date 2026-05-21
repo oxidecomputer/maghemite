@@ -69,8 +69,10 @@ banner 'dhcp-server'
 
 git clone https://github.com/oxidecomputer/omicron.git "$WORK/ci/omicron"
 cd "$WORK/ci/omicron"
+# shellcheck source=/dev/null
 source env.sh
 if [[ $CI == true ]]; then
+	# shellcheck source=/dev/null
 	source .github/buildomat/ci-env.sh
 	./tools/install_builder_prerequisites.sh -y
 fi
