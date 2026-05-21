@@ -182,7 +182,7 @@ banner 'launch'
 
 cd interop
 pfexec ./interop launch
-cp *.log /work/
+cp ./*.log /work/
 
 banner 'status'
 
