@@ -5,7 +5,7 @@
 // Copyright 2025 Oxide Computer Company
 
 use clap::{Parser, Subcommand};
-use mg_common::eprintln_nopipe;
+use client_common::eprintln_nopipe;
 
 mod external;
 

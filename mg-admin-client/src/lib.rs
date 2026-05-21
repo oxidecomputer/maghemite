@@ -68,10 +68,10 @@ progenitor::generate_api!(
     }
 );
 
+use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;
 use mg_api_types_versions::latest::rdb::prefix::Prefix;
 use mg_api_types_versions::latest::rdb::rib::{AddressFamily, ProtocolFilter};
-use mg_common::{eprintln_nopipe, println_nopipe};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;

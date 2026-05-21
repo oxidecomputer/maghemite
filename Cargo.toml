@@ -2,6 +2,7 @@
 resolver = "2"
 
 default-members = [
+    "client-common",
     "ddm",
     "ddmadm",
     "ddmd",
@@ -30,6 +31,7 @@ default-members = [
 ]
 
 members = [
+    "client-common",
     "lab",
     "ddm",
     "ddmadm",
@@ -59,6 +61,7 @@ members = [
 
 [workspace.dependencies]
 # Local
+client-common = { path = "client-common" }
 mg-api = { path = "mg-api" }
 mg-api-types = { path = "mg-api-types" }
 mg-api-types-versions = { path = "mg-api-types/versions" }
@@ -140,11 +143,11 @@ iddqd = "0.3"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "3d1fe6ad2df3752dd189ad462c4fdec74ebe25f8"
+rev = "84e91b62621406f38e4d0870a92bafacad96536e"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "3d1fe6ad2df3752dd189ad462c4fdec74ebe25f8"
+rev = "84e91b62621406f38e4d0870a92bafacad96536e"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
