@@ -2,7 +2,7 @@
 #:
 #: name = "shellcheck"
 #: variety = "basic"
-#: target = "ubuntu-22.04"
+#: target = "ubuntu-24.04"
 
 banner "packages"
 sudo apt update -y
