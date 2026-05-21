@@ -2,6 +2,7 @@
 resolver = "2"
 
 default-members = [
+    "client-common",
     "ddm",
     "ddmadm",
     "ddmd",
@@ -30,6 +31,7 @@ default-members = [
 ]
 
 members = [
+    "client-common",
     "lab",
     "ddm",
     "ddmadm",
@@ -59,6 +61,7 @@ members = [
 
 [workspace.dependencies]
 # Local
+client-common = { path = "client-common" }
 mg-api = { path = "mg-api" }
 mg-api-types = { path = "mg-api-types" }
 mg-api-types-versions = { path = "mg-api-types/versions" }

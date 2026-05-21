@@ -6,6 +6,7 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+client-common.workspace = true
 anyhow.workspace = true
 reqwest.workspace = true
 oxide-tokio-rt.workspace = true

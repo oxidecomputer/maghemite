@@ -326,6 +326,7 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "client-common",
  "mg-api-types",
  "mg-common",
  "num_enum 0.7.6",
@@ -347,6 +348,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "client-common",
  "iddqd 0.3.18",
  "itertools 0.14.0",
  "lazy_static",
@@ -813,6 +815,10 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
 ]
+
+[[package]]
+name = "client-common"
+version = "0.1.0"
 
 [[package]]
 name = "cmake"
@@ -3723,9 +3729,9 @@ name = "mg-admin-client"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "client-common",
  "colored",
  "mg-api-types-versions",
- "mg-common",
  "progenitor 0.14.0",
  "reqwest 0.13.3",
  "schemars 0.8.22",
@@ -3814,6 +3820,7 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "client-common",
  "ddm-api-types",
  "mg-common",
  "oxide-tokio-rt",
@@ -3859,6 +3866,7 @@ name = "mg-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "client-common",
  "ddm-admin-client",
  "ddm-api-types-versions",
  "mg-common",
@@ -3879,6 +3887,7 @@ dependencies = [
  "anyhow",
  "bgp",
  "clap",
+ "client-common",
  "colored",
  "mg-admin-client 0.1.0",
  "mg-api-types",
@@ -3904,6 +3913,7 @@ dependencies = [
  "bgp",
  "chrono",
  "clap",
+ "client-common",
  "dropshot",
  "gateway-client",
  "hostname 0.4.2",
@@ -5994,6 +6004,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "clap",
+ "client-common",
  "itertools 0.14.0",
  "mg-api-types",
  "mg-common",
@@ -9428,6 +9439,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "client-common",
  "mg-common",
  "tokio",
 ]

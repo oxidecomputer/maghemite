@@ -4,10 +4,10 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use client_common::println_nopipe;
 use mg_admin_client::{Client, print_rib};
 use mg_api_types::rdb::rib::{AddressFamily, ProtocolFilter};
 use mg_api_types::rib::BestpathFanoutRequest;
-use mg_common::println_nopipe;
 use std::num::NonZeroU8;
 
 #[derive(Subcommand, Debug)]

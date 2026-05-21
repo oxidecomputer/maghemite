@@ -1483,10 +1483,10 @@ mod test {
         DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey, db::Db, test::TestDb,
         types::PrefixDbKey, types::test_helpers::path_vecs_equal,
     };
+    use client_common::eprintln_nopipe;
     use mg_api_types::rdb::path::Path;
     use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
     use mg_api_types::rdb::rib::AddressFamily;
-    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
