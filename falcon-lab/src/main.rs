@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod bgp;
 mod ddm;
 mod dendrite;
+mod diagnostics;
 mod eos;
 mod frr;
 mod illumos;
