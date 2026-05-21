@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 use crate::error::Error;
 use anyhow::Result;
 use schemars::JsonSchema;
@@ -9,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::{self, Formatter};
-use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
@@ -224,6 +225,46 @@ impl PrefixDbKey for Prefix6 {
     }
 }
 
+/// Extension trait to add `contains` method for checking if a prefix contains
+/// an IP address. The base [`Prefix`] type is defined in rdb-types, but this
+/// method is specific to RDB's RPF (Reverse Path Forwarding) needs for
+/// multicast routing.
+pub trait PrefixContains {
+    /// Check if this prefix contains the given IP address.
+    ///
+    /// Performs LPM matching to determine if the address falls
+    /// within this prefix. Returns `Some(prefix_length)` if the address is
+    /// contained, `None` otherwise.
+    fn contains(&self, addr: IpAddr) -> Option<u8>;
+}
+
+impl PrefixContains for Prefix {
+    fn contains(&self, addr: IpAddr) -> Option<u8> {
+        match (self, addr) {
+            (Prefix::V4(prefix), IpAddr::V4(ipv4)) => {
+                let mask = prefix.mask();
+                if (u32::from(prefix.value) & mask) == (u32::from(ipv4) & mask)
+                {
+                    Some(prefix.length)
+                } else {
+                    None
+                }
+            }
+            (Prefix::V6(prefix), IpAddr::V6(ipv6)) => {
+                let mask = prefix.mask();
+                if (u128::from(prefix.value) & mask)
+                    == (u128::from(ipv6) & mask)
+                {
+                    Some(prefix.length)
+                } else {
+                    None
+                }
+            }
+            _ => None, // IPv4 prefix with IPv6 address or vice versa
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Asn {
     TwoOctet(u16),
@@ -252,9 +293,9 @@ impl From<u16> for Asn {
 }
 
 impl Asn {
-    pub fn as_u32(&self) -> u32 {
+    pub const fn as_u32(&self) -> u32 {
         match self {
-            Self::TwoOctet(value) => u32::from(*value),
+            Self::TwoOctet(value) => *value as u32,
             Self::FourOctet(value) => *value,
         }
     }
@@ -329,6 +370,9 @@ impl Display for PrefixChangeNotification {
     }
 }
 
+// Multicast types live in mg-api-types under the `mrib` module.
+pub use mg_api_types::mrib::*;
+
 #[cfg(test)]
 pub mod test_helpers {
     use super::Path;
@@ -370,6 +414,18 @@ mod test {
     use std::{
         cmp::Ordering, collections::BTreeSet, net::IpAddr, str::FromStr,
     };
+
+    /// ASM IPv4 group suitable for (*,G) tests.
+    const TEST_GROUP_V4: Ipv4Addr = Ipv4Addr::new(239, 1, 1, 1);
+
+    /// ASM IPv6 group suitable for (*,G) tests.
+    const TEST_GROUP_V6: Ipv6Addr = Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1);
+
+    /// Test underlay address within ff04::/64.
+    fn test_underlay() -> UnderlayMulticastIpv6 {
+        UnderlayMulticastIpv6::new(Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1))
+            .expect("valid test underlay address")
+    }
 
     fn bgp_path(
         nexthop: IpAddr,
@@ -579,6 +635,188 @@ mod test {
         assert!(!was_new);
         assert_eq!(set.len(), 1);
         assert_eq!(set.iter().next().unwrap().bgp.as_ref().unwrap().med, None,);
+    }
+
+    #[test]
+    fn broadcast_source_rejected() {
+        assert!(
+            UnicastAddrV4::new(Ipv4Addr::BROADCAST).is_err(),
+            "broadcast should be rejected as unicast source"
+        );
+    }
+
+    #[test]
+    fn loopback_source_rejected_v4() {
+        assert!(
+            UnicastAddrV4::new(Ipv4Addr::LOCALHOST).is_err(),
+            "loopback should be rejected as unicast source"
+        );
+    }
+
+    #[test]
+    fn loopback_source_rejected_v6() {
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::LOCALHOST).is_err(),
+            "loopback should be rejected as unicast source"
+        );
+    }
+
+    #[test]
+    fn unspecified_source_rejected_v4() {
+        assert!(
+            UnicastAddrV4::new(Ipv4Addr::UNSPECIFIED).is_err(),
+            "unspecified should be rejected as unicast source"
+        );
+    }
+
+    #[test]
+    fn unspecified_source_rejected_v6() {
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::UNSPECIFIED).is_err(),
+            "unspecified should be rejected as unicast source"
+        );
+    }
+
+    #[test]
+    fn route_key_af_mismatch_v4_source_v6_group() {
+        let src = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 1)).unwrap();
+        let group =
+            MulticastAddrV6::new(Ipv6Addr::new(0xff3e, 0, 0, 0, 0, 0, 0, 1))
+                .unwrap();
+        let result = MulticastRouteKey::new(
+            Some(IpAddr::V4(src.ip())),
+            group.into(),
+            DEFAULT_MULTICAST_VNI,
+        );
+        assert!(
+            result.is_err(),
+            "v4 source with v6 group should be rejected"
+        );
+    }
+
+    #[test]
+    fn route_key_af_mismatch_v6_source_v4_group() {
+        let src = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let group = MulticastAddrV4::new(TEST_GROUP_V4).unwrap();
+        let result = MulticastRouteKey::new(
+            Some(IpAddr::V6(src)),
+            group.into(),
+            DEFAULT_MULTICAST_VNI,
+        );
+        assert!(
+            result.is_err(),
+            "v6 source with v4 group should be rejected"
+        );
+    }
+
+    #[test]
+    fn multicast_source_rejected_v4() {
+        assert!(
+            UnicastAddrV4::new(Ipv4Addr::new(224, 0, 0, 1)).is_err(),
+            "multicast address should be rejected as source"
+        );
+    }
+
+    #[test]
+    fn multicast_source_rejected_v6() {
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1))
+                .is_err(),
+            "multicast address should be rejected as source"
+        );
+    }
+
+    #[test]
+    fn unicast_rpf_valid_v4() {
+        let group = MulticastAddrV4::new(TEST_GROUP_V4).unwrap();
+        let key = MulticastRouteKey::any_source(group.into());
+        let mut route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        route.rpf_neighbor = Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(route.validate().is_ok(), "unicast v4 RPF should be valid");
+    }
+
+    #[test]
+    fn unicast_rpf_valid_v6() {
+        let group = MulticastAddrV6::new(TEST_GROUP_V6).unwrap();
+        let key = MulticastRouteKey::any_source(group.into());
+        let mut route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        route.rpf_neighbor =
+            Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+        assert!(route.validate().is_ok(), "unicast v6 RPF should be valid");
+    }
+
+    #[test]
+    fn multicast_rpf_invalid_v4() {
+        let group = MulticastAddrV4::new(TEST_GROUP_V4).unwrap();
+        let key = MulticastRouteKey::any_source(group.into());
+        let mut route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        route.rpf_neighbor = Some(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)));
+        assert!(
+            route.validate().is_err(),
+            "multicast RPF should be rejected"
+        );
+    }
+
+    #[test]
+    fn multicast_rpf_invalid_v6() {
+        let group = MulticastAddrV6::new(TEST_GROUP_V6).unwrap();
+        let key = MulticastRouteKey::any_source(group.into());
+        let mut route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        route.rpf_neighbor =
+            Some(IpAddr::V6(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1)));
+        assert!(
+            route.validate().is_err(),
+            "multicast RPF should be rejected"
+        );
+    }
+
+    #[test]
+    fn rpf_af_mismatch_v4_rpf_v6_group() {
+        let group = MulticastAddrV6::new(TEST_GROUP_V6).unwrap();
+        let key = MulticastRouteKey::any_source(group.into());
+        let mut route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        route.rpf_neighbor = Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(
+            route.validate().is_err(),
+            "v4 RPF with v6 group should be rejected"
+        );
+    }
+
+    #[test]
+    fn rpf_af_mismatch_v6_rpf_v4_group() {
+        let group = MulticastAddrV4::new(TEST_GROUP_V4).unwrap();
+        let key = MulticastRouteKey::any_source(group.into());
+        let mut route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        route.rpf_neighbor =
+            Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+        assert!(
+            route.validate().is_err(),
+            "v6 RPF with v4 group should be rejected"
+        );
     }
 
     /// remove() targets the correct path by identity, not by

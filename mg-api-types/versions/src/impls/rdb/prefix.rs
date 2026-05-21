@@ -46,22 +46,20 @@ impl Prefix4 {
         new
     }
 
-    pub fn host_bits_are_unset(&self) -> bool {
-        let mask = match self.length {
+    /// Bitmask covering the network portion of the prefix.
+    pub fn mask(&self) -> u32 {
+        match self.length {
             0 => 0,
             _ => u32::MAX << (Self::HOST_MASK - self.length),
-        };
+        }
+    }
 
-        self.value.to_bits() & mask == self.value.to_bits()
+    pub fn host_bits_are_unset(&self) -> bool {
+        self.value.to_bits() & self.mask() == self.value.to_bits()
     }
 
     pub fn unset_host_bits(&mut self) {
-        let mask = match self.length {
-            0 => 0,
-            _ => u32::MAX << (Self::HOST_MASK - self.length),
-        };
-
-        self.value = Ipv4Addr::from_bits(self.value.to_bits() & mask)
+        self.value = Ipv4Addr::from_bits(self.value.to_bits() & self.mask())
     }
 
     /// Check if this prefix is contained within another prefix.
@@ -71,23 +69,12 @@ impl Prefix4 {
         if self.length < other.length {
             return false;
         }
-
         if other.length == 0 {
             // /0 contains everything
             return true;
         }
-
-        // Create masks for comparison
-        let shift_amount = Self::HOST_MASK - other.length;
-        if shift_amount >= Self::HOST_MASK {
-            return false; // Invalid case
-        }
-        let mask = u32::MAX << shift_amount;
-
-        let self_masked = self.value.to_bits() & mask;
-        let other_masked = other.value.to_bits() & mask;
-
-        self_masked == other_masked
+        let mask = other.mask();
+        (self.value.to_bits() & mask) == (other.value.to_bits() & mask)
     }
 
     /// Check if a prefix contains a subnet that is valid for use in the RIB.
@@ -166,48 +153,35 @@ impl Prefix6 {
         new
     }
 
-    pub fn host_bits_are_unset(&self) -> bool {
-        let mask = match self.length {
+    /// Bitmask covering the network portion of the prefix.
+    pub fn mask(&self) -> u128 {
+        match self.length {
             0 => 0,
             _ => u128::MAX << (Self::HOST_MASK - self.length),
-        };
+        }
+    }
 
-        self.value.to_bits() & mask == self.value.to_bits()
+    pub fn host_bits_are_unset(&self) -> bool {
+        self.value.to_bits() & self.mask() == self.value.to_bits()
     }
 
     pub fn unset_host_bits(&mut self) {
-        let mask = match self.length {
-            0 => 0,
-            _ => u128::MAX << (Self::HOST_MASK - self.length),
-        };
-
-        self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
+        self.value = Ipv6Addr::from_bits(self.value.to_bits() & self.mask())
     }
 
     /// Check if this prefix is contained within another prefix.
     /// Returns true if this prefix is equal to or more specific than the other.
     pub fn within(&self, other: &Prefix6) -> bool {
-        // A less  specific prefix cannot be within a more specific one
+        // A less specific prefix cannot be within a more specific one
         if self.length < other.length {
             return false;
         }
-
         if other.length == 0 {
             // /0 contains everything
             return true;
         }
-
-        // Create masks for comparison
-        let shift_amount = Self::HOST_MASK - other.length;
-        if shift_amount >= Self::HOST_MASK {
-            return false; // Invalid case
-        }
-        let mask = u128::MAX << shift_amount;
-
-        let self_masked = self.value.to_bits() & mask;
-        let other_masked = other.value.to_bits() & mask;
-
-        self_masked == other_masked
+        let mask = other.mask();
+        (self.value.to_bits() & mask) == (other.value.to_bits() & mask)
     }
 
     /// Check if a prefix contains a subnet that is valid for use in the RIB.

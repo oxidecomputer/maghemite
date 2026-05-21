@@ -18,9 +18,12 @@ chrono.workspace = true
 clap = { workspace = true, optional = true }
 oxnet.workspace = true
 mg-api-types = { workspace = true, features = ["clap"] }
+poptrie.workspace = true
+omicron-common.workspace = true
 ndp.workspace = true
 
 [dev-dependencies]
+mg-api-types = { workspace = true, features = ["clap", "proptest"] }
 proptest.workspace = true
 
 [features]
