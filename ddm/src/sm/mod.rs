@@ -10,8 +10,9 @@
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use crate::exchange::Update;
-use ddm_api_types::db::RouterKind;
+use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
+use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
@@ -19,6 +20,7 @@ use std::net::Ipv6Addr;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -157,6 +159,71 @@ pub struct DpdConfig {
     pub port: u16,
 }
 
+#[derive(Clone, Debug)]
+pub enum FsmState {
+    Init,
+    Solicit,
+    Exchange,
+}
+
+impl FsmState {
+    pub fn to_peer_status(&self, elapsed: Duration) -> PeerStatus {
+        match self {
+            FsmState::Init => PeerStatus::Init(elapsed),
+            FsmState::Solicit => PeerStatus::Solicit(elapsed),
+            FsmState::Exchange => PeerStatus::Exchange(elapsed),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeerIdentity {
+    pub addr: Ipv6Addr,
+    pub hostname: String,
+    pub kind: RouterKind,
+}
+
+pub struct InterfaceState {
+    pub if_index: Mutex<u32>,
+    pub if_name: Mutex<String>,
+    pub fsm_state: Mutex<FsmState>,
+    pub last_fsm_state_change: Mutex<Instant>,
+    pub peer_identity: Mutex<Option<PeerIdentity>>,
+}
+
+impl InterfaceState {
+    pub fn transition(&self, state: FsmState) {
+        *lock!(self.fsm_state) = state;
+        *lock!(self.last_fsm_state_change) = Instant::now();
+    }
+
+    pub fn clear_peer(&self) {
+        *lock!(self.peer_identity) = None;
+    }
+
+    pub fn set_if_info(&self, index: u32, name: String) {
+        *lock!(self.if_index) = index;
+        *lock!(self.if_name) = name;
+    }
+
+    pub fn peer_status(&self) -> PeerStatus {
+        let elapsed = lock!(self.last_fsm_state_change).elapsed();
+        lock!(self.fsm_state).to_peer_status(elapsed)
+    }
+}
+
+impl Default for InterfaceState {
+    fn default() -> Self {
+        Self {
+            if_index: Mutex::new(0),
+            if_name: Mutex::new(String::new()),
+            fsm_state: Mutex::new(FsmState::Init),
+            last_fsm_state_change: Mutex::new(Instant::now()),
+            peer_identity: Mutex::new(None),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SessionStats {
     // Discovery
@@ -167,7 +234,6 @@ pub struct SessionStats {
     pub peer_expirations: AtomicU64,
     pub peer_address_changes: AtomicU64,
     pub peer_established: AtomicU64,
-    pub peer_address: Mutex<Option<Ipv6Addr>>,
 
     // Exchange
     pub updates_sent: AtomicU64,
@@ -185,6 +251,7 @@ pub struct SmContext {
     pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub hostname: String,
+    pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
 }

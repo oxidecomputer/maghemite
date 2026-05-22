@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Database types changed in version 2 (MULTICAST_SUPPORT).
+//! Database types changed in version 3 (MULTICAST_SUPPORT).
 //!
 //! Adds `MulticastRoute` for routes learned via DDM and extends
 //! `PeerInfo` with an optional discovery interface name.
@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use super::exchange::MulticastPathHop;
 use super::net::MulticastOrigin;
-use crate::v1::db::{PeerStatus, RouterKind};
+use crate::v1::db::RouterKind;
+use crate::v2::db::PeerStatus;
 
 /// A multicast route learned via DDM.
 ///
@@ -81,8 +82,8 @@ pub struct PeerInfo {
     pub if_name: Option<String>,
 }
 
-/// Downconvert v2 `PeerInfo` to v1 `PeerInfo` by dropping `if_name`.
-impl From<PeerInfo> for crate::v1::db::PeerInfo {
+/// Downconvert v3 `PeerInfo` to v2 `PeerInfo` by dropping `if_name`.
+impl From<PeerInfo> for crate::v2::db::PeerInfo {
     fn from(p: PeerInfo) -> Self {
         Self {
             status: p.status,

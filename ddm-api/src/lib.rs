@@ -4,6 +4,7 @@
 
 use ddm_api_types_versions::latest;
 use ddm_api_types_versions::v1;
+use ddm_api_types_versions::v2;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -26,7 +27,8 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (2, MULTICAST_SUPPORT),
+    (3, MULTICAST_SUPPORT),
+    (2, PEER_DURATIONS),
     (1, INITIAL),
 ]);
 
@@ -59,33 +61,42 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = GET,
         path = "/peers",
-        versions = ..VERSION_MULTICAST_SUPPORT
+        versions = VERSION_PEER_DURATIONS..VERSION_MULTICAST_SUPPORT
+    }]
+    async fn get_peers_v2(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v2::db::PeerInfo>>, HttpError> {
+        let resp = Self::get_peers(ctx).await?;
+        let converted: HashMap<u32, v2::db::PeerInfo> =
+            resp.0.into_iter().map(|(k, v)| (k, v.into())).collect();
+        Ok(HttpResponseOk(converted))
+    }
+
+    /// Returns peers without per-state duration or interface name information.
+    #[endpoint {
+        method = GET,
+        path = "/peers",
+        versions = ..VERSION_PEER_DURATIONS
     }]
     async fn get_peers_v1(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<u32, v1::db::PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<u32, v1::db::PeerInfo>>, HttpError> {
+        let resp = Self::get_peers(ctx).await?;
+        let converted: HashMap<u32, v1::db::PeerInfo> = resp
+            .0
+            .into_iter()
+            .map(|(k, v)| {
+                let v2_info: v2::db::PeerInfo = v.into();
+                (k, v2_info.into())
+            })
+            .collect();
+        Ok(HttpResponseOk(converted))
+    }
 
     #[endpoint { method = DELETE, path = "/peers/{addr}" }]
     async fn expire_peer(
         ctx: RequestContext<Self::Context>,
         params: Path<latest::admin::ExpirePathParams>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
-
-    /// Set peer information for a given interface index, bypassing the state machine.
-    ///
-    /// Intended for test fixtures that run `ddmd` with `--api-only`.
-    /// In a normal run, discovery writes peer entries keyed by interface
-    /// index whenever it processes an advertisement, so any directly-injected
-    /// entry for an active interface will be overwritten the next time a
-    /// peer is observed there.
-    #[endpoint {
-        method = PUT,
-        path = "/peer",
-        versions = VERSION_MULTICAST_SUPPORT..
-    }]
-    async fn put_peer(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::admin::PutPeerRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/originated" }]

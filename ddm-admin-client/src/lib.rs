@@ -30,6 +30,7 @@ progenitor::generate_api!(
         MulticastPathHop = ddm_api_types_versions::latest::exchange::MulticastPathHop,
         MulticastPathVector = ddm_api_types_versions::latest::exchange::MulticastPathVector,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
-        PutPeerRequest = ddm_api_types_versions::latest::admin::PutPeerRequest,
+        PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,
+        Duration = std::time::Duration,
     }
 );

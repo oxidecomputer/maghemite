@@ -8,22 +8,21 @@ pub mod admin {
     pub use crate::v1::admin::EnableStatsRequest;
     pub use crate::v1::admin::ExpirePathParams;
     pub use crate::v1::admin::PrefixMap;
-    pub use crate::v2::admin::PutPeerRequest;
 }
 
 pub mod db {
-    pub use crate::v1::db::PeerStatus;
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
-    pub use crate::v2::db::MulticastRoute;
-    pub use crate::v2::db::PeerInfo;
+    pub use crate::v2::db::PeerStatus;
+    pub use crate::v3::db::MulticastRoute;
+    pub use crate::v3::db::PeerInfo;
 }
 
 pub mod exchange {
     pub use crate::v1::exchange::PathVector;
     pub use crate::v1::exchange::PathVectorV2;
-    pub use crate::v2::exchange::MulticastPathHop;
-    pub use crate::v2::exchange::MulticastPathVector;
+    pub use crate::v3::exchange::MulticastPathHop;
+    pub use crate::v3::exchange::MulticastPathVector;
 }
 
 pub mod net {
@@ -31,7 +30,7 @@ pub mod net {
     pub use crate::v1::net::Ipv4Prefix;
     pub use crate::v1::net::Ipv6Prefix;
     pub use crate::v1::net::TunnelOrigin;
-    pub use crate::v2::net::MulticastOrigin;
-    pub use crate::v2::net::UnderlayMulticastIpv6;
-    pub use crate::v2::net::Vni;
+    pub use crate::v3::net::MulticastOrigin;
+    pub use crate::v3::net::UnderlayMulticastIpv6;
+    pub use crate::v3::net::Vni;
 }

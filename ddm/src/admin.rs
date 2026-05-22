@@ -6,9 +6,7 @@ use crate::db::Db;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
-use ddm_api_types::admin::{
-    EnableStatsRequest, ExpirePathParams, PrefixMap, PutPeerRequest,
-};
+use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
 use ddm_api_types::db::{MulticastRoute, PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
@@ -126,22 +124,6 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseOk(do_get_peers(ctx.context())))
     }
 
-    async fn get_peers_v1(
-        ctx: RequestContext<Self::Context>,
-    ) -> Result<
-        HttpResponseOk<HashMap<u32, ddm_api_types_versions::v1::db::PeerInfo>>,
-        HttpError,
-    > {
-        let ctx = lock!(ctx.context());
-        let peers = ctx
-            .db
-            .peers()
-            .into_iter()
-            .map(|(k, v)| (k, v.into()))
-            .collect();
-        Ok(HttpResponseOk(peers))
-    }
-
     async fn expire_peer(
         ctx: RequestContext<Self::Context>,
         params: Path<ExpirePathParams>,
@@ -158,14 +140,6 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 })?;
         }
 
-        Ok(HttpResponseUpdatedNoContent())
-    }
-
-    async fn put_peer(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<PutPeerRequest>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        do_put_peer(ctx.context(), request.into_inner());
         Ok(HttpResponseUpdatedNoContent())
     }
 
@@ -501,91 +475,38 @@ pub fn api_description()
 }
 
 /// Snapshot the current peer table, keyed by interface index.
+///
+/// Reads per-interface state machines first and then layers in any
+/// `--api-only` injected entries for interface indexes that are not
+/// represented by a running state machine.
 pub(crate) fn do_get_peers(
     ctx: &Arc<Mutex<HandlerContext>>,
 ) -> HashMap<u32, PeerInfo> {
     let ctx = lock!(ctx);
-    ctx.db.peers()
-}
-
-/// Insert or replace the peer entry at `request.if_index`. Tests bypass
-/// the dropshot endpoint and call this directly; production goes through
-/// [`DdmAdminApiImpl::put_peer`].
-pub(crate) fn do_put_peer(
-    ctx: &Arc<Mutex<HandlerContext>>,
-    request: PutPeerRequest,
-) {
-    let PutPeerRequest { if_index, info } = request;
-    let ctx = lock!(ctx);
-    ctx.db.set_peer(if_index, info);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{HandlerContext, RouterStats, do_get_peers, do_put_peer};
-    use crate::db::Db;
-    use ddm_api_types::admin::PutPeerRequest;
-    use ddm_api_types::db::{PeerInfo, PeerStatus, RouterKind};
-    use slog::{Discard, Logger, o};
-    use std::sync::{Arc, Mutex};
-    use tempfile::TempDir;
-
-    fn build_context(tmpdir: &TempDir) -> Arc<Mutex<HandlerContext>> {
-        let log = Logger::root(Discard, o!());
-        let db_path = tmpdir.path().join("ddm").to_str().unwrap().to_string();
-        let db = Db::new(&db_path, log.clone()).expect("open db");
-        Arc::new(Mutex::new(HandlerContext {
-            event_channels: vec![],
-            db,
-            stats: Arc::new(RouterStats::default()),
-            peers: vec![],
-            stats_handler: Arc::new(Mutex::new(None)),
-            log,
-        }))
-    }
-
-    #[test]
-    fn put_peer_round_trips() {
-        let tmpdir = TempDir::new().expect("tempdir");
-        let ctx = build_context(&tmpdir);
-
-        let info = PeerInfo {
-            status: PeerStatus::Active,
-            addr: "fd00::1".parse().unwrap(),
-            host: "test-sled-1".to_string(),
-            kind: RouterKind::Server,
-            if_name: Some("tfportrear0_0".to_string()),
+    let mut res = HashMap::new();
+    for sm in &ctx.peers {
+        // Compute status first so peer_status() never runs while we hold
+        // any of the InterfaceState mutexes below.
+        let status = sm.iface.peer_status();
+        let if_index = *lock!(sm.iface.if_index);
+        let if_name = lock!(sm.iface.if_name).clone();
+        let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
+            continue;
         };
-
-        do_put_peer(
-            &ctx,
-            PutPeerRequest {
-                if_index: 7,
-                info: info.clone(),
+        res.insert(
+            if_index,
+            PeerInfo {
+                status,
+                addr: peer.addr,
+                host: peer.hostname,
+                kind: peer.kind,
+                if_name: if if_name.is_empty() {
+                    None
+                } else {
+                    Some(if_name)
+                },
             },
         );
-
-        let peers = do_get_peers(&ctx);
-        assert_eq!(peers.len(), 1);
-        let got = peers.get(&7).expect("peer at if_index 7");
-        assert_eq!(got, &info);
-
-        // Overwriting at the same `if_index` replaces the entry rather
-        // than creating a second one.
-        let info2 = PeerInfo {
-            addr: "fd00::2".parse().unwrap(),
-            host: "test-sled-1-replaced".to_string(),
-            ..info
-        };
-        do_put_peer(
-            &ctx,
-            PutPeerRequest {
-                if_index: 7,
-                info: info2.clone(),
-            },
-        );
-        let peers = do_get_peers(&ctx);
-        assert_eq!(peers.len(), 1, "overwrite at same if_index keeps map size",);
-        assert_eq!(peers[&7].addr, info2.addr);
     }
+    res
 }

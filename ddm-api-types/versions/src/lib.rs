@@ -32,5 +32,7 @@
 pub mod latest;
 #[path = "initial/mod.rs"]
 pub mod v1;
-#[path = "multicast_support/mod.rs"]
+#[path = "peer_durations/mod.rs"]
 pub mod v2;
+#[path = "multicast_support/mod.rs"]
+pub mod v3;

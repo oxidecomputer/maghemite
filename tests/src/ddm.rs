@@ -4,8 +4,6 @@
 
 use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::admin::PutPeerRequest;
-use ddm_api_types_versions::latest::db::{PeerInfo, PeerStatus, RouterKind};
 use ddm_api_types_versions::latest::net::{
     MulticastOrigin, TunnelOrigin, UnderlayMulticastIpv6, Vni,
 };
@@ -471,29 +469,6 @@ async fn run_trio_tests(
     wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 2);
 
     println_nopipe!("initial peering test passed");
-
-    // PUT /peer smoke against a running ddmd. Use an unused interface
-    // index so the live discovery handler does not race the injection
-    // on a real interface.
-    let synthetic = PeerInfo {
-        status: PeerStatus::Active,
-        addr: "fd00::dead:beef".parse().unwrap(),
-        host: "synthetic".to_string(),
-        kind: RouterKind::Server,
-        if_name: Some("synthetic0".to_string()),
-    };
-
-    t1.put_peer(&PutPeerRequest {
-        if_index: 9999,
-        info: synthetic.clone(),
-    })
-    .await?;
-
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
-    let peers = t1.get_peers().await?;
-    assert_eq!(peers["9999"].host, "synthetic");
-
-    println_nopipe!("put_peer synthetic injection passed");
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
