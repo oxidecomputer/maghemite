@@ -4,7 +4,7 @@
 
 use crate::{
     bgp::basic_unnumbered_neighbor,
-    dendrite::{softnpu_link_create, wait_for_dpd},
+    dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     eos::EosNode,
     frr::FrrNode,
     mgd::{MgdNode, wait_for_mgd},
@@ -114,9 +114,7 @@ where
 async fn boot_trio<F>(
     topo_name: &str,
     persistent: bool,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
     spawn_peer_setups: F,
 ) -> Result<BootedTrio>
 where
@@ -139,17 +137,8 @@ where
     // Any failure between launch and Ok needs to dump diagnostics from the
     // running deployment. Wrap the rest of boot in a closure so we have a
     // single Err path to hook.
-    let result = boot_trio_inner(
-        &ad,
-        ox,
-        cr1,
-        cr2,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
-        spawn_peer_setups,
-    )
-    .await;
+    let result =
+        boot_trio_inner(&ad, ox, cr1, cr2, commits, spawn_peer_setups).await;
 
     match result {
         Ok((mgd, dpd, mgmt_addr)) => Ok(BootedTrio {
@@ -169,15 +158,12 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn boot_trio_inner<F>(
     ad: &Arc<Runner>,
     ox: MgdNode,
     cr1: FrrNode,
     cr2: EosNode,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
     spawn_peer_setups: F,
 ) -> Result<(MgdClient, DpdClient, IpAddr)>
 where
@@ -190,14 +176,7 @@ where
     let mgmt_addr = ox.illumos().dhcp(ad, "vioif1/dhcp").await?;
 
     let mut js = spawn_peer_setups(cr1, cr2, ad.clone());
-    js.spawn(ox.dendrite().npuvm(
-        ad.clone(),
-        2,
-        0,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
-    ));
+    js.spawn(ox.dendrite().npuvm(ad.clone(), 2, 0, commits));
     for result in js.join_all().await.into_iter() {
         result?;
     }
@@ -229,16 +208,12 @@ pub async fn cleanup_unnumbered_test() -> Result<()> {
 
 pub async fn run_trio_unnumbered_test(
     persistent: bool,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
 ) -> Result<()> {
     let bt = boot_trio(
         TRIO_UNNUMBERED_TOPO_NAME,
         persistent,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
+        commits,
         |cr1, cr2, ad| {
             let mut js = tokio::task::JoinSet::new();
             js.spawn(frr_setup(cr1, ad.clone()));
@@ -528,16 +503,12 @@ pub async fn cleanup_bfd_static_test() -> Result<()> {
 
 pub async fn run_trio_bfd_static_test(
     persistent: bool,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
 ) -> Result<()> {
     let bt = boot_trio(
         TRIO_BFD_STATIC_TOPO_NAME,
         persistent,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
+        commits,
         |cr1, cr2, ad| {
             let mut js = tokio::task::JoinSet::new();
             js.spawn(frr_bfd_setup(cr1, ad.clone()));

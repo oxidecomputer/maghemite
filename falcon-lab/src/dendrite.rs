@@ -13,10 +13,11 @@ use slog::{Logger, debug, info};
 use std::{error::Error as StdError, net::IpAddr, sync::Arc, time::Duration};
 use tokio::time::{Instant, sleep};
 
-/// Format an error along with its full `source()` chain. The default `Display`
-/// for `dpd_client::Error` / `reqwest::Error` only prints the top frame
-/// ("error sending request for url ..."), which hides the actual cause
-/// (connection refused, dns failure, tls error, ...).
+/// Format an error along with its full `Error::source()` chain.
+///
+/// Many `Display` impls print only the top frame and hide the underlying
+/// cause; `reqwest::Error` (as surfaced via `dpd_client::Error`) is the
+/// motivating example, but this works for any `std::error::Error`.
 pub fn fmt_error_chain(err: &(dyn StdError + 'static)) -> String {
     let mut out = err.to_string();
     let mut src = err.source();
@@ -26,6 +27,16 @@ pub fn fmt_error_chain(err: &(dyn StdError + 'static)) -> String {
         src = s.source();
     }
     out
+}
+
+/// Commits pinning the buildomat artifacts that `npuvm install` pulls.
+/// `npuvm` itself is always pinned; the other two default to "latest on
+/// main" when `None`.
+#[derive(Debug, Clone)]
+pub struct NpuvmCommits {
+    pub npuvm: String,
+    pub dendrite: Option<String>,
+    pub sidecar_lite: Option<String>,
 }
 
 #[derive(Copy, Clone)]
@@ -52,9 +63,7 @@ impl DendriteNode {
         d: Arc<Runner>,
         front_ports: usize,
         rear_ports: usize,
-        npuvm_commit: String,
-        dendrite_commit: Option<String>,
-        sidecar_lite_commit: Option<String>,
+        commits: NpuvmCommits,
     ) -> Result<()> {
         const BUILDOMAT_URL: &str =
             "https://buildomat.eng.oxide.computer/public/file/oxidecomputer/";
@@ -63,7 +72,8 @@ impl DendriteNode {
             self.0,
             &format!(
                 "curl --retry 5 -OL \
-                {BUILDOMAT_URL}/softnpu/image/{npuvm_commit}/npuvm"
+                {BUILDOMAT_URL}/softnpu/image/{}/npuvm",
+                commits.npuvm,
             ),
         )
         .await?;
@@ -79,10 +89,14 @@ impl DendriteNode {
                         --rear-ports {rear_ports} \
                         --pkt-source vioif0 \
                         {} {}",
-                    dendrite_commit
+                    commits
+                        .dendrite
+                        .as_ref()
                         .map(|x| format!("--dendrite-commit {x}"))
                         .unwrap_or_default(),
-                    sidecar_lite_commit
+                    commits
+                        .sidecar_lite
+                        .as_ref()
                         .map(|x| format!("--sidecar-lite-commit {x}"))
                         .unwrap_or_default(),
                 ),

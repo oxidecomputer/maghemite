@@ -4,7 +4,7 @@
 //! so it lands in the console output even if the disk write fails.
 
 use libfalcon::{NodeRef, Runner};
-use slog::warn;
+use slog::{info, warn};
 use std::path::Path;
 
 /// Run `cmd` on `node`, capture stdout, and persist it as an artifact
@@ -36,7 +36,7 @@ pub fn write_artifact(
         Some(s) => format!("=== {topo} {label} ({s}) ==="),
         None => format!("=== {topo} {label} ==="),
     };
-    warn!(d.log, "{header}\n{contents}");
+    info!(d.log, "{header}\n{contents}");
     let path = Path::new("/work").join(format!("{topo}-{label}.log"));
     if let Err(e) = std::fs::write(&path, contents) {
         warn!(d.log, "diagnostics {label}: write {path:?}: {e}");
