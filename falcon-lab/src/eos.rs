@@ -68,15 +68,16 @@ impl EosNode {
     pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
         let name = self.name(d);
         // `Cli -c` takes a single newline-separated script.
-        const SCRIPT: &str = "enable\n\
-            show running-config\n\
-            show ip interface brief\n\
-            show ip bgp summary\n\
-            show ip bgp\n\
-            show ipv6 bgp\n\
-            show ip route\n\
-            show ipv6 route\n\
-            show bfd peers";
+        const SCRIPT: &str = "enable
+            show running-config
+            show ip interface brief
+            show ip bgp summary
+            show ip bgp
+            show ipv6 bgp
+            show ip route
+            show ipv6 route
+            show bfd peers
+        ";
         match self.shell(d, SCRIPT).await {
             Ok(out) => crate::diagnostics::write_artifact(
                 d,
