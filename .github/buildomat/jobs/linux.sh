@@ -61,7 +61,7 @@ function digest {
 }
 
 banner "packages"
-sudo apt update -y
+sudo apt update
 sudo apt install -y pkg-config libssl-dev
 
 mkdir -p /work/debug

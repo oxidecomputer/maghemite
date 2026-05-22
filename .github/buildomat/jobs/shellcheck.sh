@@ -5,7 +5,7 @@
 #: target = "ubuntu-24.04"
 
 banner "packages"
-sudo apt update -y
+sudo apt update
 sudo apt install -y shellcheck
 
 banner "shellcheck"
