@@ -11,8 +11,8 @@ sudo apt install -y shellcheck
 banner "shellcheck"
 failed=0
 for script in .github/buildomat/jobs/*.sh; do
-    if ! shellcheck -x "$script"; then
-        echo "$script failed shellcheck" >&2
+    if ! shellcheck -x -o all "${script}"; then
+        echo "${script} failed shellcheck" >&2
         failed=1
     fi
 done

@@ -25,7 +25,7 @@ PLATFORM='illumos'
 
 cargo --version
 rustc --version
-cargo install cargo-nextest --version "$NEXTEST_VERSION"
+cargo install cargo-nextest --version "${NEXTEST_VERSION}"
 
 source .github/buildomat/test-common.sh
 
@@ -35,7 +35,7 @@ source .github/buildomat/test-common.sh
 pushd rdb
 PROPTEST_CASES=1000000 cargo nextest run --lib proptest
 cp ./*.log /work/ 2>/dev/null || true
-if [ -d proptest-regressions ]; then
+if [[ -d proptest-regressions ]]; then
     cp -r proptest-regressions /work/rdb-proptest-regressions
 fi
 popd
@@ -44,7 +44,7 @@ popd
 pushd bgp
 PROPTEST_CASES=1000000 cargo nextest run --lib proptest
 cp ./*.log /work/ 2>/dev/null || true
-if [ -d proptest-regressions ]; then
+if [[ -d proptest-regressions ]]; then
     cp -r proptest-regressions /work/bgp-proptest-regressions
 fi
 popd

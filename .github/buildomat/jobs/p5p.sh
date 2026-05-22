@@ -37,7 +37,7 @@ pushd pkg
 
 banner copy
 pfexec mkdir -p /out
-pfexec chown "$UID" /out
+pfexec chown "${UID}" /out
 PKG_NAME="/out/mg.p5p"
-mv packages/repo/*.p5p "$PKG_NAME"
-sha256sum "$PKG_NAME" > "$PKG_NAME.sha256"
+mv packages/repo/*.p5p "${PKG_NAME}"
+sha256sum "${PKG_NAME}" > "${PKG_NAME}.sha256"

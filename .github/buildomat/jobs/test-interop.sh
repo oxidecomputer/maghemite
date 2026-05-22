@@ -18,57 +18,58 @@
 
 set -x
 set -e
+set -o pipefail
 
 ssh() {
-	if [ -z "$SSH_BIN" ]; then
-		SSH_BIN=$(which ssh)
+	if [[ -z "${SSH_BIN}" ]]; then
+		SSH_BIN=$(command -v ssh)
 	fi
 
-	$SSH_BIN -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$@"
+	${SSH_BIN} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$@"
 }
 
 scp() {
-	if [ -z "$SCP_BIN" ]; then
-		SCP_BIN=$(which scp)
+	if [[ -z "${SCP_BIN}" ]]; then
+		SCP_BIN=$(command -v scp)
 	fi
 
-	$SCP_BIN -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$@"
+	${SCP_BIN} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$@"
 }
 
 net_info() {
 	#
 	# grab command output to see what's going on from the buildomat logs
 	#
-	if [ -z "$ARISTA_IP" ]; then
+	if [[ -z "${ARISTA_IP}" ]]; then
 		ARISTA_IF=$(pfexec ./interop exec arista "ip -4 -j route show default | jq '.[0][\"dev\"]' | tr -d '\"'")
-		ARISTA_IP=$(pfexec ./interop exec arista "ip -4 -br -j addr show dev $ARISTA_IF | jq '.[0][\"addr_info\"][0][\"local\"]' | tr -d '\"'")
+		ARISTA_IP=$(pfexec ./interop exec arista "ip -4 -br -j addr show dev ${ARISTA_IF} | jq '.[0][\"addr_info\"][0][\"local\"]' | tr -d '\"'")
 	fi
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 Cli -c 'show ip interface brief | no-more'"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 Cli -c 'show ip bgp summary | no-more'"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 Cli -c 'show ip bgp | no-more'"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 Cli -c 'show ip route | no-more'"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 Cli -c 'show ip interface brief | no-more'"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 Cli -c 'show ip bgp summary | no-more'"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 Cli -c 'show ip bgp | no-more'"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 Cli -c 'show ip route | no-more'"
 
-	if [ -z "$JUNIPER_IP" ]; then
+	if [[ -z "${JUNIPER_IP}" ]]; then
 		JUNIPER_IF=$(pfexec ./interop exec juniper "ip -j route show default | jq '.[0][\"dev\"]' | tr -d '\"'")
-		JUNIPER_IP=$(pfexec ./interop exec juniper "ip -4 -br -j addr show dev $JUNIPER_IF | jq '.[0][\"addr_info\"][0][\"local\"]' | tr -d '\"'")
+		JUNIPER_IP=$(pfexec ./interop exec juniper "ip -4 -br -j addr show dev ${JUNIPER_IF} | jq '.[0][\"addr_info\"][0][\"local\"]' | tr -d '\"'")
 	fi
-	ssh root@"$JUNIPER_IP" "docker exec -t crpd1 cli -c 'show interfaces terse | no-more'"
-	ssh root@"$JUNIPER_IP" "docker exec -t crpd1 cli -c 'show bgp summary | no-more'"
-	ssh root@"$JUNIPER_IP" "docker exec -t crpd1 cli -c 'show route | no-more'"
+	ssh root@"${JUNIPER_IP}" "docker exec -t crpd1 cli -c 'show interfaces terse | no-more'"
+	ssh root@"${JUNIPER_IP}" "docker exec -t crpd1 cli -c 'show bgp summary | no-more'"
+	ssh root@"${JUNIPER_IP}" "docker exec -t crpd1 cli -c 'show route | no-more'"
 
-	if [ -z "$MGD_IP" ]; then
+	if [[ -z "${MGD_IP}" ]]; then
 		MGD_IF=$(pfexec ./interop exec mgd "route get -inet default | grep interface | awk '{print \$NF}'")
-		MGD_IP=$(pfexec ./interop exec mgd "ipadm show-addr $MGD_IF/v4 -p -o addr | cut -d / -f 1")
+		MGD_IP=$(pfexec ./interop exec mgd "ipadm show-addr ${MGD_IF}/v4 -p -o addr | cut -d / -f 1")
 	fi
-	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status neighbors 65100"
-	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm rib status imported"
-	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm rib status selected"
-	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status exported 65100"
+	ssh root@"${MGD_IP}" "/opt/cargo-bay/mgadm bgp status neighbors 65100"
+	ssh root@"${MGD_IP}" "/opt/cargo-bay/mgadm rib status imported"
+	ssh root@"${MGD_IP}" "/opt/cargo-bay/mgadm rib status selected"
+	ssh root@"${MGD_IP}" "/opt/cargo-bay/mgadm bgp status exported 65100"
 }
 
 _exit_trap() {
 	local status=$?
-	[[ $status -eq 0 ]] && exit 0
+	[[ ${status} -eq 0 ]] && exit 0
 
 	set +o errexit
 
@@ -103,25 +104,25 @@ _exit_trap() {
 	# grab platform-specific logs
 	# variables set in prior call to net_info
 	#
-	ssh root@"$ARISTA_IP" "cp /tmp/init.log /tmp/arista.init.log"
-	ssh root@"$ARISTA_IP" "docker ps -a > /tmp/arista.docker-ps.log"
-	ssh root@"$ARISTA_IP" "docker logs ceos1 > /tmp/arista.docker.logs"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 cat /var/log/account.log > /tmp/arista.account.log"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 cat /var/log/messages > /tmp/arista.messages"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 cat /var/log/nginx-error.log > /tmp/arista.nginx-error.log"
-	ssh root@"$ARISTA_IP" "docker exec -t ceos1 cat /var/log/nginx-access.log > /tmp/arista.nginx-access.log"
-	scp root@"$ARISTA_IP":/tmp/*.log /work
+	ssh root@"${ARISTA_IP}" "cp /tmp/init.log /tmp/arista.init.log"
+	ssh root@"${ARISTA_IP}" "docker ps -a > /tmp/arista.docker-ps.log"
+	ssh root@"${ARISTA_IP}" "docker logs ceos1 > /tmp/arista.docker.logs"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 cat /var/log/account.log > /tmp/arista.account.log"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 cat /var/log/messages > /tmp/arista.messages"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 cat /var/log/nginx-error.log > /tmp/arista.nginx-error.log"
+	ssh root@"${ARISTA_IP}" "docker exec -t ceos1 cat /var/log/nginx-access.log > /tmp/arista.nginx-access.log"
+	scp root@"${ARISTA_IP}":/tmp/*.log /work
 
-	ssh root@"$JUNIPER_IP" "cp /tmp/init.log /tmp/juniper.init.log"
-	ssh root@"$JUNIPER_IP" "docker ps -a > /tmp/juniper.docker-ps.log"
-	ssh root@"$JUNIPER_IP" "docker logs crpd1 > /tmp/juniper.docker-logs.log"
-	ssh root@"$JUNIPER_IP" "docker exec -t crpd1 cat /var/log/messages > /tmp/juniper-messages.log"
-	ssh root@"$JUNIPER_IP" "docker exec -t crpd1 cat /var/log/na-grpcd > /tmp/juniper-na-grpcd.log"
-	scp root@"$JUNIPER_IP":/tmp/*.log /work
+	ssh root@"${JUNIPER_IP}" "cp /tmp/init.log /tmp/juniper.init.log"
+	ssh root@"${JUNIPER_IP}" "docker ps -a > /tmp/juniper.docker-ps.log"
+	ssh root@"${JUNIPER_IP}" "docker logs crpd1 > /tmp/juniper.docker-logs.log"
+	ssh root@"${JUNIPER_IP}" "docker exec -t crpd1 cat /var/log/messages > /tmp/juniper-messages.log"
+	ssh root@"${JUNIPER_IP}" "docker exec -t crpd1 cat /var/log/na-grpcd > /tmp/juniper-na-grpcd.log"
+	scp root@"${JUNIPER_IP}":/tmp/*.log /work
 
 	# /tmp filepaths chosen in testbed/interop/src/interop.rs and testbed/interop/cargo-bay/mgd/init.sh
-	ssh root@"$MGD_IP" "cp /tmp/init.log /tmp/mgd.init.log"
-	scp root@"$MGD_IP":/tmp/{mgd.init,mgd}.log /work
+	ssh root@"${MGD_IP}" "cp /tmp/init.log /tmp/mgd.init.log"
+	scp root@"${MGD_IP}":/tmp/{mgd.init,mgd}.log /work
 
 	find /work -ls
 
@@ -139,15 +140,20 @@ banner 'zpool'
 # pick the largest disk available
 DISK=$(pfexec diskinfo -pH | sort -k8 -n -r | head -1 | awk '{print $2}')
 export DISK
-pfexec zpool create -o ashift=12 -f cpool "$DISK"
+pfexec zpool create -o ashift=12 -f cpool "${DISK}"
 pfexec zfs create -o mountpoint=/ci cpool/ci
 
-if [[ $(curl -s http://catacomb.eng.oxide.computer:12346/trim-me) =~ "true" ]]; then
+trim_response=$(curl -s http://catacomb.eng.oxide.computer:12346/trim-me)
+if [[ ${trim_response} =~ "true" ]]; then
 		pfexec zpool trim cpool
-		while [[ ! $(zpool status -t cpool) =~ "100%" ]]; do sleep 10; done
+		while true; do
+			trim_status=$(zpool status -t cpool)
+			[[ ${trim_status} =~ "100%" ]] && break
+			sleep 10
+		done
 fi
 
-pfexec chown "$UID" /ci
+pfexec chown "${UID}" /ci
 cd /ci
 export FALCON_DATASET="cpool/falcon"
 
@@ -158,8 +164,8 @@ tar xvfz /input/build-interop/work/testbed.tar.gz
 mkdir -p image/mgd
 (cd image/mgd && tar xvfz /input/image/out/mgd.tar.gz)
 for bin in mgadm mgd; do
-	mv "image/mgd/root/opt/oxide/mgd/bin/$bin" \
-	    "testbed/interop/cargo-bay/mgd/$bin"
+	mv "image/mgd/root/opt/oxide/mgd/bin/${bin}" \
+	    "testbed/interop/cargo-bay/mgd/${bin}"
 done
 cd testbed
 mkdir -p target/debug
@@ -175,8 +181,8 @@ chmod +x dhcp-server
 first=$(bmat address ls -f extra -Ho first)
 last=$(bmat address ls -f extra -Ho last)
 gw=$(bmat address ls -f extra -Ho gateway)
-server=$(ipadm show-addr "$EXT_INTERFACE"/dhcp -po ADDR | sed 's#/.*##g')
-pfexec ./dhcp-server "$first" "$last" "$gw" "$server" &> /work/dhcp-server.log &
+server=$(ipadm show-addr "${EXT_INTERFACE}"/dhcp -po ADDR | sed 's#/.*##g')
+pfexec ./dhcp-server "${first}" "${last}" "${gw}" "${server}" &> /work/dhcp-server.log &
 
 banner 'launch'
 
