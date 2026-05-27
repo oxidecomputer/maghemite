@@ -64,6 +64,32 @@ impl EosNode {
         LinuxNode(self.0)
     }
 
+    /// Capture BGP / BFD / routing state via the Arista CLI.
+    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+        let name = self.name(d);
+        // `Cli -c` takes a single newline-separated script.
+        const SCRIPT: &str = "enable
+            show running-config
+            show ip interface brief
+            show ip bgp summary
+            show ip bgp
+            show ipv6 bgp
+            show ip route
+            show ipv6 route
+            show bfd peers
+        ";
+        match self.shell(d, SCRIPT).await {
+            Ok(out) => crate::diagnostics::write_artifact(
+                d,
+                topo,
+                &format!("{name}-cli"),
+                None,
+                &out,
+            ),
+            Err(e) => slog::warn!(d.log, "diagnostics {name}-cli: {e}"),
+        }
+    }
+
     /// Freeze the ceos container. BFD packets stop being processed without
     /// tearing down running-config, so `unpause` restores the session.
     pub async fn pause(&self, d: &Runner) -> Result<()> {
