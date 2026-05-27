@@ -23,7 +23,7 @@ PLATFORM='illumos'
 
 cargo --version
 rustc --version
-cargo install cargo-nextest --version "$NEXTEST_VERSION"
+cargo install cargo-nextest --version "${NEXTEST_VERSION}"
 
 source .github/buildomat/test-common.sh
 
