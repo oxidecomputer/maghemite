@@ -5,6 +5,9 @@
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
+#[cfg(not(all(feature = "backend", target_os = "illumos")))]
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
@@ -253,6 +256,7 @@ fn start_state_machines(
             log: log.clone(),
             hostname: hostname.to_string(),
             rt: rt.clone(),
+            iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
         };
 

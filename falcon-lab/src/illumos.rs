@@ -110,6 +110,51 @@ impl IllumosNode {
         }
         Err(anyhow!("timeout waiting for link {name}"))
     }
+
+    /// Resolve the SMF log file for `svc` via `svcs -L` and return its
+    /// contents along with the resolved path. Avoids hard-coding the log file.
+    pub async fn svc_log(
+        &self,
+        d: &Runner,
+        svc: &str,
+    ) -> Result<(String, String)> {
+        let path = d.exec(self.0, &format!("svcs -L {svc}")).await?;
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(anyhow!("`svcs -L {svc}` returned empty path"));
+        }
+        let contents = d.exec(self.0, &format!("cat {path}")).await?;
+        Ok((path.to_string(), contents))
+    }
+
+    /// Fetch the full contents of a file on the node.
+    pub async fn read_file(&self, d: &Runner, path: &str) -> Result<String> {
+        d.exec(self.0, &format!("cat {path}"))
+            .await
+            .map_err(|e| anyhow!("cat {path}: {e}"))
+    }
+
+    /// Capture SMF status plus the standard illumos network-state snapshots
+    /// (ipadm / dladm / netstat) for this node. Each lands as its own
+    /// `/work/<topo>-<node>-<suffix>.log` artifact.
+    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+        let name = d.get_node(self.0).name.clone();
+        for (suffix, cmd) in [
+            ("svcs-xv", "svcs -xv"),
+            ("ipadm", "ipadm show-addr"),
+            ("dladm", "dladm show-link"),
+            ("netstat", "netstat -nr"),
+        ] {
+            crate::diagnostics::capture(
+                d,
+                self.0,
+                topo,
+                &format!("{name}-{suffix}"),
+                cmd,
+            )
+            .await;
+        }
+    }
 }
 
 /// Treat `ipadm` output as success unless it contains an error line and the

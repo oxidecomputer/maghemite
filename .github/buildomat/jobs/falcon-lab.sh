@@ -4,10 +4,13 @@
 #: variety = "basic"
 #: target = "lab-2.0-gimlet"
 #: skip_clone = true
-#: 
+#: output_rules = [
+#:   "/work/*",
+#: ]
+#:
 #: [dependencies.build-interop]
 #: job = "build-interop"
-#: 
+#:
 #: [dependencies.build]
 #: job = "build"
 #:

@@ -4,7 +4,7 @@
 
 use crate::{
     bgp::basic_unnumbered_neighbor,
-    dendrite::{softnpu_link_create, wait_for_dpd},
+    dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     eos::EosNode,
     frr::FrrNode,
     mgd::{MgdNode, wait_for_mgd},
@@ -32,7 +32,7 @@ use mg_api_types::static_routes::{
     StaticRoute4List, StaticRoute6, StaticRoute6List,
 };
 use oxnet::{Ipv4Net, Ipv6Net};
-use slog::info;
+use slog::{info, warn};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     sync::Arc,
@@ -82,6 +82,28 @@ struct BootedTrio {
     dpd: DpdClient,
     #[allow(dead_code)]
     mgmt_addr: IpAddr,
+    topo_name: String,
+}
+
+/// Run a test body against a booted topology and dump diagnostics from every
+/// VM if it fails. The body consumes the `BootedTrio`, so cache the bits
+/// `collect_diagnostics` needs before handing it off.
+async fn run_with_diagnostics<F, Fut>(bt: BootedTrio, body: F) -> Result<()>
+where
+    F: FnOnce(BootedTrio) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let ad = bt.ad.clone();
+    let ox = bt.ox;
+    let cr1 = bt.cr1;
+    let cr2 = bt.cr2;
+    let topo_name = bt.topo_name.clone();
+    let result = body(bt).await;
+    if let Err(e) = &result {
+        warn!(ad.log, "{topo_name} failed: {e:#}");
+        collect_diagnostics(&ad, ox, cr1, cr2, &topo_name).await;
+    }
+    result
 }
 
 /// Launch the trio topology and complete the work shared by every trio-based
@@ -92,9 +114,7 @@ struct BootedTrio {
 async fn boot_trio<F>(
     topo_name: &str,
     persistent: bool,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
     spawn_peer_setups: F,
 ) -> Result<BootedTrio>
 where
@@ -114,24 +134,58 @@ where
     d.launch().await.context("launch failed")?;
     let ad = Arc::new(d);
 
-    let mgmt_addr = ox.illumos().dhcp(&ad, "vioif1/dhcp").await?;
+    // Any failure between launch and Ok needs to dump diagnostics from the
+    // running deployment. Wrap the rest of boot in a closure so we have a
+    // single Err path to hook.
+    let result =
+        boot_trio_inner(&ad, ox, cr1, cr2, commits, spawn_peer_setups).await;
+
+    match result {
+        Ok((mgd, dpd, mgmt_addr)) => Ok(BootedTrio {
+            ad,
+            ox,
+            cr1,
+            cr2,
+            mgd,
+            dpd,
+            mgmt_addr,
+            topo_name: topo_name.to_string(),
+        }),
+        Err(e) => {
+            collect_diagnostics(&ad, ox, cr1, cr2, topo_name).await;
+            Err(e)
+        }
+    }
+}
+
+async fn boot_trio_inner<F>(
+    ad: &Arc<Runner>,
+    ox: MgdNode,
+    cr1: FrrNode,
+    cr2: EosNode,
+    commits: NpuvmCommits,
+    spawn_peer_setups: F,
+) -> Result<(MgdClient, DpdClient, IpAddr)>
+where
+    F: FnOnce(
+        FrrNode,
+        EosNode,
+        Arc<Runner>,
+    ) -> tokio::task::JoinSet<Result<()>>,
+{
+    let mgmt_addr = ox.illumos().dhcp(ad, "vioif1/dhcp").await?;
 
     let mut js = spawn_peer_setups(cr1, cr2, ad.clone());
-    js.spawn(ox.dendrite().npuvm(
-        ad.clone(),
-        2,
-        0,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
-    ));
+    js.spawn(ox.dendrite().npuvm(ad.clone(), 2, 0, commits));
     for result in js.join_all().await.into_iter() {
         result?;
     }
 
-    let mgd = ox.client(&ad, mgmt_addr).await?;
-    let dpd = ox.dendrite().client(&ad, mgmt_addr).await?;
-    wait_for_dpd(&dpd, OP_TIMEOUT, &ad.log).await?;
+    let mgd = ox.client(ad, mgmt_addr).await?;
+    let dpd = ox.dendrite().client(ad, mgmt_addr).await?;
+    wait_for_dpd(&dpd, OP_TIMEOUT, &ad.log)
+        .await
+        .context("wait_for_dpd")?;
 
     for link in ["qsfp0", "qsfp1"] {
         softnpu_link_create(&dpd, link)
@@ -139,18 +193,10 @@ where
             .context(format!("create {link}"))?;
     }
     for link in ["tfportqsfp0_0", "tfportqsfp1_0"] {
-        ox.illumos().wait_for_link(&ad, link, OP_TIMEOUT).await?;
+        ox.illumos().wait_for_link(ad, link, OP_TIMEOUT).await?;
     }
 
-    Ok(BootedTrio {
-        ad,
-        ox,
-        cr1,
-        cr2,
-        mgd,
-        dpd,
-        mgmt_addr,
-    })
+    Ok((mgd, dpd, mgmt_addr))
 }
 
 pub async fn cleanup_unnumbered_test() -> Result<()> {
@@ -162,24 +208,12 @@ pub async fn cleanup_unnumbered_test() -> Result<()> {
 
 pub async fn run_trio_unnumbered_test(
     persistent: bool,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
 ) -> Result<()> {
-    let BootedTrio {
-        ad,
-        ox,
-        cr1,
-        cr2,
-        mgd,
-        dpd,
-        ..
-    } = boot_trio(
+    let bt = boot_trio(
         TRIO_UNNUMBERED_TOPO_NAME,
         persistent,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
+        commits,
         |cr1, cr2, ad| {
             let mut js = tokio::task::JoinSet::new();
             js.spawn(frr_setup(cr1, ad.clone()));
@@ -188,6 +222,20 @@ pub async fn run_trio_unnumbered_test(
         },
     )
     .await?;
+
+    run_with_diagnostics(bt, trio_unnumbered_body).await
+}
+
+async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
+    let BootedTrio {
+        ad,
+        ox,
+        cr1,
+        cr2,
+        mgd,
+        dpd,
+        ..
+    } = bt;
 
     for link in ["tfportqsfp0_0", "tfportqsfp1_0"] {
         let addr = format!("{link}/ll");
@@ -359,6 +407,28 @@ pub async fn run_trio_unnumbered_test(
     Ok(())
 }
 
+/// Snapshot logs and live state from every VM in the trio into `/work/` so
+/// a failed run preserves the evidence past deployment teardown. The actual
+/// per-daemon and per-peer collection lives on each node type's
+/// `collect_diagnostics` method; this function is just the composition.
+async fn collect_diagnostics(
+    d: &Runner,
+    ox: MgdNode,
+    cr1: FrrNode,
+    cr2: EosNode,
+    topo_name: &str,
+) {
+    warn!(d.log, "collecting diagnostics for {topo_name}");
+    // ox VM: illumos network state, plus each daemon's log via its lens.
+    ox.illumos().collect_diagnostics(d, topo_name).await;
+    ox.dendrite().collect_diagnostics(d, topo_name).await;
+    ox.ddm().collect_diagnostics(d, topo_name).await;
+    ox.collect_diagnostics(d, topo_name).await;
+    // Peer routers.
+    cr1.collect_diagnostics(d, topo_name).await;
+    cr2.collect_diagnostics(d, topo_name).await;
+}
+
 async fn frr_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
     const BASE_CONFIG: &str = "
         configure
@@ -433,24 +503,12 @@ pub async fn cleanup_bfd_static_test() -> Result<()> {
 
 pub async fn run_trio_bfd_static_test(
     persistent: bool,
-    npuvm_commit: String,
-    dendrite_commit: Option<String>,
-    sidecar_lite_commit: Option<String>,
+    commits: NpuvmCommits,
 ) -> Result<()> {
-    let BootedTrio {
-        ad,
-        ox,
-        cr1,
-        cr2,
-        mgd,
-        dpd,
-        ..
-    } = boot_trio(
+    let bt = boot_trio(
         TRIO_BFD_STATIC_TOPO_NAME,
         persistent,
-        npuvm_commit,
-        dendrite_commit,
-        sidecar_lite_commit,
+        commits,
         |cr1, cr2, ad| {
             let mut js = tokio::task::JoinSet::new();
             js.spawn(frr_bfd_setup(cr1, ad.clone()));
@@ -459,6 +517,20 @@ pub async fn run_trio_bfd_static_test(
         },
     )
     .await?;
+
+    run_with_diagnostics(bt, trio_bfd_static_body).await
+}
+
+async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
+    let BootedTrio {
+        ad,
+        ox,
+        cr1,
+        cr2,
+        mgd,
+        dpd,
+        ..
+    } = bt;
 
     // Register each ox-side address with dpd so softnpu punts packets for
     // those destinations to the CPU port. Link-local v6 is handled
