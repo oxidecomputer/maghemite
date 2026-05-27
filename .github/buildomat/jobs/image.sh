@@ -58,7 +58,7 @@ tar tvfz out/mg-ddm-gz.tar
 
 banner copy
 pfexec mkdir -p /out
-pfexec chown "$UID" /out
+pfexec chown "${UID}" /out
 mv out/mg-ddm-gz.tar /out/mg-ddm-gz.tar
 mv out/mg-ddm.tar.gz /out/mg-ddm.tar.gz
 mv out/mgd.tar.gz /out/mgd.tar.gz

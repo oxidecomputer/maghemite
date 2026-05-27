@@ -2,7 +2,7 @@
 #:
 #: name = "linux"
 #: variety = "basic"
-#: target = "ubuntu-22.04"
+#: target = "ubuntu-24.04"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/debug/*",
@@ -61,7 +61,7 @@ function digest {
 }
 
 banner "packages"
-sudo apt update -y
+sudo apt update
 sudo apt install -y pkg-config libssl-dev
 
 mkdir -p /work/debug

@@ -79,6 +79,47 @@ impl FrrNode {
             .any(|p| p.peer == peer && p.status.eq_ignore_ascii_case("up")))
     }
 
+    /// Capture BGP / BFD / routing state via vtysh, plus linux network state
+    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+        let name = self.name(d);
+        const VTYSH: &str = "
+            show running-config
+            show ip bgp summary
+            show ip bgp
+            show ipv6 bgp
+            show ip route
+            show ipv6 route
+            show bfd peers
+        ";
+        match self.shell(d, VTYSH).await {
+            Ok(out) => crate::diagnostics::write_artifact(
+                d,
+                topo,
+                &format!("{name}-vtysh"),
+                None,
+                &out,
+            ),
+            Err(e) => slog::warn!(d.log, "diagnostics {name}-vtysh: {e}"),
+        }
+        // Plain `ip` snapshots (not a vtysh command, so issued directly).
+        for (suffix, cmd) in [
+            ("ip-link", "ip -d -s link show"),
+            ("ip-addr", "ip -d -s addr show"),
+            ("ip-neigh", "ip -d -s neigh show"),
+            ("ip-nexthop", "ip -d -s nexthop show"),
+            ("ip-route", "ip -d -s route show table all"),
+        ] {
+            crate::diagnostics::capture(
+                d,
+                self.0,
+                topo,
+                &format!("{name}-{suffix}"),
+                cmd,
+            )
+            .await;
+        }
+    }
+
     /// Execute a vtysh command and return the output.
     pub async fn shell(&self, d: &Runner, script: &str) -> Result<String> {
         info!(
