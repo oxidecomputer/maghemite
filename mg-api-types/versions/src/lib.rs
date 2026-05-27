@@ -35,6 +35,8 @@ pub mod latest;
 pub mod v1;
 #[path = "v4_over_v6_static_routes/mod.rs"]
 pub mod v10;
+#[path = "ip_headers/mod.rs"]
+pub mod v11;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

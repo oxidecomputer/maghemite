@@ -4,7 +4,7 @@
 
 use crate::{
     IO_TIMEOUT,
-    connection::{BgpConnection, BgpListener},
+    connection::{BgpConnection, BgpConnectionPolicy, BgpListener},
     router::SessionMap,
     session::{FsmEvent, PeerId, SessionEvent},
     unnumbered::UnnumberedManager,
@@ -170,7 +170,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     "session_key" => format!("{key:?}"),
                 ));
 
-                let (runner, min_ttl, md5_key) = {
+                let (runner, policy) = {
                     let sessions = lock!(self.sessions);
                     let Some(runner) = sessions.get(&key).cloned() else {
                         debug!(
@@ -182,14 +182,15 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     let config = lock!(runner.session);
                     (
                         runner.clone(),
-                        config.min_ttl,
-                        config.md5_auth_key.clone(),
+                        BgpConnectionPolicy {
+                            min_ttl: config.min_ttl,
+                            md5_key: config.md5_auth_key.clone(),
+                            dscp: config.dscp,
+                        },
                     )
                 };
 
-                if let Err(e) =
-                    Listener::apply_policy(&accepted, min_ttl, md5_key)
-                {
+                if let Err(e) = Listener::apply_policy(&accepted, policy) {
                     warn!(session_log,
                         "failed to apply policy for connection";
                         "error" => format!("{e}")

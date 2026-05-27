@@ -278,6 +278,7 @@ fn create_test_session_info(
             max: 1.0,
         }),
         deterministic_collision_resolution: false,
+        dscp: Default::default(),
     }
 }
 
@@ -2573,6 +2574,7 @@ fn create_unnumbered_session_info(
         connect_retry_jitter: None,
         idle_hold_jitter: None,
         deterministic_collision_resolution: false,
+        dscp: Default::default(),
     }
 }
 

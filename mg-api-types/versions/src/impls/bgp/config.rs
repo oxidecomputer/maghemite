@@ -198,6 +198,7 @@ fn latest_params_from_rdb(
         vlan_id,
         src_addr,
         src_port,
+        dscp,
     } = params;
 
     latest::bgp::config::BgpPeerParameters {
@@ -236,6 +237,7 @@ fn latest_params_from_rdb(
         deterministic_collision_resolution: false,
         src_addr,
         src_port,
+        dscp: Some(dscp),
     }
 }
 

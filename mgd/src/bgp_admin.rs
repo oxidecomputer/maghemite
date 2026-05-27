@@ -27,9 +27,9 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api_types::bgp::config::{
-    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetOp,
-    NeighborResetRequest, NeighborSelector, Origin4, PeerInfo, ShaperSource,
-    UnnumberedNeighbor, UnnumberedNeighborResetRequest,
+    ApplyRequest, AsnSelector, BgpPeerParameters, CheckerSource, Neighbor,
+    NeighborResetOp, NeighborResetRequest, NeighborSelector, Origin4, PeerInfo,
+    ShaperSource, UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
 use mg_api_types::bgp::history::{FsmEventBuffer, MessageDirection, Origin6};
@@ -43,6 +43,7 @@ use mg_api_types::bgp::session::{
 use mg_api_types::bgp::session::{
     FsmEventRecord, FsmStateKind, MessageHistory,
 };
+use mg_api_types::common::headers::Dscp;
 use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
@@ -50,7 +51,7 @@ use mg_api_types::ndp::{
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5};
+use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
 use rdb::{Asn, RibExt};
 use slog::Logger;
@@ -207,7 +208,11 @@ pub async fn read_neighbors_v1(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x).into())
+        .map(|x| {
+            v1::bgp::config::Neighbor::from(v8::bgp::config::Neighbor::from(
+                Neighbor::from_rdb_neighbor_info(rq.asn, &x),
+            ))
+        })
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -239,8 +244,10 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result: v1::bgp::config::Neighbor =
-        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info).into();
+    let result: v1::bgp::config::Neighbor = v8::bgp::config::Neighbor::from(
+        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info),
+    )
+    .into();
     Ok(HttpResponseOk(result))
 }
 
@@ -1926,7 +1933,10 @@ pub(crate) mod helpers {
         let allow_export4 =
             ImportExportPolicy4::from(rq.parameters.allow_export.clone());
 
-        let info = SessionInfo::from(&rq.parameters);
+        let params = BgpPeerParameters::from(
+            v8::bgp::config::BgpPeerParameters::from(rq.parameters.clone()),
+        );
+        let info = SessionInfo::from(&params);
 
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
@@ -1986,6 +1996,7 @@ pub(crate) mod helpers {
                     nexthop6: None,
                     src_addr: None,
                     src_port: None,
+                    dscp: Dscp::CS6,
                 },
             },
         )?;
@@ -2100,6 +2111,7 @@ pub(crate) mod helpers {
                     vlan_id: rq.parameters.vlan_id,
                     src_addr: rq.parameters.src_addr,
                     src_port: rq.parameters.src_port,
+                    dscp: rq.parameters.dscp.unwrap_or(Dscp::CS6),
                 },
             },
         )?;
@@ -2226,6 +2238,7 @@ pub(crate) mod helpers {
                     vlan_id: rq.parameters.vlan_id,
                     src_addr: rq.parameters.src_addr,
                     src_port: rq.parameters.src_port,
+                    dscp: rq.parameters.dscp.unwrap_or(Dscp::CS6),
                 },
             },
         )?;
@@ -2620,6 +2633,7 @@ mod tests {
     use mg_api_types_versions::v1::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
     };
+    use mg_api_types_versions::v8;
     use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
@@ -2729,9 +2743,12 @@ mod tests {
             peers,
         };
 
-        do_bgp_apply(&ctx, req.clone().into())
-            .await
-            .expect("bgp apply request");
+        do_bgp_apply(
+            &ctx,
+            v8::bgp::config::ApplyRequest::from(req.clone()).into(),
+        )
+        .await
+        .expect("bgp apply request");
 
         assert_eq!(
             ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
@@ -2740,9 +2757,12 @@ mod tests {
 
         req.peers.remove("qsfp0");
 
-        do_bgp_apply(&ctx, req.clone().into())
-            .await
-            .expect("bgp apply request");
+        do_bgp_apply(
+            &ctx,
+            v8::bgp::config::ApplyRequest::from(req.clone()).into(),
+        )
+        .await
+        .expect("bgp apply request");
 
         assert_eq!(
             ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),

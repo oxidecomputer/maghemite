@@ -10,6 +10,7 @@ use crate::{
     session::{FsmEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::common::headers::Dscp;
 use slog::Logger;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -30,6 +31,12 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
 #[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
+
+pub struct BgpConnectionPolicy {
+    pub min_ttl: Option<u8>,
+    pub md5_key: Option<String>,
+    pub dscp: Dscp,
+}
 
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
@@ -61,8 +68,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     /// Dispatcher after accept() returns and session lookup is completed.
     fn apply_policy(
         conn: &Cnx,
-        min_ttl: Option<u8>,
-        md5_key: Option<String>,
+        policy: BgpConnectionPolicy,
     ) -> Result<(), Error>;
 
     /// `SocketAddr` the listener is receiving connections on

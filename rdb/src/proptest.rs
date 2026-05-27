@@ -10,6 +10,7 @@
 
 use crate::types::StaticRouteKey;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::common::headers::Dscp;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use proptest::{prelude::*, strategy::Just};
@@ -195,6 +196,7 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                         vlan_id: Some(1),
                         src_addr: None,
                         src_port: None,
+                        dscp: Dscp::CS6,
                     },
                 }
             },

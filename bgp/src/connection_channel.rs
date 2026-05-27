@@ -11,8 +11,8 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        BgpConnection, BgpConnectionPolicy, BgpConnector, BgpListener,
+        ConnectionDirection, ConnectionId, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -273,8 +273,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
 
     fn apply_policy(
         _conn: &BgpConnectionChannel,
-        _min_ttl: Option<u8>,
-        _md5_key: Option<String>,
+        _policy: BgpConnectionPolicy,
     ) -> Result<(), Error> {
         // Policy application is ignored for test connections
         Ok(())

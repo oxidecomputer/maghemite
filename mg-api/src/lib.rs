@@ -10,7 +10,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_api_types_versions::{latest, v1, v2, v4, v5};
+use mg_api_types_versions::{latest, v1, v2, v4, v5, v8};
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):
@@ -24,6 +24,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (11, IP_HEADERS),
     (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
     (8, BGP_SRC_ADDR),
@@ -130,13 +131,14 @@ pub trait MgAdminApi {
 
     // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    // Latest API (VERSION_BGP_SRC_ADDR..) - supports src_addr/src_port for
-    // per-neighbor source address binding.
+    // Latest API (VERSION_IP_HEADERS..) - adds per-neighbor DSCP marking on
+    // top of v8's src_addr/src_port. `delete_neighbor` is unbracketed because
+    // its selector type did not change at v10.
 
     #[endpoint {
         method = PUT,
         path = "/bgp/config/neighbor",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn create_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -146,7 +148,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/neighbor/{asn}/{peer}",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn read_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -156,7 +158,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/neighbors/{asn}",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn read_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -166,7 +168,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/neighbor",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn update_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -183,6 +185,48 @@ pub trait MgAdminApi {
         path: Path<latest::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
+    // V8 API (VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS) - last shape before
+    // DSCP marking was added. Provided defaults thread requests/responses
+    // through the v8↔v10 conversions.
+
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "create_neighbor" }]
+    async fn create_neighbor_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v8::bgp::config::Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::create_neighbor(rqctx, request.map(Into::into)).await
+    }
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "read_neighbor" }]
+    async fn read_neighbor_v8(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<v5::bgp::config::NeighborSelector>,
+    ) -> Result<HttpResponseOk<v8::bgp::config::Neighbor>, HttpError> {
+        Self::read_neighbor(rqctx, path)
+            .await
+            .map(|r| r.map(v8::bgp::config::Neighbor::from))
+    }
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "read_neighbors" }]
+    async fn read_neighbors_v8(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<v8::bgp::config::Neighbor>>, HttpError> {
+        Self::read_neighbors(rqctx, path).await.map(|r| {
+            r.map(|v| {
+                v.into_iter().map(v8::bgp::config::Neighbor::from).collect()
+            })
+        })
+    }
+
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "update_neighbor" }]
+    async fn update_neighbor_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v8::bgp::config::Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::update_neighbor(rqctx, request.map(Into::into)).await
+    }
+
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - supports both
     // numbered and unnumbered neighbors but lacks src_addr/src_port.
 
@@ -196,7 +240,11 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::create_neighbor(rqctx, request.map(Into::into)).await
+        Self::create_neighbor(
+            rqctx,
+            request.map(v8::bgp::config::Neighbor::from).map(Into::into),
+        )
+        .await
     }
 
     #[endpoint {
@@ -209,9 +257,13 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         path: Path<v5::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseOk<v4::bgp::config::Neighbor>, HttpError> {
-        Self::read_neighbor(rqctx, path)
-            .await
-            .map(|r| r.map(Into::into))
+        Self::read_neighbor(rqctx, path).await.map(|r| {
+            r.map(|n| {
+                v4::bgp::config::Neighbor::from(
+                    v8::bgp::config::Neighbor::from(n),
+                )
+            })
+        })
     }
 
     #[endpoint {
@@ -224,9 +276,14 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         path: Path<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<v4::bgp::config::Neighbor>>, HttpError> {
-        Self::read_neighbors(rqctx, path)
-            .await
-            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+        Self::read_neighbors(rqctx, path).await.map(|r| {
+            r.map(|v| {
+                v.into_iter()
+                    .map(v8::bgp::config::Neighbor::from)
+                    .map(v4::bgp::config::Neighbor::from)
+                    .collect()
+            })
+        })
     }
 
     #[endpoint {
@@ -239,7 +296,11 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::update_neighbor(rqctx, request.map(Into::into)).await
+        Self::update_neighbor(
+            rqctx,
+            request.map(v8::bgp::config::Neighbor::from).map(Into::into),
+        )
+        .await
     }
 
     #[endpoint {
@@ -454,7 +515,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -467,7 +528,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -477,7 +538,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -490,7 +551,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -506,6 +567,55 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::bgp::config::UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
+
+    // V8 API (VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS) - last shape before
+    // DSCP marking was added.
+
+    #[endpoint { method = GET, path = "/bgp/config/unnumbered-neighbors", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "read_unnumbered_neighbors" }]
+    async fn read_unnumbered_neighbors_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<latest::bgp::config::AsnSelector>,
+    ) -> Result<
+        HttpResponseOk<Vec<v8::bgp::config::UnnumberedNeighbor>>,
+        HttpError,
+    > {
+        Self::read_unnumbered_neighbors(rqctx, request)
+            .await
+            .map(|r| {
+                r.map(|v| {
+                    v.into_iter()
+                        .map(v8::bgp::config::UnnumberedNeighbor::from)
+                        .collect()
+                })
+            })
+    }
+
+    #[endpoint { method = PUT, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "create_unnumbered_neighbor" }]
+    async fn create_unnumbered_neighbor_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v8::bgp::config::UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::create_unnumbered_neighbor(rqctx, request.map(Into::into)).await
+    }
+
+    #[endpoint { method = GET, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "read_unnumbered_neighbor" }]
+    async fn read_unnumbered_neighbor_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<latest::bgp::config::UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<v8::bgp::config::UnnumberedNeighbor>, HttpError>
+    {
+        Self::read_unnumbered_neighbor(rqctx, request)
+            .await
+            .map(|r| r.map(v8::bgp::config::UnnumberedNeighbor::from))
+    }
+
+    #[endpoint { method = POST, path = "/bgp/config/unnumbered-neighbor", versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS, operation_id = "update_unnumbered_neighbor" }]
+    async fn update_unnumbered_neighbor_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v8::bgp::config::UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::update_unnumbered_neighbor(rqctx, request.map(Into::into)).await
+    }
 
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - unnumbered neighbors
     // without src_addr/src_port. Operation IDs match the latest endpoints so
@@ -526,7 +636,14 @@ pub trait MgAdminApi {
     > {
         Self::read_unnumbered_neighbors(rqctx, request)
             .await
-            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+            .map(|r| {
+                r.map(|v| {
+                    v.into_iter()
+                        .map(v8::bgp::config::UnnumberedNeighbor::from)
+                        .map(v5::bgp::config::UnnumberedNeighbor::from)
+                        .collect()
+                })
+            })
     }
 
     #[endpoint {
@@ -539,7 +656,13 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v5::bgp::config::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::create_unnumbered_neighbor(rqctx, request.map(Into::into)).await
+        Self::create_unnumbered_neighbor(
+            rqctx,
+            request
+                .map(v8::bgp::config::UnnumberedNeighbor::from)
+                .map(Into::into),
+        )
+        .await
     }
 
     #[endpoint {
@@ -555,7 +678,13 @@ pub trait MgAdminApi {
     {
         Self::read_unnumbered_neighbor(rqctx, request)
             .await
-            .map(|r| r.map(Into::into))
+            .map(|r| {
+                r.map(|n| {
+                    v5::bgp::config::UnnumberedNeighbor::from(
+                        v8::bgp::config::UnnumberedNeighbor::from(n),
+                    )
+                })
+            })
     }
 
     #[endpoint {
@@ -568,7 +697,13 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v5::bgp::config::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::update_unnumbered_neighbor(rqctx, request.map(Into::into)).await
+        Self::update_unnumbered_neighbor(
+            rqctx,
+            request
+                .map(v8::bgp::config::UnnumberedNeighbor::from)
+                .map(Into::into),
+        )
+        .await
     }
 
     #[endpoint {
@@ -871,16 +1006,33 @@ pub trait MgAdminApi {
         HttpError,
     >;
 
-    // Latest API - ApplyRequest with per-AF policies and src_addr/src_port
+    // Latest API - ApplyRequest with per-neighbor DSCP marking on top of
+    // v8's per-AF policies and src_addr/src_port.
     #[endpoint {
         method = POST,
         path = "/bgp/omicron/apply",
-        versions = VERSION_BGP_SRC_ADDR..,
+        versions = VERSION_IP_HEADERS..,
     }]
     async fn bgp_apply(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V8 API - v8::bgp::config::ApplyRequest, no DSCP marking. Operation ID
+    // matches the latest endpoint so a single client method covers all
+    // versions.
+    #[endpoint {
+        method = POST,
+        path = "/bgp/omicron/apply",
+        operation_id = "bgp_apply",
+        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+    }]
+    async fn bgp_apply_v8(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v8::bgp::config::ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::bgp_apply(rqctx, request.map(Into::into)).await
+    }
 
     // V4-V7 API - v4::bgp::config::ApplyRequest with per-AF policies but no src_addr/src_port.
     // Operation ID matches the latest endpoint so a single client method
@@ -895,7 +1047,13 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::bgp_apply(rqctx, request.map(Into::into)).await
+        Self::bgp_apply(
+            rqctx,
+            request
+                .map(v8::bgp::config::ApplyRequest::from)
+                .map(Into::into),
+        )
+        .await
     }
 
     // V1/V2 API - v1::bgp::config::ApplyRequest with combined import/export policies
@@ -909,7 +1067,13 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::bgp_apply(rqctx, request.map(Into::into)).await
+        Self::bgp_apply(
+            rqctx,
+            request
+                .map(v8::bgp::config::ApplyRequest::from)
+                .map(Into::into),
+        )
+        .await
     }
 
     #[endpoint {

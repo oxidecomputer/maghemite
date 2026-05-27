@@ -12,6 +12,7 @@ use mg_api_types::bgp::config::{
 };
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::common::headers::Dscp;
 use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
@@ -592,6 +593,11 @@ pub struct Neighbor {
     #[arg(long)]
     pub src_port: Option<u16>,
 
+    /// DSCP value for BGP TCP connections (0-63). Defaults to CS6 (48),
+    /// per RFC 4271 Appendix E.
+    #[arg(long)]
+    pub dscp: Option<Dscp>,
+
     /// Multi-exit discriminator to send to eBGP peers.
     #[arg(long)]
     pub med: Option<u32>,
@@ -753,6 +759,7 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
+            dscp: self.dscp,
         }
     }
 
@@ -836,6 +843,7 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
+            dscp: self.dscp,
         }
     }
 }

@@ -34,11 +34,11 @@ use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 pub(crate) use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
 };
+use mg_api_types::common::headers::Dscp;
 pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db};
@@ -848,6 +848,8 @@ pub struct SessionInfo {
     /// resolution even when one connection is already in Established state.
     /// When false, Established connection always wins (timing-based resolution).
     pub deterministic_collision_resolution: bool,
+    /// DSCP value used for QoS marking of IP packets carrying BGP TCP session.
+    pub dscp: Dscp,
 }
 
 impl SessionInfo {
@@ -884,6 +886,7 @@ impl SessionInfo {
             }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
+            dscp: Dscp::CS6,
         }
     }
 }
@@ -917,6 +920,7 @@ impl From<&BgpPeerParameters> for SessionInfo {
             connect_retry_jitter,
             src_addr,
             src_port,
+            dscp,
         } = value.clone();
 
         SessionInfo {
@@ -943,67 +947,7 @@ impl From<&BgpPeerParameters> for SessionInfo {
             deterministic_collision_resolution,
             ipv4_unicast,
             ipv6_unicast,
-        }
-    }
-}
-
-impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
-    fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
-        // v1 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v1 contract has
-        // been violated upstream.
-        let v1::bgp::config::BgpPeerParameters {
-            hold_time,
-            idle_hold_time,
-            delay_open,
-            connect_retry,
-            keepalive,
-            resolution,
-            passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities,
-            local_pref,
-            enforce_first_as,
-            allow_import,
-            allow_export,
-            vlan_id,
-        } = value.clone();
-
-        SessionInfo {
-            passive_tcp_establishment: passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities: communities.into_iter().collect(),
-            local_pref,
-            enforce_first_as,
-            vlan_id,
-            remote_id: None,
-            bind_addr: None,
-            connect_retry_time: Duration::from_secs(connect_retry),
-            keepalive_time: Duration::from_secs(keepalive),
-            hold_time: Duration::from_secs(hold_time),
-            idle_hold_time: Duration::from_secs(idle_hold_time),
-            delay_open_time: Duration::from_secs(delay_open),
-            resolution: Duration::from_millis(resolution),
-            idle_hold_jitter: None,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            deterministic_collision_resolution: false,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: ImportExportPolicy4::from(allow_import),
-                export_policy: ImportExportPolicy4::from(allow_export),
-            }),
-            ipv6_unicast: None,
+            dscp: dscp.unwrap_or(Dscp::CS6),
         }
     }
 }
@@ -8928,6 +8872,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.vlan_id != info.vlan_id {
             current.vlan_id = info.vlan_id;
+            reset_needed = true;
+        }
+
+        if current.dscp != info.dscp {
+            current.dscp = info.dscp;
             reset_needed = true;
         }
 
