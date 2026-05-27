@@ -16,7 +16,7 @@ pub fn trio(name: &str) -> Result<Trio> {
     let mut d = Runner::new(name);
 
     // nodes
-    node!(d, ox, "helios-2.9", 4, gb(4));
+    node!(d, ox, "helios-3.0", 4, gb(4));
     node!(d, cr1, "debian-13.2", 4, gb(4));
     node!(d, cr2, "eos-4.35", 4, gb(4));
 

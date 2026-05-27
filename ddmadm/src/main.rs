@@ -6,8 +6,10 @@ use anyhow::Result;
 use clap::Parser;
 use colored::*;
 use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
+use mg_common::format_duration_human;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
 use std::io::{Write, stdout};
@@ -118,26 +120,35 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 "Interface".dimmed(),
                 "Host".dimmed(),
                 "Address".dimmed(),
                 "Kind".dimmed(),
                 "Status".dimmed(),
+                "Duration".dimmed(),
             )?;
-            for (index, info) in &msg.into_inner() {
+            let mut peers: Vec<_> = msg.into_inner().into_iter().collect();
+            peers.sort_by_key(|(index, _)| index.clone());
+            for (index, info) in &peers {
+                let (state, duration) = match &info.status {
+                    PeerStatus::Init(d) => ("Init", d),
+                    PeerStatus::Solicit(d) => ("Solicit", d),
+                    PeerStatus::Exchange(d) => ("Exchange", d),
+                    PeerStatus::Expired(d) => ("Expired", d),
+                };
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{:?}",
+                    "{}\t{}\t{}\t{}\t{}\t{}",
                     index,
                     info.host,
                     info.addr,
-                    match *info.kind {
-                        0 => "Server",
-                        1 => "Transit",
-                        _ => "?",
+                    match info.kind {
+                        ddm_api_types_versions::latest::db::RouterKind::Server => "Server",
+                        ddm_api_types_versions::latest::db::RouterKind::Transit => "Transit",
                     },
-                    info.status,
+                    state,
+                    format_duration_human(*duration),
                 )?;
             }
             tw.flush()?;

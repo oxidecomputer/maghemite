@@ -122,7 +122,26 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
-        Ok(HttpResponseOk(ctx.db.peers()))
+        let mut result = HashMap::new();
+        for sm in &ctx.peers {
+            // Compute status first so peer_status() never runs while we hold
+            // any of the InterfaceState mutexes below.
+            let status = sm.iface.peer_status();
+            let if_index = *lock!(sm.iface.if_index);
+            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
+                continue;
+            };
+            result.insert(
+                if_index,
+                PeerInfo {
+                    status,
+                    addr: peer.addr,
+                    host: peer.hostname,
+                    kind: peer.kind,
+                },
+            );
+        }
+        Ok(HttpResponseOk(result))
     }
 
     async fn expire_peer(

@@ -8,8 +8,8 @@
 //! illumos-only.
 
 use super::{
-    AdminEvent, Event, NeighborEvent, PeerEvent, PrefixSet, SmContext, SmError,
-    StateMachine,
+    AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
+    SmContext, SmError, StateMachine,
 };
 use crate::exchange::{TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
@@ -69,6 +69,8 @@ impl State for Init {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
+        self.ctx.iface.transition(FsmState::Init);
+        self.ctx.iface.clear_peer();
         loop {
             let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
                 Ok(info) => info,
@@ -100,6 +102,9 @@ impl State for Init {
             self.ctx.config.if_name.clone_from(&info.ifname);
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
+            self.ctx
+                .iface
+                .set_if_info(info.index as u32, info.ifname.clone());
             inf!(
                 self.log,
                 self.ctx.config.if_name,
@@ -115,7 +120,7 @@ impl State for Init {
                 self.ctx.hostname.clone(),
                 self.ctx.config.clone(),
                 self.ctx.tx.clone(),
-                self.ctx.db.clone(),
+                self.ctx.iface.clone(),
                 self.ctx.stats.clone(),
                 self.ctx.log.clone(),
             )
@@ -144,6 +149,7 @@ impl State for Solicit {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
+        self.ctx.iface.transition(FsmState::Solicit);
         loop {
             let e = match event.recv() {
                 Ok(e) => e,
@@ -292,7 +298,7 @@ impl Exchange {
         pull_stop: &AtomicBool,
     ) {
         exchange_thread.abort();
-        self.ctx.db.remove_peer(self.ctx.config.if_index);
+        self.ctx.iface.clear_peer();
         let (to_remove, to_remove_tnl) =
             self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
@@ -370,6 +376,7 @@ impl State for Exchange {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
+        self.ctx.iface.transition(FsmState::Exchange);
         let exchange_thread = loop {
             match exchange::handler(
                 self.ctx.clone(),

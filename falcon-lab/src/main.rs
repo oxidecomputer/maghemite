@@ -1,5 +1,6 @@
 //! Falcon test lab
 
+use crate::dendrite::NpuvmCommits;
 use crate::test::{
     cleanup_bfd_static_test, cleanup_unnumbered_test, run_trio_bfd_static_test,
     run_trio_unnumbered_test,
@@ -9,6 +10,7 @@ use clap::{Parser, Subcommand};
 mod bgp;
 mod ddm;
 mod dendrite;
+mod diagnostics;
 mod eos;
 mod frr;
 mod illumos;
@@ -73,26 +75,21 @@ fn main() -> anyhow::Result<()> {
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run(cmd) => match cmd.command {
-            TestCommand::TrioUnnumbered => {
-                run_trio_unnumbered_test(
-                    cmd.no_cleanup,
-                    cmd.npuvm_commit.clone(),
-                    cmd.dendrite_commit,
-                    cmd.sidecar_lite_commit,
-                )
-                .await?
+        Command::Run(cmd) => {
+            let commits = NpuvmCommits {
+                npuvm: cmd.npuvm_commit,
+                dendrite: cmd.dendrite_commit,
+                sidecar_lite: cmd.sidecar_lite_commit,
+            };
+            match cmd.command {
+                TestCommand::TrioUnnumbered => {
+                    run_trio_unnumbered_test(cmd.no_cleanup, commits).await?
+                }
+                TestCommand::TrioBfdStaticRouting => {
+                    run_trio_bfd_static_test(cmd.no_cleanup, commits).await?
+                }
             }
-            TestCommand::TrioBfdStaticRouting => {
-                run_trio_bfd_static_test(
-                    cmd.no_cleanup,
-                    cmd.npuvm_commit.clone(),
-                    cmd.dendrite_commit,
-                    cmd.sidecar_lite_commit,
-                )
-                .await?
-            }
-        },
+        }
         Command::Cleanup(cmd) => match cmd.command {
             TestCommand::TrioUnnumbered => cleanup_unnumbered_test().await?,
             TestCommand::TrioBfdStaticRouting => {
