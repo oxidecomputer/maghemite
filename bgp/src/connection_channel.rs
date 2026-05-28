@@ -11,8 +11,8 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnectionPolicy, BgpConnector, BgpListener,
-        ConnectionDirection, ConnectionId, ThreadState,
+        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
+        ConnectionId, SocketOption, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -271,14 +271,6 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         ))
     }
 
-    fn apply_policy(
-        _conn: &BgpConnectionChannel,
-        _policy: BgpConnectionPolicy,
-    ) -> Result<(), Error> {
-        // Policy application is ignored for test connections
-        Ok(())
-    }
-
     fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
     }
@@ -375,6 +367,19 @@ impl BgpConnection for BgpConnectionChannel {
         // Store the handle in the typestate
         state.start(handle);
 
+        Ok(())
+    }
+
+    fn update_socket_option(
+        &self,
+        _option: &SocketOption,
+    ) -> Result<(), Error> {
+        // Socket options are ignored for test connections
+        Ok(())
+    }
+
+    fn apply_md5(&self, _key: &str) -> Result<(), Error> {
+        // MD5 auth is ignored for test connections
         Ok(())
     }
 }

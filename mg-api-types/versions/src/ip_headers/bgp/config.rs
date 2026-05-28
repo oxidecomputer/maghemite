@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::num::NonZeroU8;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -28,7 +29,7 @@ pub struct BgpPeerParameters {
     pub resolution: u64,
     pub passive: bool,
     pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
+    pub min_ttl: Option<NonZeroU8>,
     pub md5_auth_key: Option<String>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
@@ -160,7 +161,7 @@ impl From<v8::bgp::config::BgpPeerParameters> for BgpPeerParameters {
             resolution,
             passive,
             remote_asn,
-            min_ttl,
+            min_ttl: min_ttl.and_then(NonZeroU8::new),
             md5_auth_key,
             multi_exit_discriminator,
             communities,
@@ -426,7 +427,7 @@ impl From<BgpPeerParameters> for v8::bgp::config::BgpPeerParameters {
             resolution,
             passive,
             remote_asn,
-            min_ttl,
+            min_ttl: min_ttl.map(NonZeroU8::get),
             md5_auth_key,
             multi_exit_discriminator,
             communities,

@@ -58,6 +58,7 @@ use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::num::NonZeroU8;
 use std::sync::{
     Arc, Mutex,
     mpsc::{Sender, channel},
@@ -1975,7 +1976,7 @@ pub(crate) mod helpers {
                     keepalive: rq.parameters.keepalive,
                     resolution: rq.parameters.resolution,
                     remote_asn: rq.parameters.remote_asn,
-                    min_ttl: rq.parameters.min_ttl,
+                    min_ttl: rq.parameters.min_ttl.and_then(NonZeroU8::new),
                     md5_auth_key: rq.parameters.md5_auth_key,
                     multi_exit_discriminator: rq
                         .parameters
