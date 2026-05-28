@@ -74,11 +74,11 @@ ptime -m cargo build --release
 
 for x in debug release
 do
-    mkdir -p /work/$x
-    cp target/$x/ddmd /work/$x/ddmd
-    cp target/$x/ddmadm /work/$x/ddmadm
-    cp target/$x/mgd /work/$x/mgd
-    cp target/$x/mgadm /work/$x/mgadm
+    mkdir -p /work/"${x}"
+    cp target/"${x}"/ddmd /work/"${x}"/ddmd
+    cp target/"${x}"/ddmadm /work/"${x}"/ddmadm
+    cp target/"${x}"/mgd /work/"${x}"/mgd
+    cp target/"${x}"/mgadm /work/"${x}"/mgadm
 done
 
 cp target/release/falcon-lab /work/release/falcon-lab

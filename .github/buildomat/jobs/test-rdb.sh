@@ -20,5 +20,5 @@ cargo nextest run \
     -p rdb \
     -p mg-api-types \
     -p mg-api-types-versions
-cp *.log /work/
+cp ./*.log /work/
 popd
