@@ -32,6 +32,7 @@ smf.workspace = true
 gateway-client.workspace = true
 ndp.workspace = true
 network-interface.workspace = true
+libc.workspace = true
 socket2.workspace = true
 
 [dev-dependencies]

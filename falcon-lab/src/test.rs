@@ -658,6 +658,7 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
             required_rx: BFD_REQUIRED_RX_US,
             detection_threshold: BFD_DETECTION_MULT,
             mode: SessionMode::SingleHop,
+            dscp: None,
         })
         .await
         .context(format!("mgd: add bfd peer {peer}"))?;

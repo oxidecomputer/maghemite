@@ -18,6 +18,7 @@ use std::{
     fs::read_to_string,
     io::{Write, stdout},
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZeroU8,
     time::Duration,
 };
 use tabwriter::TabWriter;
@@ -734,7 +735,7 @@ impl Neighbor {
         types::Neighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
-            min_ttl: self.min_ttl,
+            min_ttl: self.min_ttl.and_then(NonZeroU8::new),
             name: self.name.clone(),
             host: SocketAddr::new(addr, self.port).to_string(),
             hold_time: self.hold_time,
@@ -813,7 +814,7 @@ impl Neighbor {
         types::UnnumberedNeighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
-            min_ttl: self.min_ttl,
+            min_ttl: self.min_ttl.and_then(NonZeroU8::new),
             act_as_a_default_ipv6_router: if self.act_as_default_router {
                 1800
             } else {
