@@ -170,6 +170,9 @@ pub mod rdb {
     pub mod router {
         pub use crate::v1::rdb::router::BgpRouterInfo;
     }
+
+    pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_BGP;
+    pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_STATIC;
 }
 
 pub mod ndp {
