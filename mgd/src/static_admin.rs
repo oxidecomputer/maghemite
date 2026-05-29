@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
-use crate::validation::validate_prefixes;
+use crate::validation::{validate_nexthops, validate_prefixes};
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
@@ -17,6 +17,7 @@ use mg_api_types::static_routes::{
 };
 use mg_api_types::switch::SwitchIdentifiers;
 use rdb::StaticRouteKey;
+use std::net::IpAddr;
 use std::{collections::BTreeMap, sync::Arc};
 
 // `From<StaticRouteN>` impls cannot live in `mg-api-types-versions` (would
@@ -74,6 +75,9 @@ pub async fn static_add_v4_route(
     // Validate that all prefixes have host bits unset
     let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
     validate_prefixes(&prefixes)?;
+
+    let nexthops: Vec<IpAddr> = routes.iter().map(|r| r.nexthop).collect();
+    validate_nexthops(&nexthops)?;
 
     ctx.context()
         .db
@@ -134,6 +138,9 @@ pub async fn static_add_v6_route(
     // Validate that all prefixes have host bits unset
     let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
     validate_prefixes(&prefixes)?;
+
+    let nexthops: Vec<IpAddr> = routes.iter().map(|r| r.nexthop).collect();
+    validate_nexthops(&nexthops)?;
 
     ctx.context()
         .db

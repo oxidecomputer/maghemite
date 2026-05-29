@@ -6,6 +6,32 @@
 
 use dropshot::HttpError;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use rdb::RouterIpAddr;
+use std::net::IpAddr;
+
+/// Validate that a nexthop is a usable forwarding address.
+///
+/// Returns an HTTP 400 Bad Request error if the nexthop is the unspecified,
+/// loopback, multicast, or IPv4 broadcast address, or an IPv4-mapped IPv6
+/// address.
+pub fn validate_nexthop(nexthop: IpAddr) -> Result<(), HttpError> {
+    RouterIpAddr::try_from(nexthop).map(drop).map_err(|err| {
+        HttpError::for_bad_request(
+            Some("InvalidNexthop".to_string()),
+            format!(
+                "Nexthop {nexthop} is not a valid forwarding address ({err})"
+            ),
+        )
+    })
+}
+
+/// Validate a list of nexthops, returning the first failure.
+pub fn validate_nexthops(nexthops: &[IpAddr]) -> Result<(), HttpError> {
+    for nexthop in nexthops {
+        validate_nexthop(*nexthop)?;
+    }
+    Ok(())
+}
 
 /// Validate that all IPv4 prefixes have host bits unset and are valid for RIB.
 ///
@@ -319,6 +345,39 @@ mod tests {
             )),
         ];
         assert!(validate_prefixes(&prefixes).is_ok());
+    }
+
+    #[test]
+    fn test_validate_nexthop_accepts_unicast() {
+        assert!(validate_nexthop(Ipv4Addr::new(10, 0, 0, 1).into()).is_ok());
+        assert!(
+            validate_nexthop(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1).into()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_nexthop_rejects_loopback() {
+        let result = validate_nexthop(Ipv4Addr::LOCALHOST.into());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("127.0.0.1"));
+        assert!(err.external_message.contains("loopback"));
+    }
+
+    #[test]
+    fn test_validate_nexthop_rejects_unspecified_and_multicast() {
+        assert!(validate_nexthop(Ipv4Addr::UNSPECIFIED.into()).is_err());
+        assert!(validate_nexthop(Ipv4Addr::new(224, 0, 0, 1).into()).is_err());
+    }
+
+    #[test]
+    fn test_validate_nexthop_accepts_v6_link_local() {
+        let ll = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
+        assert!(validate_nexthop(ll.into()).is_ok());
     }
 
     // Property-based tests to verify equivalence between generic and family-specific validators
