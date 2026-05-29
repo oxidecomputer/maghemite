@@ -3,12 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
-use crate::validation::validate_prefixes;
+use crate::validation::validate_static_routes;
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_api_types::rdb::prefix::Prefix;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::GetRibResult;
 use mg_api_types::static_routes::{
@@ -71,9 +70,7 @@ pub async fn static_add_v4_route(
         .map(static_route_key_from_v4)
         .collect();
 
-    // Validate that all prefixes have host bits unset
-    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
-    validate_prefixes(&prefixes)?;
+    validate_static_routes(&routes)?;
 
     ctx.context()
         .db
@@ -131,9 +128,7 @@ pub async fn static_add_v6_route(
         .map(static_route_key_from_v6)
         .collect();
 
-    // Validate that all prefixes have host bits unset
-    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
-    validate_prefixes(&prefixes)?;
+    validate_static_routes(&routes)?;
 
     ctx.context()
         .db
