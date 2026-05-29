@@ -30,7 +30,6 @@ use mg_api_types::common::headers::Dscp;
 use mg_common::lock;
 use slog::{Logger, info};
 use socket2::SockRef;
-#[cfg(any(target_os = "linux", target_os = "illumos"))]
 use std::os::fd::AsRawFd;
 use std::{
     io::Read,
@@ -251,7 +250,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
 
         // Setup MD5 for Illumos (initialization + SA tracking data)
         #[cfg(target_os = "illumos")]
-        let md5_locals = if let Some(key) = &config.md5_auth_key {
+        let _md5_locals = if let Some(key) = &config.md5_auth_key {
             Some(
                 setup_outbound_md5(s.as_raw_fd(), key, peer.ip(), peer, &log)
                     .map_err(|e| {
@@ -1308,7 +1307,7 @@ fn apply_md5_policy(
 /// or `DEFAULT_BGP_TTL` otherwise, and sets the incoming
 /// IP_MINTTL/IPV6_MINHOPCOUNT filter to `min_ttl` (or 0 = disabled).
 fn apply_ttl(
-    sock: &impl AsFd,
+    sock: &(impl AsFd + AsRawFd),
     min_ttl: Option<NonZeroU8>,
     peer: SocketAddr,
 ) -> Result<(), Error> {
@@ -1342,7 +1341,7 @@ fn set_outgoing_ttl(
     allow(unused_variables)
 )]
 fn set_ip_minttl(
-    sock: &impl AsFd,
+    sock: &(impl AsFd + AsRawFd),
     ttl: u8,
     peer: SocketAddr,
 ) -> Result<(), Error> {
@@ -1711,7 +1710,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
 
-        apply_ttl(SockRef::from(&stream), NonZeroU8::new(200), addr).unwrap();
+        apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
 
         let mut readback: u32 = 0;
         let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
@@ -1735,7 +1734,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
 
-        apply_ttl(SockRef::from(&stream), NonZeroU8::new(200), addr).unwrap();
+        apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
 
         let mut readback: u32 = 0;
         let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
