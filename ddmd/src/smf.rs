@@ -22,7 +22,7 @@ pub(crate) async fn smf_refresh(
         .map_err(|e| anyhow::anyhow!("create smf instance: {e}"))?;
 
     let snapshot = instance.get_running_snapshot().map_err(|e| {
-        anyhow::anyhow!("get smf instnace running snapshot: {e}")
+        anyhow::anyhow!("get smf instance running snapshot: {e}")
     })?;
 
     let prop_group = snapshot

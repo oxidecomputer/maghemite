@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -41,6 +41,33 @@
         "responses": {
           "204": {
             "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/interfaces": {
+      "get": {
+        "operationId": "get_interfaces",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_InterfaceInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/InterfaceInfo"
+                  }
+                }
+              }
+            }
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -412,6 +439,116 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "InterfaceInfo": {
+        "description": "Information about a DDM interface and its FSM state.",
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "advertisements_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "advertisements_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_tunnel_endpoints": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_underlay_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "peer_addr": {
+            "nullable": true,
+            "type": "string",
+            "format": "ipv6"
+          },
+          "peer_address_changes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_host": {
+            "nullable": true,
+            "type": "string"
+          },
+          "peer_kind": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RouterKind"
+              }
+            ]
+          },
+          "solicitations_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeerStatus"
+          },
+          "update_send_fail": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "addr",
+          "advertisements_received",
+          "advertisements_sent",
+          "imported_tunnel_endpoints",
+          "imported_underlay_prefixes",
+          "name",
+          "peer_address_changes",
+          "peer_established",
+          "peer_expirations",
+          "solicitations_received",
+          "solicitations_sent",
+          "status",
+          "update_send_fail",
+          "updates_received",
+          "updates_sent"
         ]
       },
       "IpNet": {
