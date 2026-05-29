@@ -2371,6 +2371,13 @@ pub(crate) mod helpers {
             id: rq.id,
         };
 
+        if cfg.asn.is_reserved() {
+            return Err(Error::InvalidRequest(
+                "AS 0 is reserved and cannot be used as a local ASN (RFC 7607)"
+                    .into(),
+            ));
+        }
+
         let db = ctx.db.clone();
 
         let router = Arc::new(Router::<BgpConnectionTcp>::new(

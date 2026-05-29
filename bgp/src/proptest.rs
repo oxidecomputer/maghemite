@@ -92,7 +92,8 @@ fn path_origin_strategy() -> impl Strategy<Value = PathOrigin> {
 fn as_path_segment_strategy() -> impl Strategy<Value = As4PathSegment> {
     (
         prop_oneof![Just(AsPathType::AsSet), Just(AsPathType::AsSequence)],
-        prop::collection::vec(any::<u32>(), 1..5),
+        // RFC 7607: AS 0 is reserved and rejected on parse, so never generate it.
+        prop::collection::vec(1..=u32::MAX, 1..5),
     )
         .prop_map(|(typ, value)| As4PathSegment { typ, value })
 }
