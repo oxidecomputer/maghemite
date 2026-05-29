@@ -22,16 +22,18 @@ use mg_api_types::bgp::config::{
     Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
 };
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
 use mg_api_types::common::headers::Dscp;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4};
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::Asn;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use std::num::NonZeroU8;
 use std::{
     collections::BTreeSet,
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
-    num::NonZeroU8,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -1127,6 +1129,7 @@ fn test_basic_update() {
     )
 }
 
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
 fn session_update_dscp_min_ttl_helper(
     route_exchange: RouteExchange,
     r1_addr: SocketAddr,
@@ -1198,7 +1201,7 @@ fn session_update_dscp_min_ttl_helper(
         group: String::new(),
         host: r2_addr,
         hold_time: 6,
-        idle_hold_time: 0,
+        idle_hold_time: 10,
         delay_open: 0,
         connect_retry: 1,
         keepalive: 3,
@@ -1225,14 +1228,13 @@ fn session_update_dscp_min_ttl_helper(
 
     // Stage 2: set r2 min_ttl to 64.
     // r2 now sends TTL=64, but r1's incoming filter rejects TTL < 65 causing
-    // HoldTimeExpires to tear down the session. IP_MINTTL is only supported
-    // on Linux and illumos.
+    // HoldTimeExpires to tear down the session.
     let r2_peer_config = PeerConfig {
         name: "r1".into(),
         group: String::new(),
         host: r1_addr,
         hold_time: 6,
-        idle_hold_time: 0,
+        idle_hold_time: 10,
         delay_open: 0,
         connect_retry: 1,
         keepalive: 3,
@@ -1246,16 +1248,15 @@ fn session_update_dscp_min_ttl_helper(
         .update_session(r2_peer_config, r2_bump)
         .expect("set r2 min_ttl to 64");
 
-    if cfg!(any(target_os = "linux", target_os = "illumos")) {
-        wait_for_neq!(r1_session.state(), FsmStateKind::Established);
-        wait_for_neq!(r2_session.state(), FsmStateKind::Established);
-    }
+    wait_for_neq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_neq!(r2_session.state(), FsmStateKind::Established);
 
     // Cleanup
     r1.shutdown();
     r2.shutdown();
 }
 
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
 #[test]
 fn test_session_update_dscp_min_ttl() {
     session_update_dscp_min_ttl_helper(
@@ -1265,6 +1266,7 @@ fn test_session_update_dscp_min_ttl() {
     );
 }
 
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
 #[test]
 fn test_session_update_dscp_min_ttl_ipv6() {
     session_update_dscp_min_ttl_helper(
