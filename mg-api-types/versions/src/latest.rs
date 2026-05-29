@@ -13,8 +13,8 @@ pub mod bfd {
     pub use crate::v1::bfd::BfdPeerState;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
     pub use crate::v1::bfd::SessionMode;
-    pub use crate::v10::bfd::BfdPeerConfig;
-    pub use crate::v10::bfd::BfdPeerInfo;
+    pub use crate::v11::bfd::BfdPeerConfig;
+    pub use crate::v11::bfd::BfdPeerInfo;
 }
 
 pub mod bgp {
@@ -42,12 +42,12 @@ pub mod bgp {
         pub use crate::v5::bgp::config::UnnumberedNeighborResetRequest;
         pub use crate::v5::bgp::config::UnnumberedNeighborSelector;
 
-        pub use crate::v10::bgp::config::ApplyRequest;
-        pub use crate::v10::bgp::config::BgpPeerConfig;
-        pub use crate::v10::bgp::config::BgpPeerParameters;
-        pub use crate::v10::bgp::config::Neighbor;
-        pub use crate::v10::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v10::bgp::config::UnnumberedNeighbor;
+        pub use crate::v11::bgp::config::ApplyRequest;
+        pub use crate::v11::bgp::config::BgpPeerConfig;
+        pub use crate::v11::bgp::config::BgpPeerParameters;
+        pub use crate::v11::bgp::config::Neighbor;
+        pub use crate::v11::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v11::bgp::config::UnnumberedNeighbor;
     }
 
     pub mod peer {
@@ -151,9 +151,9 @@ pub mod rdb {
     }
 
     pub mod neighbor {
-        pub use crate::v10::rdb::neighbor::BgpNeighborInfo;
-        pub use crate::v10::rdb::neighbor::BgpNeighborParameters;
-        pub use crate::v10::rdb::neighbor::BgpUnnumberedNeighborInfo;
+        pub use crate::v11::rdb::neighbor::BgpNeighborInfo;
+        pub use crate::v11::rdb::neighbor::BgpNeighborParameters;
+        pub use crate::v11::rdb::neighbor::BgpUnnumberedNeighborInfo;
     }
 
     pub mod path {
@@ -177,7 +177,7 @@ pub mod rdb {
 
 pub mod common {
     pub mod headers {
-        pub use crate::v10::common::headers::Dscp;
+        pub use crate::v11::common::headers::Dscp;
     }
 }
 

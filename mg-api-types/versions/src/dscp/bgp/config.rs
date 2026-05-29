@@ -17,7 +17,7 @@ use crate::v4::bgp::config::Ipv4UnicastConfig;
 use crate::v4::bgp::config::Ipv6UnicastConfig;
 use crate::v4::bgp::config::JitterRange;
 use crate::v8;
-use crate::v10::common::headers::Dscp;
+use crate::v11::common::headers::Dscp;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerParameters {
@@ -121,7 +121,7 @@ pub struct ApplyRequest {
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
-// ----- v8 (bgp_src_addr, frozen) <-> v10 BgpPeerParameters -----
+// ----- v8 (bgp_src_addr, frozen) <-> v11 BgpPeerParameters -----
 
 impl From<v8::bgp::config::BgpPeerParameters> for BgpPeerParameters {
     fn from(p: v8::bgp::config::BgpPeerParameters) -> Self {
@@ -342,7 +342,7 @@ impl From<v8::bgp::config::ApplyRequest> for ApplyRequest {
     }
 }
 
-// ----- v8 (bgp_src_addr, frozen) <-> v10 UnnumberedNeighbor -----
+// ----- v8 (bgp_src_addr, frozen) <-> v11 UnnumberedNeighbor -----
 
 impl From<UnnumberedNeighbor> for v8::bgp::config::UnnumberedNeighbor {
     fn from(n: UnnumberedNeighbor) -> Self {

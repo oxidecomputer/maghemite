@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
 use crate::v1;
-use crate::v10::common::headers::Dscp;
+use crate::v11::common::headers::Dscp;
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct BfdPeerConfig {
@@ -72,7 +72,7 @@ impl From<BfdPeerConfig> for v1::bfd::BfdPeerConfig {
     }
 }
 
-impl From<v1::bfd::BfdPeerInfo> for crate::v10::bfd::BfdPeerInfo {
+impl From<v1::bfd::BfdPeerInfo> for crate::v11::bfd::BfdPeerInfo {
     fn from(v1: v1::bfd::BfdPeerInfo) -> Self {
         let v1::bfd::BfdPeerInfo { config, state } = v1;
         Self {
@@ -82,9 +82,9 @@ impl From<v1::bfd::BfdPeerInfo> for crate::v10::bfd::BfdPeerInfo {
     }
 }
 
-impl From<crate::v10::bfd::BfdPeerInfo> for v1::bfd::BfdPeerInfo {
-    fn from(v10: crate::v10::bfd::BfdPeerInfo) -> Self {
-        let crate::v10::bfd::BfdPeerInfo { config, state } = v10;
+impl From<crate::v11::bfd::BfdPeerInfo> for v1::bfd::BfdPeerInfo {
+    fn from(v10: crate::v11::bfd::BfdPeerInfo) -> Self {
+        let crate::v11::bfd::BfdPeerInfo { config, state } = v10;
         Self {
             config: config.into(),
             state,

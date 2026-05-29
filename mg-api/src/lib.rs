@@ -24,7 +24,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (11, IP_HEADERS),
+    (11, DSCP),
     (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
     (8, BGP_SRC_ADDR),
@@ -58,7 +58,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bfd/peers",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn get_bfd_peers(
         rqctx: RequestContext<Self::Context>,
@@ -69,7 +69,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bfd/peers",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn add_bfd_peer(
         rqctx: RequestContext<Self::Context>,
@@ -79,7 +79,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bfd/peers",
-        versions = ..VERSION_IP_HEADERS,
+        versions = ..VERSION_DSCP,
         operation_id = "get_bfd_peers"
     }]
     async fn get_bfd_peers_v1(
@@ -93,7 +93,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bfd/peers",
-        versions = ..VERSION_IP_HEADERS,
+        versions = ..VERSION_DSCP,
         operation_id = "add_bfd_peer"
     }]
     async fn add_bfd_peer_v1(
@@ -167,7 +167,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/neighbor",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn create_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -177,7 +177,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/neighbor/{asn}/{peer}",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn read_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -187,7 +187,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/neighbors/{asn}",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn read_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -197,7 +197,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/neighbor",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn update_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -216,7 +216,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = PUT,
         path = "/bgp/config/neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "create_neighbor"
     }]
     async fn create_neighbor_v8(
@@ -228,7 +228,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = GET,
         path = "/bgp/config/neighbor/{asn}/{peer}",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "read_neighbor"
     }]
     async fn read_neighbor_v8(
@@ -242,7 +242,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = GET,
         path = "/bgp/config/neighbors/{asn}",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "read_neighbors"
     }]
     async fn read_neighbors_v8(
@@ -258,7 +258,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = POST,
         path = "/bgp/config/neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "update_neighbor"
     }]
     async fn update_neighbor_v8(
@@ -556,7 +556,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -569,7 +569,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -579,7 +579,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -592,7 +592,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -611,7 +611,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "read_unnumbered_neighbors"
     }]
     async fn read_unnumbered_neighbors_v8(
@@ -634,7 +634,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "create_unnumbered_neighbor"
     }]
     async fn create_unnumbered_neighbor_v8(
@@ -646,7 +646,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "read_unnumbered_neighbor"
     }]
     async fn read_unnumbered_neighbor_v8(
@@ -661,7 +661,7 @@ pub trait MgAdminApi {
 
     #[endpoint { method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
         operation_id = "update_unnumbered_neighbor"
     }]
     async fn update_unnumbered_neighbor_v8(
@@ -1065,7 +1065,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/omicron/apply",
-        versions = VERSION_IP_HEADERS..,
+        versions = VERSION_DSCP..,
     }]
     async fn bgp_apply(
         rqctx: RequestContext<Self::Context>,
@@ -1079,7 +1079,7 @@ pub trait MgAdminApi {
         method = POST,
         path = "/bgp/omicron/apply",
         operation_id = "bgp_apply",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_IP_HEADERS,
+        versions = VERSION_BGP_SRC_ADDR..VERSION_DSCP,
     }]
     async fn bgp_apply_v8(
         rqctx: RequestContext<Self::Context>,
