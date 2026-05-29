@@ -7,6 +7,7 @@ use clap::Parser;
 use colored::*;
 use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::db::PeerStatus;
+use ddm_api_types_versions::latest::db::RouterKind;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
 use mg_common::format_duration_human;
@@ -33,6 +34,9 @@ struct Arg {
 
 #[derive(Debug, Parser)]
 enum SubCommand {
+    /// Get a DDM router's interface FSM states.
+    GetInterfaces,
+
     /// Get a DDM router's peers.
     GetPeers,
 
@@ -115,6 +119,96 @@ async fn run() -> Result<()> {
     let client = Client::new(&endpoint, log.clone());
 
     match arg.subcmd {
+        SubCommand::GetInterfaces => {
+            let msg = client.get_interfaces().await?;
+            let mut interfaces: Vec<_> = msg.into_inner().into_iter().collect();
+            interfaces.sort_by_key(|(index, _)| index.clone());
+            for (i, (if_index, info)) in interfaces.iter().enumerate() {
+                if i > 0 {
+                    mg_common::println_nopipe!();
+                }
+                let (state, duration) = match &info.status {
+                    PeerStatus::Init(d) => ("Init", d),
+                    PeerStatus::Solicit(d) => ("Solicit", d),
+                    PeerStatus::Exchange(d) => ("Exchange", d),
+                    PeerStatus::Expired(d) => ("Expired", d),
+                };
+                let peer_kind = info
+                    .peer_kind
+                    .map(|k| match k {
+                        RouterKind::Server => "Server",
+                        RouterKind::Transit => "Transit",
+                    })
+                    .unwrap_or("-");
+
+                mg_common::println_nopipe!(
+                    "{} ({})",
+                    info.name.bold(),
+                    if_index
+                );
+
+                let mut tw = TabWriter::new(stdout());
+                let mut row =
+                    |label: &str, value: String| -> std::io::Result<()> {
+                        writeln!(&mut tw, "  {}\t{}", label.dimmed(), value)
+                    };
+                row("Address", info.addr.to_string())?;
+                row(
+                    "State",
+                    format!("{state} ({})", format_duration_human(*duration)),
+                )?;
+                row(
+                    "Peer",
+                    format!(
+                        "{}\t{}\t{}",
+                        info.peer_addr
+                            .map(|a| a.to_string())
+                            .unwrap_or_default(),
+                        info.peer_host.as_deref().unwrap_or("-"),
+                        peer_kind,
+                    ),
+                )?;
+                row(
+                    "Solicitations",
+                    format!(
+                        "sent {}\trcvd {}",
+                        info.solicitations_sent, info.solicitations_received,
+                    ),
+                )?;
+                row(
+                    "Advertisements",
+                    format!(
+                        "sent {}\trcvd {}",
+                        info.advertisements_sent, info.advertisements_received,
+                    ),
+                )?;
+                row(
+                    "Updates",
+                    format!(
+                        "sent {}\trcvd {}",
+                        info.updates_sent, info.updates_received,
+                    ),
+                )?;
+                row(
+                    "Imported",
+                    format!(
+                        "underlay {}\ttunnel {}",
+                        info.imported_underlay_prefixes,
+                        info.imported_tunnel_endpoints,
+                    ),
+                )?;
+                row(
+                    "Peer events",
+                    format!(
+                        "expired {}\taddr-chg {}\testablished {}",
+                        info.peer_expirations,
+                        info.peer_address_changes,
+                        info.peer_established,
+                    ),
+                )?;
+                tw.flush()?;
+            }
+        }
         SubCommand::GetPeers => {
             let msg = client.get_peers().await?;
             let mut tw = TabWriter::new(stdout());

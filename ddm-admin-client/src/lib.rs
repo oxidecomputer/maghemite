@@ -23,6 +23,7 @@ progenitor::generate_api!(
         IpPrefix = ddm_api_types_versions::latest::net::IpPrefix,
         Ipv4Prefix = ddm_api_types_versions::latest::net::Ipv4Prefix,
         Ipv6Prefix = ddm_api_types_versions::latest::net::Ipv6Prefix,
+        InterfaceInfo = ddm_api_types_versions::latest::db::InterfaceInfo,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
         PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,
         Duration = std::time::Duration,

@@ -26,6 +26,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (3, INTERFACES),
     (2, PEER_DURATIONS),
     (1, INITIAL),
 ]);
@@ -45,6 +46,14 @@ api_versions!([
 #[dropshot::api_description]
 pub trait DdmAdminApi {
     type Context;
+
+    #[endpoint { method = GET, path = "/interfaces", versions = VERSION_INTERFACES.. }]
+    async fn get_interfaces(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<u32, latest::db::InterfaceInfo>>,
+        HttpError,
+    >;
 
     #[endpoint { method = GET, path = "/peers", versions = VERSION_PEER_DURATIONS.. }]
     async fn get_peers(

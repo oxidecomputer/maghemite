@@ -14,6 +14,7 @@ pub mod db {
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
 
+    pub use crate::v2::db::InterfaceInfo;
     pub use crate::v2::db::PeerInfo;
     pub use crate::v2::db::PeerStatus;
 }

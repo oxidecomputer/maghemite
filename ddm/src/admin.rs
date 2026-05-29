@@ -7,7 +7,7 @@ use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::db::{InterfaceInfo, PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
@@ -117,6 +117,17 @@ pub enum DdmAdminApiImpl {}
 
 impl DdmAdminApi for DdmAdminApiImpl {
     type Context = Arc<Mutex<HandlerContext>>;
+
+    async fn get_interfaces(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, InterfaceInfo>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let mut result = HashMap::new();
+        for sm in &ctx.peers {
+            result.insert(*lock!(sm.iface.if_index), sm.interface_info());
+        }
+        Ok(HttpResponseOk(result))
+    }
 
     async fn get_peers(
         ctx: RequestContext<Self::Context>,

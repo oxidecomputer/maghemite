@@ -10,14 +10,14 @@
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use crate::exchange::Update;
-use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::db::{InterfaceInfo, PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -240,6 +240,81 @@ pub struct SessionStats {
     pub imported_underlay_prefixes: AtomicU64,
     pub imported_tunnel_endpoints: AtomicU64,
     pub update_send_fail: AtomicU64,
+}
+
+/// Snapshot of [`SessionStats`] counters at a point in time.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Counters {
+    pub solicitations_sent: u64,
+    pub solicitations_received: u64,
+    pub advertisements_sent: u64,
+    pub advertisements_received: u64,
+    pub peer_expirations: u64,
+    pub peer_address_changes: u64,
+    pub peer_established: u64,
+    pub updates_sent: u64,
+    pub updates_received: u64,
+    pub imported_underlay_prefixes: u64,
+    pub imported_tunnel_endpoints: u64,
+    pub update_send_fail: u64,
+}
+
+impl SessionStats {
+    pub fn snapshot(&self) -> Counters {
+        Counters {
+            solicitations_sent: self.solicitations_sent.load(Ordering::Relaxed),
+            solicitations_received: self
+                .solicitations_received
+                .load(Ordering::Relaxed),
+            advertisements_sent: self
+                .advertisements_sent
+                .load(Ordering::Relaxed),
+            advertisements_received: self
+                .advertisements_received
+                .load(Ordering::Relaxed),
+            peer_expirations: self.peer_expirations.load(Ordering::Relaxed),
+            peer_address_changes: self
+                .peer_address_changes
+                .load(Ordering::Relaxed),
+            peer_established: self.peer_established.load(Ordering::Relaxed),
+            updates_sent: self.updates_sent.load(Ordering::Relaxed),
+            updates_received: self.updates_received.load(Ordering::Relaxed),
+            imported_underlay_prefixes: self
+                .imported_underlay_prefixes
+                .load(Ordering::Relaxed),
+            imported_tunnel_endpoints: self
+                .imported_tunnel_endpoints
+                .load(Ordering::Relaxed),
+            update_send_fail: self.update_send_fail.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl SmContext {
+    pub fn interface_info(&self) -> InterfaceInfo {
+        let counters = self.stats.snapshot();
+        let peer = lock!(self.iface.peer_identity);
+        InterfaceInfo {
+            name: lock!(self.iface.if_name).clone(),
+            addr: self.config.addr,
+            status: self.iface.peer_status(),
+            peer_addr: peer.as_ref().map(|p| p.addr),
+            peer_host: peer.as_ref().map(|p| p.hostname.clone()),
+            peer_kind: peer.as_ref().map(|p| p.kind),
+            solicitations_sent: counters.solicitations_sent,
+            solicitations_received: counters.solicitations_received,
+            advertisements_sent: counters.advertisements_sent,
+            advertisements_received: counters.advertisements_received,
+            peer_expirations: counters.peer_expirations,
+            peer_address_changes: counters.peer_address_changes,
+            peer_established: counters.peer_established,
+            updates_sent: counters.updates_sent,
+            updates_received: counters.updates_received,
+            imported_underlay_prefixes: counters.imported_underlay_prefixes,
+            imported_tunnel_endpoints: counters.imported_tunnel_endpoints,
+            update_send_fail: counters.update_send_fail,
+        }
+    }
 }
 
 #[derive(Clone)]

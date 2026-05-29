@@ -29,6 +29,29 @@ pub struct PeerInfo {
     pub kind: RouterKind,
 }
 
+/// Information about a DDM interface and its FSM state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InterfaceInfo {
+    pub name: String,
+    pub addr: Ipv6Addr,
+    pub status: PeerStatus,
+    pub peer_addr: Option<Ipv6Addr>,
+    pub peer_host: Option<String>,
+    pub peer_kind: Option<RouterKind>,
+    pub solicitations_sent: u64,
+    pub solicitations_received: u64,
+    pub advertisements_sent: u64,
+    pub advertisements_received: u64,
+    pub peer_expirations: u64,
+    pub peer_address_changes: u64,
+    pub peer_established: u64,
+    pub updates_sent: u64,
+    pub updates_received: u64,
+    pub imported_underlay_prefixes: u64,
+    pub imported_tunnel_endpoints: u64,
+    pub update_send_fail: u64,
+}
+
 // Response backwards-compat: convert v2 PeerInfo to v1 PeerInfo.
 impl From<PeerInfo> for crate::v1::db::PeerInfo {
     fn from(value: PeerInfo) -> Self {
