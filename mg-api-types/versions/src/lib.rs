@@ -33,6 +33,8 @@ mod impls;
 pub mod latest;
 #[path = "initial/mod.rs"]
 pub mod v1;
+#[path = "prefix_to_oxnet/mod.rs"]
+pub mod v10;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

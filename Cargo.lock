@@ -1941,6 +1941,7 @@ dependencies = [
  "libfalcon",
  "mg-admin-client 0.1.0",
  "mg-api-types",
+ "mg-api-types-versions",
  "oxide-tokio-rt",
  "oxnet",
  "serde",
@@ -3728,6 +3729,7 @@ dependencies = [
  "colored",
  "mg-api-types-versions",
  "mg-common",
+ "oxnet",
  "progenitor 0.14.0",
  "reqwest 0.13.3",
  "schemars 0.8.22",
@@ -3763,6 +3765,7 @@ dependencies = [
  "dropshot",
  "dropshot-api-manager-types",
  "mg-api-types-versions",
+ "oxnet",
 ]
 
 [[package]]
@@ -3884,6 +3887,7 @@ dependencies = [
  "colored",
  "mg-admin-client 0.1.0",
  "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "natord",
  "oxide-tokio-rt",
@@ -3921,6 +3925,7 @@ dependencies = [
  "oxide-tokio-rt",
  "oximeter",
  "oximeter-producer",
+ "oxnet",
  "proptest",
  "rand 0.10.1",
  "rdb",
@@ -5997,6 +6002,7 @@ dependencies = [
  "clap",
  "itertools 0.14.0",
  "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "ndp",
  "oxnet",

@@ -19,7 +19,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
 use rhai::AST;
@@ -516,12 +516,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix4: Vec<Prefix4> = prefixes
+        let prefix4: Vec<Ipv4Net> = prefixes
             .iter()
             .cloned()
             .filter_map(|x| match x {
-                Prefix::V4(p4) => Some(p4),
-                Prefix::V6(_) => None,
+                IpNet::V4(p4) => Some(p4),
+                IpNet::V6(_) => None,
             })
             .collect();
         self.db.create_origin4(&prefix4)?;
@@ -535,23 +535,23 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
     pub fn set_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
         let origin4 = self.db.get_origin4()?;
-        let current: BTreeSet<&Prefix4> = origin4.iter().collect();
+        let current: BTreeSet<&Ipv4Net> = origin4.iter().collect();
 
-        let prefix4: Vec<Prefix4> = prefixes
+        let prefix4: Vec<Ipv4Net> = prefixes
             .iter()
             .cloned()
             .filter_map(|x| match x {
-                Prefix::V4(p4) => Some(p4),
-                Prefix::V6(_) => None,
+                IpNet::V4(p4) => Some(p4),
+                IpNet::V6(_) => None,
             })
             .collect();
 
-        let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
+        let new: BTreeSet<&Ipv4Net> = prefix4.iter().collect();
 
-        let to_withdraw: Vec<Prefix4> =
+        let to_withdraw: Vec<Ipv4Net> =
             current.difference(&new).map(|x| **x).collect();
 
-        let to_announce: Vec<Prefix4> =
+        let to_announce: Vec<Ipv4Net> =
             new.difference(&current).map(|x| **x).collect();
 
         self.db.set_origin4(&prefix4)?;
@@ -575,7 +575,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    fn announce_origin4(&self, prefixes: Vec<Prefix4>) {
+    fn announce_origin4(&self, prefixes: Vec<Ipv4Net>) {
         if prefixes.is_empty() {
             return;
         }
@@ -597,7 +597,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout4).send_all(prefixes, vec![]);
     }
 
-    fn withdraw_origin4(&self, prefixes: Vec<Prefix4>) {
+    fn withdraw_origin4(&self, prefixes: Vec<Ipv4Net>) {
         if prefixes.is_empty() {
             return;
         }
@@ -620,12 +620,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix6: Vec<Prefix6> = prefixes
+        let prefix6: Vec<Ipv6Net> = prefixes
             .iter()
             .cloned()
             .filter_map(|x| match x {
-                Prefix::V6(p6) => Some(p6),
-                Prefix::V4(_) => None,
+                IpNet::V6(p6) => Some(p6),
+                IpNet::V4(_) => None,
             })
             .collect();
         self.db.create_origin6(&prefix6)?;
@@ -639,23 +639,23 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
     pub fn set_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
         let origin6 = self.db.get_origin6()?;
-        let current: BTreeSet<&Prefix6> = origin6.iter().collect();
+        let current: BTreeSet<&Ipv6Net> = origin6.iter().collect();
 
-        let prefix6: Vec<Prefix6> = prefixes
+        let prefix6: Vec<Ipv6Net> = prefixes
             .iter()
             .cloned()
             .filter_map(|x| match x {
-                Prefix::V6(p6) => Some(p6),
-                Prefix::V4(_) => None,
+                IpNet::V6(p6) => Some(p6),
+                IpNet::V4(_) => None,
             })
             .collect();
 
-        let new: BTreeSet<&Prefix6> = prefix6.iter().collect();
+        let new: BTreeSet<&Ipv6Net> = prefix6.iter().collect();
 
-        let to_withdraw: Vec<Prefix6> =
+        let to_withdraw: Vec<Ipv6Net> =
             current.difference(&new).map(|x| **x).collect();
 
-        let to_announce: Vec<Prefix6> =
+        let to_announce: Vec<Ipv6Net> =
             new.difference(&current).map(|x| **x).collect();
 
         self.db.set_origin6(&prefix6)?;
@@ -679,7 +679,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    fn announce_origin6(&self, prefixes: Vec<Prefix6>) {
+    fn announce_origin6(&self, prefixes: Vec<Ipv6Net>) {
         if prefixes.is_empty() {
             return;
         }
@@ -701,7 +701,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout6).send_all(prefixes, vec![]);
     }
 
-    fn withdraw_origin6(&self, prefixes: Vec<Prefix6>) {
+    fn withdraw_origin6(&self, prefixes: Vec<Ipv6Net>) {
         if prefixes.is_empty() {
             return;
         }

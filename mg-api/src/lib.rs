@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use oxnet::IpNet;
 use std::collections::HashMap;
 use std::net::IpAddr;
 
@@ -24,6 +25,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (10, PREFIX_TO_OXNET),
     (9, ENDPOINT_RENAME),
     (8, BGP_SRC_ADDR),
     (7, OPERATION_ID_CLEANUP),
@@ -671,20 +673,35 @@ pub trait MgAdminApi {
         request: Query<latest::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
+    #[endpoint {
+        method = GET,
+        path = "/bgp/status/exported",
+        versions = VERSION_PREFIX_TO_OXNET..,
+    }]
+    async fn get_exported(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::bgp::session::ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, Vec<IpNet>>>, HttpError>;
+
     // Fixed: uses String keys from PeerId Display (e.g. "192.0.2.1" or
     // "tfportqsfp0_0").
     #[endpoint {
         method = GET,
         path = "/bgp/status/exported",
-        versions = VERSION_RIB_EXPORTED_STRING_KEY..,
+        versions = VERSION_RIB_EXPORTED_STRING_KEY..VERSION_PREFIX_TO_OXNET,
+        operation_id = "get_exported",
     }]
-    async fn get_exported(
+    async fn get_exported_v6(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bgp::session::ExportedSelector>,
     ) -> Result<
-        HttpResponseOk<HashMap<String, Vec<latest::rdb::prefix::Prefix>>>,
+        HttpResponseOk<HashMap<String, Vec<v1::rdb::prefix::Prefix>>>,
         HttpError,
-    >;
+    > {
+        Ok(Self::get_exported(rqctx, request)
+            .await?
+            .map(|m| m.into_iter().map(|(k, v)| (k, v.into_iter().map(v1::rdb::prefix::Prefix::from).collect())).collect()))
+    }
 
     // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers.
     // NOTE: broken — PeerId enum can't serialize as JSON object key.
@@ -914,7 +931,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/history/message",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_PREFIX_TO_OXNET..,
     }]
     async fn message_history(
         rqctx: RequestContext<Self::Context>,
@@ -923,6 +940,24 @@ pub trait MgAdminApi {
         HttpResponseOk<latest::bgp::session::MessageHistoryResponse>,
         HttpError,
     >;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/history/message",
+        versions = VERSION_UNNUMBERED..VERSION_PREFIX_TO_OXNET,
+        operation_id = "message_history",
+    }]
+    async fn message_history_v5(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::bgp::session::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v5::bgp::session::MessageHistoryResponse>,
+        HttpError,
+    > {
+        Ok(Self::message_history(rqctx, request)
+            .await?
+            .map(v5::bgp::session::MessageHistoryResponse::from))
+    }
 
     // `message_history_v{1,2,4}` and `fsm_history_v2` are required (not
     // provided) because the response is drawn from the in-memory ring

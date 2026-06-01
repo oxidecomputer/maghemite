@@ -24,7 +24,6 @@ use mg_api_types::bgp::session::{
     MessageHistoryRequest, MessageHistoryResponse,
 };
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
-use mg_api_types::rdb::prefix::Prefix;
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
@@ -35,6 +34,7 @@ use mg_api_types::static_routes::{
 use mg_api_types::switch::SwitchIdentifiers;
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::stats::MgLowerStats;
+use oxnet::IpNet;
 use rdb::Db;
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
@@ -365,7 +365,7 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_exported(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<ExportedSelector>,
-    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<String, Vec<IpNet>>>, HttpError> {
         bgp_admin::get_exported(ctx, request).await
     }
 

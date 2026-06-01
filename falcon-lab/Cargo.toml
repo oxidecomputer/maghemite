@@ -19,3 +19,4 @@ oxide-tokio-rt.workspace = true
 bgp.workspace = true
 colored.workspace = true
 mg-api-types.workspace = true
+mg-api-types-versions.workspace = true

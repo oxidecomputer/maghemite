@@ -2,9 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::latest::rdb::prefix::Prefix;
-use crate::latest::rdb::prefix::Prefix4;
-use crate::latest::rdb::prefix::Prefix6;
+use crate::v1::rdb::prefix::Prefix;
+use crate::v1::rdb::prefix::Prefix4;
+use crate::v1::rdb::prefix::Prefix6;
 use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::fmt::{self};
@@ -259,6 +259,19 @@ impl std::fmt::Display for Prefix {
         match self {
             Prefix::V4(p) => p.fmt(f),
             Prefix::V6(p) => p.fmt(f),
+        }
+    }
+}
+
+impl From<oxnet::IpNet> for Prefix {
+    fn from(value: oxnet::IpNet) -> Self {
+        match value {
+            oxnet::IpNet::V4(n) => {
+                Self::V4(Prefix4 { value: n.addr(), length: n.width() })
+            }
+            oxnet::IpNet::V6(n) => {
+                Self::V6(Prefix6 { value: n.addr(), length: n.width() })
+            }
         }
     }
 }

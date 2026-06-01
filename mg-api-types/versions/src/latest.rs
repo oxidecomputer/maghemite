@@ -110,19 +110,20 @@ pub mod bgp {
         pub use crate::v4::bgp::messages::As4Aggregator;
         pub use crate::v4::bgp::messages::BgpNexthop;
         pub use crate::v4::bgp::messages::Ipv6DoubleNexthop;
-        pub use crate::v4::bgp::messages::Message;
-        pub use crate::v4::bgp::messages::MpReachIpv4Unicast;
-        pub use crate::v4::bgp::messages::MpReachIpv6Unicast;
-        pub use crate::v4::bgp::messages::MpReachNlri;
-        pub use crate::v4::bgp::messages::MpUnreachIpv4Unicast;
-        pub use crate::v4::bgp::messages::MpUnreachIpv6Unicast;
-        pub use crate::v4::bgp::messages::MpUnreachNlri;
-        pub use crate::v4::bgp::messages::PathAttribute;
         pub use crate::v4::bgp::messages::PathAttributeType;
         pub use crate::v4::bgp::messages::PathAttributeTypeCode;
-        pub use crate::v4::bgp::messages::PathAttributeValue;
-        pub use crate::v4::bgp::messages::UpdateMessage;
         pub use crate::v4::bgp::messages::path_attribute_flags;
+
+        pub use crate::v10::bgp::messages::Message;
+        pub use crate::v10::bgp::messages::MpReachIpv4Unicast;
+        pub use crate::v10::bgp::messages::MpReachIpv6Unicast;
+        pub use crate::v10::bgp::messages::MpReachNlri;
+        pub use crate::v10::bgp::messages::MpUnreachIpv4Unicast;
+        pub use crate::v10::bgp::messages::MpUnreachIpv6Unicast;
+        pub use crate::v10::bgp::messages::MpUnreachNlri;
+        pub use crate::v10::bgp::messages::PathAttribute;
+        pub use crate::v10::bgp::messages::PathAttributeValue;
+        pub use crate::v10::bgp::messages::UpdateMessage;
     }
 
     pub mod session {
@@ -132,15 +133,15 @@ pub mod bgp {
         pub use crate::v2::bgp::session::FsmEventRecord;
         pub use crate::v2::bgp::session::FsmStateKind;
 
-        pub use crate::v4::bgp::session::MAX_MESSAGE_HISTORY;
-        pub use crate::v4::bgp::session::MessageHistory;
-        pub use crate::v4::bgp::session::MessageHistoryEntry;
-
         pub use crate::v5::bgp::session::ExportedSelector;
         pub use crate::v5::bgp::session::FsmHistoryRequest;
         pub use crate::v5::bgp::session::FsmHistoryResponse;
         pub use crate::v5::bgp::session::MessageHistoryRequest;
-        pub use crate::v5::bgp::session::MessageHistoryResponse;
+
+        pub use crate::v10::bgp::session::MAX_MESSAGE_HISTORY;
+        pub use crate::v10::bgp::session::MessageHistory;
+        pub use crate::v10::bgp::session::MessageHistoryEntry;
+        pub use crate::v10::bgp::session::MessageHistoryResponse;
     }
 }
 
@@ -159,12 +160,6 @@ pub mod rdb {
     pub mod path {
         pub use crate::v5::rdb::path::BgpPathProperties;
         pub use crate::v5::rdb::path::Path;
-    }
-
-    pub mod prefix {
-        pub use crate::v1::rdb::prefix::Prefix;
-        pub use crate::v1::rdb::prefix::Prefix4;
-        pub use crate::v1::rdb::prefix::Prefix6;
     }
 
     pub mod router {

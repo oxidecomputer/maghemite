@@ -11,7 +11,8 @@ use mg_api_types::bgp::config::{
 };
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
+use oxnet::{Ipv4Net, Ipv6Net};
 use mg_common::{print_nopipe, println_nopipe};
 use std::{
     fs::read_to_string,
@@ -485,7 +486,7 @@ pub struct Originate4 {
     pub asn: u32,
 
     /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
+    pub prefixes: Vec<Ipv4Net>,
 }
 
 #[derive(Args, Debug)]
@@ -495,13 +496,13 @@ pub struct Originate6 {
     pub asn: u32,
 
     /// Set of IPv6 prefixes to originate.
-    pub prefixes: Vec<Prefix6>,
+    pub prefixes: Vec<Ipv6Net>,
 }
 
 #[derive(Args, Debug)]
 pub struct Withdraw4 {
     /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
+    pub prefixes: Vec<Ipv4Net>,
 
     /// Autonomous system number for the router to originated the prefixes from.
     #[clap(env)]
@@ -618,11 +619,11 @@ pub struct Neighbor {
 
     /// IPv4 prefixes to allow importing (requires --enable-ipv4).
     #[arg(long, requires = "enable_ipv4")]
-    pub allow_import4: Option<Vec<Prefix4>>,
+    pub allow_import4: Option<Vec<Ipv4Net>>,
 
     /// IPv4 prefixes to allow exporting (requires --enable-ipv4).
     #[arg(long, requires = "enable_ipv4")]
-    pub allow_export4: Option<Vec<Prefix4>>,
+    pub allow_export4: Option<Vec<Ipv4Net>>,
 
     /// IPv4 nexthop override for this neighbor (requires --enable-ipv4).
     #[arg(long, requires = "enable_ipv4")]
@@ -634,11 +635,11 @@ pub struct Neighbor {
 
     /// IPv6 prefixes to allow importing (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
-    pub allow_import6: Option<Vec<Prefix6>>,
+    pub allow_import6: Option<Vec<Ipv6Net>>,
 
     /// IPv6 prefixes to allow exporting (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
-    pub allow_export6: Option<Vec<Prefix6>>,
+    pub allow_export6: Option<Vec<Ipv6Net>>,
 
     /// IPv6 nexthop override for this neighbor (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
@@ -682,15 +683,19 @@ impl Neighbor {
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if self.enable_ipv4 {
             let import_policy = match self.allow_import4.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy4::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy4::NoFiltering,
             };
             let export_policy = match self.allow_export4.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy4::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
@@ -705,15 +710,19 @@ impl Neighbor {
         // Build IPv6 unicast config if enabled
         let ipv6_unicast = if self.enable_ipv6 {
             let import_policy = match self.allow_import6.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy6::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy6::NoFiltering,
             };
             let export_policy = match self.allow_export6.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy6::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
@@ -760,15 +769,19 @@ impl Neighbor {
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if self.enable_ipv4 {
             let import_policy = match self.allow_import4.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy4::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy4::NoFiltering,
             };
             let export_policy = match self.allow_export4.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy4::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
@@ -783,15 +796,19 @@ impl Neighbor {
         // Build IPv6 unicast config if enabled
         let ipv6_unicast = if self.enable_ipv6 {
             let import_policy = match self.allow_import6.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy6::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy6::NoFiltering,
             };
             let export_policy = match self.allow_export6.clone() {
-                Some(prefixes) => {
-                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
-                }
+                Some(prefixes) => ImportExportPolicy6::Allow(
+                    prefixes.into_iter()
+                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
+                        .collect()
+                ),
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
@@ -1446,7 +1463,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix4::new(x.value, x.length))
+            .map(|x| Prefix4 { value: x.addr(), length: x.width() })
             .collect(),
     })
     .await?;
@@ -1460,7 +1477,7 @@ async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix4::new(x.value, x.length))
+            .map(|x| Prefix4 { value: x.addr(), length: x.width() })
             .collect(),
     })
     .await?;
@@ -1485,7 +1502,7 @@ async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix6::new(x.value, x.length))
+            .map(|x| Prefix6 { value: x.addr(), length: x.width() })
             .collect(),
     })
     .await?;
@@ -1499,7 +1516,7 @@ async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix6::new(x.value, x.length))
+            .map(|x| Prefix6 { value: x.addr(), length: x.width() })
             .collect(),
     })
     .await?;
@@ -1872,10 +1889,10 @@ mod tests {
     fn test_ipv4_prefix_parsing_in_cli() {
         // Test that IPv4 prefixes can be parsed for CLI usage
         let prefix_str = "192.168.1.0/24";
-        let prefix = Prefix4::from_str(prefix_str).expect("parse IPv4 prefix");
+        let prefix = Ipv4Net::from_str(prefix_str).expect("parse IPv4 prefix");
 
-        assert_eq!(prefix.value.to_string(), "192.168.1.0");
-        assert_eq!(prefix.length, 24);
+        assert_eq!(prefix.addr().to_string(), "192.168.1.0");
+        assert_eq!(prefix.width(), 24);
 
         // Test Originate4 struct creation (simulating CLI argument parsing)
         let originate4 = Originate4 {
@@ -1885,18 +1902,18 @@ mod tests {
 
         assert_eq!(originate4.asn, 65001);
         assert_eq!(originate4.prefixes.len(), 1);
-        assert_eq!(originate4.prefixes[0].value.to_string(), "192.168.1.0");
-        assert_eq!(originate4.prefixes[0].length, 24);
+        assert_eq!(originate4.prefixes[0].addr().to_string(), "192.168.1.0");
+        assert_eq!(originate4.prefixes[0].width(), 24);
     }
 
     #[test]
     fn test_ipv6_prefix_parsing_in_cli() {
         // Test that IPv6 prefixes can be parsed for CLI usage
         let prefix_str = "2001:db8::/32";
-        let prefix = Prefix6::from_str(prefix_str).expect("parse IPv6 prefix");
+        let prefix = Ipv6Net::from_str(prefix_str).expect("parse IPv6 prefix");
 
-        assert_eq!(prefix.value.to_string(), "2001:db8::");
-        assert_eq!(prefix.length, 32);
+        assert_eq!(prefix.addr().to_string(), "2001:db8::");
+        assert_eq!(prefix.width(), 32);
 
         // Test Originate6 struct creation (simulating CLI argument parsing)
         let originate6 = Originate6 {
@@ -1906,8 +1923,8 @@ mod tests {
 
         assert_eq!(originate6.asn, 65001);
         assert_eq!(originate6.prefixes.len(), 1);
-        assert_eq!(originate6.prefixes[0].value.to_string(), "2001:db8::");
-        assert_eq!(originate6.prefixes[0].length, 32);
+        assert_eq!(originate6.prefixes[0].addr().to_string(), "2001:db8::");
+        assert_eq!(originate6.prefixes[0].width(), 32);
     }
 
     #[test]

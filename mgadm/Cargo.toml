@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bgp = { workspace = true, features = ["clap"] }
 mg-api-types.workspace = true
+mg-api-types-versions.workspace = true
 mg-common.workspace = true
 mg-admin-client.workspace = true
 clap.workspace = true

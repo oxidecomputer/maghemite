@@ -3,12 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
-use crate::validation::validate_prefixes;
+use crate::validation::{validate_ipv4_nets, validate_ipv6_nets};
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_api_types::rdb::prefix::Prefix;
+use oxnet::{Ipv4Net, Ipv6Net};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::GetRibResult;
 use mg_api_types::static_routes::{
@@ -33,8 +33,9 @@ fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
         vlan_id,
         rib_priority,
     } = v;
+    use oxnet::{IpNet, Ipv4Net};
     StaticRouteKey {
-        prefix: prefix.into(),
+        prefix: IpNet::V4(Ipv4Net::new_unchecked(prefix.value, prefix.length)),
         nexthop: nexthop.into(),
         vlan_id,
         rib_priority,
@@ -51,8 +52,9 @@ fn static_route_key_from_v6(v: StaticRoute6) -> StaticRouteKey {
         vlan_id,
         rib_priority,
     } = v;
+    use oxnet::{IpNet, Ipv6Net};
     StaticRouteKey {
-        prefix: prefix.into(),
+        prefix: IpNet::V6(Ipv6Net::new_unchecked(prefix.value, prefix.length)),
         nexthop: nexthop.into(),
         vlan_id,
         rib_priority,
@@ -63,17 +65,17 @@ pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute4Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let routes: Vec<StaticRouteKey> = request
-        .into_inner()
-        .routes
-        .list
-        .into_iter()
-        .map(static_route_key_from_v4)
-        .collect();
+    let list = request.into_inner().routes.list;
 
     // Validate that all prefixes have host bits unset
-    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
-    validate_prefixes(&prefixes)?;
+    let nets: Vec<Ipv4Net> = list
+        .iter()
+        .map(|r| Ipv4Net::new_unchecked(r.prefix.value, r.prefix.length))
+        .collect();
+    validate_ipv4_nets(&nets)?;
+
+    let routes: Vec<StaticRouteKey> =
+        list.into_iter().map(static_route_key_from_v4).collect();
 
     ctx.context()
         .db
@@ -123,17 +125,17 @@ pub async fn static_add_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute6Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let routes: Vec<StaticRouteKey> = request
-        .into_inner()
-        .routes
-        .list
-        .into_iter()
-        .map(static_route_key_from_v6)
-        .collect();
+    let list = request.into_inner().routes.list;
 
     // Validate that all prefixes have host bits unset
-    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
-    validate_prefixes(&prefixes)?;
+    let nets: Vec<Ipv6Net> = list
+        .iter()
+        .map(|r| Ipv6Net::new_unchecked(r.prefix.value, r.prefix.length))
+        .collect();
+    validate_ipv6_nets(&nets)?;
+
+    let routes: Vec<StaticRouteKey> =
+        list.into_iter().map(static_route_key_from_v6).collect();
 
     ctx.context()
         .db
