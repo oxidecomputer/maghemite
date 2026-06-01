@@ -266,12 +266,14 @@ impl std::fmt::Display for Prefix {
 impl From<oxnet::IpNet> for Prefix {
     fn from(value: oxnet::IpNet) -> Self {
         match value {
-            oxnet::IpNet::V4(n) => {
-                Self::V4(Prefix4 { value: n.addr(), length: n.width() })
-            }
-            oxnet::IpNet::V6(n) => {
-                Self::V6(Prefix6 { value: n.addr(), length: n.width() })
-            }
+            oxnet::IpNet::V4(n) => Self::V4(Prefix4 {
+                value: n.addr(),
+                length: n.width(),
+            }),
+            oxnet::IpNet::V6(n) => Self::V6(Prefix6 {
+                value: n.addr(),
+                length: n.width(),
+            }),
         }
     }
 }

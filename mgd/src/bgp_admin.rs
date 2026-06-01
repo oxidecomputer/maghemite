@@ -6,7 +6,9 @@
 use crate::unnumbered_manager::{
     NdpPeerState, NdpThreadStateInternal, UnnumberedManagerNdp,
 };
-use crate::validation::{validate_ipv4_nets, validate_ipv6_nets, validate_nets};
+use crate::validation::{
+    validate_ipv4_nets, validate_ipv6_nets, validate_nets,
+};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
@@ -45,12 +47,12 @@ use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_api_types_versions::v1::rdb::prefix::{Prefix, Prefix4, Prefix6};
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
+use mg_api_types_versions::v1::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -719,7 +721,10 @@ pub async fn read_origin4(
         asn: rq.asn,
         prefixes: originated
             .into_iter()
-            .map(|p| Prefix4 { value: p.addr(), length: p.width() })
+            .map(|p| Prefix4 {
+                value: p.addr(),
+                length: p.width(),
+            })
             .collect(),
     }))
 }
@@ -802,7 +807,10 @@ pub async fn read_origin6(
         asn: rq.asn,
         prefixes: originated
             .into_iter()
-            .map(|p| Prefix6 { value: p.addr(), length: p.width() })
+            .map(|p| Prefix6 {
+                value: p.addr(),
+                length: p.width(),
+            })
             .collect(),
     }))
 }
@@ -879,7 +887,12 @@ pub async fn get_exported_v1(
 
         let mut orig_routes: Vec<Prefix> = orig4
             .iter()
-            .map(|p| Prefix::V4(Prefix4 { value: p.addr(), length: p.width() }))
+            .map(|p| {
+                Prefix::V4(Prefix4 {
+                    value: p.addr(),
+                    length: p.width(),
+                })
+            })
             .collect();
 
         // Combine per-AF export policies into legacy format for filtering
@@ -1266,8 +1279,12 @@ async fn do_bgp_apply(
         .originate
         .iter()
         .map(|p| match p {
-            Prefix::V4(p4) => IpNet::V4(Ipv4Net::new_unchecked(p4.value, p4.length)),
-            Prefix::V6(p6) => IpNet::V6(Ipv6Net::new_unchecked(p6.value, p6.length)),
+            Prefix::V4(p4) => {
+                IpNet::V4(Ipv4Net::new_unchecked(p4.value, p4.length))
+            }
+            Prefix::V6(p6) => {
+                IpNet::V6(Ipv6Net::new_unchecked(p6.value, p6.length))
+            }
         })
         .collect();
     validate_nets(&originate_nets)?;
@@ -1675,9 +1692,9 @@ pub async fn message_history_v4(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history)| {
-            key.parse::<IpAddr>()
-                .ok()
-                .map(|addr| (addr, v4::bgp::session::MessageHistory::from(history)))
+            key.parse::<IpAddr>().ok().map(|addr| {
+                (addr, v4::bgp::session::MessageHistory::from(history))
+            })
         })
         .collect();
 
@@ -2632,8 +2649,7 @@ pub(crate) mod helpers {
                     });
                 }
             }
-            peer_exported_routes
-                .extend(v4_routes.into_iter().map(IpNet::V4));
+            peer_exported_routes.extend(v4_routes.into_iter().map(IpNet::V4));
         }
 
         // Process IPv6 routes if requested and negotiated
@@ -2655,8 +2671,7 @@ pub(crate) mod helpers {
                     });
                 }
             }
-            peer_exported_routes
-                .extend(v6_routes.into_iter().map(IpNet::V6));
+            peer_exported_routes.extend(v6_routes.into_iter().map(IpNet::V6));
         }
 
         // Only return if we have exported routes

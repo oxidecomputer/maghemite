@@ -12,8 +12,8 @@ use mg_api_types::bgp::config::{
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
-use oxnet::{Ipv4Net, Ipv6Net};
 use mg_common::{print_nopipe, println_nopipe};
+use oxnet::{Ipv4Net, Ipv6Net};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -684,17 +684,25 @@ impl Neighbor {
         let ipv4_unicast = if self.enable_ipv4 {
             let import_policy = match self.allow_import4.clone() {
                 Some(prefixes) => ImportExportPolicy4::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix4 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy4::NoFiltering,
             };
             let export_policy = match self.allow_export4.clone() {
                 Some(prefixes) => ImportExportPolicy4::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix4 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy4::NoFiltering,
             };
@@ -711,17 +719,25 @@ impl Neighbor {
         let ipv6_unicast = if self.enable_ipv6 {
             let import_policy = match self.allow_import6.clone() {
                 Some(prefixes) => ImportExportPolicy6::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix6 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy6::NoFiltering,
             };
             let export_policy = match self.allow_export6.clone() {
                 Some(prefixes) => ImportExportPolicy6::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix6 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy6::NoFiltering,
             };
@@ -770,17 +786,25 @@ impl Neighbor {
         let ipv4_unicast = if self.enable_ipv4 {
             let import_policy = match self.allow_import4.clone() {
                 Some(prefixes) => ImportExportPolicy4::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix4 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy4::NoFiltering,
             };
             let export_policy = match self.allow_export4.clone() {
                 Some(prefixes) => ImportExportPolicy4::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix4 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix4 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy4::NoFiltering,
             };
@@ -797,17 +821,25 @@ impl Neighbor {
         let ipv6_unicast = if self.enable_ipv6 {
             let import_policy = match self.allow_import6.clone() {
                 Some(prefixes) => ImportExportPolicy6::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix6 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy6::NoFiltering,
             };
             let export_policy = match self.allow_export6.clone() {
                 Some(prefixes) => ImportExportPolicy6::Allow(
-                    prefixes.into_iter()
-                        .map(|n| Prefix6 { value: n.addr(), length: n.width() })
-                        .collect()
+                    prefixes
+                        .into_iter()
+                        .map(|n| Prefix6 {
+                            value: n.addr(),
+                            length: n.width(),
+                        })
+                        .collect(),
                 ),
                 None => ImportExportPolicy6::NoFiltering,
             };
@@ -1463,7 +1495,10 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix4 { value: x.addr(), length: x.width() })
+            .map(|x| Prefix4 {
+                value: x.addr(),
+                length: x.width(),
+            })
             .collect(),
     })
     .await?;
@@ -1477,7 +1512,10 @@ async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix4 { value: x.addr(), length: x.width() })
+            .map(|x| Prefix4 {
+                value: x.addr(),
+                length: x.width(),
+            })
             .collect(),
     })
     .await?;
@@ -1502,7 +1540,10 @@ async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix6 { value: x.addr(), length: x.width() })
+            .map(|x| Prefix6 {
+                value: x.addr(),
+                length: x.width(),
+            })
             .collect(),
     })
     .await?;
@@ -1516,7 +1557,10 @@ async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| Prefix6 { value: x.addr(), length: x.width() })
+            .map(|x| Prefix6 {
+                value: x.addr(),
+                length: x.width(),
+            })
             .collect(),
     })
     .await?;

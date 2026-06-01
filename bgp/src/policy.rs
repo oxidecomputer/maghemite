@@ -26,12 +26,10 @@
 //!
 //! Policy scripts are operator defined and written in Rhai.
 
-use crate::messages::{
-    CapabilityCode, Message, OpenMessage, Prefix, UpdateMessage,
-};
+use crate::messages::{CapabilityCode, Message, OpenMessage, UpdateMessage};
 use crate::rhai_integration::*;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use oxnet::Ipv4Net;
+use oxnet::{IpNet, Ipv4Net};
 
 /// Address-family-specific import/export policy wrapper for internal session
 /// signaling. Carries either an IPv4 or IPv6 policy so per-AF policy-change
@@ -136,14 +134,11 @@ impl ShaperResult {
     ) -> UpdateMessage {
         // anything that was previously being announced that is no longer
         // being announced, must be withdrawn
-        let previous: HashSet<Ipv4Net> =
-            a.nlri.iter().copied().collect();
-        let current: HashSet<Ipv4Net> =
-            b.nlri.iter().copied().collect();
+        let previous: HashSet<Ipv4Net> = a.nlri.iter().copied().collect();
+        let current: HashSet<Ipv4Net> = b.nlri.iter().copied().collect();
 
         let mut new = b.clone();
-        new.withdrawn =
-            previous.difference(&current).copied().collect();
+        new.withdrawn = previous.difference(&current).copied().collect();
 
         new
     }
@@ -241,7 +236,7 @@ pub fn new_rhai_engine() -> Engine {
         );
 
     engine
-        .register_type_with_name::<Prefix>("Prefix")
+        .register_type_with_name::<IpNet>("Prefix")
         .register_fn("within", prefix_within_rhai)
         .register_type_with_name::<Ipv4Net>("Prefix4")
         .register_fn("within", prefix4_within_rhai)

@@ -22,10 +22,10 @@ use mg_api_types::bgp::config::{
 };
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types_versions::v1::rdb::prefix::Prefix4;
-use oxnet::IpNet;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
+use oxnet::IpNet;
 use rdb::Asn;
 use std::{
     collections::BTreeSet,

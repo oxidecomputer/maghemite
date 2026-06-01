@@ -188,7 +188,12 @@ mod tests {
         let nets = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(127, 0, 0, 0), 8)];
         let result = validate_ipv4_nets(&nets);
         assert!(result.is_err());
-        assert!(result.unwrap_err().external_message.contains("not valid for RIB"));
+        assert!(
+            result
+                .unwrap_err()
+                .external_message
+                .contains("not valid for RIB")
+        );
     }
 
     #[test]
@@ -196,16 +201,25 @@ mod tests {
         let nets = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(224, 0, 0, 0), 4)];
         let result = validate_ipv4_nets(&nets);
         assert!(result.is_err());
-        assert!(result.unwrap_err().external_message.contains("not valid for RIB"));
+        assert!(
+            result
+                .unwrap_err()
+                .external_message
+                .contains("not valid for RIB")
+        );
     }
 
     #[test]
     fn test_validate_ipv6_rejects_loopback() {
-        let nets =
-            vec![Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)];
+        let nets = vec![Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)];
         let result = validate_ipv6_nets(&nets);
         assert!(result.is_err());
-        assert!(result.unwrap_err().external_message.contains("not valid for RIB"));
+        assert!(
+            result
+                .unwrap_err()
+                .external_message
+                .contains("not valid for RIB")
+        );
     }
 
     #[test]
@@ -216,7 +230,12 @@ mod tests {
         )];
         let result = validate_ipv6_nets(&nets);
         assert!(result.is_err());
-        assert!(result.unwrap_err().external_message.contains("not valid for RIB"));
+        assert!(
+            result
+                .unwrap_err()
+                .external_message
+                .contains("not valid for RIB")
+        );
     }
 
     #[test]
@@ -227,7 +246,12 @@ mod tests {
         )];
         let result = validate_ipv6_nets(&nets);
         assert!(result.is_err());
-        assert!(result.unwrap_err().external_message.contains("not valid for RIB"));
+        assert!(
+            result
+                .unwrap_err()
+                .external_message
+                .contains("not valid for RIB")
+        );
     }
 
     #[test]

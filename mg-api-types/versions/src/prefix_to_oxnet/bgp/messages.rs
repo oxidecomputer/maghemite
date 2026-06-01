@@ -110,11 +110,17 @@ pub enum Message {
 // ---------------------------------------------------------------------------
 
 fn ipv4net_to_prefix4(n: Ipv4Net) -> v1::rdb::prefix::Prefix4 {
-    v1::rdb::prefix::Prefix4 { value: n.addr(), length: n.width() }
+    v1::rdb::prefix::Prefix4 {
+        value: n.addr(),
+        length: n.width(),
+    }
 }
 
 fn ipv6net_to_prefix6(n: Ipv6Net) -> v1::rdb::prefix::Prefix6 {
-    v1::rdb::prefix::Prefix6 { value: n.addr(), length: n.width() }
+    v1::rdb::prefix::Prefix6 {
+        value: n.addr(),
+        length: n.width(),
+    }
 }
 
 impl From<MpReachIpv4Unicast> for v4::bgp::messages::MpReachIpv4Unicast {
@@ -148,13 +154,25 @@ impl From<MpReachNlri> for v4::bgp::messages::MpReachNlri {
 
 impl From<MpUnreachIpv4Unicast> for v4::bgp::messages::MpUnreachIpv4Unicast {
     fn from(v: MpUnreachIpv4Unicast) -> Self {
-        Self { withdrawn: v.withdrawn.into_iter().map(ipv4net_to_prefix4).collect() }
+        Self {
+            withdrawn: v
+                .withdrawn
+                .into_iter()
+                .map(ipv4net_to_prefix4)
+                .collect(),
+        }
     }
 }
 
 impl From<MpUnreachIpv6Unicast> for v4::bgp::messages::MpUnreachIpv6Unicast {
     fn from(v: MpUnreachIpv6Unicast) -> Self {
-        Self { withdrawn: v.withdrawn.into_iter().map(ipv6net_to_prefix6).collect() }
+        Self {
+            withdrawn: v
+                .withdrawn
+                .into_iter()
+                .map(ipv6net_to_prefix6)
+                .collect(),
+        }
     }
 }
 
@@ -190,14 +208,21 @@ impl From<PathAttributeValue> for v4::bgp::messages::PathAttributeValue {
 
 impl From<PathAttribute> for v4::bgp::messages::PathAttribute {
     fn from(v: PathAttribute) -> Self {
-        Self { typ: v.typ, value: v.value.into() }
+        Self {
+            typ: v.typ,
+            value: v.value.into(),
+        }
     }
 }
 
 impl From<UpdateMessage> for v4::bgp::messages::UpdateMessage {
     fn from(v: UpdateMessage) -> Self {
         Self {
-            withdrawn: v.withdrawn.into_iter().map(ipv4net_to_prefix4).collect(),
+            withdrawn: v
+                .withdrawn
+                .into_iter()
+                .map(ipv4net_to_prefix4)
+                .collect(),
             path_attributes: v
                 .path_attributes
                 .into_iter()

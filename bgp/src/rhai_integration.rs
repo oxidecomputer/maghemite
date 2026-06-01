@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     messages::{
-        Capability, CapabilityCode, Community, Message, OpenMessage, Prefix,
+        Capability, CapabilityCode, Community, Message, OpenMessage,
         UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult},
@@ -197,8 +197,8 @@ pub mod shaper_result_module {
     }
 }
 
-pub fn prefix_within_rhai(prefix: &mut Prefix, x: &str) -> bool {
-    let x: Prefix = match x.parse() {
+pub fn prefix_within_rhai(prefix: &mut IpNet, x: &str) -> bool {
+    let x: IpNet = match x.parse() {
         Ok(p) => p,
         Err(_) => return false,
     };

@@ -698,9 +698,18 @@ pub trait MgAdminApi {
         HttpResponseOk<HashMap<String, Vec<v1::rdb::prefix::Prefix>>>,
         HttpError,
     > {
-        Ok(Self::get_exported(rqctx, request)
-            .await?
-            .map(|m| m.into_iter().map(|(k, v)| (k, v.into_iter().map(v1::rdb::prefix::Prefix::from).collect())).collect()))
+        Ok(Self::get_exported(rqctx, request).await?.map(|m| {
+            m.into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(v1::rdb::prefix::Prefix::from)
+                            .collect(),
+                    )
+                })
+                .collect()
+        }))
     }
 
     // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers.

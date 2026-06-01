@@ -638,7 +638,8 @@ mod test {
 
     #[test]
     fn prefix_no_cross_family_within() {
-        let v4 = IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8));
+        let v4 =
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8));
         let v6 = IpNet::V6(Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128));
         assert!(!v4.is_subnet_of(&v6));
         assert!(!v6.is_subnet_of(&v4));

@@ -4,12 +4,11 @@
 
 use crate::{BGP_VERSION, error::Error};
 use mg_api_types::rdb::rib::AddressFamily;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-pub(crate) use oxnet::IpNet as Prefix;
 use nom::{
     bytes::complete::take,
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use path_attribute_flags::*;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -2664,8 +2663,14 @@ mod tests {
                 },
             ],
             nlri: vec![
-                Ipv4Net::new_unchecked(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
-                Ipv4Net::new_unchecked(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
+                Ipv4Net::new_unchecked(
+                    std::net::Ipv4Addr::new(0, 23, 1, 13),
+                    32,
+                ),
+                Ipv4Net::new_unchecked(
+                    std::net::Ipv4Addr::new(0, 23, 1, 14),
+                    32,
+                ),
             ],
             errors: vec![],
         };
@@ -2920,7 +2925,10 @@ mod tests {
                         Ipv4Addr::from(octets),
                         test_case.prefix_length,
                     );
-                    IpNet::V4(Ipv4Net::new_unchecked(n.prefix(), test_case.prefix_length))
+                    IpNet::V4(Ipv4Net::new_unchecked(
+                        n.prefix(),
+                        test_case.prefix_length,
+                    ))
                 }
                 AddressFamily::Ipv6 => {
                     let mut octets = [0u8; 16];
@@ -2929,7 +2937,10 @@ mod tests {
                         Ipv6Addr::from(octets),
                         test_case.prefix_length,
                     );
-                    IpNet::V6(Ipv6Net::new_unchecked(n.prefix(), test_case.prefix_length))
+                    IpNet::V6(Ipv6Net::new_unchecked(
+                        n.prefix(),
+                        test_case.prefix_length,
+                    ))
                 }
             };
 
@@ -2937,7 +2948,8 @@ mod tests {
                 AddressFamily::Ipv4 => {
                     if let IpNet::V4(net4) = prefix {
                         assert_eq!(
-                            net4.width(), test_case.prefix_length,
+                            net4.width(),
+                            test_case.prefix_length,
                             "IPv4 length mismatch for {}",
                             test_case.description
                         );
@@ -2962,7 +2974,8 @@ mod tests {
                 AddressFamily::Ipv6 => {
                     if let IpNet::V6(net6) = prefix {
                         assert_eq!(
-                            net6.width(), test_case.prefix_length,
+                            net6.width(),
+                            test_case.prefix_length,
                             "IPv6 length mismatch for {}",
                             test_case.description
                         );
@@ -3265,8 +3278,14 @@ mod tests {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
         let nlri = vec![
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                48,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+                48,
+            ),
         ];
 
         let mp_reach = MpReachNlri::ipv6_unicast(nh, nlri.clone());
@@ -3343,8 +3362,14 @@ mod tests {
     #[test]
     fn mp_unreach_nlri_ipv6_unicast() {
         let withdrawn = vec![
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                48,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+                48,
+            ),
         ];
 
         let mp_unreach = MpUnreachNlri::ipv6_unicast(withdrawn.clone());
@@ -3455,7 +3480,10 @@ mod tests {
         // Create an UPDATE with both traditional NLRI and MP_REACH_NLRI
         let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8::").unwrap(), 32)],
+            vec![Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8::").unwrap(),
+                32,
+            )],
         );
 
         let update = UpdateMessage {
@@ -3504,10 +3532,11 @@ mod tests {
             )],
         );
 
-        let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![Ipv6Net::new_unchecked(
-            Ipv6Addr::from_str("2001:db8:2::").unwrap(),
-            48,
-        )]);
+        let mp_unreach =
+            MpUnreachNlri::ipv6_unicast(vec![Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+                48,
+            )]);
 
         let update = UpdateMessage {
             withdrawn: vec![],
@@ -3565,8 +3594,10 @@ mod tests {
             vec![Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 0, 0), 16)];
 
         // MP-BGP IPv4 prefixes (different from traditional)
-        let mp_nlri = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
-        let mp_withdrawn = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 10, 0, 0), 16)];
+        let mp_nlri =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        let mp_withdrawn =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 10, 0, 0), 16)];
 
         let mp_reach = MpReachNlri::ipv4_unicast(
             BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1)),
@@ -4841,10 +4872,11 @@ mod tests {
         fn mp_unreach_only_update_does_not_require_mandatory_attrs() {
             // An UPDATE that only carries MP_UNREACH_NLRI (MP-BGP withdrawals)
             // doesn't need mandatory attributes because there's no reachable NLRI.
-            let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![Ipv6Net::new_unchecked(
-                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
-                48,
-            )]);
+            let mp_unreach =
+                MpUnreachNlri::ipv6_unicast(vec![Ipv6Net::new_unchecked(
+                    Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                    48,
+                )]);
             let value_bytes = mp_unreach_nlri_to_wire(&mp_unreach)
                 .expect("MP_UNREACH_NLRI encoding");
 

@@ -19,9 +19,9 @@ use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
 use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::rib::AddressFamily;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::{lock, read_lock, write_lock};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
@@ -1167,11 +1167,8 @@ impl Db {
         }
     }
 
-    pub fn remove_path_for_prefixes<F>(
-        &self,
-        prefixes: &[IpNet],
-        prefix_cmp: F,
-    ) where
+    pub fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
+    where
         F: Fn(&Path) -> bool,
     {
         // split prefixes into v4 and v6 groups. this allows us to lock the v4
@@ -1485,9 +1482,9 @@ mod test {
     };
     use mg_api_types::rdb::path::Path;
     use mg_api_types::rdb::rib::AddressFamily;
-    use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use mg_common::eprintln_nopipe;
     use mg_common::log::*;
+    use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -1817,8 +1814,10 @@ mod test {
         let nexthop = IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap());
 
         // Test adding IPv4 static routes
-        let prefix4 =
-            Ipv4Net::new_unchecked(Ipv4Addr::from_str("192.168.1.0").unwrap(), 24);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("192.168.1.0").unwrap(),
+            24,
+        );
         let static_route = StaticRouteKey {
             prefix: IpNet::V4(prefix4),
             nexthop,
@@ -1857,8 +1856,10 @@ mod test {
         let nexthop = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
 
         // Test adding IPv6 static routes
-        let prefix6 =
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8::").unwrap(), 64);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8::").unwrap(),
+            64,
+        );
         let static_route = StaticRouteKey {
             prefix: IpNet::V6(prefix6),
             nexthop,
@@ -1894,8 +1895,10 @@ mod test {
     #[test]
     fn test_static_routing_ipv6_vlan_id_handling() {
         let db = get_test_db();
-        let prefix6 =
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+            48,
+        );
 
         // Test route without VLAN ID
         let route_no_vlan = StaticRouteKey {
@@ -1938,8 +1941,10 @@ mod test {
         let db = get_test_db();
 
         // Create IPv4 and IPv6 routes
-        let prefix4 = Ipv4Net::new_unchecked(Ipv4Addr::from_str("10.0.0.0").unwrap(), 8);
-        let prefix6 = Ipv6Net::new_unchecked(Ipv6Addr::from_str("fd00::").unwrap(), 8);
+        let prefix4 =
+            Ipv4Net::new_unchecked(Ipv4Addr::from_str("10.0.0.0").unwrap(), 8);
+        let prefix6 =
+            Ipv6Net::new_unchecked(Ipv6Addr::from_str("fd00::").unwrap(), 8);
 
         let route4 = StaticRouteKey {
             prefix: IpNet::V4(prefix4),
@@ -1987,8 +1992,10 @@ mod test {
     #[test]
     fn test_static_routing_multiple_routes_same_prefix() {
         let db = get_test_db();
-        let prefix4 =
-            Ipv4Net::new_unchecked(Ipv4Addr::from_str("172.16.0.0").unwrap(), 16);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("172.16.0.0").unwrap(),
+            16,
+        );
 
         // Create multiple routes to the same prefix with different next-hops and priorities
         let route1 = StaticRouteKey {
@@ -2029,8 +2036,10 @@ mod test {
     #[test]
     fn test_static_routing_vlan_id_handling() {
         let db = get_test_db();
-        let prefix4 =
-            Ipv4Net::new_unchecked(Ipv4Addr::from_str("203.0.113.0").unwrap(), 24);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("203.0.113.0").unwrap(),
+            24,
+        );
 
         // Test route without VLAN ID
         let route_no_vlan = StaticRouteKey {
@@ -2073,14 +2082,18 @@ mod test {
         let db = get_test_db();
 
         // Ipv4Net::new_unchecked does NOT zero host bits, so use a proper network address.
-        let prefix4 =
-            Ipv4Net::new_unchecked(Ipv4Addr::from_str("192.168.1.0").unwrap(), 24);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("192.168.1.0").unwrap(),
+            24,
+        );
         assert_eq!(prefix4.addr(), Ipv4Addr::from_str("192.168.1.0").unwrap());
         assert_eq!(prefix4.width(), 24);
 
         // Ipv6Net::new_unchecked does NOT zero host bits, so use a proper network address.
-        let prefix6 =
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8::").unwrap(), 64);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8::").unwrap(),
+            64,
+        );
         assert_eq!(prefix6.addr(), Ipv6Addr::from_str("2001:db8::").unwrap());
         assert_eq!(prefix6.width(), 64);
 
@@ -2132,7 +2145,8 @@ mod test {
         assert!(db.create_origin4(&prefixes).is_err());
 
         // Update origin4 with different prefixes
-        let new_prefixes = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        let new_prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
         db.set_origin4(&new_prefixes).expect("set origin4");
 
         let updated = db.get_origin4().expect("get updated origin4");
@@ -2156,8 +2170,14 @@ mod test {
 
         // Test creating IPv6 origins
         let prefixes = vec![
-            Ipv6Net::new_unchecked(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
-            Ipv6Net::new_unchecked(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                32,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0),
+                8,
+            ),
         ];
 
         // Create origin6 - should succeed
@@ -2196,7 +2216,8 @@ mod test {
 
     #[test]
     fn test_prefix4_db_key_serialization() {
-        let prefix = Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 100, 0), 24);
+        let prefix =
+            Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 100, 0), 24);
         let key = prefix.db_key();
 
         // IPv4 address should be 4 bytes + 1 byte for length
@@ -2260,7 +2281,8 @@ mod test {
 
         // --- IPv4 static path ---
         let nexthop4 = IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap());
-        let prefix4 = Ipv4Net::new_unchecked(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
+        let prefix4 =
+            Ipv4Net::new_unchecked(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
         let static_key4 = StaticRouteKey {
             prefix: IpNet::V4(prefix4),
             nexthop: nexthop4,
@@ -2288,8 +2310,10 @@ mod test {
 
         // --- IPv6 static path ---
         let nexthop6 = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
-        let prefix6 =
-            Ipv6Net::new_unchecked(Ipv6Addr::from_str("2001:db8::").unwrap(), 48);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8::").unwrap(),
+            48,
+        );
         let static_key6 = StaticRouteKey {
             prefix: IpNet::V6(prefix6),
             nexthop: nexthop6,

@@ -24,13 +24,13 @@ use mg_admin_client::{
 use mg_api_types::bgp::config::{Origin4, Router};
 use mg_api_types::bgp::history::Origin6;
 use mg_api_types::bgp::session::FsmStateKind;
-use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::BestpathFanoutRequest;
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, StaticRoute4,
     StaticRoute4List, StaticRoute6, StaticRoute6List,
 };
+use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
 use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{

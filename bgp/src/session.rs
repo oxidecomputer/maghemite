@@ -35,10 +35,10 @@ pub(crate) use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
 };
 use mg_api_types::rdb::path::BgpPathProperties;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, Db};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
@@ -6306,7 +6306,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             .cloned()
                                             .filter(|x: &Ipv4Net| {
                                                 list.iter().any(|p| {
-                                                    Ipv4Net::new_unchecked(p.value, p.length) == *x
+                                                    Ipv4Net::new_unchecked(
+                                                        p.value, p.length,
+                                                    ) == *x
                                                 })
                                             })
                                             .collect()
@@ -6329,7 +6331,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             .into_iter()
                                             .filter(|x: &Ipv4Net| {
                                                 list.iter().any(|p| {
-                                                    Ipv4Net::new_unchecked(p.value, p.length) == *x
+                                                    Ipv4Net::new_unchecked(
+                                                        p.value, p.length,
+                                                    ) == *x
                                                 })
                                             })
                                             .collect()
@@ -6417,7 +6421,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             .cloned()
                                             .filter(|x: &Ipv6Net| {
                                                 list.iter().any(|p| {
-                                                    Ipv6Net::new_unchecked(p.value, p.length) == *x
+                                                    Ipv6Net::new_unchecked(
+                                                        p.value, p.length,
+                                                    ) == *x
                                                 })
                                             })
                                             .collect()
@@ -6440,7 +6446,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             .into_iter()
                                             .filter(|x: &Ipv6Net| {
                                                 list.iter().any(|p| {
-                                                    Ipv6Net::new_unchecked(p.value, p.length) == *x
+                                                    Ipv6Net::new_unchecked(
+                                                        p.value, p.length,
+                                                    ) == *x
                                                 })
                                             })
                                             .collect()
@@ -8584,10 +8592,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     || p.addr().is_multicast()
                                     || p.addr().is_unspecified()
                                         && p.width() == 32)
-                                && !self.prefix_via_self(
-                                    IpNet::V4(**p),
-                                    mp_nexthop,
-                                )
+                                && !self
+                                    .prefix_via_self(IpNet::V4(**p), mp_nexthop)
                         })
                         .copied()
                         .map(IpNet::V4)
@@ -9488,35 +9494,27 @@ mod tests {
 
     #[test]
     fn route_update_is_announcement_and_withdrawal() {
-        let v4_announce =
-            RouteUpdate::V4(RouteUpdate4::Announce(vec![Ipv4Net::new_unchecked(
-                ip!("10.0.0.0"),
-                8,
-            )]));
+        let v4_announce = RouteUpdate::V4(RouteUpdate4::Announce(vec![
+            Ipv4Net::new_unchecked(ip!("10.0.0.0"), 8),
+        ]));
         assert!(v4_announce.is_announcement());
         assert!(!v4_announce.is_withdrawal());
 
-        let v4_withdraw =
-            RouteUpdate::V4(RouteUpdate4::Withdraw(vec![Ipv4Net::new_unchecked(
-                ip!("10.0.0.0"),
-                8,
-            )]));
+        let v4_withdraw = RouteUpdate::V4(RouteUpdate4::Withdraw(vec![
+            Ipv4Net::new_unchecked(ip!("10.0.0.0"), 8),
+        ]));
         assert!(!v4_withdraw.is_announcement());
         assert!(v4_withdraw.is_withdrawal());
 
-        let v6_announce =
-            RouteUpdate::V6(RouteUpdate6::Announce(vec![Ipv6Net::new_unchecked(
-                ip!("2001:db8::"),
-                32,
-            )]));
+        let v6_announce = RouteUpdate::V6(RouteUpdate6::Announce(vec![
+            Ipv6Net::new_unchecked(ip!("2001:db8::"), 32),
+        ]));
         assert!(v6_announce.is_announcement());
         assert!(!v6_announce.is_withdrawal());
 
-        let v6_withdraw =
-            RouteUpdate::V6(RouteUpdate6::Withdraw(vec![Ipv6Net::new_unchecked(
-                ip!("2001:db8::"),
-                32,
-            )]));
+        let v6_withdraw = RouteUpdate::V6(RouteUpdate6::Withdraw(vec![
+            Ipv6Net::new_unchecked(ip!("2001:db8::"), 32),
+        ]));
         assert!(!v6_withdraw.is_announcement());
         assert!(v6_withdraw.is_withdrawal());
     }

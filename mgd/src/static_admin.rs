@@ -8,7 +8,6 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use oxnet::{Ipv4Net, Ipv6Net};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::GetRibResult;
 use mg_api_types::static_routes::{
@@ -16,6 +15,7 @@ use mg_api_types::static_routes::{
     DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
 use mg_api_types::switch::SwitchIdentifiers;
+use oxnet::{Ipv4Net, Ipv6Net};
 use rdb::StaticRouteKey;
 use std::{collections::BTreeMap, sync::Arc};
 

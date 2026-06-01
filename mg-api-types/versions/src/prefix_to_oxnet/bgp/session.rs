@@ -42,8 +42,16 @@ pub struct MessageHistoryResponse {
 
 impl From<MessageHistoryEntry> for v4::bgp::session::MessageHistoryEntry {
     fn from(entry: MessageHistoryEntry) -> Self {
-        let MessageHistoryEntry { timestamp, message, connection_id } = entry;
-        Self { timestamp, message: v4::bgp::messages::Message::from(message), connection_id }
+        let MessageHistoryEntry {
+            timestamp,
+            message,
+            connection_id,
+        } = entry;
+        Self {
+            timestamp,
+            message: v4::bgp::messages::Message::from(message),
+            connection_id,
+        }
     }
 }
 

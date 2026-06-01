@@ -10,7 +10,7 @@ use crate::{
     fanout::{Egress, Fanout4, Fanout6},
     messages::{
         As4PathSegment, AsPathType, Community, PathAttribute,
-        PathAttributeValue, PathOrigin, Prefix,
+        PathAttributeValue, PathOrigin,
     },
     policy::{load_checker, load_shaper},
     session::{
@@ -19,8 +19,8 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use mg_common::{lock, read_lock, write_lock};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, Db};
 use rhai::AST;
 use slog::Logger;
@@ -515,7 +515,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn create_origin4(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
         let prefix4: Vec<Ipv4Net> = prefixes
             .iter()
             .cloned()
@@ -533,7 +533,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn set_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn set_origin4(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
         let origin4 = self.db.get_origin4()?;
         let current: BTreeSet<&Ipv4Net> = origin4.iter().collect();
 
@@ -619,7 +619,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout4).send_all(vec![], prefixes);
     }
 
-    pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn create_origin6(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
         let prefix6: Vec<Ipv6Net> = prefixes
             .iter()
             .cloned()
@@ -637,7 +637,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn set_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn set_origin6(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
         let origin6 = self.db.get_origin6()?;
         let current: BTreeSet<&Ipv6Net> = origin6.iter().collect();
 
