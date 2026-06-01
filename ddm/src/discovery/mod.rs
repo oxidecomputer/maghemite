@@ -23,6 +23,7 @@
 //!
 //! The general sequence of events is depicted in the following diagram.
 //!
+//! ```text
 //!             *==========*                *==========*
 //!             |  violin  |                |  piano   |
 //!             *==========*                *==========*
@@ -51,6 +52,7 @@
 //!      expire |    |                           |
 //!       piano |    |                           |
 //!             +--->|                           |
+//! ```
 //!
 //! This shows violin sending a link-local multicast solicitation over the wire.
 //! That solicitation is received by piano and piano respons with an
@@ -74,6 +76,7 @@
 //!
 //! Discovery packets follow a very simple format
 //!
+//! ```text
 //!                      1                   2                   3
 //!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -83,6 +86,7 @@
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! :                             ....                              :
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! ```
 //!
 //! The first byte indicates the version. The only valid version at present is
 //! version 1. The second byte is a flags bitfield. The first position `S`

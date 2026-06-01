@@ -1,0 +1,225 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Protocol",
+  "type": "object",
+  "required": [
+    "pull_response",
+    "update"
+  ],
+  "properties": {
+    "pull_response": {
+      "$ref": "#/definitions/PullResponseV2"
+    },
+    "update": {
+      "$ref": "#/definitions/UpdateV2"
+    }
+  },
+  "definitions": {
+    "IpPrefix": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "V4"
+          ],
+          "properties": {
+            "V4": {
+              "$ref": "#/definitions/Ipv4Prefix"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "V6"
+          ],
+          "properties": {
+            "V6": {
+              "$ref": "#/definitions/Ipv6Prefix"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Ipv4Prefix": {
+      "type": "object",
+      "required": [
+        "addr",
+        "len"
+      ],
+      "properties": {
+        "addr": {
+          "type": "string",
+          "format": "ipv4"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Ipv6Prefix": {
+      "type": "object",
+      "required": [
+        "addr",
+        "len"
+      ],
+      "properties": {
+        "addr": {
+          "type": "string",
+          "format": "ipv6"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "PathVectorV2": {
+      "type": "object",
+      "required": [
+        "destination",
+        "path"
+      ],
+      "properties": {
+        "destination": {
+          "$ref": "#/definitions/Ipv6Prefix"
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PullResponseV2": {
+      "type": "object",
+      "properties": {
+        "tunnel": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/TunnelOriginV2"
+          },
+          "uniqueItems": true
+        },
+        "underlay": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PathVectorV2"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "TunnelOriginV2": {
+      "type": "object",
+      "required": [
+        "boundary_addr",
+        "overlay_prefix",
+        "vni"
+      ],
+      "properties": {
+        "boundary_addr": {
+          "type": "string",
+          "format": "ipv6"
+        },
+        "metric": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "overlay_prefix": {
+          "$ref": "#/definitions/IpPrefix"
+        },
+        "vni": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "TunnelUpdateV2": {
+      "type": "object",
+      "required": [
+        "announce",
+        "withdraw"
+      ],
+      "properties": {
+        "announce": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TunnelOriginV2"
+          },
+          "uniqueItems": true
+        },
+        "withdraw": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TunnelOriginV2"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "UnderlayUpdateV2": {
+      "type": "object",
+      "required": [
+        "announce",
+        "withdraw"
+      ],
+      "properties": {
+        "announce": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PathVectorV2"
+          },
+          "uniqueItems": true
+        },
+        "withdraw": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PathVectorV2"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "UpdateV2": {
+      "type": "object",
+      "properties": {
+        "tunnel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TunnelUpdateV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "underlay": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UnderlayUpdateV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
