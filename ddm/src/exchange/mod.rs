@@ -21,13 +21,17 @@
 //! program forwarding state live in the [`runtime`] submodule and are
 //! illumos-only, since they call into [`crate::sys`] to install routes.
 
-use ddm_api_types::exchange::{PathVector, PathVectorV2};
+use ddm_api_types::exchange::PathVector;
 use ddm_api_types::net::TunnelOrigin;
-use mg_common::net::TunnelOriginV2;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use thiserror::Error;
+
+mod ddm_v2;
+
+pub use ddm_v2::*;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 mod runtime;
@@ -38,40 +42,10 @@ pub(crate) use runtime::{
     withdraw_tunnel, withdraw_underlay,
 };
 
-/// THIS TYPE IS FOR DDM PROTOCOL VERSION 1. IT SHALL NEVER CHANGE. THIS TYPE
-/// CAN BE REMOVED WHEN DDMV1 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
-/// DEFINITION SHALL NEVER CHANGE.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct UpdateV1 {
-    pub announce: HashSet<PathVector>,
-    pub withdraw: HashSet<PathVector>,
-}
-
-/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
-/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
-/// DEFINITION SHALL NEVER CHANGE.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct UpdateV2 {
-    pub underlay: Option<UnderlayUpdateV2>,
-    pub tunnel: Option<TunnelUpdateV2>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
-}
-
-impl From<UpdateV1> for Update {
-    fn from(value: UpdateV1) -> Self {
-        Update {
-            tunnel: None,
-            underlay: Some(UnderlayUpdate {
-                announce: value.announce,
-                withdraw: value.withdraw,
-            }),
-        }
-    }
 }
 
 impl From<UpdateV2> for Update {
@@ -80,16 +54,6 @@ impl From<UpdateV2> for Update {
             tunnel: value.tunnel.map(TunnelUpdate::from),
             underlay: value.underlay.map(UnderlayUpdate::from),
         }
-    }
-}
-
-impl From<Update> for UpdateV1 {
-    fn from(value: Update) -> Self {
-        let (announce, withdraw) = match value.underlay {
-            Some(underlay) => (underlay.announce, underlay.withdraw),
-            None => (HashSet::new(), HashSet::new()),
-        };
-        UpdateV1 { announce, withdraw }
     }
 }
 
@@ -126,15 +90,6 @@ pub struct PullResponse {
     pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
-/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
-/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
-/// DEFINITION SHALL NEVER CHANGE.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct PullResponseV2 {
-    pub underlay: Option<HashSet<PathVectorV2>>,
-    pub tunnel: Option<HashSet<TunnelOriginV2>>,
-}
-
 impl From<PullResponseV2> for PullResponse {
     fn from(value: PullResponseV2) -> Self {
         PullResponse {
@@ -161,15 +116,6 @@ impl From<HashSet<PathVector>> for PullResponse {
 pub struct UnderlayUpdate {
     pub announce: HashSet<PathVector>,
     pub withdraw: HashSet<PathVector>,
-}
-
-/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
-/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
-/// DEFINITION SHALL NEVER CHANGE.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct UnderlayUpdateV2 {
-    pub announce: HashSet<PathVectorV2>,
-    pub withdraw: HashSet<PathVectorV2>,
 }
 
 impl From<UnderlayUpdate> for UnderlayUpdateV2 {
@@ -249,15 +195,6 @@ pub struct TunnelUpdate {
     pub withdraw: HashSet<TunnelOrigin>,
 }
 
-/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
-/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
-/// DEFINITION SHALL NEVER CHANGE.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct TunnelUpdateV2 {
-    pub announce: HashSet<TunnelOriginV2>,
-    pub withdraw: HashSet<TunnelOriginV2>,
-}
-
 impl From<TunnelUpdateV2> for TunnelUpdate {
     fn from(value: TunnelUpdateV2) -> Self {
         TunnelUpdate {
@@ -323,4 +260,116 @@ pub enum ExchangeError {
 
     #[error("json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+}
+
+impl From<PathVectorV2> for PathVector {
+    fn from(value: PathVectorV2) -> Self {
+        PathVector {
+            destination: Ipv6Net::new_unchecked(
+                value.destination.addr,
+                value.destination.len,
+            ),
+            path: value.path,
+        }
+    }
+}
+
+impl From<PathVector> for PathVectorV2 {
+    fn from(value: PathVector) -> Self {
+        PathVectorV2 {
+            destination: Ipv6Prefix {
+                addr: value.destination.addr(),
+                len: value.destination.width(),
+            },
+            path: value.path,
+        }
+    }
+}
+
+impl From<TunnelOriginV2> for TunnelOrigin {
+    fn from(value: TunnelOriginV2) -> Self {
+        // TunnelOriginV2 is the DDMv2 wire shape, frozen by protocol
+        // contract. If this destructure stops compiling, the V2
+        // contract has been violated upstream — there is no
+        // #[serde(skip)] escape valve for a wire-format type.
+        let TunnelOriginV2 {
+            overlay_prefix,
+            boundary_addr,
+            vni,
+            metric,
+        } = value;
+        TunnelOrigin {
+            overlay_prefix: overlay_prefix.into(),
+            boundary_addr,
+            vni,
+            metric,
+        }
+    }
+}
+
+impl From<TunnelOrigin> for TunnelOriginV2 {
+    fn from(value: TunnelOrigin) -> Self {
+        // Compile barrier: adding a TunnelOrigin (latest API) field
+        // fails to bind here, forcing a decision about whether the new
+        // field is representable in the V2 wire form.
+        let TunnelOrigin {
+            overlay_prefix,
+            boundary_addr,
+            vni,
+            metric,
+        } = value;
+        TunnelOriginV2 {
+            overlay_prefix: overlay_prefix.into(),
+            boundary_addr,
+            vni,
+            metric,
+        }
+    }
+}
+
+impl From<Ipv4Net> for Ipv4Prefix {
+    fn from(value: Ipv4Net) -> Self {
+        Ipv4Prefix {
+            addr: value.addr(),
+            len: value.width(),
+        }
+    }
+}
+
+impl From<Ipv4Prefix> for Ipv4Net {
+    fn from(value: Ipv4Prefix) -> Self {
+        Ipv4Net::new_unchecked(value.addr, value.len)
+    }
+}
+
+impl From<Ipv6Net> for Ipv6Prefix {
+    fn from(value: Ipv6Net) -> Self {
+        Ipv6Prefix {
+            addr: value.addr(),
+            len: value.width(),
+        }
+    }
+}
+
+impl From<Ipv6Prefix> for Ipv6Net {
+    fn from(value: Ipv6Prefix) -> Self {
+        Ipv6Net::new_unchecked(value.addr, value.len)
+    }
+}
+
+impl From<IpNet> for IpPrefix {
+    fn from(value: IpNet) -> Self {
+        match value {
+            IpNet::V4(x) => IpPrefix::V4(x.into()),
+            IpNet::V6(x) => IpPrefix::V6(x.into()),
+        }
+    }
+}
+impl From<IpPrefix> for IpNet {
+    fn from(value: IpPrefix) -> Self {
+        match value {
+            IpPrefix::V4(x) => IpNet::V4(x.into()),
+            IpPrefix::V6(x) => IpNet::V6(x.into()),
+        }
+    }
 }
