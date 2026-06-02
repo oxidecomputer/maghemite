@@ -21,7 +21,6 @@ use mg_api_types::bgp::config::{
     Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
 };
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use mg_api_types_versions::v1::rdb::prefix::Prefix4;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
@@ -1398,13 +1397,13 @@ fn test_import_export_policy_filtering() {
     let prefix_c = ip!("10.3.0.0/24"); // Will pass export but filtered by import
 
     // Build export policy for r1: allow prefix_a and prefix_c, deny prefix_b
-    let export_allow: BTreeSet<Prefix4> =
+    let export_allow: BTreeSet<oxnet::Ipv4Net> =
         [cidr!("10.1.0.0/24"), cidr!("10.3.0.0/24")]
             .into_iter()
             .collect();
 
     // Build import policy for r2: allow prefix_a and prefix_b, deny prefix_c
-    let import_allow: BTreeSet<Prefix4> =
+    let import_allow: BTreeSet<oxnet::Ipv4Net> =
         [cidr!("10.1.0.0/24"), cidr!("10.2.0.0/24")]
             .into_iter()
             .collect();
