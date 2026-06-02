@@ -1132,9 +1132,9 @@ pub trait MgAdminApi {
         HttpResponseOk<HashMap<String, v4::bgp::config::PeerInfo>>,
         HttpError,
     > {
-        Self::get_neighbors(rqctx, request)
-            .await
-            .map(|r| r.map(|m| m.into_iter().map(|(k, v)| (k, v.into())).collect()))
+        Self::get_neighbors(rqctx, request).await.map(|r| {
+            r.map(|m| m.into_iter().map(|(k, v)| (k, v.into())).collect())
+        })
     }
 
     #[endpoint {

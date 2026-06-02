@@ -350,8 +350,16 @@ fn start_bgp_routers(
                     ipv4_unicast: if nbr.parameters.ipv4_enabled {
                         Some(Ipv4UnicastConfig {
                             nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr.parameters.allow_import4.clone().into(),
-                            export_policy: nbr.parameters.allow_export4.clone().into(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import4
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export4
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -359,8 +367,16 @@ fn start_bgp_routers(
                     ipv6_unicast: if nbr.parameters.ipv6_enabled {
                         Some(Ipv6UnicastConfig {
                             nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr.parameters.allow_import6.clone().into(),
-                            export_policy: nbr.parameters.allow_export6.clone().into(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import6
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export6
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -407,8 +423,16 @@ fn start_bgp_routers(
                     ipv4_unicast: if nbr.parameters.ipv4_enabled {
                         Some(Ipv4UnicastConfig {
                             nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr.parameters.allow_import4.clone().into(),
-                            export_policy: nbr.parameters.allow_export4.clone().into(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import4
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export4
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -416,8 +440,16 @@ fn start_bgp_routers(
                     ipv6_unicast: if nbr.parameters.ipv6_enabled {
                         Some(Ipv6UnicastConfig {
                             nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr.parameters.allow_import6.clone().into(),
-                            export_policy: nbr.parameters.allow_export6.clone().into(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import6
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export6
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
