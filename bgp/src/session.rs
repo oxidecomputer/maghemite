@@ -38,7 +38,7 @@ use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types_versions::{v1, v4};
 use mg_common::{lock, read_lock, write_lock};
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, Db};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
@@ -8438,12 +8438,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let withdrawn: Vec<IpNet> = update
             .withdrawn
             .iter()
-            .filter(|p| {
-                !originated4.contains(p)
-                    && !(p.addr().is_loopback()
-                        || p.addr().is_multicast()
-                        || p.addr().is_unspecified() && p.width() == 32)
-            })
+            .filter(|p| !originated4.contains(p) && p.valid_for_rib())
             .copied()
             .map(IpNet::V4)
             .collect();
@@ -8456,9 +8451,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .iter()
                 .filter(|p| {
                     !originated4.contains(p)
-                        && !(p.addr().is_loopback()
-                            || p.addr().is_multicast()
-                            || p.addr().is_unspecified() && p.width() == 32)
+                        && p.valid_for_rib()
                         && !self.prefix_via_self(IpNet::V4(**p), nexthop)
                 })
                 .copied()
@@ -8528,10 +8521,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .iter()
                         .filter(|p| {
                             !originated4.contains(p)
-                                && !(p.addr().is_loopback()
-                                    || p.addr().is_multicast()
-                                    || p.addr().is_unspecified()
-                                        && p.width() == 32)
+                                && p.valid_for_rib()
                                 && !self
                                     .prefix_via_self(IpNet::V4(**p), mp_nexthop)
                         })
@@ -8613,11 +8603,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .iter()
                         .filter(|p| {
                             !originated6.contains(p)
-                                && !(p.addr().is_loopback()
-                                    || p.addr().is_multicast()
-                                    || p.addr().is_unicast_link_local()
-                                    || p.addr().is_unspecified()
-                                        && p.width() == 128)
+                                && p.valid_for_rib()
                                 && !self
                                     .prefix_via_self(IpNet::V6(**p), nexthop6)
                         })
@@ -8665,11 +8651,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .withdrawn
                         .iter()
                         .filter(|p| {
-                            !originated4.contains(p)
-                                && !(p.addr().is_loopback()
-                                    || p.addr().is_multicast()
-                                    || p.addr().is_unspecified()
-                                        && p.width() == 32)
+                            !originated4.contains(p) && p.valid_for_rib()
                         })
                         .copied()
                         .map(IpNet::V4)
@@ -8697,12 +8679,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .withdrawn
                         .iter()
                         .filter(|p| {
-                            !originated6.contains(p)
-                                && !(p.addr().is_loopback()
-                                    || p.addr().is_multicast()
-                                    || p.addr().is_unicast_link_local()
-                                    || p.addr().is_unspecified()
-                                        && p.width() == 128)
+                            !originated6.contains(p) && p.valid_for_rib()
                         })
                         .copied()
                         .map(IpNet::V6)
@@ -8771,10 +8748,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn prefix_via_self(&self, prefix: IpNet, nexthop: IpAddr) -> bool {
         match (prefix, nexthop) {
             (IpNet::V4(p4), IpAddr::V4(ip4)) => {
-                p4.width() == 32u8 && p4.addr() == ip4
+                p4.width() == IPV4_NET_WIDTH_MAX && p4.addr() == ip4
             }
             (IpNet::V6(p6), IpAddr::V6(ip6)) => {
-                p6.width() == 128u8 && p6.addr() == ip6
+                p6.width() == IPV6_NET_WIDTH_MAX && p6.addr() == ip6
             }
             _ => false,
         }
@@ -9247,6 +9224,48 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     ipv6_unicast,
                 }
             }
+        }
+    }
+}
+
+trait IpNetExt {
+    fn valid_for_rib(&self) -> bool;
+}
+
+impl IpNetExt for Ipv4Net {
+    /// Check if a prefix contains a subnet that is valid for use in the RIB.
+    /// Currently this only checks if the prefix overlaps with Loopback
+    /// (127.0.0.0/8) or Multicast (224.0.0.0/4) address space. We deliberately
+    /// do not flag Class E (240.0.0.0/4) or Link-Local (169.254.0.0/16)
+    /// ranges as invalid, as some networks have deployed these as if they were
+    /// standard routable unicast addresses, which we need to handle.
+    fn valid_for_rib(&self) -> bool {
+        !(self.addr().is_loopback()
+            || self.addr().is_multicast()
+            || (self.addr().is_unspecified()
+                && self.width() == IPV4_NET_WIDTH_MAX))
+    }
+}
+
+impl IpNetExt for Ipv6Net {
+    /// Check if a prefix contains a subnet that is valid for use in the RIB.
+    /// Currently this only checks if the prefix carries the Unspecified or
+    /// Loopback address (::/128 or ::1/128), Multicast (ff00::/8) or Link-Local
+    /// Unicast (fe80::/10) address spaces.
+    fn valid_for_rib(&self) -> bool {
+        !(self.addr().is_loopback()
+            || self.addr().is_multicast()
+            || self.addr().is_unicast_link_local()
+            || (self.addr().is_unspecified()
+                && self.width() == IPV6_NET_WIDTH_MAX))
+    }
+}
+
+impl IpNetExt for IpNet {
+    fn valid_for_rib(&self) -> bool {
+        match self {
+            IpNet::V4(net4) => net4.valid_for_rib(),
+            IpNet::V6(net6) => net6.valid_for_rib(),
         }
     }
 }
