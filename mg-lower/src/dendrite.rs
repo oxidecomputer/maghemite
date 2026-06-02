@@ -335,6 +335,19 @@ where
     Ok(())
 }
 
+/// Resolve a tfport datalink name (e.g. `tfportrear0_0`) to the dpd
+/// `(PortId, LinkId)` pair that names the switch port and link.
+pub(crate) fn port_link_from_ifname(
+    ifname: &str,
+) -> Result<(types::PortId, types::LinkId), Error> {
+    let tfport = parse_tfport_name(ifname).map_err(Error::Tfport)?;
+    let port_id =
+        tfport_port_id(tfport.kind, tfport.port).map_err(Error::Tfport)?;
+    // TODO breakout considerations
+    let link_id = types::LinkId(tfport.link);
+    Ok((port_id, link_id))
+}
+
 fn get_port_and_link(
     sw: &impl SwitchZone,
     path: &Path,
@@ -344,12 +357,7 @@ fn get_port_and_link(
         && nh6.is_unicast_link_local()
         && let Some(ref iface) = path.nexthop_interface
     {
-        let tfport = parse_tfport_name(iface).map_err(Error::Tfport)?;
-        let port_id =
-            tfport_port_id(tfport.kind, tfport.port).map_err(Error::Tfport)?;
-        // TODO breakout considerations
-        let link_id = types::LinkId(tfport.link);
-        return Ok((port_id, link_id));
+        return port_link_from_ifname(iface);
     }
 
     // Standard nexthop resolution for numbered peers
@@ -373,13 +381,7 @@ fn resolve_port_and_link(
         }
     };
 
-    let tfport = parse_tfport_name(&ifname).map_err(Error::Tfport)?;
-    let port_id =
-        tfport_port_id(tfport.kind, tfport.port).map_err(Error::Tfport)?;
-
-    // TODO breakout considerations
-    let link_id = types::LinkId(tfport.link);
-    Ok((port_id, link_id))
+    port_link_from_ifname(&ifname)
 }
 
 pub(crate) fn get_routes_for_prefix(
