@@ -2748,4 +2748,136 @@ mod tests {
             1,
         );
     }
+
+    /// Regression test for https://github.com/oxidecomputer/maghemite/issues/772
+    ///
+    /// Applying an unnumbered peer under one ASN and then re-applying the same
+    /// peer (same interface/group) under a *different* ASN must move the peer
+    /// to the new ASN, not silently leave it attached to the old ASN. Today
+    /// `do_bgp_apply` keys the diff on interface only (ignoring ASN), so the
+    /// re-apply mutates the existing ASN-123 neighbor in place instead of
+    /// re-homing it under ASN 456.
+    #[tokio::test]
+    async fn apply_change_unnumbered_peer_asn() {
+        use mg_api_types_versions::v4::bgp::config::Ipv4UnicastConfig;
+        use mg_api_types_versions::v4::bgp::config::Ipv6UnicastConfig;
+        use mg_api_types_versions::v4::bgp::policy::{
+            ImportExportPolicy4, ImportExportPolicy6,
+        };
+        use mg_api_types_versions::v8::bgp::config::{
+            ApplyRequest as ApplyRequestV8, BgpPeerParameters,
+            UnnumberedBgpPeerConfig,
+        };
+
+        let tmpdir = temp_dir();
+        let tmpdir = format!(
+            "{}/maghemite-test/apply_change_unnumbered_peer_asn",
+            tmpdir.to_str().unwrap()
+        );
+        if std::fs::exists(&tmpdir).unwrap() {
+            remove_dir_all(&tmpdir).unwrap();
+        }
+        create_dir_all(&tmpdir).unwrap();
+        println_nopipe!("tmpdir is {tmpdir}");
+        let log = mg_common::log::init_file_logger(
+            "apply_change_unnumbered_peer_asn.log",
+        );
+
+        let db = get_test_db("apply_change_unnumbered_peer_asn", log.clone())
+            .unwrap();
+        let ctx = Arc::new(HandlerContext {
+            #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
+            tep: Ipv6Addr::UNSPECIFIED,
+            bgp: BgpContext::new(
+                Arc::new(Mutex::new(SessionMap::new())),
+                log.clone(),
+            ),
+            bfd: BfdContext::new(log.clone()),
+            log: log.clone(),
+            db: (*db).clone(),
+            mg_lower_stats: Arc::new(MgLowerStats::default()),
+            stats_server_running: Mutex::new(false),
+            oximeter_port: 0,
+        });
+
+        // Build an unnumbered peer on qsfp0 with the given hold_time.
+        let peer = |hold_time: u64| UnnumberedBgpPeerConfig {
+            interface: String::from("tfportqsfp0_0"),
+            name: String::from("unnumbered-qsfp0"),
+            router_lifetime: 1,
+            parameters: BgpPeerParameters {
+                hold_time,
+                idle_hold_time: 3,
+                delay_open: 0,
+                connect_retry: 3,
+                keepalive: 2,
+                resolution: 100,
+                passive: false,
+                remote_asn: None,
+                min_ttl: None,
+                md5_auth_key: None,
+                multi_exit_discriminator: None,
+                communities: Vec::default(),
+                local_pref: None,
+                enforce_first_as: false,
+                vlan_id: None,
+                ipv4_unicast: Some(Ipv4UnicastConfig {
+                    nexthop: None,
+                    import_policy: ImportExportPolicy4::NoFiltering,
+                    export_policy: ImportExportPolicy4::NoFiltering,
+                }),
+                ipv6_unicast: Some(Ipv6UnicastConfig {
+                    nexthop: None,
+                    import_policy: ImportExportPolicy6::NoFiltering,
+                    export_policy: ImportExportPolicy6::NoFiltering,
+                }),
+                deterministic_collision_resolution: false,
+                idle_hold_jitter: None,
+                connect_retry_jitter: None,
+                src_addr: None,
+                src_port: None,
+            },
+        };
+
+        let req = |asn: u32, hold_time: u64| {
+            let mut unnumbered_peers = HashMap::new();
+            unnumbered_peers
+                .insert(String::from("qsfp0"), vec![peer(hold_time)]);
+            ApplyRequestV8 {
+                asn,
+                originate: Vec::default(),
+                checker: None,
+                shaper: None,
+                peers: HashMap::default(),
+                unnumbered_peers,
+            }
+        };
+
+        // Apply the peer under ASN 123.
+        do_bgp_apply(&ctx, req(123, 6))
+            .await
+            .expect("apply asn 123");
+
+        let nbrs = ctx
+            .db
+            .get_unnumbered_bgp_neighbors()
+            .expect("get unnumbered neighbors");
+        assert_eq!(nbrs.len(), 1);
+        assert_eq!(nbrs[0].asn, 123);
+        assert_eq!(nbrs[0].parameters.hold_time, 6);
+
+        // Re-apply the same peer under ASN 456 with a new hold_time.
+        do_bgp_apply(&ctx, req(456, 10))
+            .await
+            .expect("apply asn 456");
+
+        // The peer must have moved to ASN 456, not stayed on ASN 123.
+        let nbrs = ctx
+            .db
+            .get_unnumbered_bgp_neighbors()
+            .expect("get unnumbered neighbors");
+        assert_eq!(nbrs.len(), 1, "expected exactly one unnumbered neighbor");
+        assert_eq!(nbrs[0].asn, 456, "peer should be re-homed under ASN 456");
+        assert_eq!(nbrs[0].parameters.hold_time, 10);
+    }
 }
