@@ -33,9 +33,8 @@ fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
         vlan_id,
         rib_priority,
     } = v;
-    use oxnet::{IpNet, Ipv4Net};
     StaticRouteKey {
-        prefix: IpNet::V4(Ipv4Net::new_unchecked(prefix.value, prefix.length)),
+        prefix: prefix.into(),
         nexthop: nexthop.into(),
         vlan_id,
         rib_priority,
@@ -52,9 +51,8 @@ fn static_route_key_from_v6(v: StaticRoute6) -> StaticRouteKey {
         vlan_id,
         rib_priority,
     } = v;
-    use oxnet::{IpNet, Ipv6Net};
     StaticRouteKey {
-        prefix: IpNet::V6(Ipv6Net::new_unchecked(prefix.value, prefix.length)),
+        prefix: prefix.into(),
         nexthop: nexthop.into(),
         vlan_id,
         rib_priority,
@@ -68,10 +66,7 @@ pub async fn static_add_v4_route(
     let list = request.into_inner().routes.list;
 
     // Validate that all prefixes have host bits unset
-    let nets: Vec<Ipv4Net> = list
-        .iter()
-        .map(|r| Ipv4Net::new_unchecked(r.prefix.value, r.prefix.length))
-        .collect();
+    let nets: Vec<Ipv4Net> = list.iter().map(|r| r.prefix).collect();
     validate_ipv4_nets(&nets)?;
 
     let routes: Vec<StaticRouteKey> =
@@ -128,10 +123,7 @@ pub async fn static_add_v6_route(
     let list = request.into_inner().routes.list;
 
     // Validate that all prefixes have host bits unset
-    let nets: Vec<Ipv6Net> = list
-        .iter()
-        .map(|r| Ipv6Net::new_unchecked(r.prefix.value, r.prefix.length))
-        .collect();
+    let nets: Vec<Ipv6Net> = list.iter().map(|r| r.prefix).collect();
     validate_ipv6_nets(&nets)?;
 
     let routes: Vec<StaticRouteKey> =

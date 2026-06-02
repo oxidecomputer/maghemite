@@ -4,7 +4,7 @@
 
 //! The routing database (rdb).
 //!
-//! This is the maghmite routing database. The routing database holds both
+//! This is the maghemite routing database. The routing database holds both
 //! volatile and non-volatile information. Non-volatile information is stored
 //! in a sled key-value store that is persisted to disk via flush operations.
 //! Volatile information is stored in in-memory data structures such as hash
