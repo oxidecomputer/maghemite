@@ -948,13 +948,8 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/status/exported",
-<<<<<<< HEAD
-        versions = VERSION_RIB_EXPORTED_STRING_KEY..VERSION_PREFIX_TO_OXNET,
-        operation_id = "get_exported",
-=======
         operation_id = "get_exported",
         versions = VERSION_RIB_EXPORTED_STRING_KEY..VERSION_PREFIX_TO_OXNET,
->>>>>>> 1e7b314 (fix up API)
     }]
     async fn get_exported_v6(
         rqctx: RequestContext<Self::Context>,
