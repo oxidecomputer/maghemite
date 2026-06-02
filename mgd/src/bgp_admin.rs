@@ -55,7 +55,7 @@ use mg_common::lock;
 use rdb::{Asn, RibExt};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{
     Arc, Mutex,
@@ -1239,40 +1239,16 @@ async fn do_bgp_apply(
         "params" => format!("{rq:?}")
     );
 
-    #[derive(Debug, Eq)]
+    #[derive(Debug, Eq, Hash, PartialEq)]
     struct Nbr {
         addr: IpAddr,
         asn: u32,
     }
 
-    impl Hash for Nbr {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.addr.hash(state);
-        }
-    }
-
-    impl PartialEq for Nbr {
-        fn eq(&self, other: &Nbr) -> bool {
-            self.addr.eq(&other.addr)
-        }
-    }
-
-    #[derive(Debug, Eq)]
+    #[derive(Debug, Eq, Hash, PartialEq)]
     struct Unbr {
         interface: String,
         asn: u32,
-    }
-
-    impl Hash for Unbr {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.interface.hash(state);
-        }
-    }
-
-    impl PartialEq for Unbr {
-        fn eq(&self, other: &Unbr) -> bool {
-            self.interface.eq(&other.interface)
-        }
     }
 
     let groups = ctx
@@ -1348,7 +1324,7 @@ async fn do_bgp_apply(
             })
             .collect();
 
-        let specified_unbr_ifxs: HashSet<Unbr> = peers
+        let requested_unbr_ifxs: HashSet<Unbr> = peers
             .iter()
             .map(|x| Unbr {
                 interface: x.interface.clone(),
@@ -1356,13 +1332,31 @@ async fn do_bgp_apply(
             })
             .collect();
 
-        let to_delete = current_unbr_ifxs.difference(&specified_unbr_ifxs);
-        let to_add = specified_unbr_ifxs.difference(&current_unbr_ifxs);
-        let to_modify = current_unbr_ifxs.intersection(&specified_unbr_ifxs);
+        let to_delete = current_unbr_ifxs.difference(&requested_unbr_ifxs);
+        let to_add = requested_unbr_ifxs.difference(&current_unbr_ifxs);
+        let to_modify = current_unbr_ifxs.intersection(&requested_unbr_ifxs);
 
         bgp_log!(log, info, "unbr: current {current:#?}");
         bgp_log!(log, info, "unbr: adding {to_add:#?}");
         bgp_log!(log, info, "unbr: removing {to_delete:#?}");
+
+        for nbr in to_delete {
+            helpers::remove_unnumbered_neighbor(
+                ctx.clone(),
+                nbr.asn,
+                &nbr.interface,
+            )
+            .await?;
+
+            let mut routers = lock!(ctx.bgp.router);
+            let mut remove = false;
+            if let Some(r) = routers.get(&nbr.asn) {
+                remove = lock!(r.sessions).is_empty();
+            }
+            if remove && let Some(r) = routers.remove(&nbr.asn) {
+                r.shutdown()
+            };
+        }
 
         let mut nbr_config = Vec::new();
         for nbr in to_add {
@@ -1409,24 +1403,6 @@ async fn do_bgp_apply(
                 true, // ensure mode: create or update as needed
             )?;
         }
-
-        for nbr in to_delete {
-            helpers::remove_unnumbered_neighbor(
-                ctx.clone(),
-                nbr.asn,
-                &nbr.interface,
-            )
-            .await?;
-
-            let mut routers = lock!(ctx.bgp.router);
-            let mut remove = false;
-            if let Some(r) = routers.get(&nbr.asn) {
-                remove = lock!(r.sessions).is_empty();
-            }
-            if remove && let Some(r) = routers.remove(&nbr.asn) {
-                r.shutdown()
-            };
-        }
     }
 
     for (group, peers) in &peers {
@@ -1446,7 +1422,7 @@ async fn do_bgp_apply(
             })
             .collect();
 
-        let specified_nbr_addrs: HashSet<Nbr> = peers
+        let requested_nbr_addrs: HashSet<Nbr> = peers
             .iter()
             .map(|x| Nbr {
                 addr: x.host.ip(),
@@ -1454,13 +1430,26 @@ async fn do_bgp_apply(
             })
             .collect();
 
-        let to_delete = current_nbr_addrs.difference(&specified_nbr_addrs);
-        let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
-        let to_modify = current_nbr_addrs.intersection(&specified_nbr_addrs);
+        let to_delete = current_nbr_addrs.difference(&requested_nbr_addrs);
+        let to_add = requested_nbr_addrs.difference(&current_nbr_addrs);
+        let to_modify = current_nbr_addrs.intersection(&requested_nbr_addrs);
 
         bgp_log!(log, info, "nbr: current {current:#?}");
         bgp_log!(log, info, "nbr: adding {to_add:#?}");
         bgp_log!(log, info, "nbr: removing {to_delete:#?}");
+
+        for nbr in to_delete {
+            helpers::remove_neighbor(ctx.clone(), nbr.asn, nbr.addr).await?;
+
+            let mut routers = lock!(ctx.bgp.router);
+            let mut remove = false;
+            if let Some(r) = routers.get(&nbr.asn) {
+                remove = lock!(r.sessions).is_empty();
+            }
+            if remove && let Some(r) = routers.remove(&nbr.asn) {
+                r.shutdown()
+            };
+        }
 
         let mut nbr_config = Vec::new();
         for nbr in to_add {
@@ -1509,19 +1498,6 @@ async fn do_bgp_apply(
                 ),
                 true,
             )?;
-        }
-
-        for nbr in to_delete {
-            helpers::remove_neighbor(ctx.clone(), nbr.asn, nbr.addr).await?;
-
-            let mut routers = lock!(ctx.bgp.router);
-            let mut remove = false;
-            if let Some(r) = routers.get(&nbr.asn) {
-                remove = lock!(r.sessions).is_empty();
-            }
-            if remove && let Some(r) = routers.remove(&nbr.asn) {
-                r.shutdown()
-            };
         }
     }
 
