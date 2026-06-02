@@ -12,6 +12,7 @@ use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::prefix::Prefix;
+use mg_common::tfport::{parse_tfport_name, tfport_port_id};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use slog::Logger;
 use std::{
@@ -22,7 +23,6 @@ use std::{
     time::Duration,
 };
 
-const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 const UNIT_DPD: &str = "dpd";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -335,70 +335,6 @@ where
     Ok(())
 }
 
-// Translate a tfport name into the underlying (port, link, vlan) tuple.
-//    tfportqsfp10_0 would translate to (10, 0, None)
-//    tfportqsfp10_0.100 would translate to (10, 0, Some(100))
-// TODO this is gross, use link type properties rather than futzing
-// around with strings.
-fn parse_tfport_name(name: &str) -> Result<(u8, u8, Option<u16>), Error> {
-    let body =
-        name.strip_prefix(TFPORT_QSFP_DEVICE_PREFIX)
-            .ok_or(Error::Tfport(format!(
-                "{} missing expected prefix {}",
-                name, TFPORT_QSFP_DEVICE_PREFIX
-            )))?;
-    let fields: Vec<&str> = body.split('.').collect();
-    let (port, link) = fields[0]
-        .split_once('_')
-        .ok_or(Error::Tfport(format!("{} has no link id", name)))?;
-
-    let port = port.parse::<u8>().map_err(|_| {
-        Error::Tfport(format!("{} has invalid port {}", name, port))
-    })?;
-
-    let link = link.parse::<u8>().map_err(|_| {
-        Error::Tfport(format!("{} has invalid link id {}", name, link))
-    })?;
-
-    let vlan = match fields.len() {
-        1 => Ok(None),
-        2 => fields[1].parse::<u16>().map(Some).map_err(|_| {
-            Error::Tfport(format!("{} has invalid vlan {}", name, fields[1]))
-        }),
-        _ => Err(Error::Tfport(format!(
-            "{} has multiple vlan deliminators",
-            name
-        ))),
-    }?;
-
-    Ok((port, link, vlan))
-}
-
-#[test]
-fn test_tfport_parser() {
-    // Test valid names
-    assert_eq!(parse_tfport_name("tfportqsfp10_0").unwrap(), (10, 0, None));
-    assert_eq!(
-        parse_tfport_name("tfportqsfp10_0.100").unwrap(),
-        (10, 0, Some(100))
-    );
-    assert_eq!(parse_tfport_name("tfportqsfp1_1").unwrap(), (1, 1, None));
-
-    // test malformed names
-    assert!(parse_tfport_name("fportqsfp10_0").is_err());
-    assert!(parse_tfport_name("10_0").is_err());
-    assert!(parse_tfport_name("tfportqsfp10").is_err());
-    assert!(parse_tfport_name("tfportqsfp_10").is_err());
-    assert!(parse_tfport_name("tfportqsfp0_").is_err());
-    assert!(parse_tfport_name("tfportqsfp10_10_10").is_err());
-    assert!(parse_tfport_name("tfportqsfp10.100_0").is_err());
-
-    // test invalid components
-    assert!(parse_tfport_name("tfportqsfp1X_0.100").is_err());
-    assert!(parse_tfport_name("tfportqsfp10_X.100").is_err());
-    assert!(parse_tfport_name("tfportqsfp10_0.X").is_err());
-}
-
 fn get_port_and_link(
     sw: &impl SwitchZone,
     path: &Path,
@@ -408,17 +344,11 @@ fn get_port_and_link(
         && nh6.is_unicast_link_local()
         && let Some(ref iface) = path.nexthop_interface
     {
-        let (port, link, _vlan) = parse_tfport_name(iface)?;
-        let port_name = format!("qsfp{port}");
-        let port_id = types::Qsfp::try_from(&port_name)
-            .map(types::PortId::Qsfp)
-            .map_err(|e| {
-                Error::Tfport(format!(
-                    "bad port name ifname: {iface}  port name: {port_name}: {e}",
-                ))
-            })?;
+        let tfport = parse_tfport_name(iface).map_err(Error::Tfport)?;
+        let port_id =
+            tfport_port_id(tfport.kind, tfport.port).map_err(Error::Tfport)?;
         // TODO breakout considerations
-        let link_id = types::LinkId(link);
+        let link_id = types::LinkId(tfport.link);
         return Ok((port_id, link_id));
     }
 
@@ -443,18 +373,12 @@ fn resolve_port_and_link(
         }
     };
 
-    let (port, link, _vlan) = parse_tfport_name(&ifname)?;
-    let port_name = format!("qsfp{port}");
-    let port_id = types::Qsfp::try_from(&port_name)
-        .map(types::PortId::Qsfp)
-        .map_err(|e| {
-            Error::Tfport(format!(
-                "bad port name ifname: {ifname}  port name: {port_name}: {e}"
-            ))
-        })?;
+    let tfport = parse_tfport_name(&ifname).map_err(Error::Tfport)?;
+    let port_id =
+        tfport_port_id(tfport.kind, tfport.port).map_err(Error::Tfport)?;
 
     // TODO breakout considerations
-    let link_id = types::LinkId(link);
+    let link_id = types::LinkId(tfport.link);
     Ok((port_id, link_id))
 }
 
