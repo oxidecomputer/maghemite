@@ -141,7 +141,7 @@ impl From<TunnelUpdate> for Update {
 mod test {
     use super::*;
 
-    // Write out the JSON schema for the DDMv2 protocol to a file for
+    // Write out the JSON schema for the DDMv3 protocol to a file for
     // validation. This should not change.
     #[test]
     fn test_ddm_v3_protocol() {

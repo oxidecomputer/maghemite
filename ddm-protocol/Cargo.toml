@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-expectorate.workspace = true
 oxnet.workspace = true
 schemars.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+expectorate.workspace = true
 serde_json.workspace = true

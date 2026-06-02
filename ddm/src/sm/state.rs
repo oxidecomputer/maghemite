@@ -13,8 +13,7 @@ use super::{
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
-use ddm_api_types::exchange::PathVector;
-use ddm_protocol::v3::{TunnelUpdate, UnderlayUpdate, Update};
+use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
