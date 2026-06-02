@@ -20,9 +20,6 @@ progenitor::generate_api!(
     }),
     replace = {
         TunnelOrigin = ddm_api_types_versions::latest::net::TunnelOrigin,
-        IpPrefix = ddm_api_types_versions::latest::net::IpPrefix,
-        Ipv4Prefix = ddm_api_types_versions::latest::net::Ipv4Prefix,
-        Ipv6Prefix = ddm_api_types_versions::latest::net::Ipv6Prefix,
         MulticastOrigin = ddm_api_types_versions::latest::net::MulticastOrigin,
         UnderlayMulticastIpv6 = ddm_api_types_versions::latest::net::UnderlayMulticastIpv6,
         Vni = ddm_api_types_versions::latest::net::Vni,
