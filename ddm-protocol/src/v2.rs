@@ -15,33 +15,60 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct UpdateV2 {
-    pub underlay: Option<UnderlayUpdateV2>,
-    pub tunnel: Option<TunnelUpdateV2>,
+pub struct Update {
+    pub underlay: Option<UnderlayUpdate>,
+    pub tunnel: Option<TunnelUpdate>,
+}
+
+impl From<UnderlayUpdate> for Update {
+    fn from(u: UnderlayUpdate) -> Self {
+        Update {
+            underlay: Some(u),
+            tunnel: None,
+        }
+    }
+}
+
+impl From<TunnelUpdate> for Update {
+    fn from(t: TunnelUpdate) -> Self {
+        Update {
+            underlay: None,
+            tunnel: Some(t),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct TunnelUpdateV2 {
-    pub announce: HashSet<TunnelOriginV2>,
-    pub withdraw: HashSet<TunnelOriginV2>,
+pub struct TunnelUpdate {
+    pub announce: HashSet<TunnelOrigin>,
+    pub withdraw: HashSet<TunnelOrigin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct PullResponseV2 {
-    pub underlay: Option<HashSet<PathVectorV2>>,
-    pub tunnel: Option<HashSet<TunnelOriginV2>>,
+pub struct PullResponse {
+    pub underlay: Option<HashSet<PathVector>>,
+    pub tunnel: Option<HashSet<TunnelOrigin>>,
+}
+
+impl From<HashSet<PathVector>> for PullResponse {
+    fn from(value: HashSet<PathVector>) -> Self {
+        PullResponse {
+            underlay: Some(value),
+            tunnel: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub struct UnderlayUpdateV2 {
-    pub announce: HashSet<PathVectorV2>,
-    pub withdraw: HashSet<PathVectorV2>,
+pub struct UnderlayUpdate {
+    pub announce: HashSet<PathVector>,
+    pub withdraw: HashSet<PathVector>,
 }
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
-pub struct PathVectorV2 {
+pub struct PathVector {
     pub destination: Ipv6Prefix,
     pub path: Vec<String>,
 }
@@ -73,7 +100,7 @@ pub enum IpPrefix {
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
-pub struct TunnelOriginV2 {
+pub struct TunnelOrigin {
     pub overlay_prefix: IpPrefix,
     pub boundary_addr: Ipv6Addr,
     pub vni: u32,
@@ -92,8 +119,8 @@ mod test {
         #[derive(JsonSchema)]
         #[allow(dead_code)]
         struct Protocol {
-            update: UpdateV2,
-            pull_response: PullResponseV2,
+            update: Update,
+            pull_response: PullResponse,
         }
 
         let schema = schemars::schema_for!(Protocol);

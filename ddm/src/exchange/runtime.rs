@@ -7,18 +7,13 @@
 //! plumbing that drains received updates into the local DB and the
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
-use super::{
-    ExchangeError, PullResponse, PullResponseV2, TunnelUpdate, UnderlayUpdate,
-    Update, UpdateV2,
-};
+use super::ExchangeError;
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
-use crate::exchange::{PathVectorV2, TunnelOriginV2};
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
-use ddm_api_types::exchange::PathVector;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -52,67 +47,55 @@ pub struct HandlerContext {
     log: Logger,
 }
 
-impl Update {
-    /// Build an `Update` whose underlay/tunnel halves carry the announcements
-    /// from `pr`. Used by [`pull`] to project a pull response back into the
-    /// update event stream.
-    fn announce(pr: PullResponse) -> Self {
-        Self {
-            underlay: pr.underlay.map(UnderlayUpdate::announce),
-            tunnel: pr.tunnel.map(TunnelUpdate::announce),
-        }
-    }
-}
-
 pub(crate) fn announce_underlay(
     ctx: &SmContext,
     config: Config,
-    prefixes: HashSet<PathVector>,
+    prefixes: HashSet<v3::PathVector>,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = UnderlayUpdate::announce(prefixes);
+    let update = v3::UnderlayUpdate::announce(prefixes);
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn announce_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<TunnelOrigin>,
+    endpoints: HashSet<v3::TunnelOrigin>,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = TunnelUpdate::announce(endpoints.into_iter().collect());
+    let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_underlay(
     ctx: &SmContext,
     config: Config,
-    prefixes: HashSet<PathVector>,
+    prefixes: HashSet<v3::PathVector>,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = UnderlayUpdate::withdraw(prefixes);
+    let update = v3::UnderlayUpdate::withdraw(prefixes);
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<TunnelOrigin>,
+    endpoints: HashSet<v3::TunnelOrigin>,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = TunnelUpdate::withdraw(endpoints.into_iter().collect());
+    let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
@@ -120,7 +103,7 @@ pub(crate) fn do_pull(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
-) -> Result<PullResponse, ExchangeError> {
+) -> Result<v3::PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/v3/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
@@ -133,7 +116,7 @@ pub(crate) fn do_pull_v2(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
-) -> Result<PullResponseV2, ExchangeError> {
+) -> Result<v2::PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/v2/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
@@ -174,12 +157,12 @@ pub(crate) fn pull(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let pr: PullResponse = match version {
+    let pr: v3::PullResponse = match version {
         Version::V2 => do_pull_v2(&ctx, &addr, &rt)?.into(),
         Version::V3 => do_pull(&ctx, &addr, &rt)?,
     };
 
-    let update = Update::announce(pr);
+    let update = v3::Update::announce(pr);
 
     let hctx = HandlerContext {
         ctx,
@@ -194,7 +177,7 @@ pub(crate) fn pull(
 fn send_update(
     ctx: &SmContext,
     config: Config,
-    update: Update,
+    update: v3::Update,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
@@ -212,7 +195,7 @@ fn send_update(
 fn send_update_v2(
     ctx: &SmContext,
     config: Config,
-    update: UpdateV2,
+    update: v2::Update,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
@@ -228,7 +211,7 @@ fn send_update_v2(
 fn send_update_v3(
     ctx: &SmContext,
     config: Config,
-    update: Update,
+    update: v3::Update,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
@@ -356,17 +339,17 @@ pub fn api_description() -> Result<
 #[endpoint { method = PUT, path = "/v2/push" }]
 async fn push_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    request: TypedBody<UpdateV2>,
+    request: TypedBody<v2::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update_v2 = request.into_inner();
-    let update = Update::from(update_v2);
+    let update = v3::Update::from(update_v2);
     push_handler_common(ctx, update).await
 }
 
 #[endpoint { method = PUT, path = "/v3/push" }]
 async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    request: TypedBody<Update>,
+    request: TypedBody<v3::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update = request.into_inner();
     push_handler_common(ctx, update).await
@@ -374,7 +357,7 @@ async fn push_handler(
 
 async fn push_handler_common(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    update: Update,
+    update: v3::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().await.clone();
     tokio::task::spawn_blocking(move || {
@@ -391,7 +374,7 @@ async fn push_handler_common(
 #[endpoint { method = GET, path = "/v2/pull" }]
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<PullResponseV2>, HttpError> {
+) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
     let mut underlay = HashSet::new();
@@ -404,7 +387,7 @@ async fn pull_handler_v2(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = PathVector {
+            let mut pv = v3::PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
@@ -425,7 +408,7 @@ async fn pull_handler_v2(
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = PathVector {
+        let pv = v3::PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
@@ -438,7 +421,7 @@ async fn pull_handler_v2(
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated_tunnel {
-        let tv = TunnelOrigin {
+        let tv = v3::TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
             vni: prefix.vni,
@@ -447,16 +430,16 @@ async fn pull_handler_v2(
         tunnel.insert(tv);
     }
 
-    Ok(HttpResponseOk(PullResponseV2 {
+    Ok(HttpResponseOk(v2::PullResponse {
         underlay: if underlay.is_empty() {
             None
         } else {
-            Some(underlay.into_iter().map(PathVectorV2::from).collect())
+            Some(underlay.into_iter().map(v2::PathVector::from).collect())
         },
         tunnel: if tunnel.is_empty() {
             None
         } else {
-            Some(tunnel.into_iter().map(TunnelOriginV2::from).collect())
+            Some(tunnel.into_iter().map(v2::TunnelOrigin::from).collect())
         },
     }))
 }
@@ -464,7 +447,7 @@ async fn pull_handler_v2(
 #[endpoint { method = GET, path = "/v3/pull" }]
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<PullResponse>, HttpError> {
+) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
     let mut underlay = HashSet::new();
@@ -477,7 +460,7 @@ async fn pull_handler(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = PathVector {
+            let mut pv = v3::PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
@@ -498,7 +481,7 @@ async fn pull_handler(
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = PathVector {
+        let pv = v3::PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
@@ -511,7 +494,7 @@ async fn pull_handler(
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated_tunnel {
-        let tv = TunnelOrigin {
+        let tv = v3::TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
             vni: prefix.vni,
@@ -520,7 +503,7 @@ async fn pull_handler(
         tunnel.insert(tv);
     }
 
-    Ok(HttpResponseOk(PullResponse {
+    Ok(HttpResponseOk(v3::PullResponse {
         underlay: if underlay.is_empty() {
             None
         } else {
@@ -534,7 +517,7 @@ async fn pull_handler(
     }))
 }
 
-fn handle_update(update: &Update, ctx: &HandlerContext) {
+fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
     ctx.ctx
         .stats
         .updates_received
@@ -563,7 +546,7 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             .as_ref()
             .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
 
-        let push = Update {
+        let push = v3::Update {
             underlay,
             tunnel: update.tunnel.clone(),
         };
@@ -574,7 +557,7 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
     }
 }
 
-fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
+fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
     let mut import = HashSet::new();
     let mut remove = HashSet::new();
     let db = &ctx.ctx.db;
@@ -583,7 +566,7 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
 
     for x in &update.announce {
         import.insert(TunnelRoute {
-            origin: TunnelOrigin {
+            origin: v3::TunnelOrigin {
                 overlay_prefix: x.overlay_prefix,
                 boundary_addr: x.boundary_addr,
                 vni: x.vni,
@@ -596,7 +579,7 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
 
     for x in &update.withdraw {
         remove.insert(TunnelRoute {
-            origin: TunnelOrigin {
+            origin: v3::TunnelOrigin {
                 overlay_prefix: x.overlay_prefix,
                 boundary_addr: x.boundary_addr,
                 vni: x.vni,
@@ -644,7 +627,7 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
         .store(ctx.ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
-fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
+fn handle_underlay_update(update: &v3::UnderlayUpdate, ctx: &HandlerContext) {
     let mut import = HashSet::new();
     let mut add = Vec::new();
     let db = &ctx.ctx.db;

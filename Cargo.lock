@@ -1345,6 +1345,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-protocol",
  "dpd-client",
  "dropshot",
  "expectorate",
@@ -1407,11 +1408,23 @@ dependencies = [
 name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
+ "ddm-protocol",
  "oxnet",
  "schemars 0.8.22",
  "serde",
  "serde_repr",
  "uuid",
+]
+
+[[package]]
+name = "ddm-protocol"
+version = "0.1.0"
+dependencies = [
+ "expectorate",
+ "oxnet",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
