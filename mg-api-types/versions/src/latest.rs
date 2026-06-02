@@ -21,20 +21,16 @@ pub mod bgp {
     pub mod config {
         pub use crate::v1::bgp::config::AsnSelector;
         pub use crate::v1::bgp::config::CheckerSource;
-        pub use crate::v1::bgp::config::Origin4;
         pub use crate::v1::bgp::config::Router;
         pub use crate::v1::bgp::config::ShaperSource;
 
         pub use crate::v4::bgp::config::AfiSafi;
         pub use crate::v4::bgp::config::BgpCapability;
         pub use crate::v4::bgp::config::DynamicTimerInfo;
-        pub use crate::v4::bgp::config::Ipv4UnicastConfig;
-        pub use crate::v4::bgp::config::Ipv6UnicastConfig;
         pub use crate::v4::bgp::config::JitterRange;
         pub use crate::v4::bgp::config::NeighborResetOp;
         pub use crate::v4::bgp::config::NeighborResetRequest;
         pub use crate::v4::bgp::config::PeerCounters;
-        pub use crate::v4::bgp::config::PeerInfo;
         pub use crate::v4::bgp::config::PeerTimers;
         pub use crate::v4::bgp::config::StaticTimerInfo;
 
@@ -42,12 +38,16 @@ pub mod bgp {
         pub use crate::v5::bgp::config::UnnumberedNeighborResetRequest;
         pub use crate::v5::bgp::config::UnnumberedNeighborSelector;
 
-        pub use crate::v8::bgp::config::ApplyRequest;
-        pub use crate::v8::bgp::config::BgpPeerConfig;
-        pub use crate::v8::bgp::config::BgpPeerParameters;
-        pub use crate::v8::bgp::config::Neighbor;
-        pub use crate::v8::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v8::bgp::config::UnnumberedNeighbor;
+        pub use crate::v10::bgp::config::ApplyRequest;
+        pub use crate::v10::bgp::config::BgpPeerConfig;
+        pub use crate::v10::bgp::config::BgpPeerParameters;
+        pub use crate::v10::bgp::config::Ipv4UnicastConfig;
+        pub use crate::v10::bgp::config::Ipv6UnicastConfig;
+        pub use crate::v10::bgp::config::Neighbor;
+        pub use crate::v10::bgp::config::Origin4;
+        pub use crate::v10::bgp::config::PeerInfo;
+        pub use crate::v10::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v10::bgp::config::UnnumberedNeighbor;
     }
 
     pub mod peer {
@@ -55,14 +55,15 @@ pub mod bgp {
     }
 
     pub mod policy {
-        pub use crate::v4::bgp::policy::ImportExportPolicy4;
-        pub use crate::v4::bgp::policy::ImportExportPolicy6;
+        pub use crate::v10::bgp::policy::ImportExportPolicy4;
+        pub use crate::v10::bgp::policy::ImportExportPolicy6;
     }
 
     pub mod history {
         pub use crate::v2::bgp::history::FsmEventBuffer;
         pub use crate::v2::bgp::history::MessageDirection;
-        pub use crate::v2::bgp::history::Origin6;
+
+        pub use crate::v10::bgp::history::Origin6;
     }
 
     pub mod error {
@@ -187,15 +188,14 @@ pub mod rib {
 }
 
 pub mod static_routes {
-    pub use crate::v1::static_routes::AddStaticRoute4Request;
-    pub use crate::v1::static_routes::DeleteStaticRoute4Request;
-    pub use crate::v1::static_routes::StaticRoute4;
-    pub use crate::v1::static_routes::StaticRoute4List;
-
-    pub use crate::v2::static_routes::AddStaticRoute6Request;
-    pub use crate::v2::static_routes::DeleteStaticRoute6Request;
-    pub use crate::v2::static_routes::StaticRoute6;
-    pub use crate::v2::static_routes::StaticRoute6List;
+    pub use crate::v10::static_routes::AddStaticRoute4Request;
+    pub use crate::v10::static_routes::AddStaticRoute6Request;
+    pub use crate::v10::static_routes::DeleteStaticRoute4Request;
+    pub use crate::v10::static_routes::DeleteStaticRoute6Request;
+    pub use crate::v10::static_routes::StaticRoute4;
+    pub use crate::v10::static_routes::StaticRoute4List;
+    pub use crate::v10::static_routes::StaticRoute6;
+    pub use crate::v10::static_routes::StaticRoute6List;
 }
 
 pub mod switch {

@@ -36,7 +36,7 @@ pub(crate) use mg_api_types::bgp::session::{
 };
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_api_types_versions::v1;
+use mg_api_types_versions::{v1, v4};
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, Db};
@@ -999,8 +999,12 @@ impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
             deterministic_collision_resolution: false,
             ipv4_unicast: Some(Ipv4UnicastConfig {
                 nexthop: None,
-                import_policy: ImportExportPolicy4::from(allow_import),
-                export_policy: ImportExportPolicy4::from(allow_export),
+                import_policy: ImportExportPolicy4::from(
+                    v4::bgp::policy::ImportExportPolicy4::from(allow_import),
+                ),
+                export_policy: ImportExportPolicy4::from(
+                    v4::bgp::policy::ImportExportPolicy4::from(allow_export),
+                ),
             }),
             ipv6_unicast: None,
         }
@@ -6304,13 +6308,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .iter()
                                             .cloned()
-                                            .filter(|x: &Ipv4Net| {
-                                                list.iter().any(|p| {
-                                                    Ipv4Net::new_unchecked(
-                                                        p.value, p.length,
-                                                    ) == *x
-                                                })
-                                            })
+                                            .filter(|x| list.contains(x))
                                             .collect()
                                     }
                                 };
@@ -6329,13 +6327,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .clone()
                                             .into_iter()
-                                            .filter(|x: &Ipv4Net| {
-                                                list.iter().any(|p| {
-                                                    Ipv4Net::new_unchecked(
-                                                        p.value, p.length,
-                                                    ) == *x
-                                                })
-                                            })
+                                            .filter(|x| list.contains(x))
                                             .collect()
                                     }
                                 };
@@ -6419,13 +6411,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .iter()
                                             .cloned()
-                                            .filter(|x: &Ipv6Net| {
-                                                list.iter().any(|p| {
-                                                    Ipv6Net::new_unchecked(
-                                                        p.value, p.length,
-                                                    ) == *x
-                                                })
-                                            })
+                                            .filter(|x| list.contains(x))
                                             .collect()
                                     }
                                 };
@@ -6444,13 +6430,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .clone()
                                             .into_iter()
-                                            .filter(|x: &Ipv6Net| {
-                                                list.iter().any(|p| {
-                                                    Ipv6Net::new_unchecked(
-                                                        p.value, p.length,
-                                                    ) == *x
-                                                })
-                                            })
+                                            .filter(|x| list.contains(x))
                                             .collect()
                                     }
                                 };
@@ -7677,11 +7657,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             && let ImportExportPolicy4::Allow(ref policy4) =
                 config4.export_policy
         {
-            let allowed: std::collections::BTreeSet<Ipv4Net> = policy4
-                .iter()
-                .map(|p| Ipv4Net::new_unchecked(p.value, p.length))
-                .collect();
-            update.nlri.retain(|p| allowed.contains(p));
+            update.nlri.retain(|p| policy4.contains(p));
         }
 
         // Filter MP_REACH_NLRI using the appropriate per-AF policy
@@ -7692,14 +7668,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         && let ImportExportPolicy4::Allow(ref policy4) =
                             config4.export_policy
                     {
-                        let allowed: std::collections::BTreeSet<Ipv4Net> =
-                            policy4
-                                .iter()
-                                .map(|p| {
-                                    Ipv4Net::new_unchecked(p.value, p.length)
-                                })
-                                .collect();
-                        reach4.nlri.retain(|p| allowed.contains(p));
+                        reach4.nlri.retain(|p| policy4.contains(p));
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
@@ -7707,14 +7676,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         && let ImportExportPolicy6::Allow(ref policy6) =
                             config6.export_policy
                     {
-                        let allowed: std::collections::BTreeSet<Ipv6Net> =
-                            policy6
-                                .iter()
-                                .map(|p| {
-                                    Ipv6Net::new_unchecked(p.value, p.length)
-                                })
-                                .collect();
-                        reach6.nlri.retain(|p| allowed.contains(p));
+                        reach6.nlri.retain(|p| policy6.contains(p));
                     }
                 }
             }
@@ -8203,11 +8165,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 && let ImportExportPolicy4::Allow(ref policy4) =
                     config4.import_policy
             {
-                let allowed: std::collections::BTreeSet<Ipv4Net> = policy4
-                    .iter()
-                    .map(|p| Ipv4Net::new_unchecked(p.value, p.length))
-                    .collect();
-                update.nlri.retain(|p| allowed.contains(p));
+                update.nlri.retain(|p| policy4.contains(p));
             }
 
             // Filter MP_REACH_NLRI using the appropriate per-AF policy
@@ -8218,16 +8176,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             && let ImportExportPolicy4::Allow(ref policy4) =
                                 config4.import_policy
                         {
-                            let allowed: std::collections::BTreeSet<Ipv4Net> =
-                                policy4
-                                    .iter()
-                                    .map(|p| {
-                                        Ipv4Net::new_unchecked(
-                                            p.value, p.length,
-                                        )
-                                    })
-                                    .collect();
-                            reach4.nlri.retain(|p| allowed.contains(p));
+                            reach4.nlri.retain(|p| policy4.contains(p));
                         }
                     }
                     MpReachNlri::Ipv6Unicast(reach6) => {
@@ -8235,16 +8184,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             && let ImportExportPolicy6::Allow(ref policy6) =
                                 config6.import_policy
                         {
-                            let allowed: std::collections::BTreeSet<Ipv6Net> =
-                                policy6
-                                    .iter()
-                                    .map(|p| {
-                                        Ipv6Net::new_unchecked(
-                                            p.value, p.length,
-                                        )
-                                    })
-                                    .collect();
-                            reach6.nlri.retain(|p| allowed.contains(p));
+                            reach6.nlri.retain(|p| policy6.contains(p));
                         }
                     }
                 }

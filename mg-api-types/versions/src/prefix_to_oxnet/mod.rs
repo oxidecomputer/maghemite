@@ -9,3 +9,4 @@
 //! `MpUnreachIpv4/6Unicast`) and the message-history response.
 
 pub mod bgp;
+pub mod static_routes;

@@ -1779,7 +1779,7 @@
         ]
       },
       "ApplyRequest": {
-        "description": "Apply changes to an ASN (current version with per-AF policies).",
+        "description": "Apply changes to an ASN.",
         "type": "object",
         "properties": {
           "asn": {
@@ -1801,7 +1801,7 @@
             "description": "Complete set of prefixes to originate.",
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/IpNet"
             }
           },
           "peers": {
@@ -2202,7 +2202,6 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -2215,7 +2214,6 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -2231,7 +2229,6 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -2245,7 +2242,6 @@
           },
           "ipv4_unicast": {
             "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -2254,7 +2250,6 @@
           },
           "ipv6_unicast": {
             "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -2307,13 +2302,11 @@
           },
           "src_addr": {
             "nullable": true,
-            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
-            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -3296,7 +3289,7 @@
               "Allow": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/Prefix4"
+                  "$ref": "#/components/schemas/Ipv4Net"
                 },
                 "uniqueItems": true
               }
@@ -3323,7 +3316,7 @@
               "Allow": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/Prefix6"
+                  "$ref": "#/components/schemas/Ipv6Net"
                 },
                 "uniqueItems": true
               }
@@ -3947,7 +3940,6 @@
         ]
       },
       "Neighbor": {
-        "description": "Neighbor configuration with explicit per-address-family enablement (v3 API)",
         "type": "object",
         "properties": {
           "asn": {
@@ -3970,7 +3962,6 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -3983,7 +3974,6 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -4002,7 +3992,6 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -4016,7 +4005,6 @@
           },
           "ipv4_unicast": {
             "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -4025,7 +4013,6 @@
           },
           "ipv6_unicast": {
             "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -4078,13 +4065,11 @@
           },
           "src_addr": {
             "nullable": true,
-            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
-            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -4365,6 +4350,7 @@
         ]
       },
       "Origin4": {
+        "description": "IPv4 prefixes to originate from an ASN.",
         "type": "object",
         "properties": {
           "asn": {
@@ -4377,7 +4363,7 @@
             "description": "Set of prefixes to originate.",
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix4"
+              "$ref": "#/components/schemas/Ipv4Net"
             }
           }
         },
@@ -4387,6 +4373,7 @@
         ]
       },
       "Origin6": {
+        "description": "IPv6 prefixes to originate from an ASN.",
         "type": "object",
         "properties": {
           "asn": {
@@ -4399,7 +4386,7 @@
             "description": "Set of prefixes to originate.",
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix6"
+              "$ref": "#/components/schemas/Ipv6Net"
             }
           }
         },
@@ -5133,70 +5120,6 @@
           "keepalive"
         ]
       },
-      "Prefix": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "V4": {
-                "$ref": "#/components/schemas/Prefix4"
-              }
-            },
-            "required": [
-              "V4"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "V6": {
-                "$ref": "#/components/schemas/Prefix6"
-              }
-            },
-            "required": [
-              "V6"
-            ],
-            "additionalProperties": false
-          }
-        ]
-      },
-      "Prefix4": {
-        "type": "object",
-        "properties": {
-          "length": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "value": {
-            "type": "string",
-            "format": "ipv4"
-          }
-        },
-        "required": [
-          "length",
-          "value"
-        ]
-      },
-      "Prefix6": {
-        "type": "object",
-        "properties": {
-          "length": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "value": {
-            "type": "string",
-            "format": "ipv6"
-          }
-        },
-        "required": [
-          "length",
-          "value"
-        ]
-      },
       "Rib": {
         "type": "object",
         "additionalProperties": {
@@ -5291,7 +5214,7 @@
             "format": "ipv4"
           },
           "prefix": {
-            "$ref": "#/components/schemas/Prefix4"
+            "$ref": "#/components/schemas/Ipv4Net"
           },
           "rib_priority": {
             "type": "integer",
@@ -5333,7 +5256,7 @@
             "format": "ipv6"
           },
           "prefix": {
-            "$ref": "#/components/schemas/Prefix6"
+            "$ref": "#/components/schemas/Ipv6Net"
           },
           "rib_priority": {
             "type": "integer",
@@ -5414,7 +5337,6 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5427,7 +5349,6 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -5440,7 +5361,6 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5457,7 +5377,6 @@
           },
           "ipv4_unicast": {
             "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -5466,7 +5385,6 @@
           },
           "ipv6_unicast": {
             "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -5524,13 +5442,11 @@
           },
           "src_addr": {
             "nullable": true,
-            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
-            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -5586,7 +5502,6 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5599,7 +5514,6 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -5615,7 +5529,6 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5632,7 +5545,6 @@
           },
           "ipv4_unicast": {
             "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -5641,7 +5553,6 @@
           },
           "ipv6_unicast": {
             "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -5694,13 +5605,11 @@
           },
           "src_addr": {
             "nullable": true,
-            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
-            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
