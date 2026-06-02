@@ -9,7 +9,6 @@
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
-use crate::exchange::Update;
 use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
@@ -49,7 +48,7 @@ pub enum PrefixSet {
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(Update),
+    Push(ddm_protocol::v3::Update),
 }
 
 #[derive(Debug)]

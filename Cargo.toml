@@ -9,6 +9,7 @@ default-members = [
     "ddm-api",
     "ddm-api-types",
     "ddm-api-types/versions",
+    "ddm-protocol",
     "dropshot-apis",
     "bfd",
     "util",
@@ -38,6 +39,7 @@ members = [
     "ddm-api",
     "ddm-api-types",
     "ddm-api-types/versions",
+    "ddm-protocol",
     "dropshot-apis",
     "bfd",
     "package",
@@ -72,6 +74,7 @@ rdb = { path = "rdb", features = ["clap"] }
 ddm-api = { path = "ddm-api" }
 ddm-api-types = { path = "ddm-api-types" }
 ddm-api-types-versions = { path = "ddm-api-types/versions" }
+ddm-protocol = { path = "ddm-protocol" }
 
 # External
 slog = { version = "2.8.2", features = ["max_level_trace", "release_max_level_debug"] }

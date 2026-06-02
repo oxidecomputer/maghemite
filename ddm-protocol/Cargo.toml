@@ -1,12 +1,11 @@
 [package]
-name = "ddm-api-types-versions"
+name = "ddm-protocol"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+expectorate.workspace = true
 oxnet.workspace = true
 schemars.workspace = true
 serde.workspace = true
-serde_repr.workspace = true
-uuid.workspace = true
-ddm-protocol.workspace = true
+serde_json.workspace = true

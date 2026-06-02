@@ -25,6 +25,7 @@ serde_json.workspace = true
 sled.workspace = true
 mg-common.workspace = true
 ddm-api-types.workspace = true
+ddm-protocol.workspace = true
 chrono.workspace = true
 omicron-common.workspace = true
 oximeter.workspace = true

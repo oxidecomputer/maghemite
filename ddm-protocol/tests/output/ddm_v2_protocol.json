@@ -8,10 +8,10 @@
   ],
   "properties": {
     "pull_response": {
-      "$ref": "#/definitions/PullResponseV2"
+      "$ref": "#/definitions/PullResponse"
     },
     "update": {
-      "$ref": "#/definitions/UpdateV2"
+      "$ref": "#/definitions/Update"
     }
   },
   "definitions": {
@@ -79,7 +79,7 @@
         }
       }
     },
-    "PathVectorV2": {
+    "PathVector": {
       "type": "object",
       "required": [
         "destination",
@@ -97,7 +97,7 @@
         }
       }
     },
-    "PullResponseV2": {
+    "PullResponse": {
       "type": "object",
       "properties": {
         "tunnel": {
@@ -106,7 +106,7 @@
             "null"
           ],
           "items": {
-            "$ref": "#/definitions/TunnelOriginV2"
+            "$ref": "#/definitions/TunnelOrigin"
           },
           "uniqueItems": true
         },
@@ -116,13 +116,13 @@
             "null"
           ],
           "items": {
-            "$ref": "#/definitions/PathVectorV2"
+            "$ref": "#/definitions/PathVector"
           },
           "uniqueItems": true
         }
       }
     },
-    "TunnelOriginV2": {
+    "TunnelOrigin": {
       "type": "object",
       "required": [
         "boundary_addr",
@@ -150,7 +150,7 @@
         }
       }
     },
-    "TunnelUpdateV2": {
+    "TunnelUpdate": {
       "type": "object",
       "required": [
         "announce",
@@ -160,20 +160,20 @@
         "announce": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/TunnelOriginV2"
+            "$ref": "#/definitions/TunnelOrigin"
           },
           "uniqueItems": true
         },
         "withdraw": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/TunnelOriginV2"
+            "$ref": "#/definitions/TunnelOrigin"
           },
           "uniqueItems": true
         }
       }
     },
-    "UnderlayUpdateV2": {
+    "UnderlayUpdate": {
       "type": "object",
       "required": [
         "announce",
@@ -183,26 +183,26 @@
         "announce": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/PathVectorV2"
+            "$ref": "#/definitions/PathVector"
           },
           "uniqueItems": true
         },
         "withdraw": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/PathVectorV2"
+            "$ref": "#/definitions/PathVector"
           },
           "uniqueItems": true
         }
       }
     },
-    "UpdateV2": {
+    "Update": {
       "type": "object",
       "properties": {
         "tunnel": {
           "anyOf": [
             {
-              "$ref": "#/definitions/TunnelUpdateV2"
+              "$ref": "#/definitions/TunnelUpdate"
             },
             {
               "type": "null"
@@ -212,7 +212,7 @@
         "underlay": {
           "anyOf": [
             {
-              "$ref": "#/definitions/UnderlayUpdateV2"
+              "$ref": "#/definitions/UnderlayUpdate"
             },
             {
               "type": "null"
