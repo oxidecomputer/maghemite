@@ -1235,9 +1235,6 @@ async fn do_bgp_apply(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.log.clone();
 
-    // Validate originate prefixes before processing
-    validate_prefixes(&rq.originate)?;
-
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")
     );
@@ -1285,6 +1282,13 @@ async fn do_bgp_apply(
         .into_iter()
         .map(|x| x.group)
         .collect::<HashSet<_>>();
+    let ugroups = ctx
+        .db
+        .get_unnumbered_bgp_neighbors()
+        .map_err(Error::Db)?
+        .into_iter()
+        .map(|x| x.group)
+        .collect::<HashSet<_>>();
 
     // Turn any peer groups that are resident in the db but not in the apply
     // request into empty groups so the difference functions below remove
@@ -1296,9 +1300,21 @@ async fn do_bgp_apply(
         }
     }
     let mut upeers = rq.unnumbered_peers.clone();
-    for g in &groups {
-        if !upeers.contains_key(g) {
-            upeers.insert(g.clone(), Vec::default());
+    for u in &ugroups {
+        if !upeers.contains_key(u) {
+            upeers.insert(u.clone(), Vec::default());
+        }
+    }
+
+    // Treat bgp_apply endpoint as idempotent.
+    // If the request only has one ASN, then all others should be removed.
+    let routers = ctx
+        .db
+        .get_bgp_routers()
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+    for (old_asn, _router) in routers {
+        if rq.asn != old_asn {
+            ctx.db.remove_bgp_router(old_asn).map_err(Error::Db)?;
         }
     }
 
@@ -1508,6 +1524,9 @@ async fn do_bgp_apply(
             };
         }
     }
+
+    // Validate originate prefixes before processing
+    validate_prefixes(&rq.originate)?;
 
     get_router!(ctx, rq.asn)?
         .set_origin4(rq.originate.clone().into_iter().collect())
