@@ -7,7 +7,7 @@ use crate::unnumbered_manager::{
     NdpPeerState, NdpThreadStateInternal, UnnumberedManagerNdp,
 };
 use crate::validation::{
-    validate_ipv4_nets, validate_ipv6_nets, validate_nets,
+    validate_prefixes, validate_prefixes_v4, validate_prefixes_v6,
 };
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
@@ -694,7 +694,7 @@ pub async fn create_origin4(
 
     // Validate prefixes before processing
     let prefixes = rq.prefixes;
-    validate_ipv4_nets(&prefixes)?;
+    validate_prefixes_v4(&prefixes)?;
     let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V4).collect();
     let ctx = ctx.context();
 
@@ -733,7 +733,7 @@ pub async fn update_origin4(
 
     // Validate prefixes before processing
     let prefixes = rq.prefixes;
-    validate_ipv4_nets(&prefixes)?;
+    validate_prefixes_v4(&prefixes)?;
     let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V4).collect();
     let ctx = ctx.context();
 
@@ -766,7 +766,7 @@ pub async fn create_origin6(
 
     // Validate prefixes before processing
     let prefixes = rq.prefixes;
-    validate_ipv6_nets(&prefixes)?;
+    validate_prefixes_v6(&prefixes)?;
     let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V6).collect();
     let ctx = ctx.context();
 
@@ -805,7 +805,7 @@ pub async fn update_origin6(
 
     // Validate prefixes before processing
     let prefixes = rq.prefixes;
-    validate_ipv6_nets(&prefixes)?;
+    validate_prefixes_v6(&prefixes)?;
     let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V6).collect();
     let ctx = ctx.context();
 
@@ -1252,7 +1252,7 @@ async fn do_bgp_apply(
 
     // Validate originate prefixes before processing
     let originate_nets: &Vec<IpNet> = &rq.originate;
-    validate_nets(originate_nets)?;
+    validate_prefixes(originate_nets)?;
 
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")

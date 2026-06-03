@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
-use crate::validation::{validate_ipv4_nets, validate_ipv6_nets};
+use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
@@ -67,7 +67,7 @@ pub async fn static_add_v4_route(
 
     // Validate that all prefixes have host bits unset
     let nets: Vec<Ipv4Net> = list.iter().map(|r| r.prefix).collect();
-    validate_ipv4_nets(&nets)?;
+    validate_prefixes_v4(&nets)?;
 
     let routes: Vec<StaticRouteKey> =
         list.into_iter().map(static_route_key_from_v4).collect();
@@ -124,7 +124,7 @@ pub async fn static_add_v6_route(
 
     // Validate that all prefixes have host bits unset
     let nets: Vec<Ipv6Net> = list.iter().map(|r| r.prefix).collect();
-    validate_ipv6_nets(&nets)?;
+    validate_prefixes_v6(&nets)?;
 
     let routes: Vec<StaticRouteKey> =
         list.into_iter().map(static_route_key_from_v6).collect();

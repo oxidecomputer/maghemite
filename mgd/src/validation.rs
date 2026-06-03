@@ -16,23 +16,23 @@ use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 /// - Is a multicast address (224.0.0.0/4)
 ///
 /// Provides helpful error messages indicating the correct normalized format.
-pub fn validate_ipv4_nets(nets: &[Ipv4Net]) -> Result<(), HttpError> {
-    for net in nets {
-        if !net.is_network_address() {
+pub fn validate_prefixes_v4(prefixes: &[Ipv4Net]) -> Result<(), HttpError> {
+    for prefix in prefixes {
+        if !prefix.is_network_address() {
             return Err(HttpError::for_bad_request(
                 Some("InvalidPrefix".to_string()),
                 format!(
                     "Prefix {} has host bits set. Use normalized prefix (e.g., 10.0.0.0/24 instead of 10.0.0.5/24)",
-                    net
+                    prefix
                 ),
             ));
         }
-        if !net.valid_for_rib() {
+        if !prefix.valid_for_rib() {
             return Err(HttpError::for_bad_request(
                 Some("InvalidPrefix".to_string()),
                 format!(
                     "Prefix {} is not valid for RIB (loopback or multicast address)",
-                    net
+                    prefix
                 ),
             ));
         }
@@ -49,23 +49,23 @@ pub fn validate_ipv4_nets(nets: &[Ipv4Net]) -> Result<(), HttpError> {
 /// - Is a link-local unicast address (fe80::/10)
 ///
 /// Provides helpful error messages indicating the correct normalized format.
-pub fn validate_ipv6_nets(nets: &[Ipv6Net]) -> Result<(), HttpError> {
-    for net in nets {
-        if !net.is_network_address() {
+pub fn validate_prefixes_v6(prefixes: &[Ipv6Net]) -> Result<(), HttpError> {
+    for prefix in prefixes {
+        if !prefix.is_network_address() {
             return Err(HttpError::for_bad_request(
                 Some("InvalidPrefix".to_string()),
                 format!(
                     "Prefix {} has host bits set. Use normalized prefix (e.g., 2001:db8::/64 instead of 2001:db8::1/64)",
-                    net
+                    prefix
                 ),
             ));
         }
-        if !net.valid_for_rib() {
+        if !prefix.valid_for_rib() {
             return Err(HttpError::for_bad_request(
                 Some("InvalidPrefix".to_string()),
                 format!(
                     "Prefix {} is not valid for RIB (loopback, multicast, or link-local address)",
-                    net
+                    prefix
                 ),
             ));
         }
@@ -80,13 +80,21 @@ pub fn validate_ipv6_nets(nets: &[Ipv6Net]) -> Result<(), HttpError> {
 /// unset and be valid for RIB.
 ///
 /// Returns an HTTP 400 Bad Request error if any prefix fails validation.
-pub fn validate_nets(nets: &[IpNet]) -> Result<(), HttpError> {
-    for net in nets {
-        match net {
-            IpNet::V4(n) => validate_ipv4_nets(std::slice::from_ref(n))?,
-            IpNet::V6(n) => validate_ipv6_nets(std::slice::from_ref(n))?,
-        }
-    }
+pub fn validate_prefixes(prefixes: &[IpNet]) -> Result<(), HttpError> {
+    let (p4, p6) = prefixes.iter().copied().fold(
+        (Vec::new(), Vec::new()),
+        |(mut p4, mut p6), p| {
+            match p {
+                IpNet::V4(prefix4) => p4.push(prefix4),
+                IpNet::V6(prefix6) => p6.push(prefix6),
+            };
+            (p4, p6)
+        },
+    );
+
+    validate_prefixes_v4(&p4)?;
+    validate_prefixes_v6(&p6)?;
+
     Ok(())
 }
 
@@ -96,27 +104,29 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
-    fn test_validate_ipv4_accepts_normalized() {
-        let nets = vec![
+    fn test_validate_prefixes_v4_accepts_normalized() {
+        let prefixes = vec![
             Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24),
             Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 0, 0), 16),
         ];
-        assert!(validate_ipv4_nets(&nets).is_ok());
+        assert!(validate_prefixes_v4(&prefixes).is_ok());
     }
 
     #[test]
-    fn test_validate_ipv4_rejects_unnormalized() {
-        let nets = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 5), 24)];
-        let result = validate_ipv4_nets(&nets);
+    fn test_validate_prefixes_v4_rejects_unnormalized() {
+        let prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 5), 24)];
+        let result = validate_prefixes_v4(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("10.0.0.5/24"));
         assert!(err.external_message.contains("host bits set"));
     }
 
     #[test]
-    fn test_validate_ipv6_accepts_normalized() {
-        let nets = vec![
+    fn test_validate_prefixes_v6_accepts_normalized() {
+        let prefixes = vec![
             Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
                 64,
@@ -126,117 +136,203 @@ mod tests {
                 48,
             ),
         ];
-        assert!(validate_ipv6_nets(&nets).is_ok());
+        assert!(validate_prefixes_v6(&prefixes).is_ok());
     }
 
     #[test]
-    fn test_validate_ipv6_rejects_unnormalized() {
-        let nets = vec![Ipv6Net::new_unchecked(
+    fn test_validate_prefixes_v6_rejects_unnormalized() {
+        let prefixes = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
             64,
         )];
-        let result = validate_ipv6_nets(&nets);
+        let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("2001:db8::1/64"));
         assert!(err.external_message.contains("host bits set"));
     }
 
     #[test]
-    fn test_validate_ipv4_empty() {
-        assert!(validate_ipv4_nets(&[]).is_ok());
+    fn test_validate_prefixes_v4_empty_list() {
+        let prefixes: Vec<Ipv4Net> = vec![];
+        assert!(validate_prefixes_v4(&prefixes).is_ok());
     }
 
     #[test]
-    fn test_validate_ipv6_empty() {
-        assert!(validate_ipv6_nets(&[]).is_ok());
+    fn test_validate_prefixes_v6_empty_list() {
+        let prefixes: Vec<Ipv6Net> = vec![];
+        assert!(validate_prefixes_v6(&prefixes).is_ok());
     }
 
     #[test]
-    fn test_validate_ipv4_rejects_loopback() {
-        let nets = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(127, 0, 0, 0), 8)];
-        let result = validate_ipv4_nets(&nets);
+    fn test_validate_prefixes_v4_rejects_loopback() {
+        let prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(127, 0, 0, 0), 8)];
+        let result = validate_prefixes_v4(&prefixes);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .external_message
-                .contains("not valid for RIB")
-        );
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
     }
 
     #[test]
-    fn test_validate_ipv4_rejects_multicast() {
-        let nets = vec![Ipv4Net::new_unchecked(Ipv4Addr::new(224, 0, 0, 0), 4)];
-        let result = validate_ipv4_nets(&nets);
+    fn test_validate_prefixes_v4_rejects_multicast() {
+        let prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(224, 0, 0, 0), 4)];
+        let result = validate_prefixes_v4(&prefixes);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .external_message
-                .contains("not valid for RIB")
-        );
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
     }
 
     #[test]
-    fn test_validate_ipv6_rejects_loopback() {
-        let nets = vec![Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)];
-        let result = validate_ipv6_nets(&nets);
+    fn test_validate_prefixes_v6_rejects_loopback() {
+        let prefixes = vec![Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)];
+        let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .external_message
-                .contains("not valid for RIB")
-        );
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
     }
 
     #[test]
-    fn test_validate_ipv6_rejects_multicast() {
-        let nets = vec![Ipv6Net::new_unchecked(
+    fn test_validate_prefixes_v6_rejects_multicast() {
+        let prefixes = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0),
             8,
         )];
-        let result = validate_ipv6_nets(&nets);
+        let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .external_message
-                .contains("not valid for RIB")
-        );
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
     }
 
     #[test]
-    fn test_validate_ipv6_rejects_link_local() {
-        let nets = vec![Ipv6Net::new_unchecked(
+    fn test_validate_prefixes_v6_rejects_link_local() {
+        let prefixes = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0),
             10,
         )];
-        let result = validate_ipv6_nets(&nets);
+        let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .external_message
-                .contains("not valid for RIB")
-        );
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
     }
 
     #[test]
-    fn test_validate_nets_empty() {
-        assert!(validate_nets(&[]).is_ok());
+    fn test_validate_prefixes_empty_list() {
+        let prefixes: Vec<IpNet> = vec![];
+        assert!(validate_prefixes(&prefixes).is_ok());
     }
 
     #[test]
-    fn test_validate_nets_mixed_accepts_normalized() {
-        let nets = vec![
+    fn test_validate_prefixes_mixed_accepts_normalized() {
+        let prefixes = vec![
             IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
             IpNet::V6(Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
                 64,
             )),
+            IpNet::V4(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(192, 168, 0, 0),
+                16,
+            )),
         ];
-        assert!(validate_nets(&nets).is_ok());
+        assert!(validate_prefixes(&prefixes).is_ok());
+    }
+
+    #[test]
+    fn test_validate_prefixes_rejects_unnormalized_v4() {
+        let prefixes = vec![
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V4(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(192, 168, 1, 5),
+                24,
+            )),
+        ];
+        let result = validate_prefixes(&prefixes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("192.168.1.5/24"));
+    }
+
+    #[test]
+    fn test_validate_prefixes_rejects_unnormalized_v6() {
+        let prefixes = vec![
+            IpNet::V6(Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                64,
+            )),
+            IpNet::V6(Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 1),
+                64,
+            )),
+        ];
+        let result = validate_prefixes(&prefixes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("2001:db8:1::1/64"));
+    }
+
+    #[test]
+    fn test_validate_prefixes_rejects_invalid_for_rib_v4() {
+        let prefixes = vec![
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(127, 0, 0, 0), 8)),
+        ];
+        let result = validate_prefixes(&prefixes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
+    }
+
+    #[test]
+    fn test_validate_prefixes_rejects_invalid_for_rib_v6() {
+        let prefixes = vec![
+            IpNet::V6(Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                64,
+            )),
+            IpNet::V6(Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)),
+        ];
+        let result = validate_prefixes(&prefixes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("not valid for RIB"));
+    }
+
+    #[test]
+    fn test_validate_prefixes_only_v4() {
+        let prefixes = vec![
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V4(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(192, 168, 0, 0),
+                16,
+            )),
+        ];
+        assert!(validate_prefixes(&prefixes).is_ok());
+    }
+
+    #[test]
+    fn test_validate_prefixes_only_v6() {
+        let prefixes = vec![
+            IpNet::V6(Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                64,
+            )),
+            IpNet::V6(Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
+                48,
+            )),
+        ];
+        assert!(validate_prefixes(&prefixes).is_ok());
     }
 }
