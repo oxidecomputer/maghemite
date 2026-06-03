@@ -185,6 +185,7 @@ pub struct PeerIdentity {
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
+    pub addr: Mutex<Ipv6Addr>,
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
@@ -200,9 +201,10 @@ impl InterfaceState {
         *lock!(self.peer_identity) = None;
     }
 
-    pub fn set_if_info(&self, index: u32, name: String) {
+    pub fn set_if_info(&self, index: u32, name: String, addr: Ipv6Addr) {
         *lock!(self.if_index) = index;
         *lock!(self.if_name) = name;
+        *lock!(self.addr) = addr;
     }
 
     pub fn peer_status(&self) -> PeerStatus {
@@ -216,6 +218,7 @@ impl Default for InterfaceState {
         Self {
             if_index: Mutex::new(0),
             if_name: Mutex::new(String::new()),
+            addr: Mutex::new(Ipv6Addr::UNSPECIFIED),
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),
@@ -296,7 +299,7 @@ impl SmContext {
         let peer = lock!(self.iface.peer_identity);
         InterfaceInfo {
             name: lock!(self.iface.if_name).clone(),
-            addr: self.config.addr,
+            addr: *lock!(self.iface.addr),
             status: self.iface.peer_status(),
             peer_addr: peer.as_ref().map(|p| p.addr),
             peer_host: peer.as_ref().map(|p| p.hostname.clone()),
