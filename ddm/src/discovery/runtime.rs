@@ -122,6 +122,7 @@ pub(crate) fn handler(
 
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
+    uc.set_reuse_address(true)?;
     uc.bind(&uc_sa)?;
     uc.set_read_timeout(Some(Duration::from_millis(
         config.discovery_read_timeout,
