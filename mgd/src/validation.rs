@@ -335,4 +335,99 @@ mod tests {
         ];
         assert!(validate_prefixes(&prefixes).is_ok());
     }
+
+    // Property-based tests to verify equivalence between generic and family-specific validators
+    use proptest::prelude::*;
+
+    // Strategy for generating any IPv4 prefix (normalized or unnormalized)
+    fn any_ipv4_prefix_strategy() -> impl Strategy<Value = Ipv4Net> {
+        (any::<u32>(), 0u8..=32u8).prop_map(|(addr_bits, length)| {
+            // Don't use new() - we want to test both normalized and unnormalized
+            Ipv4Net::new_unchecked(Ipv4Addr::from(addr_bits), length)
+        })
+    }
+
+    // Strategy for generating any IPv6 prefix (normalized or unnormalized)
+    fn any_ipv6_prefix_strategy() -> impl Strategy<Value = Ipv6Net> {
+        (any::<u128>(), 0u8..=128u8).prop_map(|(addr_bits, length)| {
+            // Don't use new() - we want to test both normalized and unnormalized
+            Ipv6Net::new_unchecked(Ipv6Addr::from(addr_bits), length)
+        })
+    }
+
+    // Helper function to compare validation results
+    fn results_equivalent(
+        r1: Result<(), HttpError>,
+        r2: Result<(), HttpError>,
+    ) -> bool {
+        match (r1, r2) {
+            (Ok(()), Ok(())) => true,
+            (Err(e1), Err(e2)) => {
+                // Both errors - compare status codes and error type
+                e1.status_code == e2.status_code
+                    && e1.error_code == e2.error_code
+                    && e1.external_message.contains("host bits")
+                        == e2.external_message.contains("host bits")
+                    && e1.external_message.contains("not valid for RIB")
+                        == e2.external_message.contains("not valid for RIB")
+            }
+            _ => false, // One Ok, one Err - not equivalent
+        }
+    }
+
+    proptest! {
+        /// Property: validate_prefixes with single Prefix::V4 is equivalent to validate_prefixes_v4
+        #[test]
+        fn prop_validate_prefixes_v4_equivalence(prefix4 in any_ipv4_prefix_strategy()) {
+            let result_v4 = validate_prefixes_v4(&[prefix4]);
+            let result_generic = validate_prefixes(&[IpNet::V4(prefix4)]);
+
+            prop_assert!(
+                results_equivalent(result_v4, result_generic),
+                "validate_prefixes_v4 and validate_prefixes should give equivalent results"
+            );
+        }
+
+        /// Property: validate_prefixes with single Prefix::V6 is equivalent to validate_prefixes_v6
+        #[test]
+        fn prop_validate_prefixes_v6_equivalence(prefix6 in any_ipv6_prefix_strategy()) {
+            let result_v6 = validate_prefixes_v6(&[prefix6]);
+            let result_generic = validate_prefixes(&[IpNet::V6(prefix6)]);
+
+            prop_assert!(
+                results_equivalent(result_v6, result_generic),
+                "validate_prefixes_v6 and validate_prefixes should give equivalent results"
+            );
+        }
+
+        /// Property: validate_prefixes with multiple V4 prefixes is equivalent to validate_prefixes_v4
+        #[test]
+        fn prop_validate_prefixes_v4_list_equivalence(
+            prefixes in prop::collection::vec(any_ipv4_prefix_strategy(), 0..10)
+        ) {
+            let result_v4 = validate_prefixes_v4(&prefixes);
+            let wrapped: Vec<IpNet> = prefixes.iter().map(|p| IpNet::V4(*p)).collect();
+            let result_generic = validate_prefixes(&wrapped);
+
+            prop_assert!(
+                results_equivalent(result_v4, result_generic),
+                "validate_prefixes_v4 and validate_prefixes should give equivalent results for lists"
+            );
+        }
+
+        /// Property: validate_prefixes with multiple V6 prefixes is equivalent to validate_prefixes_v6
+        #[test]
+        fn prop_validate_prefixes_v6_list_equivalence(
+            prefixes in prop::collection::vec(any_ipv6_prefix_strategy(), 0..10)
+        ) {
+            let result_v6 = validate_prefixes_v6(&prefixes);
+            let wrapped: Vec<IpNet> = prefixes.iter().map(|p| IpNet::V6(*p)).collect();
+            let result_generic = validate_prefixes(&wrapped);
+
+            prop_assert!(
+                results_equivalent(result_v6, result_generic),
+                "validate_prefixes_v6 and validate_prefixes should give equivalent results for lists"
+            );
+        }
+    }
 }
