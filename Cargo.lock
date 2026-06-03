@@ -1348,7 +1348,6 @@ dependencies = [
  "ddm-protocol",
  "dpd-client",
  "dropshot",
- "expectorate",
  "hostname 0.4.2",
  "http-body-util",
  "hyper",
