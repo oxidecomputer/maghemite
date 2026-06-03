@@ -240,20 +240,6 @@ impl FromStr for Prefix6 {
     }
 }
 
-impl PartialEq<&Prefix> for oxnet::IpNet {
-    fn eq(&self, other: &&Prefix) -> bool {
-        match (self, other) {
-            (Self::V4(a), Prefix::V4(b)) => {
-                a.addr() == b.value && a.width() == b.length
-            }
-            (Self::V6(a), Prefix::V6(b)) => {
-                a.addr() == b.value && a.width() == b.length
-            }
-            _ => false,
-        }
-    }
-}
-
 impl std::fmt::Display for Prefix {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
@@ -275,6 +261,12 @@ impl From<oxnet::IpNet> for Prefix {
                 length: n.width(),
             }),
         }
+    }
+}
+
+impl From<oxnet::Ipv4Net> for Prefix {
+    fn from(value: oxnet::Ipv4Net) -> Self {
+        oxnet::IpNet::from(value).into()
     }
 }
 

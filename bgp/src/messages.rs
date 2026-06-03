@@ -109,10 +109,10 @@ impl BgpWireFormat<Ipv4Net> for Ipv4Net {
         let len = input[0];
 
         // Validate length bound for IPv4 (structural validation)
-        if len > 32u8 {
+        if len > oxnet::IPV4_NET_WIDTH_MAX {
             return Err(PrefixParseError::InvalidMask {
                 length: len,
-                max: 32u8,
+                max: oxnet::IPV4_NET_WIDTH_MAX,
             });
         }
 
@@ -174,10 +174,10 @@ impl BgpWireFormat<Ipv6Net> for Ipv6Net {
         let len = input[0];
 
         // Validate length bound for IPv6 (structural validation)
-        if len > 128u8 {
+        if len > oxnet::IPV6_NET_WIDTH_MAX {
             return Err(PrefixParseError::InvalidMask {
                 length: len,
-                max: 128u8,
+                max: oxnet::IPV6_NET_WIDTH_MAX,
             });
         }
 

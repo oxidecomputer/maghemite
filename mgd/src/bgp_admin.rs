@@ -49,7 +49,6 @@ use mg_api_types::ndp::{
 };
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::v1::rdb::prefix::{Prefix, Prefix4};
 use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
@@ -842,9 +841,15 @@ pub async fn get_exported_v1(
     let rq = request.into_inner();
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
-    let orig4 = r.db.get_origin4().map_err(|e| {
-        HttpError::for_internal_error(format!("error getting origin: {e}"))
-    })?;
+    let orig4: Vec<v1::rdb::prefix::Prefix> = r
+        .db
+        .get_origin4()
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("error getting origin: {e}"))
+        })?
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let neighs = r.db.get_bgp_neighbors().map_err(|e| {
         HttpError::for_internal_error(format!("error getting neighbors: {e}"))
     })?;
@@ -864,15 +869,7 @@ pub async fn get_exported_v1(
             continue;
         }
 
-        let mut orig_routes: Vec<Prefix> = orig4
-            .iter()
-            .map(|p| {
-                Prefix::V4(Prefix4 {
-                    value: p.addr(),
-                    length: p.width(),
-                })
-            })
-            .collect();
+        let mut orig_routes = orig4.clone();
 
         // Combine per-AF export policies into legacy format for filtering
         let allow_export =
@@ -880,7 +877,7 @@ pub async fn get_exported_v1(
                 &n.parameters.allow_export4,
                 &n.parameters.allow_export6,
             );
-        let mut exported_routes: Vec<Prefix> = match allow_export {
+        let mut exported_routes = match allow_export {
             v1::bgp::policy::ImportExportPolicy::NoFiltering => orig_routes,
             v1::bgp::policy::ImportExportPolicy::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
@@ -925,7 +922,7 @@ pub async fn get_exported_v5(
     let mut exported = HashMap::new();
 
     let to_prefix =
-        |routes: Vec<IpNet>| routes.into_iter().map(Prefix::from).collect();
+        |routes: Vec<IpNet>| routes.into_iter().map(Into::into).collect();
 
     if let Some(ref peer_filter) = rq.peer {
         // Specific peer requested - look it up directly

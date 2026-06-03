@@ -597,7 +597,7 @@ pub struct AddPathElement {
 #[derive(
     Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
 )]
-pub struct Prefix {
+pub(crate) struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,
 }
@@ -1024,9 +1024,9 @@ pub struct RouteRefreshMessage {
 )]
 #[schemars(rename = "UpdateMessage")]
 pub struct UpdateMessage {
-    pub withdrawn: Vec<Prefix>,
-    pub path_attributes: Vec<PathAttribute>,
-    pub nlri: Vec<Prefix>,
+    pub(crate) withdrawn: Vec<Prefix>,
+    pub(crate) path_attributes: Vec<PathAttribute>,
+    pub(crate) nlri: Vec<Prefix>,
 }
 
 /// V1 Message enum for API compatibility.
