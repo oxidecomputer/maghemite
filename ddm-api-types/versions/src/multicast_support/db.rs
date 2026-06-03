@@ -46,9 +46,18 @@ pub struct MulticastRoute {
     pub path: Vec<MulticastPathHop>,
 }
 
+impl MulticastRoute {
+    /// Identity used for equality and hashing: which group, from which peer.
+    /// Excludes `path`, so equality and hashing both key on the same fields
+    /// and cannot drift as the struct grows.
+    fn identity(&self) -> (&MulticastOrigin, &Ipv6Addr) {
+        (&self.origin, &self.nexthop)
+    }
+}
+
 impl PartialEq for MulticastRoute {
     fn eq(&self, other: &Self) -> bool {
-        self.origin == other.origin && self.nexthop == other.nexthop
+        self.identity() == other.identity()
     }
 }
 
@@ -56,8 +65,7 @@ impl Eq for MulticastRoute {}
 
 impl std::hash::Hash for MulticastRoute {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.origin.hash(state);
-        self.nexthop.hash(state);
+        self.identity().hash(state);
     }
 }
 

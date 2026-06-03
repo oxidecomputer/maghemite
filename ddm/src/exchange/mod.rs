@@ -123,6 +123,7 @@ impl From<UpdateV3> for Update {
         Update {
             underlay: value.underlay,
             tunnel: value.tunnel,
+            // V3 protocol doesn't support multicast
             multicast: None,
         }
     }
@@ -212,6 +213,7 @@ impl From<PullResponseV3> for PullResponse {
         PullResponse {
             underlay: value.underlay,
             tunnel: value.tunnel,
+            // V3 protocol doesn't support multicast
             multicast: None,
         }
     }
@@ -446,7 +448,7 @@ mod tests {
     use ddm_api_types::net::{MulticastOrigin, UnderlayMulticastIpv6, Vni};
     use std::net::Ipv6Addr;
 
-    fn sample_multicast_update() -> MulticastUpdate {
+    fn multicast_update() -> MulticastUpdate {
         let origin = MulticastOrigin {
             overlay_group: "233.252.0.1".parse().unwrap(),
             underlay_group: UnderlayMulticastIpv6::new(
@@ -457,14 +459,14 @@ mod tests {
             metric: 0,
             source: None,
         };
-        let pv = MulticastPathVector {
+        let path_vector = MulticastPathVector {
             origin,
             path: vec![MulticastPathHop::new(
                 "router-1".into(),
                 Ipv6Addr::LOCALHOST,
             )],
         };
-        MulticastUpdate::announce([pv].into_iter().collect())
+        MulticastUpdate::announce([path_vector].into_iter().collect())
     }
 
     #[test]
@@ -472,7 +474,7 @@ mod tests {
         let update = Update {
             underlay: None,
             tunnel: None,
-            multicast: Some(sample_multicast_update()),
+            multicast: Some(multicast_update()),
         };
         let json = serde_json::to_string(&update).unwrap();
         let back: Update = serde_json::from_str(&json).unwrap();
@@ -485,7 +487,7 @@ mod tests {
         let update = Update {
             underlay: None,
             tunnel: None,
-            multicast: Some(sample_multicast_update()),
+            multicast: Some(multicast_update()),
         };
         let json = serde_json::to_string(&update).unwrap();
         // A V3 peer would deserialize this as UpdateV3, silently
@@ -519,14 +521,14 @@ mod tests {
             metric: 0,
             source: None,
         };
-        let pv = MulticastPathVector {
+        let path_vector = MulticastPathVector {
             origin,
             path: vec![],
         };
         let resp = PullResponse {
             underlay: None,
             tunnel: None,
-            multicast: Some([pv].into_iter().collect()),
+            multicast: Some([path_vector].into_iter().collect()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: PullResponse = serde_json::from_str(&json).unwrap();
@@ -545,14 +547,14 @@ mod tests {
             metric: 0,
             source: None,
         };
-        let pv = MulticastPathVector {
+        let path_vector = MulticastPathVector {
             origin,
             path: vec![],
         };
         let resp = PullResponse {
             underlay: None,
             tunnel: None,
-            multicast: Some([pv].into_iter().collect()),
+            multicast: Some([path_vector].into_iter().collect()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         // V3 peer drops the multicast field.
@@ -577,7 +579,7 @@ mod tests {
         let update = Update {
             underlay: None,
             tunnel: None,
-            multicast: Some(sample_multicast_update()),
+            multicast: Some(multicast_update()),
         };
         let v3 = UpdateV3::from(update);
         let back = Update::from(v3);

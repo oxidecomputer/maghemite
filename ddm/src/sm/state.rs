@@ -170,6 +170,14 @@ impl State for Solicit {
                         self.ctx.config.if_name,
                         "transition solicit -> exchange"
                     );
+                    // The peer is now established on this link, so wake the
+                    // multicast sweep for any of its groups whose import raced
+                    // ahead of resolution.
+                    crate::mcast::notify_peer_groups(
+                        &self.ctx.db,
+                        addr,
+                        &self.ctx.mcast_notify,
+                    );
                     return (
                         Box::new(Exchange::new(
                             self.ctx.clone(),
@@ -299,8 +307,11 @@ impl Exchange {
     ) {
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
-        let (to_remove, to_remove_tnl, to_remove_mcast) =
-            self.ctx.db.remove_nexthop_routes(self.peer);
+        let crate::db::RemovedNexthopRoutes {
+            underlay: to_remove,
+            tunnel: to_remove_tnl,
+            multicast: to_remove_mcast,
+        } = self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
@@ -326,6 +337,15 @@ impl Exchange {
                 to_remove_tnl
             );
         }
+
+        // The expired peer is gone from the imported set, so notify the
+        // multicast sweep of each affected underlay group. The sweep drops the
+        // peer's replication membership from DPD.
+        crate::mcast::notify_affected_groups(
+            to_remove_mcast.iter(),
+            &self.ctx.mcast_notify,
+        );
+
         // if we're a transit router propagate withdraws for the
         // expired peer.
         if self.ctx.config.kind == RouterKind::Transit {
@@ -594,13 +614,13 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Multicast(
                     groups,
                 ))) => {
-                    // Convert `MulticastOrigin` to `MulticastPathVector` with
-                    // our hop info
+                    // Build a `MulticastPathVector` for each origin, recording
+                    // our hop in the path.
                     let hop = MulticastPathHop::new(
                         self.ctx.hostname.clone(),
                         self.ctx.config.addr,
                     );
-                    let pvs: HashSet<_> = groups
+                    let path_vectors: HashSet<_> = groups
                         .iter()
                         .map(|origin| {
                             ddm_api_types::exchange::MulticastPathVector {
@@ -613,7 +633,7 @@ impl State for Exchange {
                     if let Err(e) = crate::exchange::announce_multicast(
                         &self.ctx,
                         self.ctx.config.clone(),
-                        pvs,
+                        path_vectors,
                         self.peer,
                         self.version,
                         self.ctx.rt.clone(),
@@ -622,8 +642,7 @@ impl State for Exchange {
                         err!(
                             self.log,
                             self.ctx.config.if_name,
-                            "announce multicast: {}",
-                            e,
+                            "announce multicast: {e}",
                         );
                         wrn!(
                             self.log,
@@ -644,12 +663,13 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Multicast(
                     groups,
                 ))) => {
-                    // Convert MulticastOrigin to MulticastPathVector for withdrawal
+                    // Build a `MulticastPathVector` for each origin, recording
+                    // our hop in the path.
                     let hop = MulticastPathHop::new(
                         self.ctx.hostname.clone(),
                         self.ctx.config.addr,
                     );
-                    let pvs: HashSet<_> = groups
+                    let path_vectors: HashSet<_> = groups
                         .iter()
                         .map(|origin| {
                             ddm_api_types::exchange::MulticastPathVector {
@@ -662,7 +682,7 @@ impl State for Exchange {
                     if let Err(e) = crate::exchange::withdraw_multicast(
                         &self.ctx,
                         self.ctx.config.clone(),
-                        pvs,
+                        path_vectors,
                         self.peer,
                         self.version,
                         self.ctx.rt.clone(),
@@ -766,6 +786,7 @@ impl State for Exchange {
                                 event,
                             );
                         }
+
                         if !push.withdraw.is_empty()
                             && let Err(e) = crate::exchange::withdraw_underlay(
                                 &self.ctx,
@@ -798,7 +819,7 @@ impl State for Exchange {
                             );
                         }
                     }
-                    // Handle multicast redistribution
+
                     if let Some(push) = update.multicast {
                         if !push.announce.is_empty()
                             && let Err(e) = crate::exchange::announce_multicast(
@@ -831,6 +852,7 @@ impl State for Exchange {
                                 event,
                             );
                         }
+
                         if !push.withdraw.is_empty()
                             && let Err(e) = crate::exchange::withdraw_multicast(
                                 &self.ctx,
@@ -896,6 +918,15 @@ impl State for Exchange {
                 Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
                     self.peer = addr;
                     self.version = version;
+                    // Re-advertisement may carry a new address, so wake the
+                    // multicast sweep for the peer's groups under it. Routes
+                    // still keyed on the prior address are not withdrawn here.
+                    // Peer expiry and the periodic sweep reconcile those.
+                    crate::mcast::notify_peer_groups(
+                        &self.ctx.db,
+                        addr,
+                        &self.ctx.mcast_notify,
+                    );
                 }
             }
         }

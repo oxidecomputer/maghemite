@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Multicast origin and validated underlay address types added in
-//! version 2 (MULTICAST_SUPPORT).
+//! version 3 (MULTICAST_SUPPORT).
 
 pub use multicast_types::{UnderlayMulticastError, UnderlayMulticastIpv6};
 pub use omicron_common::api::external::Vni;
@@ -50,26 +50,51 @@ pub struct MulticastOrigin {
     pub source: Option<IpAddr>,
 }
 
-// Equality and hashing consider only the identity fields (overlay_group,
-// underlay_group, vni, source), not metric. This allows metric updates to
-// replace existing entries in HashSet-based collections without creating
-// duplicates. This type is not used in ordered collections (BTreeSet).
-// See #649 for why adding Ord here would require more care.
+impl MulticastOrigin {
+    /// Identity used for equality and hashing: the group, its underlay
+    /// mapping, VNI, and source. Excludes `metric`, a mutable path-selection
+    /// attribute, so a metric change updates an existing entry rather than
+    /// creating a duplicate. Routing both `PartialEq` and `Hash` through this
+    /// accessor keeps the field set defined once so the two cannot drift.
+    ///
+    /// This type is not used in ordered collections (BTreeSet). See #649 for
+    /// why adding `Ord` here would require more care.
+    fn identity(
+        &self,
+    ) -> (&IpAddr, &UnderlayMulticastIpv6, &Vni, &Option<IpAddr>) {
+        (
+            &self.overlay_group,
+            &self.underlay_group,
+            &self.vni,
+            &self.source,
+        )
+    }
+
+    /// Return a stable string key for this origin's identity.
+    ///
+    /// Serializes only the identity fields, matching `PartialEq`/`Hash`, so a
+    /// keyed store overwrites the entry for an origin whose `metric` changed
+    /// rather than leaving a stale entry under the prior metric. Deriving the
+    /// key from [`MulticastOrigin::identity`] keeps it from drifting from
+    /// equality.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity fields fail to serialize.
+    pub fn identity_key(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.identity())
+    }
+}
+
 impl PartialEq for MulticastOrigin {
     fn eq(&self, other: &Self) -> bool {
-        self.overlay_group == other.overlay_group
-            && self.underlay_group == other.underlay_group
-            && self.vni == other.vni
-            && self.source == other.source
+        self.identity() == other.identity()
     }
 }
 
 impl std::hash::Hash for MulticastOrigin {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.overlay_group.hash(state);
-        self.underlay_group.hash(state);
-        self.vni.hash(state);
-        self.source.hash(state);
+        self.identity().hash(state);
     }
 }
 

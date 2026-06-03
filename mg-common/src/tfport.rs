@@ -74,8 +74,8 @@ pub struct TfportName {
 ///
 /// # Errors
 ///
-/// Returns a human-readable message if `name` lacks the `tfport` prefix, has
-/// an unrecognized device kind, or has malformed port/link/vlan fields.
+/// Returns an error if `name` lacks the `tfport` prefix, has an unrecognized
+/// device kind, or has malformed port/link/vlan fields.
 pub fn parse_tfport_name(name: &str) -> Result<TfportName, String> {
     let body = name.strip_prefix(TFPORT_DEVICE_PREFIX).ok_or_else(|| {
         format!("{name} missing expected prefix {TFPORT_DEVICE_PREFIX}")
@@ -130,8 +130,8 @@ pub fn parse_tfport_name(name: &str) -> Result<TfportName, String> {
 ///
 /// # Errors
 ///
-/// Returns a human-readable message if the synthesized port name is not a valid
-/// dpd `qsfp` or `rear` port identifier.
+/// Returns an error if the synthesized port name is not a valid dpd `qsfp` or
+/// `rear` port identifier.
 ///
 /// [`PortId`]: dpd_client::types::PortId
 pub fn tfport_port_id(
@@ -140,7 +140,7 @@ pub fn tfport_port_id(
 ) -> Result<dpd_client::types::PortId, String> {
     use dpd_client::types;
 
-    let port_name = format!("{}{}", kind.token(), port);
+    let port_name = format!("{}{port}", kind.token());
     match kind {
         TfportKind::Qsfp => types::Qsfp::try_from(&port_name)
             .map(types::PortId::Qsfp)
@@ -151,14 +151,35 @@ pub fn tfport_port_id(
     }
 }
 
+/// Resolve a tfport datalink name (e.g. `tfportrear0_0`) to the dpd
+/// `(PortId, LinkId)` pair that names the switch port and link.
+///
+/// # Errors
+///
+/// Returns an error if `ifname` is not a valid tfport datalink name or its
+/// kind and port do not form a valid dpd port identifier.
+///
+/// [`PortId`]: dpd_client::types::PortId
+/// [`LinkId`]: dpd_client::types::LinkId
+pub fn port_link_from_ifname(
+    ifname: &str,
+) -> Result<(dpd_client::types::PortId, dpd_client::types::LinkId), String> {
+    let tfport = parse_tfport_name(ifname)?;
+    let port_id = tfport_port_id(tfport.kind, tfport.port)?;
+    // Breakout lanes surface as distinct datalinks (`qsfp0_0`, `qsfp0_1`, ...),
+    // sharing one `PortId`. The parsed link is the lane, which is the dpd
+    // `LinkId`.
+    let link_id = dpd_client::types::LinkId(tfport.link);
+    Ok((port_id, link_id))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::TfportKind::{Qsfp, Rear};
-    use super::{TfportName, parse_tfport_name};
+    use super::*;
     use proptest::prelude::*;
 
     fn name(
-        kind: super::TfportKind,
+        kind: TfportKind,
         port: u8,
         link: u8,
         vlan: Option<u16>,
@@ -176,25 +197,25 @@ mod tests {
         // Valid qsfp (front-panel) names.
         assert_eq!(
             parse_tfport_name("tfportqsfp10_0").unwrap(),
-            name(Qsfp, 10, 0, None)
+            name(TfportKind::Qsfp, 10, 0, None)
         );
         assert_eq!(
             parse_tfport_name("tfportqsfp10_0.100").unwrap(),
-            name(Qsfp, 10, 0, Some(100))
+            name(TfportKind::Qsfp, 10, 0, Some(100))
         );
         assert_eq!(
             parse_tfport_name("tfportqsfp1_1").unwrap(),
-            name(Qsfp, 1, 1, None)
+            name(TfportKind::Qsfp, 1, 1, None)
         );
 
         // Valid rear (backplane) names.
         assert_eq!(
             parse_tfport_name("tfportrear0_0").unwrap(),
-            name(Rear, 0, 0, None)
+            name(TfportKind::Rear, 0, 0, None)
         );
         assert_eq!(
             parse_tfport_name("tfportrear31_0.200").unwrap(),
-            name(Rear, 31, 0, Some(200))
+            name(TfportKind::Rear, 31, 0, Some(200))
         );
 
         // Malformed names.
@@ -217,9 +238,10 @@ mod tests {
     }
 
     proptest! {
-        /// Any well-formed name round-trips: formatting a kind, port, link,
-        /// vlan tuple and parsing it back yields the same components. The
-        /// parser is purely syntactic, so the full u8/u16 ranges are exercised.
+        /// Any well-formed name round-trips: formatting a `kind`, `port`,
+        /// `link`, `vlan` tuple and parsing it back yields the same components.
+        /// The parser is purely syntactic, so the full u8/u16 ranges are
+        /// exercised.
         #[test]
         fn prop_roundtrip(
             is_rear in any::<bool>(),
@@ -227,7 +249,7 @@ mod tests {
             link in any::<u8>(),
             vlan in proptest::option::of(any::<u16>()),
         ) {
-            let kind = if is_rear { Rear } else { Qsfp };
+            let kind = if is_rear { TfportKind::Rear } else { TfportKind::Qsfp };
             let mut ifname = format!("tfport{}{port}_{link}", kind.token());
             if let Some(vlan) = vlan {
                 ifname.push_str(&format!(".{vlan}"));

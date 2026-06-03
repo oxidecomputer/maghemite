@@ -6,6 +6,8 @@ pub mod admin;
 pub mod db;
 pub mod discovery;
 pub mod exchange;
+#[cfg(feature = "backend")]
+pub mod mcast;
 pub mod oxstats;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -15,7 +17,11 @@ pub const COMPONENT_DDM: &str = "ddm";
 pub const MOD_ADMIN: &str = "admin";
 pub const MOD_EXCHANGE: &str = "exchange";
 
-/// Returns `None` if the set is empty, otherwise `Some(s)`.
+/// Wrap a set in `Some`, treating an empty set as absence.
+///
+/// # Returns
+///
+/// `None` if `set` is empty, otherwise `Some(set)`.
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) fn non_empty<T>(
     set: std::collections::HashSet<T>,

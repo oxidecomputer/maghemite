@@ -17,6 +17,7 @@ thiserror.workspace = true
 dropshot.workspace = true
 schemars.workspace = true
 tokio.workspace = true
+futures.workspace = true
 anyhow.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -41,7 +42,8 @@ libnet = { workspace = true, optional = true }
 dpd-client = { workspace = true, optional = true }
 opte-ioctl = { workspace = true, optional = true }
 oxide-vpc = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [features]
 default = ["backend"]
-backend = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc"]
+backend = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc", "dep:reqwest"]

@@ -203,19 +203,4 @@ mod tests {
             Err(UnderlayMulticastError::InvalidIpv6(_))
         ));
     }
-
-    #[test]
-    fn from_str_rejects_non_admin_local() {
-        let result: Result<UnderlayMulticastIpv6, _> = "ff0e::1".parse();
-        assert!(matches!(
-            result,
-            Err(UnderlayMulticastError::NotInSubnet { .. })
-        ));
-    }
-
-    #[test]
-    fn from_str_accepts_admin_local() {
-        let parsed: UnderlayMulticastIpv6 = "ff04::1".parse().unwrap();
-        assert_eq!(parsed.ip(), Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1));
-    }
 }

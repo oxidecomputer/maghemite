@@ -1,4 +1,4 @@
-//! This crate contains traits that decouple mg-lower from the underlying
+//! This module contains traits that decouple mg-lower from the underlying
 //! platform. This is useful for testing mg-lower while not having to
 //! have a running dpd, ddmd, or switch zone.
 //!
@@ -271,6 +271,7 @@ pub trait SwitchZone {
 
 /// Production dpd trait that simply passes through calls to a dpd client.
 #[cfg(target_os = "illumos")]
+#[derive(Clone)]
 pub struct ProductionDpd {
     pub client: DpdClient,
 }
@@ -393,6 +394,7 @@ impl Dpd for ProductionDpd {
 
 /// Production ddm trait that simply passes through calls to a ddm client.
 #[cfg(target_os = "illumos")]
+#[derive(Clone)]
 pub struct ProductionDdm {
     pub client: DdmClient,
 }

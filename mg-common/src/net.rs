@@ -26,7 +26,7 @@ impl From<TunnelOriginV2> for TunnelOrigin {
     fn from(value: TunnelOriginV2) -> Self {
         // TunnelOriginV2 is the DDMv2 wire shape, frozen by protocol
         // contract. If this destructure stops compiling, the V2
-        // contract has been violated upstream; there is no
+        // contract has been violated upstream — there is no
         // #[serde(skip)] escape valve for a wire-format type.
         let TunnelOriginV2 {
             overlay_prefix,

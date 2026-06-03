@@ -12,13 +12,12 @@ use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::prefix::Prefix;
-use mg_common::tfport::{parse_tfport_name, tfport_port_id};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
     hash::Hash,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -340,12 +339,7 @@ where
 pub(crate) fn port_link_from_ifname(
     ifname: &str,
 ) -> Result<(types::PortId, types::LinkId), Error> {
-    let tfport = parse_tfport_name(ifname).map_err(Error::Tfport)?;
-    let port_id =
-        tfport_port_id(tfport.kind, tfport.port).map_err(Error::Tfport)?;
-    // TODO breakout considerations
-    let link_id = types::LinkId(tfport.link);
-    Ok((port_id, link_id))
+    mg_common::tfport::port_link_from_ifname(ifname).map_err(Error::Tfport)
 }
 
 fn get_port_and_link(
@@ -494,16 +488,21 @@ pub(crate) fn get_routes_for_prefix(
     Ok(result.into_iter().collect())
 }
 
-/// Create a new Dendrite/dpd client. The lower half always runs on the same
-/// host/zone as the underlying platform.
+/// Create a new Dendrite (DPD) client.
+///
+/// In production the lower half runs in the same zone as DPD, so `addr` is
+/// `None` and the client targets `localhost` on the default DPD port. Tests
+/// pass an explicit `addr` to reach a DPD listening elsewhere (for example a
+/// dynamically assigned port in an integration harness).
 #[cfg(target_os = "illumos")]
-pub fn new_dpd_client(log: &Logger) -> DpdClient {
+pub fn new_dpd_client(log: &Logger, addr: Option<SocketAddr>) -> DpdClient {
     let client_state = dpd_client::ClientState {
         tag: MG_LOWER_TAG.into(),
         log: log.clone(),
     };
-    DpdClient::new(
-        &format!("http://localhost:{}", dpd_client::default_port()),
-        client_state,
-    )
+    let host = match addr {
+        Some(addr) => format!("http://{addr}"),
+        None => format!("http://localhost:{}", dpd_client::default_port()),
+    };
+    DpdClient::new(&host, client_state)
 }

@@ -8,7 +8,10 @@ use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
-use std::{net::Ipv6Addr, sync::Arc};
+use std::{
+    net::{Ipv6Addr, SocketAddr},
+    sync::Arc,
+};
 
 use crate::platform::Ddm;
 
@@ -107,9 +110,19 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     }
 }
 
+/// Create a new DDM admin client.
+///
+/// In production the lower half runs in the same zone as DDM, so `addr` is
+/// `None` and the client targets the default `localhost:8000`. Tests pass an
+/// explicit `addr` to reach a DDM listening elsewhere (for example a
+/// dynamically assigned port in an integration harness).
 #[cfg(target_os = "illumos")]
-pub fn new_ddm_client(log: &Logger) -> Client {
-    Client::new("http://localhost:8000", log.clone())
+pub fn new_ddm_client(log: &Logger, addr: Option<SocketAddr>) -> Client {
+    let host = match addr {
+        Some(addr) => format!("http://{addr}"),
+        None => "http://localhost:8000".to_string(),
+    };
+    Client::new(&host, log.clone())
 }
 
 pub(crate) fn add_multicast_routes<

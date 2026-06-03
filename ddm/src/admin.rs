@@ -483,30 +483,25 @@ pub(crate) fn do_get_peers(
     ctx: &Arc<Mutex<HandlerContext>>,
 ) -> HashMap<u32, PeerInfo> {
     let ctx = lock!(ctx);
-    let mut res = HashMap::new();
-    for sm in &ctx.peers {
-        // Compute status first so peer_status() never runs while we hold
-        // any of the InterfaceState mutexes below.
-        let status = sm.iface.peer_status();
-        let if_index = *lock!(sm.iface.if_index);
-        let if_name = lock!(sm.iface.if_name).clone();
-        let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
-            continue;
-        };
-        res.insert(
-            if_index,
-            PeerInfo {
-                status,
-                addr: peer.addr,
-                host: peer.hostname,
-                kind: peer.kind,
-                if_name: if if_name.is_empty() {
-                    None
-                } else {
-                    Some(if_name)
+    ctx.peers
+        .iter()
+        .filter_map(|sm| {
+            // Compute status first so peer_status() never runs while we hold
+            // any of the InterfaceState mutexes below.
+            let status = sm.iface.peer_status();
+            let peer = lock!(sm.iface.peer_identity).clone()?;
+            let if_index = *lock!(sm.iface.if_index);
+            let if_name = lock!(sm.iface.if_name).clone();
+            Some((
+                if_index,
+                PeerInfo {
+                    status,
+                    addr: peer.addr,
+                    host: peer.hostname,
+                    kind: peer.kind,
+                    if_name: (!if_name.is_empty()).then_some(if_name),
                 },
-            },
-        );
-    }
-    res
+            ))
+        })
+        .collect()
 }

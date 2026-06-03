@@ -253,6 +253,11 @@ pub struct SmContext {
     pub hostname: String,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
+    /// Notifies the [`crate::mcast`] sweep that an underlay group's imported
+    /// membership changed, by sending the group's address. The sweep wakes early
+    /// to reconcile the group's DPD members, so the control plane never touches
+    /// DPD directly.
+    pub mcast_notify: Sender<Ipv6Addr>,
     pub log: Logger,
 }
 

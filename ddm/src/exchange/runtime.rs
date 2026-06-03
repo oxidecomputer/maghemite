@@ -55,9 +55,9 @@ pub struct HandlerContext {
 }
 
 impl Update {
-    /// Build an `Update` whose underlay/tunnel/multicast halves carry the
-    /// announcements from `pr`. Used by [`pull`] to project a pull response
-    /// back into the update event stream.
+    /// Build an [`Update`] whose underlay/tunnel/multicast halves carry the
+    /// announcements from the [`PullResponse`]. Used by [`pull`] to project a
+    /// pull response back into the update event stream.
     fn announce(pr: PullResponse) -> Self {
         Self {
             underlay: pr.underlay.map(UnderlayUpdate::announce),
@@ -643,13 +643,43 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             .as_ref()
             .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
 
-        // Add our hop info to multicast path vectors before redistribution
+        // Multicast loop prevention is asymmetric with the underlay. The
+        // underlay relies on sender-side split-horizon, skipping any route
+        // whose nexthop is the destination peer. Multicast relies on
+        // receiver-side path-vector RPF, where, on receipt, any announcement
+        // already carrying our router_id is dropped. RPF is the authoritative
+        // loop guard and is strictly stronger than split-horizon because it
+        // catches loops of any length rather than only the immediate echo.
+        //
+        // We apply that same RPF filter here before redistributing, dropping
+        // any path vector that already traversed us. Forwarding such a vector
+        // is harmless to a peer that already has us in its path (its own RPF
+        // drops it), but would propagate a looped path to a peer that does
+        // not, inflating its collection of path vectors.
+        let hostname = &ctx.ctx.hostname;
         let multicast = update.multicast.as_ref().map(|update| {
-            let hop = MulticastPathHop::new(
-                ctx.ctx.hostname.clone(),
-                ctx.ctx.config.addr,
-            );
-            update.with_hop(hop)
+            let hop =
+                MulticastPathHop::new(hostname.clone(), ctx.ctx.config.addr);
+            let passes_rpf = |path_vector: &&MulticastPathVector| {
+                !path_vector
+                    .path
+                    .iter()
+                    .any(|hop| &hop.router_id == hostname)
+            };
+            MulticastUpdate {
+                announce: update
+                    .announce
+                    .iter()
+                    .filter(passes_rpf)
+                    .map(|path_vector| path_vector.with_hop(hop.clone()))
+                    .collect(),
+                withdraw: update
+                    .withdraw
+                    .iter()
+                    .filter(passes_rpf)
+                    .map(|path_vector| path_vector.with_hop(hop.clone()))
+                    .collect(),
+            }
         });
 
         let push = Arc::new(Update {
@@ -824,7 +854,7 @@ fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
             dbg!(
                 ctx.log,
                 ctx.ctx.config.if_name,
-                "dropping multicast announce for {:?} - loop detected \
+                "dropping multicast announce for {:?}; loop detected \
                  (path length {})",
                 path_vector.origin.overlay_group,
                 path_vector.path.len(),
@@ -839,22 +869,26 @@ fn handle_multicast_update(update: &MulticastUpdate, ctx: &HandlerContext) {
         });
     }
 
-    let mut remove = HashSet::new();
-    for path_vector in &update.withdraw {
-        // Empty path is safe: MulticastRoute's PartialEq/Hash exclude
-        // the path field, so this matches by (origin, nexthop) only.
-        remove.insert(MulticastRoute {
+    // Empty path is safe: MulticastRoute's PartialEq/Hash exclude the path
+    // field, so this matches by (origin, nexthop) only.
+    let remove: HashSet<MulticastRoute> = update
+        .withdraw
+        .iter()
+        .map(|path_vector| MulticastRoute {
             origin: path_vector.origin.clone(),
             nexthop: ctx.peer,
             path: Vec::new(),
-        });
-    }
+        })
+        .collect();
 
     // Atomic import + delete + diff under a single lock.
-    //
-    // DDM stores learned multicast state, which feeds back into Omicron, as
-    // the latter owns OPTE M2P programming via sled-agent (the M2P table is
-    // global to xde).
-    // Learned state is queryable via the DDM admin API (get_multicast_groups).
     db.update_imported_mcast(&import, &remove);
+
+    // Notify the multicast sweep of each affected underlay group so it
+    // reconciles the group's DPD members. Only the sweep writes to DPD;
+    // this handler records the import and signals.
+    crate::mcast::notify_affected_groups(
+        import.iter().chain(remove.iter()),
+        &ctx.ctx.mcast_notify,
+    );
 }

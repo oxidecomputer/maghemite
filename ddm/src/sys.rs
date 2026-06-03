@@ -24,7 +24,9 @@ use ::{
     std::collections::HashMap,
 };
 
-const DDM_DPD_TAG: &str = "ddmd";
+/// Client identity tag carried in `dpd_client::ClientState` to identify
+/// `ddmd` to DPD, distinct from any per-group authorization tag DPD owns.
+pub(crate) const DDM_DPD_TAG: &str = "ddmd";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
@@ -188,7 +190,7 @@ pub fn add_routes_dendrite(
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
         if tfport.kind != TfportKind::Rear {
-            err!(log, ifname, "expected tfportrear");
+            err!(log, ifname, "expected rear tfport, got {:?}", tfport.kind);
             continue;
         }
 
