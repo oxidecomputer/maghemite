@@ -5,39 +5,8 @@
 //! Shared validation functions for API request handlers.
 
 use dropshot::HttpError;
+use mg_common::IpNetExt;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-
-pub trait RibValid {
-    fn valid_for_rib(&self) -> bool;
-}
-
-impl RibValid for Ipv4Net {
-    fn valid_for_rib(&self) -> bool {
-        let addr = self.addr();
-        !(addr.is_loopback()
-            || addr.is_multicast()
-            || addr.is_unspecified() && self.width() == 32)
-    }
-}
-
-impl RibValid for Ipv6Net {
-    fn valid_for_rib(&self) -> bool {
-        let addr = self.addr();
-        !(addr.is_loopback()
-            || addr.is_multicast()
-            || addr.is_unicast_link_local()
-            || addr.is_unspecified() && self.width() == 128)
-    }
-}
-
-impl RibValid for IpNet {
-    fn valid_for_rib(&self) -> bool {
-        match self {
-            IpNet::V4(n) => n.valid_for_rib(),
-            IpNet::V6(n) => n.valid_for_rib(),
-        }
-    }
-}
 
 /// Validate that all IPv4 prefixes have host bits unset and are valid for RIB.
 ///

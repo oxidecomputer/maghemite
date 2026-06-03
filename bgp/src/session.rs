@@ -37,7 +37,7 @@ pub(crate) use mg_api_types::bgp::session::{
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types_versions::{v1, v4};
-use mg_common::{lock, read_lock, write_lock};
+use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, Db};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
@@ -9227,52 +9227,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 }
-
-trait IpNetExt {
-    fn valid_for_rib(&self) -> bool;
-}
-
-impl IpNetExt for Ipv4Net {
-    /// Check if a prefix contains a subnet that is valid for use in the RIB.
-    /// Currently this only checks if the prefix overlaps with Loopback
-    /// (127.0.0.0/8) or Multicast (224.0.0.0/4) address space. We deliberately
-    /// do not flag Class E (240.0.0.0/4) or Link-Local (169.254.0.0/16)
-    /// ranges as invalid, as some networks have deployed these as if they were
-    /// standard routable unicast addresses, which we need to handle.
-    fn valid_for_rib(&self) -> bool {
-        !(self.addr().is_loopback()
-            || self.addr().is_multicast()
-            || (self.addr().is_unspecified()
-                && self.width() == IPV4_NET_WIDTH_MAX))
-    }
-}
-
-impl IpNetExt for Ipv6Net {
-    /// Check if a prefix contains a subnet that is valid for use in the RIB.
-    /// Currently this only checks if the prefix carries the Unspecified or
-    /// Loopback address (::/128 or ::1/128), Multicast (ff00::/8) or Link-Local
-    /// Unicast (fe80::/10) address spaces.
-    fn valid_for_rib(&self) -> bool {
-        !(self.addr().is_loopback()
-            || self.addr().is_multicast()
-            || self.addr().is_unicast_link_local()
-            || (self.addr().is_unspecified()
-                && self.width() == IPV6_NET_WIDTH_MAX))
-    }
-}
-
-impl IpNetExt for IpNet {
-    fn valid_for_rib(&self) -> bool {
-        match self {
-            IpNet::V4(net4) => net4.valid_for_rib(),
-            IpNet::V6(net6) => net6.valid_for_rib(),
-        }
-    }
-}
-
-// V1 message-history shapes live in `v1::bgp::session`. Cross-version
-// `From` conversions live alongside the latest definition in
-// `mg_api_types_versions::v4::bgp::session`.
 
 #[cfg(test)]
 mod tests {
