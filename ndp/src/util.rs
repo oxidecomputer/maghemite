@@ -11,6 +11,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     ffi::c_void,
     net::{Ipv6Addr, SocketAddrV6},
+    num::NonZeroU32,
     os::fd::AsRawFd,
     thread::sleep,
     time::{Duration, Instant},
@@ -72,6 +73,12 @@ pub enum ListeningSocketError {
 
     #[error("failed to set ipv6 min hop count: {0}")]
     SetIpv6MinHopCount(std::io::Error),
+
+    #[error("failed to bind socket to interface: {0}")]
+    SetBoundIf(std::io::Error),
+
+    #[error("interface index must be non-zero")]
+    InvalidInterfaceIndex,
 }
 
 pub fn send_ra(
@@ -204,6 +211,10 @@ pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
 
     s.join_multicast_v6(&ALL_ROUTERS_MCAST, index)
         .map_err(E::JoinAllRoutersMulticast)?;
+
+    let ifindex = NonZeroU32::new(index).ok_or(E::InvalidInterfaceIndex)?;
+    s.bind_device_by_index_v6(Some(ifindex))
+        .map_err(E::SetBoundIf)?;
 
     s.bind(&sa).map_err(ListeningSocketError::Bind)?;
 
