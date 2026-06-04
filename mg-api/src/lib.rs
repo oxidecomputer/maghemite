@@ -24,6 +24,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
     (8, BGP_SRC_ADDR),
     (7, OPERATION_ID_CLEANUP),
@@ -1116,6 +1117,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/static/route4",
+        versions = VERSION_V4_OVER_V6_STATIC_ROUTES..,
     }]
     async fn static_add_v4_route(
         rqctx: RequestContext<Self::Context>,
@@ -1123,13 +1125,44 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
+        method = PUT,
+        path = "/static/route4",
+        versions = ..VERSION_V4_OVER_V6_STATIC_ROUTES,
+    }]
+    async fn static_add_v4_route_v1(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v1::static_routes::AddStaticRoute4Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let rq = latest::static_routes::AddStaticRoute4Request::from(
+            request.into_inner(),
+        );
+        Self::static_add_v4_route(rqctx, TypedBody::from(rq)).await
+    }
+
+    #[endpoint {
         method = DELETE,
         path = "/static/route4",
+        versions = VERSION_V4_OVER_V6_STATIC_ROUTES..,
     }]
     async fn static_remove_v4_route(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::static_routes::DeleteStaticRoute4Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
+
+    #[endpoint {
+        method = DELETE,
+        path = "/static/route4",
+        versions = ..VERSION_V4_OVER_V6_STATIC_ROUTES,
+    }]
+    async fn static_remove_v4_route_v1(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v1::static_routes::DeleteStaticRoute4Request>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        let rq = latest::static_routes::DeleteStaticRoute4Request::from(
+            request.into_inner(),
+        );
+        Self::static_remove_v4_route(rqctx, TypedBody::from(rq)).await
+    }
 
     #[endpoint {
         method = GET,

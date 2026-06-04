@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_api_types::exchange::PathVector;
-use mg_common::{eprintln_nopipe, println_nopipe};
 use oxnet::Ipv6Net;
 use serde::Deserialize;
 use std::collections::HashMap;
