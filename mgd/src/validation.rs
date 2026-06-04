@@ -344,7 +344,6 @@ mod tests {
     // Strategy for generating any IPv4 prefix (normalized or unnormalized)
     fn any_ipv4_prefix_strategy() -> impl Strategy<Value = Ipv4Net> {
         (any::<u32>(), 0u8..=32u8).prop_map(|(addr_bits, length)| {
-            // Don't use new() - we want to test both normalized and unnormalized
             Ipv4Net::new_unchecked(Ipv4Addr::from(addr_bits), length)
         })
     }
@@ -352,7 +351,6 @@ mod tests {
     // Strategy for generating any IPv6 prefix (normalized or unnormalized)
     fn any_ipv6_prefix_strategy() -> impl Strategy<Value = Ipv6Net> {
         (any::<u128>(), 0u8..=128u8).prop_map(|(addr_bits, length)| {
-            // Don't use new() - we want to test both normalized and unnormalized
             Ipv6Net::new_unchecked(Ipv6Addr::from(addr_bits), length)
         })
     }

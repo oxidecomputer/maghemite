@@ -1093,7 +1093,7 @@ pub trait MgAdminApi {
         request: TypedBody<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError>;
 
-    // The `get_neighbors_v{1,2,4}` below are required (not provided)
+    // The `get_neighbors_v{1,2,4}` triple below is required (not provided)
     // because each version returns a per-session shape (`PeerInfo` /
     // `history::PeerInfo` / `config::PeerInfo`) that the server can only
     // populate by walking its live session table via `Self::Context`. The

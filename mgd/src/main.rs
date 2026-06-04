@@ -18,6 +18,7 @@ use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
@@ -491,7 +492,6 @@ fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
     // Normalize all prefixes by unsetting host bits and deduplicate.
     // BTreeSet automatically deduplicates routes that become identical after
     // normalization (same prefix + nexthop + vlan_id + rib_priority).
-    use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     let normalized: BTreeSet<rdb::StaticRouteKey> = routes
         .iter()
         .map(|srk| {

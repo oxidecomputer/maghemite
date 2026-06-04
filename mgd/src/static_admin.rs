@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
-use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
+use crate::validation::validate_prefixes;
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
@@ -15,7 +15,7 @@ use mg_api_types::static_routes::{
     DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
 use mg_api_types::switch::SwitchIdentifiers;
-use oxnet::{Ipv4Net, Ipv6Net};
+use oxnet::IpNet;
 use rdb::StaticRouteKey;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -63,14 +63,17 @@ pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute4Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let list = request.into_inner().routes.list;
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(static_route_key_from_v4)
+        .collect();
 
     // Validate that all prefixes have host bits unset
-    let nets: Vec<Ipv4Net> = list.iter().map(|r| r.prefix).collect();
-    validate_prefixes_v4(&nets)?;
-
-    let routes: Vec<StaticRouteKey> =
-        list.into_iter().map(static_route_key_from_v4).collect();
+    let prefixes: Vec<IpNet> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
 
     ctx.context()
         .db
@@ -120,14 +123,17 @@ pub async fn static_add_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute6Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let list = request.into_inner().routes.list;
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(static_route_key_from_v6)
+        .collect();
 
     // Validate that all prefixes have host bits unset
-    let nets: Vec<Ipv6Net> = list.iter().map(|r| r.prefix).collect();
-    validate_prefixes_v6(&nets)?;
-
-    let routes: Vec<StaticRouteKey> =
-        list.into_iter().map(static_route_key_from_v6).collect();
+    let prefixes: Vec<IpNet> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
 
     ctx.context()
         .db

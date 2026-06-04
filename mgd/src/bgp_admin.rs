@@ -694,9 +694,8 @@ pub async fn create_origin4(
     let rq = request.into_inner();
 
     // Validate prefixes before processing
-    let prefixes = rq.prefixes;
-    validate_prefixes_v4(&prefixes)?;
-    let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V4).collect();
+    validate_prefixes_v4(&rq.prefixes)?;
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
@@ -733,9 +732,8 @@ pub async fn update_origin4(
     let rq = request.into_inner();
 
     // Validate prefixes before processing
-    let prefixes = rq.prefixes;
-    validate_prefixes_v4(&prefixes)?;
-    let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V4).collect();
+    validate_prefixes_v4(&rq.prefixes)?;
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
@@ -766,9 +764,8 @@ pub async fn create_origin6(
     let rq = request.into_inner();
 
     // Validate prefixes before processing
-    let prefixes = rq.prefixes;
-    validate_prefixes_v6(&prefixes)?;
-    let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V6).collect();
+    validate_prefixes_v6(&rq.prefixes)?;
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
@@ -805,9 +802,8 @@ pub async fn update_origin6(
     let rq = request.into_inner();
 
     // Validate prefixes before processing
-    let prefixes = rq.prefixes;
-    validate_prefixes_v6(&prefixes)?;
-    let prefixes: Vec<IpNet> = prefixes.into_iter().map(IpNet::V6).collect();
+    validate_prefixes_v6(&rq.prefixes)?;
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
@@ -922,9 +918,6 @@ pub async fn get_exported_v5(
 
     let mut exported = HashMap::new();
 
-    let to_prefix =
-        |routes: Vec<IpNet>| routes.into_iter().map(Into::into).collect();
-
     if let Some(ref peer_filter) = rq.peer {
         // Specific peer requested - look it up directly
         if let Some(session) = r.get_session(peer_filter.clone())
@@ -936,7 +929,8 @@ pub async fn get_exported_v5(
                 process_ipv6,
             )
         {
-            exported.insert(peer_key, to_prefix(routes));
+            exported
+                .insert(peer_key, routes.into_iter().map(Into::into).collect());
         }
     } else {
         // No peer filter - iterate all sessions
@@ -948,7 +942,10 @@ pub async fn get_exported_v5(
                 process_ipv4,
                 process_ipv6,
             ) {
-                exported.insert(peer_key, to_prefix(routes));
+                exported.insert(
+                    peer_key,
+                    routes.into_iter().map(Into::into).collect(),
+                );
             }
         }
     }
@@ -1252,8 +1249,7 @@ async fn do_bgp_apply(
     let log = ctx.log.clone();
 
     // Validate originate prefixes before processing
-    let originate_nets: &Vec<IpNet> = &rq.originate;
-    validate_prefixes(originate_nets)?;
+    validate_prefixes(&rq.originate)?;
 
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")
@@ -1526,25 +1522,12 @@ async fn do_bgp_apply(
         }
     }
 
-    let originate4: Vec<IpNet> = rq
-        .originate
-        .iter()
-        .filter(|p| matches!(p, IpNet::V4(_)))
-        .cloned()
-        .collect();
-    let originate6: Vec<IpNet> = rq
-        .originate
-        .iter()
-        .filter(|p| matches!(p, IpNet::V6(_)))
-        .cloned()
-        .collect();
-
     get_router!(ctx, rq.asn)?
-        .set_origin4(originate4)
+        .set_origin4(rq.originate.clone().into_iter().collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     get_router!(ctx, rq.asn)?
-        .set_origin6(originate6)
+        .set_origin6(rq.originate.clone().into_iter().collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -2596,16 +2579,25 @@ pub(crate) mod helpers {
             && ipv4_negotiated
             && let Some(ref ipv4_config) = session_info.ipv4_unicast
         {
-            let mut v4_routes: Vec<Ipv4Net> = orig4.to_vec();
+            let mut v4_routes: Vec<IpNet> =
+                orig4.iter().map(|p| IpNet::from(*p)).collect();
 
             // Apply export policy
             match &ipv4_config.export_policy {
-                ImportExportPolicy4::NoFiltering => {}
+                ImportExportPolicy4::NoFiltering => {
+                    peer_exported_routes.extend(v4_routes);
+                }
                 ImportExportPolicy4::Allow(allowed) => {
-                    v4_routes.retain(|net| allowed.contains(net));
+                    v4_routes.retain(|p| {
+                        if let IpNet::V4(p4) = p {
+                            allowed.contains(p4)
+                        } else {
+                            false
+                        }
+                    });
+                    peer_exported_routes.extend(v4_routes);
                 }
             }
-            peer_exported_routes.extend(v4_routes.into_iter().map(IpNet::V4));
         }
 
         // Process IPv6 routes if requested and negotiated
@@ -2613,16 +2605,25 @@ pub(crate) mod helpers {
             && ipv6_negotiated
             && let Some(ref ipv6_config) = session_info.ipv6_unicast
         {
-            let mut v6_routes: Vec<Ipv6Net> = orig6.to_vec();
+            let mut v6_routes: Vec<IpNet> =
+                orig6.iter().map(|p| IpNet::from(*p)).collect();
 
             // Apply export policy
             match &ipv6_config.export_policy {
-                ImportExportPolicy6::NoFiltering => {}
+                ImportExportPolicy6::NoFiltering => {
+                    peer_exported_routes.extend(v6_routes);
+                }
                 ImportExportPolicy6::Allow(allowed) => {
-                    v6_routes.retain(|net| allowed.contains(net));
+                    v6_routes.retain(|p| {
+                        if let IpNet::V6(p6) = p {
+                            allowed.contains(p6)
+                        } else {
+                            false
+                        }
+                    });
+                    peer_exported_routes.extend(v6_routes);
                 }
             }
-            peer_exported_routes.extend(v6_routes.into_iter().map(IpNet::V6));
         }
 
         // Only return if we have exported routes
