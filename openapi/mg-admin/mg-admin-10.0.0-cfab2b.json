@@ -1779,7 +1779,7 @@
         ]
       },
       "ApplyRequest": {
-        "description": "Apply changes to an ASN.",
+        "description": "Apply changes to an ASN (current version with per-AF policies).",
         "type": "object",
         "properties": {
           "asn": {
@@ -2202,6 +2202,7 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -2214,6 +2215,7 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -2234,6 +2236,7 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -2247,6 +2250,7 @@
           },
           "ipv4_unicast": {
             "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -2255,6 +2259,7 @@
           },
           "ipv6_unicast": {
             "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -2307,11 +2312,13 @@
           },
           "src_addr": {
             "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -3465,7 +3472,7 @@
         ]
       },
       "Message": {
-        "description": "Holds a BGP message.",
+        "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
         "oneOf": [
           {
             "type": "object",
@@ -3639,7 +3646,7 @@
         ]
       },
       "MessageHistoryResponse": {
-        "description": "Unified message history response with string keys from PeerId Display",
+        "description": "Unified message history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
@@ -3654,10 +3661,10 @@
         ]
       },
       "MpReachNlri": {
-        "description": "MP_REACH_NLRI path attribute.",
+        "description": "MP_REACH_NLRI path attribute\n\nEach variant represents a specific AFI+SAFI combination, providing compile-time guarantees about the address family of routes being announced.\n\n```text 3.  Multiprotocol Reachable NLRI - MP_REACH_NLRI (Type Code 14):\n\nThis is an optional non-transitive attribute that can be used for the following purposes:\n\n(a) to advertise a feasible route to a peer\n\n(b) to permit a router to advertise the Network Layer address of the router that should be used as the next hop to the destinations listed in the Network Layer Reachability Information field of the MP_NLRI attribute.\n\nThe attribute is encoded as shown below:\n\n+---------------------------------------------------------+ | Address Family Identifier (2 octets)                    | +---------------------------------------------------------+ ```",
         "oneOf": [
           {
-            "description": "IPv4 Unicast MP_REACH_NLRI contents.",
+            "description": "IPv4 Unicast routes (AFI=1, SAFI=1)",
             "type": "object",
             "properties": {
               "afi_safi": {
@@ -3667,15 +3674,22 @@
                 ]
               },
               "nexthop": {
-                "$ref": "#/components/schemas/BgpNexthop"
+                "description": "Next-hop for IPv4 routes.\n\nCurrently must be `BgpNexthop::Ipv4`, but will support IPv6 nexthops when extended next-hop capability (RFC 8950) is implemented.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BgpNexthop"
+                  }
+                ]
               },
               "nlri": {
+                "description": "IPv4 prefixes being announced",
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Ipv4Net"
                 }
               },
               "reserved": {
+                "description": "Reserved byte from RFC 4760 §3 (historically \"Number of SNPAs\" in RFC 2858). MUST be 0 per RFC 4760, but MUST be ignored by receiver. Stored for validation logging in session layer. This field is positioned before NLRI to match the wire format encoding.",
                 "type": "integer",
                 "format": "uint8",
                 "minimum": 0
@@ -3689,7 +3703,7 @@
             ]
           },
           {
-            "description": "IPv6 Unicast MP_REACH_NLRI contents.",
+            "description": "IPv6 Unicast routes (AFI=2, SAFI=1)",
             "type": "object",
             "properties": {
               "afi_safi": {
@@ -3699,15 +3713,22 @@
                 ]
               },
               "nexthop": {
-                "$ref": "#/components/schemas/BgpNexthop"
+                "description": "Next-hop for IPv6 routes.\n\nCan be `BgpNexthop::Ipv6Single` (16 bytes) or `BgpNexthop::Ipv6Double` (32 bytes with link-local address).",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BgpNexthop"
+                  }
+                ]
               },
               "nlri": {
+                "description": "IPv6 prefixes being announced",
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Ipv6Net"
                 }
               },
               "reserved": {
+                "description": "Reserved byte from RFC 4760 §3 (historically \"Number of SNPAs\" in RFC 2858). MUST be 0 per RFC 4760, but MUST be ignored by receiver. Stored for validation logging in session layer. This field is positioned before NLRI to match the wire format encoding.",
                 "type": "integer",
                 "format": "uint8",
                 "minimum": 0
@@ -3723,10 +3744,10 @@
         ]
       },
       "MpUnreachNlri": {
-        "description": "MP_UNREACH_NLRI path attribute.",
+        "description": "MP_UNREACH_NLRI path attribute\n\nEach variant represents a specific AFI+SAFI combination, providing compile-time guarantees about the address family of routes being withdrawn.\n\n```text 4.  Multiprotocol Unreachable NLRI - MP_UNREACH_NLRI (Type Code 15):\n\nThis is an optional non-transitive attribute that can be used for the purpose of withdrawing multiple unfeasible routes from service.\n\nThe attribute is encoded as shown below:\n\n+---------------------------------------------------------+ | Address Family Identifier (2 octets)                    | +---------------------------------------------------------+ | Subsequent Address Family Identifier (1 octet)          | +---------------------------------------------------------+ | Withdrawn Routes (variable)                             | +---------------------------------------------------------+ ```",
         "oneOf": [
           {
-            "description": "IPv4 Unicast MP_UNREACH_NLRI contents.",
+            "description": "IPv4 Unicast routes being withdrawn (AFI=1, SAFI=1)",
             "type": "object",
             "properties": {
               "afi_safi": {
@@ -3748,7 +3769,7 @@
             ]
           },
           {
-            "description": "IPv6 Unicast MP_UNREACH_NLRI contents.",
+            "description": "IPv6 Unicast routes being withdrawn (AFI=2, SAFI=1)",
             "type": "object",
             "properties": {
               "afi_safi": {
@@ -3945,6 +3966,7 @@
         ]
       },
       "Neighbor": {
+        "description": "Neighbor configuration with explicit per-address-family enablement (v3 API)",
         "type": "object",
         "properties": {
           "asn": {
@@ -3967,6 +3989,7 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -3979,6 +4002,7 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -4002,6 +4026,7 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -4015,6 +4040,7 @@
           },
           "ipv4_unicast": {
             "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -4023,6 +4049,7 @@
           },
           "ipv6_unicast": {
             "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -4075,11 +4102,13 @@
           },
           "src_addr": {
             "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -4360,7 +4389,6 @@
         ]
       },
       "Origin4": {
-        "description": "IPv4 prefixes to originate from an ASN.",
         "type": "object",
         "properties": {
           "asn": {
@@ -4383,7 +4411,6 @@
         ]
       },
       "Origin6": {
-        "description": "IPv6 prefixes to originate from an ASN.",
         "type": "object",
         "properties": {
           "asn": {
@@ -4447,14 +4474,24 @@
         ]
       },
       "PathAttribute": {
-        "description": "A self-describing BGP path attribute.",
+        "description": "A self-describing BGP path attribute",
         "type": "object",
         "properties": {
           "typ": {
-            "$ref": "#/components/schemas/PathAttributeType"
+            "description": "Type encoding for the attribute",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeType"
+              }
+            ]
           },
           "value": {
-            "$ref": "#/components/schemas/PathAttributeValue"
+            "description": "Value of the attribute",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeValue"
+              }
+            ]
           }
         },
         "required": [
@@ -4530,12 +4567,7 @@
         "description": "The value encoding of a path attribute.",
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "atomic_aggregate"
-            ]
-          },
-          {
+            "description": "The type of origin associated with a path",
             "type": "object",
             "properties": {
               "origin": {
@@ -4548,6 +4580,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The AS set associated with a path",
             "type": "object",
             "properties": {
               "as_path": {
@@ -4563,6 +4596,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The nexthop associated with a path (IPv4 only for traditional BGP)",
             "type": "object",
             "properties": {
               "next_hop": {
@@ -4576,6 +4610,7 @@
             "additionalProperties": false
           },
           {
+            "description": "A metric used for external (inter-AS) links to discriminate among multiple entry or exit points.",
             "type": "object",
             "properties": {
               "multi_exit_disc": {
@@ -4590,6 +4625,7 @@
             "additionalProperties": false
           },
           {
+            "description": "Local pref is included in update messages sent to internal peers and indicates a degree of preference.",
             "type": "object",
             "properties": {
               "local_pref": {
@@ -4604,6 +4640,7 @@
             "additionalProperties": false
           },
           {
+            "description": "AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (2-octet ASN)",
             "type": "object",
             "properties": {
               "aggregator": {
@@ -4616,6 +4653,7 @@
             "additionalProperties": false
           },
           {
+            "description": "Indicates communities associated with a path.",
             "type": "object",
             "properties": {
               "communities": {
@@ -4631,6 +4669,14 @@
             "additionalProperties": false
           },
           {
+            "description": "Indicates this route was formed via aggregation (RFC 4271 §5.1.7)",
+            "type": "string",
+            "enum": [
+              "atomic_aggregate"
+            ]
+          },
+          {
+            "description": "The 4-byte encoded AS set associated with a path",
             "type": "object",
             "properties": {
               "as4_path": {
@@ -4646,6 +4692,7 @@
             "additionalProperties": false
           },
           {
+            "description": "AS4_AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (4-octet ASN)",
             "type": "object",
             "properties": {
               "as4_aggregator": {
@@ -4658,6 +4705,7 @@
             "additionalProperties": false
           },
           {
+            "description": "Carries reachable MP-BGP NLRI and Next-hop (advertisement).",
             "type": "object",
             "properties": {
               "mp_reach_nlri": {
@@ -4670,6 +4718,7 @@
             "additionalProperties": false
           },
           {
+            "description": "Carries unreachable MP-BGP NLRI (withdrawal).",
             "type": "object",
             "properties": {
               "mp_unreach_nlri": {
@@ -5347,6 +5396,7 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5359,6 +5409,7 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -5371,6 +5422,7 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5387,6 +5439,7 @@
           },
           "ipv4_unicast": {
             "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -5395,6 +5448,7 @@
           },
           "ipv6_unicast": {
             "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -5452,11 +5506,13 @@
           },
           "src_addr": {
             "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -5512,6 +5568,7 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5524,6 +5581,7 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -5539,6 +5597,7 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -5555,6 +5614,7 @@
           },
           "ipv4_unicast": {
             "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv4UnicastConfig"
@@ -5563,6 +5623,7 @@
           },
           "ipv6_unicast": {
             "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/Ipv6UnicastConfig"
@@ -5615,11 +5676,13 @@
           },
           "src_addr": {
             "nullable": true,
+            "description": "Source IP address to bind when establishing outbound TCP connections. None means the system selects the source address.",
             "type": "string",
             "format": "ip"
           },
           "src_port": {
             "nullable": true,
+            "description": "Source TCP port to bind when establishing outbound TCP connections. None means the system selects the source port.",
             "type": "integer",
             "format": "uint16",
             "minimum": 0
@@ -5689,7 +5752,7 @@
         ]
       },
       "UpdateMessage": {
-        "description": "BGP UPDATE message.",
+        "description": "An update message is used to advertise feasible routes that share common path attributes to a peer, or to withdraw multiple unfeasible routes from service.\n\n```text 0                   1                   2                   3 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |        Witdrawn Length        |       Withdrawn Routes        : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :                Withdrawn Routes (cont, variable)              : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |    Path Attribute Length      |       Path Attributes         : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :                Path Attributes (cont, variable)               : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :       Network Layer Reachability Information (variable)       : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ```\n\nRef: RFC 4271 §4.3",
         "type": "object",
         "properties": {
           "nlri": {

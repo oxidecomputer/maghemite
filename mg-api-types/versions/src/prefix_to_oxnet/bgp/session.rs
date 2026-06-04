@@ -2,6 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+//! Session-history wire shapes for the prefix_to_oxnet (v10) admin API
+//! version.
+//!
+//! These shapes are structurally identical to v4 (`mp_bgp`) but reference
+//! the v10 `Message` type, which uses `oxnet` prefix types in place of the
+//! legacy `Prefix`/`Prefix4`/`Prefix6` types.
+
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
@@ -31,6 +38,7 @@ pub struct MessageHistory {
 }
 
 /// Unified message history response with string keys from PeerId Display
+/// Keys will be "192.0.2.1" or "eth0" format
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
     pub by_peer: HashMap<String, MessageHistory>,

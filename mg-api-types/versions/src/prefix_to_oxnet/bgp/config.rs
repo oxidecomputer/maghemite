@@ -54,12 +54,28 @@ pub struct BgpPeerParameters {
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
     pub vlan_id: Option<u16>,
+    /// IPv4 Unicast address family configuration (None = disabled)
     pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    /// IPv6 Unicast address family configuration (None = disabled)
     pub ipv6_unicast: Option<Ipv6UnicastConfig>,
+    /// Enable deterministic collision resolution in Established state.
+    /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
+    /// resolution even when one connection is already in Established state.
+    /// When false, Established connection always wins (timing-based resolution).
     pub deterministic_collision_resolution: bool,
+    /// Jitter range for idle hold timer. When used, the idle hold timer is
+    /// multiplied by a random value within the (min, max) range supplied.
+    /// Useful to help break repeated synchronization of connection collisions.
     pub idle_hold_jitter: Option<v4::bgp::config::JitterRange>,
+    /// Jitter range for connect_retry timer. When used, the connect_retry timer
+    /// is multiplied by a random value within the (min, max) range supplied.
+    /// Useful to help break repeated synchronization of connection collisions.
     pub connect_retry_jitter: Option<v4::bgp::config::JitterRange>,
+    /// Source IP address to bind when establishing outbound TCP connections.
+    /// None means the system selects the source address.
     pub src_addr: Option<IpAddr>,
+    /// Source TCP port to bind when establishing outbound TCP connections.
+    /// None means the system selects the source port.
     pub src_port: Option<u16>,
 }
 
@@ -80,6 +96,7 @@ pub struct UnnumberedBgpPeerConfig {
     pub parameters: BgpPeerParameters,
 }
 
+/// Neighbor configuration with explicit per-address-family enablement (v3 API)
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct Neighbor {
     pub asn: u32,
@@ -101,7 +118,7 @@ pub struct UnnumberedNeighbor {
     pub parameters: BgpPeerParameters,
 }
 
-/// Apply changes to an ASN.
+/// Apply changes to an ASN (current version with per-AF policies).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct ApplyRequest {
     /// ASN to apply changes to.
@@ -138,7 +155,6 @@ pub struct PeerInfo {
     pub ipv6_unicast: Ipv6UnicastConfig,
 }
 
-/// IPv4 prefixes to originate from an ASN.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Origin4 {
     /// ASN of the router to originate from.

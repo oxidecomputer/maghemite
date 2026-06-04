@@ -7,7 +7,6 @@ use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// IPv6 prefixes to originate from an ASN.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Origin6 {
     /// ASN of the router to originate from.

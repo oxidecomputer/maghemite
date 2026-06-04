@@ -650,7 +650,7 @@ pub fn update_message_prefixes_from_wire(
 }
 
 /// Parse IPv4 prefixes from wire format.
-pub fn update_message_prefixes4_from_wire(
+fn update_message_prefixes4_from_wire(
     mut buf: &[u8],
 ) -> Result<Vec<Ipv4Net>, PrefixParseError> {
     let mut result = Vec::new();
@@ -663,7 +663,7 @@ pub fn update_message_prefixes4_from_wire(
 }
 
 /// Parse IPv6 prefixes from wire format.
-pub fn update_message_prefixes6_from_wire(
+fn update_message_prefixes6_from_wire(
     mut buf: &[u8],
 ) -> Result<Vec<Ipv6Net>, PrefixParseError> {
     let mut result = Vec::new();
