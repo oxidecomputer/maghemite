@@ -4,7 +4,6 @@
 
 pub mod cli;
 pub mod log;
-pub mod net;
 pub mod nexus;
 pub mod smf;
 pub mod stats;

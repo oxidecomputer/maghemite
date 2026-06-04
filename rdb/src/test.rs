@@ -90,7 +90,8 @@ impl Drop for TestDb {
 ///
 /// ```no_run
 /// use rdb::test::get_test_db;
-/// use rdb::{StaticRouteKey, Prefix, Prefix4};
+/// use rdb::StaticRouteKey;
+/// use mg_api_types::rdb::prefix::{Prefix, Prefix4};
 /// use mg_common::log::init_file_logger;
 /// use std::net::{IpAddr, Ipv4Addr};
 ///
