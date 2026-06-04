@@ -134,7 +134,7 @@ impl FrrNode {
             .collect::<Vec<_>>()
             .join(" ");
         let output = d
-            .exec(self.0, &format!("vtysh {args}"))
+            .exec(self.0, &format!("/usr/bin/vtysh {args}"))
             .await
             .context("vtysh shell failed")?;
         Ok(output)
