@@ -81,6 +81,7 @@ pub fn validate_prefixes_v6(prefixes: &[Ipv6Net]) -> Result<(), HttpError> {
 ///
 /// Returns an HTTP 400 Bad Request error if any prefix fails validation.
 pub fn validate_prefixes(prefixes: &[IpNet]) -> Result<(), HttpError> {
+    // Separate prefixes by address family
     let (p4, p6) = prefixes.iter().copied().fold(
         (Vec::new(), Vec::new()),
         |(mut p4, mut p6), p| {
@@ -92,6 +93,7 @@ pub fn validate_prefixes(prefixes: &[IpNet]) -> Result<(), HttpError> {
         },
     );
 
+    // Validate each address family
     validate_prefixes_v4(&p4)?;
     validate_prefixes_v6(&p6)?;
 
