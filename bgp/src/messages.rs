@@ -2534,9 +2534,10 @@ impl Display for MessageParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mg_common::{cidr, ip, parse, println_nopipe};
+    use client_common::println_nopipe;
+    use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
-    use pretty_hex::*;
+    use pretty_hex::PrettyHex;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
