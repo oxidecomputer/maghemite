@@ -2925,6 +2925,7 @@ mod tests {
                         Ipv4Addr::from(octets),
                         test_case.prefix_length,
                     );
+                    // Normalize the IpNet
                     IpNet::V4(Ipv4Net::new_unchecked(
                         n.prefix(),
                         test_case.prefix_length,
@@ -2937,6 +2938,7 @@ mod tests {
                         Ipv6Addr::from(octets),
                         test_case.prefix_length,
                     );
+                    // Normalize the IpNet
                     IpNet::V6(Ipv6Net::new_unchecked(
                         n.prefix(),
                         test_case.prefix_length,

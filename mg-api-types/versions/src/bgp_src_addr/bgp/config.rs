@@ -19,7 +19,6 @@ use crate::v4::bgp::config::JitterRange;
 use crate::v4::bgp::policy::ImportExportPolicy4;
 use crate::v5;
 
-/// BGP peer parameters.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerParameters {
     pub hold_time: u64,
@@ -66,7 +65,6 @@ pub struct BgpPeerParameters {
     pub src_port: Option<u16>,
 }
 
-/// BGP peer configuration.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
@@ -75,7 +73,6 @@ pub struct BgpPeerConfig {
     pub parameters: BgpPeerParameters,
 }
 
-/// Unnumbered BGP peer configuration.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct UnnumberedBgpPeerConfig {
     pub interface: String,
@@ -96,7 +93,6 @@ pub struct Neighbor {
     pub parameters: BgpPeerParameters,
 }
 
-/// Unnumbered BGP neighbor configuration.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct UnnumberedNeighbor {
     pub asn: u32,
