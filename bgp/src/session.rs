@@ -34,13 +34,14 @@ use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 pub(crate) use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
 };
+pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
+pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db};
-pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
