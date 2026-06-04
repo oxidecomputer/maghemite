@@ -1941,7 +1941,6 @@ dependencies = [
  "libfalcon",
  "mg-admin-client 0.1.0",
  "mg-api-types",
- "mg-api-types-versions",
  "oxide-tokio-rt",
  "oxnet",
  "serde",
