@@ -2644,11 +2644,12 @@ mod tests {
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
     use bgp::router::SessionMap;
+    use client_common::println_nopipe;
     use mg_api_types_versions::v1::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
     };
     use mg_api_types_versions::{v1, v8};
-    use mg_common::{println_nopipe, stats::MgLowerStats};
+    use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     use std::net::Ipv6Addr;

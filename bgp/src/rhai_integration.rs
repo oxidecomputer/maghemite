@@ -12,7 +12,7 @@ use crate::{
     policy::{CheckerResult, ShaperResult},
 };
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use rhai::{Module, export_module, plugin::*};
+use rhai::export_module;
 
 macro_rules! create_enum_module {
     ($module:ident : $typ:ty => $($variant:ident),+) => {

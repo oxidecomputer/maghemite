@@ -147,10 +147,7 @@ mod tests {
         };
 
         let api_route4_v6nh = mg_api_types::static_routes::StaticRoute4 {
-            prefix: Prefix4::new(
-                route4_v6nh.destination.addr(),
-                route4_v6nh.destination.width(),
-            ),
+            prefix: route4_v6nh.destination,
             nexthop: route4_v6nh.nexthop,
             vlan_id: route4_v6nh.vlan_id,
             rib_priority: route4_v6nh.rib_priority,
