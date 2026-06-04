@@ -96,11 +96,13 @@ where
     let ox = bt.ox;
     let cr1 = bt.cr1;
     let cr2 = bt.cr2;
+    let mgd = bt.mgd.clone();
     let topo_name = bt.topo_name.clone();
     let result = body(bt).await;
     if let Err(e) = &result {
         warn!(ad.log, "{topo_name} failed: {e:#}");
         collect_diagnostics(&ad, ox, cr1, cr2, &topo_name).await;
+        ox.collect_ndp_diagnostics(&ad, &mgd, &topo_name).await;
     }
     result
 }

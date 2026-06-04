@@ -64,29 +64,50 @@ impl EosNode {
         LinuxNode(self.0)
     }
 
-    /// Capture BGP / BFD / routing state via the Arista CLI.
+    /// Capture BGP / BFD / routing state via the Arista CLI, plus container
+    /// and host state.
     pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
         let name = self.name(d);
-        // `Cli -c` takes a single newline-separated script.
-        const SCRIPT: &str = "enable
-            show running-config
-            show ip interface brief
-            show ip bgp summary
-            show ip bgp
-            show ipv6 bgp
-            show ip route
-            show ipv6 route
-            show bfd peers
-        ";
-        match self.shell(d, SCRIPT).await {
-            Ok(out) => crate::diagnostics::write_artifact(
+        for (suffix, cmd) in [
+            ("running-config", "show running-config"),
+            ("ip-interface-brief", "show ip interface brief"),
+            ("ip-bgp-summary", "show ip bgp summary"),
+            ("ip-bgp", "show ip bgp"),
+            ("ipv6-bgp", "show ipv6 bgp"),
+            ("ip-route", "show ip route"),
+            ("ipv6-route", "show ipv6 route"),
+            ("bfd-peers", "show bfd peers"),
+        ] {
+            let script = format!("enable\n{cmd}");
+            match self.shell(d, &script).await {
+                Ok(out) => crate::diagnostics::write_artifact(
+                    d,
+                    topo,
+                    &format!("{name}-{suffix}"),
+                    Some(cmd),
+                    &out,
+                ),
+                Err(e) => {
+                    slog::warn!(d.log, "diagnostics {name}-{suffix}: {e}")
+                }
+            }
+        }
+        // Container log plus host-side interface state, so there is something
+        // to look at even if the CLI is unresponsive.
+        for (suffix, cmd) in [
+            ("ceos-logs", "docker logs --tail 200 ceos"),
+            ("host-ip-link", "ip -d -s link show"),
+            ("host-ip-addr", "ip -d -s addr show"),
+            ("host-ip-neigh", "ip -d -s neigh show"),
+        ] {
+            crate::diagnostics::capture(
                 d,
+                self.0,
                 topo,
-                &format!("{name}-cli"),
-                None,
-                &out,
-            ),
-            Err(e) => slog::warn!(d.log, "diagnostics {name}-cli: {e}"),
+                &format!("{name}-{suffix}"),
+                cmd,
+            )
+            .await;
         }
     }
 

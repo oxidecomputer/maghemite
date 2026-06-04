@@ -144,6 +144,8 @@ impl IllumosNode {
             ("ipadm", "ipadm show-addr"),
             ("dladm", "dladm show-link"),
             ("netstat", "netstat -nr"),
+            ("ndp", "ndp -a -n"),
+            ("arp", "arp -a -n"),
         ] {
             crate::diagnostics::capture(
                 d,
