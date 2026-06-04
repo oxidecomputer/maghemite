@@ -617,7 +617,7 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
                 .into_iter()
                 .map(|nh| StaticRoute4 {
                     prefix: prefix_v4,
-                    nexthop: nh,
+                    nexthop: IpAddr::V4(nh),
                     vlan_id: None,
                     rib_priority: 0,
                 })

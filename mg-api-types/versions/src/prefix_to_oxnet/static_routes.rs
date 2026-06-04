@@ -2,10 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 
 use crate::v1;
 use crate::v2;
+use crate::v10;
 use oxnet::{Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,7 @@ pub struct StaticRoute4List {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct StaticRoute4 {
     pub prefix: Ipv4Net,
-    pub nexthop: Ipv4Addr,
+    pub nexthop: IpAddr,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -57,8 +58,53 @@ pub struct StaticRoute6 {
 }
 
 // ---------------------------------------------------------------------------
-// Upgrade conversions: v1/v2 → v10
+// Upgrade conversions: v1/v2/v10 → v11
 // ---------------------------------------------------------------------------
+
+impl From<v10::static_routes::StaticRoute4> for StaticRoute4 {
+    fn from(old: v10::static_routes::StaticRoute4) -> Self {
+        let v10::static_routes::StaticRoute4 {
+            prefix,
+            nexthop,
+            vlan_id,
+            rib_priority,
+        } = old;
+        Self {
+            prefix: Ipv4Net::new_unchecked(prefix.value, prefix.length),
+            nexthop,
+            vlan_id,
+            rib_priority,
+        }
+    }
+}
+
+impl From<v10::static_routes::StaticRoute4List> for StaticRoute4List {
+    fn from(old: v10::static_routes::StaticRoute4List) -> Self {
+        Self {
+            list: old.list.into_iter().map(StaticRoute4::from).collect(),
+        }
+    }
+}
+
+impl From<v10::static_routes::AddStaticRoute4Request>
+    for AddStaticRoute4Request
+{
+    fn from(old: v10::static_routes::AddStaticRoute4Request) -> Self {
+        Self {
+            routes: StaticRoute4List::from(old.routes),
+        }
+    }
+}
+
+impl From<v10::static_routes::DeleteStaticRoute4Request>
+    for DeleteStaticRoute4Request
+{
+    fn from(old: v10::static_routes::DeleteStaticRoute4Request) -> Self {
+        Self {
+            routes: StaticRoute4List::from(old.routes),
+        }
+    }
+}
 
 impl From<v1::static_routes::StaticRoute4> for StaticRoute4 {
     fn from(old: v1::static_routes::StaticRoute4) -> Self {
@@ -70,7 +116,7 @@ impl From<v1::static_routes::StaticRoute4> for StaticRoute4 {
         } = old;
         Self {
             prefix: Ipv4Net::new_unchecked(prefix.value, prefix.length),
-            nexthop,
+            nexthop: IpAddr::V4(nexthop),
             vlan_id,
             rib_priority,
         }

@@ -35,7 +35,7 @@ fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
     } = v;
     StaticRouteKey {
         prefix: prefix.into(),
-        nexthop: nexthop.into(),
+        nexthop,
         vlan_id,
         rib_priority,
     }

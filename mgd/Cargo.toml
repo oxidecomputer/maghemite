@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+client-common.workspace = true
 mg-lower = { path = "../mg-lower", optional = true }
 mg-api.workspace = true
 mg-api-types.workspace = true

@@ -245,7 +245,7 @@ pub fn new_rhai_engine() -> Engine {
 
     #[cfg(debug_assertions)]
     {
-        use mg_common::println_nopipe;
+        use client_common::println_nopipe;
         println_nopipe!("Functions registered:");
         engine
             .gen_fn_signatures(false)

@@ -1477,12 +1477,13 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey, db::Db, test::TestDb,
-        types::PrefixDbKey, types::test_helpers::path_vecs_equal,
+        StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
+        types::test_helpers::path_vecs_equal,
     };
+    use client_common::eprintln_nopipe;
+    use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
     use mg_api_types::rdb::path::Path;
     use mg_api_types::rdb::rib::AddressFamily;
-    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1518,11 +1519,12 @@ mod test {
     #[test]
     fn test_rib() {
         use crate::StaticRouteKey;
-        use crate::{
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC, db::Db,
-        };
+        use crate::db::Db;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
+        use mg_api_types::rdb::{
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
         use oxnet::{IpNet, Ipv4Net};
         // init test vars
         let p0 = IpNet::from("192.168.0.0/24".parse::<Ipv4Net>().unwrap());
@@ -2269,12 +2271,12 @@ mod test {
     /// `shutdown` is not part of `Path::Ord` identity.
     #[test]
     fn test_set_nexthop_shutdown_replaces_path() {
-        use crate::{
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
-            StaticRouteKey,
-        };
+        use crate::StaticRouteKey;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
+        use mg_api_types::rdb::{
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
         use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
         let db = get_test_db();

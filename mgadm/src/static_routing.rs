@@ -4,11 +4,11 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use client_common::println_nopipe;
 use mg_admin_client::Client;
-use mg_common::println_nopipe;
+use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use oxnet::{Ipv4Net, Ipv6Net};
-use rdb::DEFAULT_RIB_PRIORITY_STATIC;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -23,7 +23,7 @@ pub enum Commands {
 #[derive(Debug, Args)]
 pub struct StaticRoute4 {
     pub destination: Ipv4Net,
-    pub nexthop: Ipv4Addr,
+    pub nexthop: IpAddr,
     #[clap(long)]
     pub vlan_id: Option<u16>,
     #[clap(long, default_value_t = DEFAULT_RIB_PRIORITY_STATIC)]
@@ -109,14 +109,15 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
     use std::str::FromStr;
 
     #[test]
     fn test_route_conversion_to_api_types() {
-        // IPv4 test case
+        // IPv4-over-IPv4 case
         let route4 = StaticRoute4 {
             destination: Ipv4Net::from_str("192.168.0.0/16").unwrap(),
-            nexthop: Ipv4Addr::from_str("10.0.0.1").unwrap(),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
             vlan_id: Some(100),
             rib_priority: 50,
         };
@@ -136,6 +137,25 @@ mod tests {
         assert_eq!(api_route4.nexthop, route4.nexthop);
         assert_eq!(api_route4.vlan_id, route4.vlan_id);
         assert_eq!(api_route4.rib_priority, route4.rib_priority);
+
+        // IPv4-over-IPv6 case
+        let route4_v6nh = StaticRoute4 {
+            destination: Ipv4Net::from_str("192.168.0.0/16").unwrap(),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            vlan_id: None,
+            rib_priority: 50,
+        };
+
+        let api_route4_v6nh = mg_api_types::static_routes::StaticRoute4 {
+            prefix: Prefix4::new(
+                route4_v6nh.destination.addr(),
+                route4_v6nh.destination.width(),
+            ),
+            nexthop: route4_v6nh.nexthop,
+            vlan_id: route4_v6nh.vlan_id,
+            rib_priority: route4_v6nh.rib_priority,
+        };
+        assert_eq!(api_route4_v6nh.nexthop, route4_v6nh.nexthop);
 
         // IPv6 test case
         let route6 = StaticRoute6 {

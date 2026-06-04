@@ -69,9 +69,9 @@ progenitor::generate_api!(
    }
 );
 
+use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;
 use mg_api_types_versions::latest::rdb::rib::{AddressFamily, ProtocolFilter};
-use mg_common::{eprintln_nopipe, println_nopipe};
 use oxnet::IpNet;
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};

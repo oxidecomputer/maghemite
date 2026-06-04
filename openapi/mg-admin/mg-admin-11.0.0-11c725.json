@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "10.0.0"
+    "version": "11.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -5270,7 +5270,7 @@
         "properties": {
           "nexthop": {
             "type": "string",
-            "format": "ipv4"
+            "format": "ip"
           },
           "prefix": {
             "$ref": "#/components/schemas/Ipv4Net"

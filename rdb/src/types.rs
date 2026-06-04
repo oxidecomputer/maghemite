@@ -363,7 +363,7 @@ pub mod test_helpers {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::DEFAULT_RIB_PRIORITY_BGP;
+    use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
     use std::{
         cmp::Ordering, collections::BTreeSet, net::IpAddr, str::FromStr,
     };

@@ -11,7 +11,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_api_types_versions::{latest, v1, v2, v4, v5, v8};
+use mg_api_types_versions::{latest, v1, v2, v4, v5, v8, v10};
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):
@@ -25,7 +25,8 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (10, PREFIX_TO_OXNET),
+    (11, PREFIX_TO_OXNET),
+    (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
     (8, BGP_SRC_ADDR),
     (7, OPERATION_ID_CLEANUP),
@@ -1457,6 +1458,32 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
+        method = PUT,
+        path = "/static/route4",
+        operation_id = "static_add_v4_route",
+        versions = VERSION_V4_OVER_V6_STATIC_ROUTES..VERSION_PREFIX_TO_OXNET,
+    }]
+    async fn static_add_v4_route_v10(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v10::static_routes::AddStaticRoute4Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::static_add_v4_route(rqctx, request.map(Into::into)).await
+    }
+
+    #[endpoint {
+        method = PUT,
+        path = "/static/route4",
+        operation_id = "static_add_v4_route",
+        versions = ..VERSION_V4_OVER_V6_STATIC_ROUTES,
+    }]
+    async fn static_add_v4_route_v1(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v1::static_routes::AddStaticRoute4Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::static_add_v4_route_v10(rqctx, request.map(Into::into)).await
+    }
+
+    #[endpoint {
         method = DELETE,
         path = "/static/route4",
         versions = VERSION_PREFIX_TO_OXNET..,
@@ -1467,29 +1494,29 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseDeleted, HttpError>;
 
     #[endpoint {
-        method = PUT,
+        method = DELETE,
         path = "/static/route4",
-        operation_id = "static_add_v4_route",
-        versions = ..VERSION_PREFIX_TO_OXNET,
+        operation_id = "static_remove_v4_route",
+        versions = VERSION_V4_OVER_V6_STATIC_ROUTES..VERSION_PREFIX_TO_OXNET,
     }]
-    async fn static_add_v4_route_v1(
+    async fn static_remove_v4_route_v10(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::static_routes::AddStaticRoute4Request>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::static_add_v4_route(rqctx, request.map(Into::into)).await
+        request: TypedBody<v10::static_routes::DeleteStaticRoute4Request>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        Self::static_remove_v4_route(rqctx, request.map(Into::into)).await
     }
 
     #[endpoint {
         method = DELETE,
         path = "/static/route4",
         operation_id = "static_remove_v4_route",
-        versions = ..VERSION_PREFIX_TO_OXNET,
+        versions = ..VERSION_V4_OVER_V6_STATIC_ROUTES,
     }]
     async fn static_remove_v4_route_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::static_routes::DeleteStaticRoute4Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::static_remove_v4_route(rqctx, request.map(Into::into)).await
+        Self::static_remove_v4_route_v10(rqctx, request.map(Into::into)).await
     }
 
     #[endpoint {
