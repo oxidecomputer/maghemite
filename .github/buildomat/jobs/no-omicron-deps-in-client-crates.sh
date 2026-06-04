@@ -17,7 +17,7 @@ function omicron_dep_check {
   pushd "$1"
   set +e
   tree_output=$(cargo tree -e normal --all-features)
-  if grep omicron <<< "$tree_output"; then
+  if grep omicron <<< "${tree_output}"; then
     echo "$1 may not depend on omicron"
     exit 1
   fi
