@@ -17,7 +17,8 @@ progenitor::generate_api!(
     }),
     derives = [schemars::JsonSchema],
     crates = {
-        "oxnet" = "0.1.5",
+        "oxnet" = "0.1.6",
+        "std" = "1.0.0",
     },
     replace = {
         // Routing-database shapes.

@@ -2225,6 +2225,11 @@
             "minimum": 0
           },
           "host": {
+            "x-rust-type": {
+              "crate": "std",
+              "path": "std::net::SocketAddr",
+              "version": ">=1.0.0"
+            },
             "type": "string"
           },
           "idle_hold_jitter": {
@@ -3988,6 +3993,11 @@
             "minimum": 0
           },
           "host": {
+            "x-rust-type": {
+              "crate": "std",
+              "path": "std::net::SocketAddr",
+              "version": ">=1.0.0"
+            },
             "type": "string"
           },
           "idle_hold_jitter": {

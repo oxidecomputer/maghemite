@@ -75,7 +75,7 @@ impl latest::bgp::config::Neighbor {
         Self {
             asn,
             name,
-            host,
+            host: host.into(),
             group,
             parameters: latest_params_from_rdb(parameters),
         }

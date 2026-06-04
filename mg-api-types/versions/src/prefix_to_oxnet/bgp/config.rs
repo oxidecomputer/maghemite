@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::v1;
 use crate::v4;
 use crate::v8;
+use oxnet::SocketAddrJson;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ pub struct BgpPeerParameters {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerConfig {
-    pub host: SocketAddr,
+    pub host: SocketAddrJson,
     pub name: String,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
@@ -85,7 +85,7 @@ pub struct Neighbor {
     pub asn: u32,
     pub name: String,
     pub group: String,
-    pub host: SocketAddr,
+    pub host: SocketAddrJson,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
@@ -248,7 +248,7 @@ impl From<v8::bgp::config::BgpPeerConfig> for BgpPeerConfig {
             parameters,
         } = old;
         Self {
-            host,
+            host: host.into(),
             name,
             parameters: BgpPeerParameters::from(parameters),
         }
@@ -287,7 +287,7 @@ impl From<v8::bgp::config::Neighbor> for Neighbor {
             asn,
             name,
             group,
-            host,
+            host: host.into(),
             parameters: BgpPeerParameters::from(parameters),
         }
     }
@@ -484,7 +484,7 @@ impl From<BgpPeerConfig> for v8::bgp::config::BgpPeerConfig {
             parameters,
         } = new;
         Self {
-            host,
+            host: *host,
             name,
             parameters: v8::bgp::config::BgpPeerParameters::from(parameters),
         }
@@ -523,7 +523,7 @@ impl From<Neighbor> for v8::bgp::config::Neighbor {
             asn,
             name,
             group,
-            host,
+            host: *host,
             parameters: v8::bgp::config::BgpPeerParameters::from(parameters),
         }
     }

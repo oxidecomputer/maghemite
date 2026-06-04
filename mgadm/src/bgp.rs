@@ -730,7 +730,7 @@ impl Neighbor {
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
             name: self.name.clone(),
-            host: SocketAddr::new(addr, self.port).to_string(),
+            host: SocketAddr::new(addr, self.port),
             hold_time: self.hold_time,
             idle_hold_time: self.idle_hold_time,
             connect_retry: self.connect_retry_time,

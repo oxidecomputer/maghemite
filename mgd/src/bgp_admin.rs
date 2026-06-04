@@ -338,7 +338,8 @@ pub async fn read_neighbor(
                 host: std::net::SocketAddr::new(
                     std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
                     179,
-                ),
+                )
+                .into(),
                 parameters: result.parameters,
             }))
         }
@@ -2116,7 +2117,7 @@ pub(crate) mod helpers {
                 asn: rq.asn,
                 group: rq.group.clone(),
                 name: rq.name.clone(),
-                host: rq.host,
+                host: *rq.host,
                 parameters: BgpNeighborParameters {
                     remote_asn: rq.parameters.remote_asn,
                     min_ttl: rq.parameters.min_ttl,

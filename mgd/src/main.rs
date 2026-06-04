@@ -326,7 +326,7 @@ fn start_bgp_routers(
                 asn: nbr.asn,
                 group: nbr.group.clone(),
                 name: nbr.name.clone(),
-                host: nbr.host,
+                host: nbr.host.into(),
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
                     min_ttl: nbr.parameters.min_ttl,
