@@ -38,7 +38,6 @@ pub struct UnnumberedNeighborResetRequest {
 
 /// Unnumbered neighbor configuration for v4-v6 API (lacks src_addr/src_port).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "UnnumberedNeighbor")]
 pub struct UnnumberedNeighbor {
     pub asn: u32,
     pub name: String,

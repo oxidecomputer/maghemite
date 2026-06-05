@@ -70,7 +70,6 @@ pub struct FsmHistoryResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[schemars(rename = "PeerInfo")]
 pub struct PeerInfo {
     pub state: FsmStateKind,
     pub asn: Option<u32>,
