@@ -18,7 +18,7 @@ use super::messages::Message;
 // V1 API compatibility type for message history entry (IPv4-only with v1 Message)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MessageHistoryEntry")]
-pub struct MessageHistoryEntry {
+pub(crate) struct MessageHistoryEntry {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub message: Message,
 }
@@ -27,6 +27,6 @@ pub struct MessageHistoryEntry {
 #[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MessageHistory")]
 pub struct MessageHistory {
-    pub received: VecDeque<MessageHistoryEntry>,
-    pub sent: VecDeque<MessageHistoryEntry>,
+    pub(crate) received: VecDeque<MessageHistoryEntry>,
+    pub(crate) sent: VecDeque<MessageHistoryEntry>,
 }

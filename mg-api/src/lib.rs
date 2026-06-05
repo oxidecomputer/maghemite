@@ -177,7 +177,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/neighbor/{asn}/{peer}",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_UNNUMBERED..,
     }]
     async fn delete_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -243,19 +243,6 @@ pub trait MgAdminApi {
         Self::update_neighbor(rqctx, request.map(Into::into)).await
     }
 
-    #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/neighbor/{asn}/{peer}",
-        operation_id = "delete_neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_PREFIX_TO_OXNET,
-    }]
-    async fn delete_neighbor_v8(
-        rqctx: RequestContext<Self::Context>,
-        path: Path<latest::bgp::config::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::delete_neighbor(rqctx, path).await
-    }
-
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - supports both
     // numbered and unnumbered neighbors but lacks src_addr/src_port.
 
@@ -313,19 +300,6 @@ pub trait MgAdminApi {
         request: TypedBody<v4::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         Self::update_neighbor_v8(rqctx, request.map(Into::into)).await
-    }
-
-    #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/neighbor/{asn}/{peer}",
-        operation_id = "delete_neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR,
-    }]
-    async fn delete_neighbor_v5(
-        rqctx: RequestContext<Self::Context>,
-        path: Path<v5::bgp::config::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::delete_neighbor(rqctx, path).await
     }
 
     // V4 API - new Neighbor type with explicit per-AF configuration (numbered
@@ -393,28 +367,6 @@ pub trait MgAdminApi {
         Self::update_neighbor_v5(rqctx, request).await
     }
 
-    #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/neighbor",
-        operation_id = "delete_neighbor",
-        versions = VERSION_MP_BGP..VERSION_UNNUMBERED,
-    }]
-    async fn delete_neighbor_v4(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::config::NeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        let rq = request.into_inner();
-        Self::delete_neighbor_v5(
-            rqctx,
-            v5::bgp::config::NeighborSelector {
-                asn: rq.asn,
-                peer: rq.addr.to_string(),
-            }
-            .into(),
-        )
-        .await
-    }
-
     // V1/V2 API - legacy Neighbor type with combined import/export policies.
     //
     // These four endpoints (create/read/read-all/update) are required methods
@@ -477,14 +429,14 @@ pub trait MgAdminApi {
         method = DELETE,
         path = "/bgp/config/neighbor",
         operation_id = "delete_neighbor",
-        versions = ..VERSION_MP_BGP,
+        versions = ..VERSION_UNNUMBERED,
     }]
     async fn delete_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         let rq = request.into_inner();
-        Self::delete_neighbor_v5(
+        Self::delete_neighbor(
             rqctx,
             v5::bgp::config::NeighborSelector {
                 asn: rq.asn,
