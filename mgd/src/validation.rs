@@ -5,7 +5,52 @@
 //! Shared validation functions for API request handlers.
 
 use dropshot::HttpError;
+use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use rdb::StaticRouteKey;
+use std::collections::BTreeSet;
+
+/// Validate a static-route add request: every prefix must be normalized and
+/// valid for the RIB, and no two routes may share a RIB identity.
+pub fn validate_static_routes(
+    routes: &[StaticRouteKey],
+) -> Result<(), HttpError> {
+    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
+    validate_unique_static_routes(routes)?;
+    Ok(())
+}
+
+/// Reject a static-route request that lists more than one route for the same
+/// prefix and RIB path identity within a single request.
+///
+/// A static path is identified by `(nexthop, interface, vlan_id)`;
+/// `rib_priority` is a property, not part of identity. Two such entries
+/// collapse to a single RIB path, so accepting them would silently drop all
+/// but one. The dedup key pairs the prefix with [`Path`] so it tracks the same
+/// identity the RIB uses.
+pub fn validate_unique_static_routes(
+    routes: &[StaticRouteKey],
+) -> Result<(), HttpError> {
+    let mut seen: BTreeSet<(Prefix, Path)> = BTreeSet::new();
+    for route in routes {
+        if !seen.insert((route.prefix, Path::from(*route))) {
+            return Err(HttpError::for_bad_request(
+                Some("DuplicateStaticRoute".to_string()),
+                format!(
+                    "Duplicate static route for prefix {} via nexthop {} on vlan {}; \
+                     a (prefix, nexthop, vlan) can appear at most once per request",
+                    route.prefix,
+                    route.nexthop,
+                    route
+                        .vlan_id
+                        .map_or_else(|| "none".to_string(), |v| v.to_string()),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Validate that all IPv4 prefixes have host bits unset and are valid for RIB.
 ///
@@ -102,7 +147,7 @@ pub fn validate_prefixes(prefixes: &[Prefix]) -> Result<(), HttpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn test_validate_prefixes_v4_accepts_normalized() {
@@ -319,6 +364,96 @@ mod tests {
             )),
         ];
         assert!(validate_prefixes(&prefixes).is_ok());
+    }
+
+    fn route(
+        prefix: Prefix,
+        nexthop: IpAddr,
+        vlan_id: Option<u16>,
+        rib_priority: u8,
+    ) -> StaticRouteKey {
+        StaticRouteKey {
+            prefix,
+            nexthop,
+            vlan_id,
+            rib_priority,
+        }
+    }
+
+    fn p4(prefix: Prefix4) -> Prefix {
+        Prefix::V4(prefix)
+    }
+
+    #[test]
+    fn test_unique_static_routes_accepts_distinct() {
+        let nh = IpAddr::from(Ipv4Addr::new(1, 2, 3, 4));
+        let routes = vec![
+            route(
+                p4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
+                nh,
+                None,
+                1,
+            ),
+            route(
+                p4(Prefix4::new(Ipv4Addr::new(10, 0, 1, 0), 24)),
+                nh,
+                None,
+                1,
+            ),
+            route(
+                p4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
+                IpAddr::from(Ipv4Addr::new(5, 6, 7, 8)),
+                None,
+                1,
+            ),
+        ];
+        assert!(validate_unique_static_routes(&routes).is_ok());
+    }
+
+    #[test]
+    fn test_unique_static_routes_rejects_same_triple_diff_priority() {
+        let prefix = p4(Prefix4::new(Ipv4Addr::UNSPECIFIED, 2));
+        let nh = IpAddr::from(Ipv4Addr::new(1, 2, 3, 4));
+        let routes =
+            vec![route(prefix, nh, None, 14), route(prefix, nh, None, 153)];
+        let result = validate_unique_static_routes(&routes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status_code, http::StatusCode::BAD_REQUEST);
+        assert!(err.external_message.contains("Duplicate static route"));
+    }
+
+    #[test]
+    fn test_unique_static_routes_distinct_vlan_is_ok() {
+        let prefix = p4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24));
+        let nh = IpAddr::from(Ipv4Addr::new(1, 2, 3, 4));
+        let routes = vec![
+            route(prefix, nh, Some(10), 1),
+            route(prefix, nh, Some(20), 1),
+        ];
+        assert!(validate_unique_static_routes(&routes).is_ok());
+    }
+
+    #[test]
+    fn test_unique_static_routes_empty() {
+        assert!(validate_unique_static_routes(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_static_routes_rejects_duplicate() {
+        let prefix = p4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24));
+        let nh = IpAddr::from(Ipv4Addr::new(1, 2, 3, 4));
+        let routes =
+            vec![route(prefix, nh, None, 1), route(prefix, nh, None, 2)];
+        assert!(validate_static_routes(&routes).is_err());
+    }
+
+    #[test]
+    fn test_validate_static_routes_rejects_bad_prefix() {
+        let prefix = p4(Prefix4::new(Ipv4Addr::new(127, 0, 0, 0), 8));
+        let nh = IpAddr::from(Ipv4Addr::new(1, 2, 3, 4));
+        let routes = vec![route(prefix, nh, None, 1)];
+        assert!(validate_static_routes(&routes).is_err());
     }
 
     // Property-based tests to verify equivalence between generic and family-specific validators
