@@ -26,7 +26,9 @@ pub struct StaticRoute4List {
     pub list: Vec<StaticRoute4>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
 pub struct StaticRoute4 {
     pub prefix: Ipv4Net,
     pub nexthop: IpAddr,
@@ -49,7 +51,9 @@ pub struct StaticRoute6List {
     pub list: Vec<StaticRoute6>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
 pub struct StaticRoute6 {
     pub prefix: Ipv6Net,
     pub nexthop: Ipv6Addr,
