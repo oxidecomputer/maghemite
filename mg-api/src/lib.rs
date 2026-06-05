@@ -247,19 +247,6 @@ pub trait MgAdminApi {
     // numbered and unnumbered neighbors but lacks src_addr/src_port.
 
     #[endpoint {
-        method = PUT,
-        path = "/bgp/config/neighbor",
-        operation_id = "create_neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR,
-    }]
-    async fn create_neighbor_v5(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v4::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::create_neighbor_v8(rqctx, request.map(Into::into)).await
-    }
-
-    #[endpoint {
         method = GET,
         path = "/bgp/config/neighbor/{asn}/{peer}",
         operation_id = "read_neighbor",
@@ -289,34 +276,20 @@ pub trait MgAdminApi {
             .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
     }
 
-    #[endpoint {
-        method = POST,
-        path = "/bgp/config/neighbor",
-        operation_id = "update_neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR,
-    }]
-    async fn update_neighbor_v5(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<v4::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::update_neighbor_v8(rqctx, request.map(Into::into)).await
-    }
-
     // V4 API - new Neighbor type with explicit per-AF configuration (numbered
-    // peers only). create and update take v4::bgp::config::Neighbor (same schema as V5);
-    // read and delete use a different selector type.
+    // peers only).
 
     #[endpoint {
         method = PUT,
         path = "/bgp/config/neighbor",
         operation_id = "create_neighbor",
-        versions = VERSION_MP_BGP..VERSION_UNNUMBERED,
+        versions = VERSION_MP_BGP..VERSION_BGP_SRC_ADDR,
     }]
     async fn create_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::create_neighbor_v5(rqctx, request).await
+        Self::create_neighbor_v8(rqctx, request.map(Into::into)).await
     }
 
     #[endpoint {
@@ -358,13 +331,13 @@ pub trait MgAdminApi {
         method = POST,
         path = "/bgp/config/neighbor",
         operation_id = "update_neighbor",
-        versions = VERSION_MP_BGP..VERSION_UNNUMBERED,
+        versions = VERSION_MP_BGP..VERSION_BGP_SRC_ADDR,
     }]
     async fn update_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v4::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::update_neighbor_v5(rqctx, request).await
+        Self::update_neighbor_v8(rqctx, request.map(Into::into)).await
     }
 
     // V1/V2 API - legacy Neighbor type with combined import/export policies.
@@ -525,7 +498,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_UNNUMBERED..,
     }]
     async fn delete_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -592,19 +565,6 @@ pub trait MgAdminApi {
         request: TypedBody<v8::bgp::config::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         Self::update_unnumbered_neighbor(rqctx, request.map(Into::into)).await
-    }
-
-    #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/unnumbered-neighbor",
-        operation_id = "delete_unnumbered_neighbor",
-        versions = VERSION_BGP_SRC_ADDR..VERSION_PREFIX_TO_OXNET,
-    }]
-    async fn delete_unnumbered_neighbor_v8(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::delete_unnumbered_neighbor(rqctx, request).await
     }
 
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - unnumbered neighbors
@@ -674,19 +634,6 @@ pub trait MgAdminApi {
     }
 
     #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/unnumbered-neighbor",
-        operation_id = "delete_unnumbered_neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR,
-    }]
-    async fn delete_unnumbered_neighbor_v5(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<v5::bgp::config::UnnumberedNeighborSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::delete_unnumbered_neighbor_v8(rqctx, request).await
-    }
-
-    #[endpoint {
         method = POST,
         path = "/bgp/clear/unnumbered-neighbor",
         versions = VERSION_UNNUMBERED..,
@@ -731,7 +678,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/origin4",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = ..,
     }]
     async fn delete_origin4(
         rqctx: RequestContext<Self::Context>,
@@ -780,19 +727,6 @@ pub trait MgAdminApi {
     }
 
     #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/origin4",
-        operation_id = "delete_origin4",
-        versions = ..VERSION_PREFIX_TO_OXNET,
-    }]
-    async fn delete_origin4_v1(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::delete_origin4(rqctx, request).await
-    }
-
-    #[endpoint {
         method = PUT,
         path = "/bgp/config/origin6",
         versions = VERSION_PREFIX_TO_OXNET..,
@@ -825,7 +759,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/origin6",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_IPV6_BASIC..,
     }]
     async fn delete_origin6(
         rqctx: RequestContext<Self::Context>,
@@ -871,19 +805,6 @@ pub trait MgAdminApi {
         request: TypedBody<v2::bgp::history::Origin6>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         Self::update_origin6(rqctx, request.map(Into::into)).await
-    }
-
-    #[endpoint {
-        method = DELETE,
-        path = "/bgp/config/origin6",
-        operation_id = "delete_origin6",
-        versions = VERSION_IPV6_BASIC..VERSION_PREFIX_TO_OXNET,
-    }]
-    async fn delete_origin6_v2(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseDeleted, HttpError> {
-        Self::delete_origin6(rqctx, request).await
     }
 
     #[endpoint {
