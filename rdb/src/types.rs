@@ -252,11 +252,18 @@ impl From<u16> for Asn {
 }
 
 impl Asn {
+    /// AS 0 is reserved by IANA and MUST NOT appear on the wire (RFC 7607).
+    pub const RESERVED: u32 = 0;
+
     pub fn as_u32(&self) -> u32 {
         match self {
             Self::TwoOctet(value) => u32::from(*value),
             Self::FourOctet(value) => *value,
         }
+    }
+
+    pub fn is_reserved(&self) -> bool {
+        self.as_u32() == Self::RESERVED
     }
 }
 
@@ -408,6 +415,15 @@ mod test {
             bgp: None,
             vlan_id: None,
         }
+    }
+
+    /// AS 0 is reserved (RFC 7607) regardless of two- or four-octet encoding.
+    #[test]
+    fn asn_reserved_is_zero_only() {
+        assert!(Asn::TwoOctet(0).is_reserved());
+        assert!(Asn::FourOctet(0).is_reserved());
+        assert!(!Asn::TwoOctet(1).is_reserved());
+        assert!(!Asn::FourOctet(65000).is_reserved());
     }
 
     /// BGP path identity is purely PeerId. Two paths with the

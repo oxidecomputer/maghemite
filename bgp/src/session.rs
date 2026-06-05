@@ -7174,6 +7174,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Handle an open message
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let remote_asn = om.asn();
+        if Asn::from(remote_asn).is_reserved() {
+            self.send_notification(
+                conn,
+                ErrorCode::Open,
+                ErrorSubcode::Open(OpenErrorSubcode::BadPeerAS),
+            );
+            self.unregister_conn(conn.id());
+            return Err(Error::ReservedPeerAsn);
+        }
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn
             && remote_asn != expected_remote_asn
         {

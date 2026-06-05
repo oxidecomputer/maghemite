@@ -11,6 +11,7 @@ use nom::{
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
 use path_attribute_flags::*;
+use rdb::Asn;
 use std::{
     collections::{BTreeSet, HashSet},
     fmt::{Display, Formatter},
@@ -1373,6 +1374,11 @@ pub fn path_attribute_value_from_wire(
                 segments.push(seg);
                 input = out;
             }
+            if as_path_contains_reserved_asn(&segments) {
+                return Err(UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::AsPath,
+                });
+            }
             Ok(PathAttributeValue::As4Path(segments))
         }
         PathAttributeTypeCode::NextHop => {
@@ -1424,6 +1430,11 @@ pub fn path_attribute_value_from_wire(
                     })?;
                 segments.push(seg);
                 input = out;
+            }
+            if as_path_contains_reserved_asn(&segments) {
+                return Err(UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::As4Path,
+                });
             }
             Ok(PathAttributeValue::As4Path(segments))
         }
@@ -1506,6 +1517,11 @@ pub fn path_attribute_value_from_wire(
                     detail: e,
                 }
             })?;
+            if Asn::from(agg.asn).is_reserved() {
+                return Err(UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::Aggregator,
+                });
+            }
             Ok(PathAttributeValue::Aggregator(agg))
         }
         PathAttributeTypeCode::As4Aggregator => {
@@ -1524,6 +1540,11 @@ pub fn path_attribute_value_from_wire(
                     detail: e,
                 }
             })?;
+            if Asn::from(agg.asn).is_reserved() {
+                return Err(UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::As4Aggregator,
+                });
+            }
             Ok(PathAttributeValue::As4Aggregator(agg))
         }
     }
@@ -1553,6 +1574,14 @@ pub fn as4_path_segment_to_wire(
         buf.extend_from_slice(&v.to_be_bytes());
     }
     Ok(buf)
+}
+
+/// RFC 7607: AS 0 is reserved and MUST NOT appear in an AS path attribute.
+fn as_path_contains_reserved_asn(segments: &[As4PathSegment]) -> bool {
+    segments
+        .iter()
+        .flat_map(|seg| seg.value.iter())
+        .any(|asn| Asn::from(*asn).is_reserved())
 }
 
 pub fn as4_path_segment_from_wire(
@@ -3086,6 +3115,161 @@ mod tests {
 
         // The NLRI should still be parsed (for processing as withdrawals)
         assert!(!msg.nlri.is_empty(), "Expected NLRI to be present");
+    }
+
+    // =========================================================================
+    // RFC 7607 (AS 0) tests
+    // =========================================================================
+
+    /// Append a path-attributes length and NLRI to a partial UPDATE buffer,
+    /// patching the length field at `len_offset`.
+    fn finish_update(buf: &mut Vec<u8>, len_offset: usize, attrs_start: usize) {
+        let attrs_len = (buf.len() - attrs_start) as u16;
+        buf[len_offset..len_offset + 2]
+            .copy_from_slice(&attrs_len.to_be_bytes());
+        // NLRI: 198.51.100.0/24
+        buf.push(24);
+        buf.extend_from_slice(&[198, 51, 100]);
+    }
+
+    /// RFC 7607: AS 0 in AS_PATH makes the UPDATE malformed (treat-as-withdraw).
+    #[test]
+    fn as_path_reserved_as_zero_treated_as_withdraw() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u16.to_be_bytes()); // withdrawn routes length
+        let len_offset = buf.len();
+        buf.extend_from_slice(&0u16.to_be_bytes()); // path attrs length
+        let attrs_start = buf.len();
+
+        // ORIGIN (IGP)
+        buf.extend_from_slice(&[0x40, 1, 1, 0]);
+        // AS_PATH: AS_SEQUENCE with a single AS of 0
+        buf.extend_from_slice(&[0x40, 2, 6, 2, 1]);
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        // NEXT_HOP
+        buf.extend_from_slice(&[0x40, 3, 4, 192, 0, 2, 1]);
+
+        finish_update(&mut buf, len_offset, attrs_start);
+
+        let msg = update_message_from_wire(&buf)
+            .expect("parse should succeed with treat-as-withdraw");
+        assert!(
+            treat_as_withdraw(&msg.errors),
+            "AS 0 in AS_PATH should be treat-as-withdraw"
+        );
+        assert!(
+            msg.errors.iter().any(|(reason, action)| matches!(
+                reason,
+                UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::AsPath
+                }
+            ) && matches!(
+                action,
+                AttributeAction::TreatAsWithdraw
+            )),
+            "expected ReservedAsZero(AsPath) treat-as-withdraw, got {:?}",
+            msg.errors
+        );
+    }
+
+    /// RFC 7607: AS 0 in AGGREGATOR makes the UPDATE malformed; per RFC 7606
+    /// the AGGREGATOR is an informational attribute, so it is discarded while
+    /// the rest of the UPDATE is retained.
+    #[test]
+    fn aggregator_reserved_as_zero_discarded() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        let len_offset = buf.len();
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        let attrs_start = buf.len();
+
+        // ORIGIN, AS_PATH (AS 65000), NEXT_HOP - all valid
+        buf.extend_from_slice(&[0x40, 1, 1, 0]);
+        buf.extend_from_slice(&[0x40, 2, 6, 2, 1]);
+        buf.extend_from_slice(&65000u32.to_be_bytes());
+        buf.extend_from_slice(&[0x40, 3, 4, 192, 0, 2, 1]);
+        // AGGREGATOR: 2-byte AS of 0 + IPv4
+        buf.extend_from_slice(&[0xc0, 7, 6, 0, 0, 192, 0, 2, 1]);
+
+        finish_update(&mut buf, len_offset, attrs_start);
+
+        let msg = update_message_from_wire(&buf).expect("parse should succeed");
+        assert!(
+            !treat_as_withdraw(&msg.errors),
+            "AGGREGATOR error must not withdraw the route"
+        );
+        assert!(
+            msg.errors.iter().any(|(reason, action)| matches!(
+                reason,
+                UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::Aggregator
+                }
+            ) && matches!(
+                action,
+                AttributeAction::Discard
+            )),
+            "expected ReservedAsZero(Aggregator) discard, got {:?}",
+            msg.errors
+        );
+        assert!(
+            !msg.path_attributes.iter().any(|pa| matches!(
+                pa.value,
+                PathAttributeValue::Aggregator(_)
+            )),
+            "AGGREGATOR with AS 0 should be discarded"
+        );
+    }
+
+    /// RFC 7607: AS 0 in AS4_AGGREGATOR is handled the same as AGGREGATOR.
+    #[test]
+    fn as4_aggregator_reserved_as_zero_discarded() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        let len_offset = buf.len();
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        let attrs_start = buf.len();
+
+        buf.extend_from_slice(&[0x40, 1, 1, 0]);
+        buf.extend_from_slice(&[0x40, 2, 6, 2, 1]);
+        buf.extend_from_slice(&65000u32.to_be_bytes());
+        buf.extend_from_slice(&[0x40, 3, 4, 192, 0, 2, 1]);
+        // AS4_AGGREGATOR: 4-byte AS of 0 + IPv4
+        buf.extend_from_slice(&[0xc0, 18, 8]);
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&[192, 0, 2, 1]);
+
+        finish_update(&mut buf, len_offset, attrs_start);
+
+        let msg = update_message_from_wire(&buf).expect("parse should succeed");
+        assert!(!treat_as_withdraw(&msg.errors));
+        assert!(
+            msg.errors.iter().any(|(reason, action)| matches!(
+                reason,
+                UpdateParseErrorReason::ReservedAsZero {
+                    type_code: PathAttributeTypeCode::As4Aggregator
+                }
+            ) && matches!(
+                action,
+                AttributeAction::Discard
+            )),
+            "expected ReservedAsZero(As4Aggregator) discard, got {:?}",
+            msg.errors
+        );
+        assert!(!msg.path_attributes.iter().any(|pa| matches!(
+            pa.value,
+            PathAttributeValue::As4Aggregator(_)
+        )));
+    }
+
+    /// RFC 7607: a peer that advertises AS 0 in its OPEN must be detected as
+    /// using a reserved ASN (the session layer rejects it with Bad Peer AS).
+    #[test]
+    fn open_peer_as_zero_is_reserved() {
+        let om = OpenMessage::new4(0, 30, 0xaabbccdd, false);
+        assert!(Asn::from(om.asn()).is_reserved());
+
+        let om = OpenMessage::new2(0, 30, 0xaabbccdd, false);
+        assert!(Asn::from(om.asn()).is_reserved());
     }
 
     // =========================================================================
