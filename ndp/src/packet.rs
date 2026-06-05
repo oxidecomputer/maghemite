@@ -39,13 +39,8 @@ impl Icmp6RouterAdvertisement {
     const TYPE: u8 = 134;
     const CODE: u8 = 0;
     const DEFAULT_HOPLIMIT: u8 = 255;
-    const MIN_PAYLOAD_LEN: usize = 16;
 
     pub fn from_wire(buf: &[u8]) -> Result<Self, Icmp6RaFromWireError> {
-        // Per RFC 4861 Section 6.1.2: a valid RA has an ICMP payload of >= 16b
-        if buf.len() < Self::MIN_PAYLOAD_LEN {
-            return Err(Icmp6RaFromWireError::TooShort(buf.len()));
-        }
         let s: Self = ispf::from_bytes_be(buf)?;
         if s.typ != Self::TYPE {
             return Err(Icmp6RaFromWireError::WrongType(s.typ));
@@ -90,9 +85,6 @@ impl Default for Icmp6RouterAdvertisement {
 pub enum Icmp6RaFromWireError {
     #[error("deserialization error: {0}")]
     Ispf(#[from] ispf::Error),
-
-    #[error("too short: {0} octets, expected at least 16")]
-    TooShort(usize),
 
     #[error("wrong type: expected {expected}, got {0}", expected = Icmp6RouterAdvertisement::TYPE)]
     WrongType(u8),
@@ -156,4 +148,57 @@ pub enum Icmp6RsFromWireError {
 
     #[error("wrong code: expected {expected}, got {0}", expected = Icmp6RouterSolicitation::CODE)]
     WrongCode(u8),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The kernel does not filter received RAs on length, type, or code, so
+    // from_wire is responsible for rejecting malformed packets.
+
+    fn valid_ra_wire() -> Vec<u8> {
+        ispf::to_bytes_be(&Icmp6RouterAdvertisement::default()).unwrap()
+    }
+
+    #[test]
+    fn valid_ra_round_trips() {
+        let buf = valid_ra_wire();
+        let ra = Icmp6RouterAdvertisement::from_wire(&buf)
+            .expect("a well-formed RA must parse");
+        assert_eq!(ra.typ, Icmp6RouterAdvertisement::TYPE);
+        assert_eq!(ra.code, Icmp6RouterAdvertisement::CODE);
+    }
+
+    #[test]
+    fn undersized_ra_is_rejected() {
+        // Per RFC 4861 Section 6.1.2 a valid RA carries at least 16 octets.
+        for len in 0..16 {
+            let buf = vec![Icmp6RouterAdvertisement::TYPE; len];
+            assert!(
+                Icmp6RouterAdvertisement::from_wire(&buf).is_err(),
+                "RA of {len} octets must be rejected as too short",
+            );
+        }
+    }
+
+    #[test]
+    fn wrong_type_ra_is_rejected() {
+        let mut buf = valid_ra_wire();
+        buf[0] = Icmp6RouterAdvertisement::TYPE + 1;
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&buf),
+            Err(Icmp6RaFromWireError::WrongType(_)),
+        ));
+    }
+
+    #[test]
+    fn wrong_code_ra_is_rejected() {
+        let mut buf = valid_ra_wire();
+        buf[1] = Icmp6RouterAdvertisement::CODE + 1;
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&buf),
+            Err(Icmp6RaFromWireError::WrongCode(_)),
+        ));
+    }
 }
