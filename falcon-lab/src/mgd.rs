@@ -62,6 +62,39 @@ impl MgdNode {
             Err(e) => slog::warn!(d.log, "diagnostics {label}: {e}"),
         }
     }
+
+    pub async fn collect_ndp_diagnostics(
+        &self,
+        d: &Runner,
+        client: &Client,
+        topo: &str,
+    ) {
+        let name = d.get_node(self.0).name.clone();
+        for (suffix, result) in [
+            (
+                "ndp-manager",
+                client
+                    .get_ndp_manager_state()
+                    .await
+                    .map(|r| format!("{:#?}", r.into_inner())),
+            ),
+            (
+                "ndp-interfaces",
+                client
+                    .get_ndp_interfaces()
+                    .await
+                    .map(|r| format!("{:#?}", r.into_inner())),
+            ),
+        ] {
+            let label = format!("{name}-{suffix}");
+            match result {
+                Ok(contents) => crate::diagnostics::write_artifact(
+                    d, topo, &label, None, &contents,
+                ),
+                Err(e) => slog::warn!(d.log, "diagnostics {label}: {e}"),
+            }
+        }
+    }
 }
 
 pub async fn wait_for_mgd(

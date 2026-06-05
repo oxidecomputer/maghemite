@@ -149,3 +149,56 @@ pub enum Icmp6RsFromWireError {
     #[error("wrong code: expected {expected}, got {0}", expected = Icmp6RouterSolicitation::CODE)]
     WrongCode(u8),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The kernel does not filter received RAs on length, type, or code, so
+    // from_wire is responsible for rejecting malformed packets.
+
+    fn valid_ra_wire() -> Vec<u8> {
+        ispf::to_bytes_be(&Icmp6RouterAdvertisement::default()).unwrap()
+    }
+
+    #[test]
+    fn valid_ra_round_trips() {
+        let buf = valid_ra_wire();
+        let ra = Icmp6RouterAdvertisement::from_wire(&buf)
+            .expect("a well-formed RA must parse");
+        assert_eq!(ra.typ, Icmp6RouterAdvertisement::TYPE);
+        assert_eq!(ra.code, Icmp6RouterAdvertisement::CODE);
+    }
+
+    #[test]
+    fn undersized_ra_is_rejected() {
+        // Per RFC 4861 Section 6.1.2 a valid RA carries at least 16 octets.
+        for len in 0..16 {
+            let buf = vec![Icmp6RouterAdvertisement::TYPE; len];
+            assert!(
+                Icmp6RouterAdvertisement::from_wire(&buf).is_err(),
+                "RA of {len} octets must be rejected as too short",
+            );
+        }
+    }
+
+    #[test]
+    fn wrong_type_ra_is_rejected() {
+        let mut buf = valid_ra_wire();
+        buf[0] = Icmp6RouterAdvertisement::TYPE + 1;
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&buf),
+            Err(Icmp6RaFromWireError::WrongType(_)),
+        ));
+    }
+
+    #[test]
+    fn wrong_code_ra_is_rejected() {
+        let mut buf = valid_ra_wire();
+        buf[1] = Icmp6RouterAdvertisement::CODE + 1;
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&buf),
+            Err(Icmp6RaFromWireError::WrongCode(_)),
+        ));
+    }
+}

@@ -35,6 +35,7 @@ mod bfd_admin;
 mod bgp_admin;
 mod error;
 mod log;
+mod ndp_admin;
 mod oxstats;
 mod rib_admin;
 mod signal;

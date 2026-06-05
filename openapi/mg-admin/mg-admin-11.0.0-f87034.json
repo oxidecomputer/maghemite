@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "10.0.0"
+    "version": "11.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1240,19 +1240,7 @@
         "parameters": [
           {
             "in": "query",
-            "name": "asn",
-            "description": "ASN of the router",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "query",
-            "name": "interface",
-            "description": "Interface name",
+            "name": "interface_name",
             "required": true,
             "schema": {
               "type": "string"
@@ -1282,19 +1270,6 @@
     "/ndp/interfaces": {
       "get": {
         "operationId": "get_ndp_interfaces",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "successful operation",
@@ -1322,19 +1297,6 @@
     "/ndp/manager": {
       "get": {
         "operationId": "get_ndp_manager_state",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "successful operation",
