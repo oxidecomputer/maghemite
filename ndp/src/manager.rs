@@ -11,7 +11,7 @@ use crate::util::{
 };
 use mg_common::thread::ManagedThread;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{Logger, error};
+use slog::{Logger, debug, error};
 use socket2::Socket;
 use std::mem::MaybeUninit;
 use std::net::Ipv6Addr;
@@ -340,6 +340,16 @@ impl InterfaceNdpManagerInner {
     /// is updated as well as the time of reception and the stored advertisement
     /// containing the reachable time.
     fn handle_ra(&self, ra: Icmp6RouterAdvertisement, src: Ipv6Addr) {
+        // Per RFC 4861 Section 6.1.2: a valid RA's source is always link-local
+        if !src.is_unicast_link_local() {
+            debug!(
+                self.log,
+                "ignoring RA from non-link-local source {src} on {}",
+                self.ifx.name,
+            );
+            return;
+        }
+
         let mut guard = lock!(self.neighbor_router);
         let now = Instant::now();
 
