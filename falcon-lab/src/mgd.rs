@@ -70,38 +70,28 @@ impl MgdNode {
         topo: &str,
     ) {
         let name = d.get_node(self.0).name.clone();
-        let routers = match client.read_routers().await {
-            Ok(r) => r.into_inner(),
-            Err(e) => {
-                slog::warn!(d.log, "diagnostics {name}-ndp: read routers: {e}");
-                return;
-            }
-        };
-        for router in routers {
-            let asn = router.asn;
-            for (suffix, result) in [
-                (
-                    "ndp-manager",
-                    client
-                        .get_ndp_manager_state(asn)
-                        .await
-                        .map(|r| format!("{:#?}", r.into_inner())),
+        for (suffix, result) in [
+            (
+                "ndp-manager",
+                client
+                    .get_ndp_manager_state()
+                    .await
+                    .map(|r| format!("{:#?}", r.into_inner())),
+            ),
+            (
+                "ndp-interfaces",
+                client
+                    .get_ndp_interfaces()
+                    .await
+                    .map(|r| format!("{:#?}", r.into_inner())),
+            ),
+        ] {
+            let label = format!("{name}-{suffix}");
+            match result {
+                Ok(contents) => crate::diagnostics::write_artifact(
+                    d, topo, &label, None, &contents,
                 ),
-                (
-                    "ndp-interfaces",
-                    client
-                        .get_ndp_interfaces(asn)
-                        .await
-                        .map(|r| format!("{:#?}", r.into_inner())),
-                ),
-            ] {
-                let label = format!("{name}-{suffix}-asn{asn}");
-                match result {
-                    Ok(contents) => crate::diagnostics::write_artifact(
-                        d, topo, &label, None, &contents,
-                    ),
-                    Err(e) => slog::warn!(d.log, "diagnostics {label}: {e}"),
-                }
+                Err(e) => slog::warn!(d.log, "diagnostics {label}: {e}"),
             }
         }
     }

@@ -25,42 +25,32 @@ pub struct StatusArgs {
 #[derive(Subcommand, Debug)]
 pub enum StatusCmd {
     /// Show NDP manager state
-    Manager {
-        #[clap(env)]
-        asn: u32,
-    },
+    Manager,
 
     /// List all NDP-managed interfaces
-    Interfaces {
-        #[clap(env)]
-        asn: u32,
-    },
+    Interfaces,
 
     /// Show detailed state for a specific interface
-    Interface {
-        interface: String,
-        #[clap(env)]
-        asn: u32,
-    },
+    Interface { interface: String },
 }
 
 pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
         Commands::Status(args) => match args.command {
-            StatusCmd::Manager { asn } => ndp_manager_status(asn, c).await?,
-            StatusCmd::Interfaces { asn } => ndp_interfaces(asn, c).await?,
-            StatusCmd::Interface { asn, interface } => {
-                ndp_interface_detail(asn, interface, c).await?
+            StatusCmd::Manager => ndp_manager_status(c).await?,
+            StatusCmd::Interfaces => ndp_interfaces(c).await?,
+            StatusCmd::Interface { interface } => {
+                ndp_interface_detail(interface, c).await?
             }
         },
     }
     Ok(())
 }
 
-async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
-    let state = c.get_ndp_manager_state(asn).await?.into_inner();
+async fn ndp_manager_status(c: Client) -> Result<()> {
+    let state = c.get_ndp_manager_state().await?.into_inner();
 
-    println_nopipe!("NDP Manager State (ASN {})", asn);
+    println_nopipe!("NDP Manager State");
     println_nopipe!("{}", "=".repeat(60));
     println_nopipe!();
 
@@ -104,11 +94,11 @@ async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
-    let interfaces = c.get_ndp_interfaces(asn).await?.into_inner();
+async fn ndp_interfaces(c: Client) -> Result<()> {
+    let interfaces = c.get_ndp_interfaces().await?.into_inner();
 
     if interfaces.is_empty() {
-        println_nopipe!("No NDP-managed interfaces found for ASN {}", asn);
+        println_nopipe!("No NDP-managed interfaces found");
         return Ok(());
     }
 
@@ -128,7 +118,7 @@ async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
     for iface in interfaces {
         let (peer_str, reachable_str) = match &iface.discovered_peer {
             Some(peer) => {
-                let addr_str = format!("{}%{}", peer.address, iface.interface);
+                let addr_str = format!("{}", peer.address);
                 let reachable = if peer.expired {
                     "No".red()
                 } else {
@@ -173,15 +163,8 @@ async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn ndp_interface_detail(
-    asn: u32,
-    interface: String,
-    c: Client,
-) -> Result<()> {
-    let detail = c
-        .get_ndp_interface_detail(asn, &interface)
-        .await?
-        .into_inner();
+async fn ndp_interface_detail(interface: String, c: Client) -> Result<()> {
+    let detail = c.get_ndp_interface_detail(&interface).await?.into_inner();
 
     println_nopipe!("NDP State: {}", interface);
     println_nopipe!("{}", "=".repeat(60));

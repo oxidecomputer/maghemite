@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, ndp_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use dropshot::{
@@ -651,23 +651,35 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_ndp_manager_state(
         ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<NdpManagerState>, HttpError> {
-        bgp_admin::get_ndp_manager_state(ctx, request).await
+        ndp_admin::get_ndp_manager_state(ctx).await
     }
 
     async fn get_ndp_interfaces(
         ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
-        bgp_admin::get_ndp_interfaces(ctx, request).await
+        ndp_admin::get_ndp_interfaces(ctx).await
+    }
+
+    async fn get_ndp_interfaces_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
+        ndp_admin::get_ndp_interfaces_v5(ctx, request).await
     }
 
     async fn get_ndp_interface_detail(
         ctx: RequestContext<Self::Context>,
         request: Query<NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
-        bgp_admin::get_ndp_interface_detail(ctx, request).await
+        ndp_admin::get_ndp_interface_detail(ctx, request).await
+    }
+
+    async fn get_ndp_interface_detail_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v5::ndp::NdpInterfaceSelector>,
+    ) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
+        ndp_admin::get_ndp_interface_detail_v5(ctx, request).await
     }
 }
 

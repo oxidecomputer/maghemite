@@ -177,11 +177,12 @@ pub mod rdb {
 
 pub mod ndp {
     pub use crate::v5::ndp::NdpInterface;
-    pub use crate::v5::ndp::NdpInterfaceSelector;
     pub use crate::v5::ndp::NdpManagerState;
     pub use crate::v5::ndp::NdpPeer;
     pub use crate::v5::ndp::NdpPendingInterface;
     pub use crate::v5::ndp::NdpThreadState;
+
+    pub use crate::v11::ndp::NdpInterfaceSelector;
 }
 
 pub mod rib {

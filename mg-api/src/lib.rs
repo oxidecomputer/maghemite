@@ -24,6 +24,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (11, NDP_NO_ASN),
     (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
     (8, BGP_SRC_ADDR),
@@ -1249,30 +1250,63 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/ndp/manager",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_NDP_NO_ASN..,
     }]
     async fn get_ndp_manager_state(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<latest::ndp::NdpManagerState>, HttpError>;
 
     #[endpoint {
         method = GET,
+        path = "/ndp/manager",
+        operation_id = "get_ndp_manager_state",
+        versions = VERSION_UNNUMBERED..VERSION_NDP_NO_ASN,
+    }]
+    async fn get_ndp_manager_state_v5(
+        rqctx: RequestContext<Self::Context>,
+        _request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<latest::ndp::NdpManagerState>, HttpError> {
+        Self::get_ndp_manager_state(rqctx).await
+    }
+
+    #[endpoint {
+        method = GET,
         path = "/ndp/interfaces",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_NDP_NO_ASN..,
     }]
     async fn get_ndp_interfaces(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<latest::ndp::NdpInterface>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/ndp/interfaces",
+        operation_id = "get_ndp_interfaces",
+        versions = VERSION_UNNUMBERED..VERSION_NDP_NO_ASN,
+    }]
+    async fn get_ndp_interfaces_v5(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<latest::ndp::NdpInterface>>, HttpError>;
 
     #[endpoint {
         method = GET,
         path = "/ndp/interface",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_NDP_NO_ASN..,
     }]
     async fn get_ndp_interface_detail(
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::ndp::NdpInterfaceSelector>,
+    ) -> Result<HttpResponseOk<latest::ndp::NdpInterface>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/ndp/interface",
+        operation_id = "get_ndp_interface_detail",
+        versions = VERSION_UNNUMBERED..VERSION_NDP_NO_ASN,
+    }]
+    async fn get_ndp_interface_detail_v5(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<v5::ndp::NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<latest::ndp::NdpInterface>, HttpError>;
 }
