@@ -3,10 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod db;
+pub mod net;
 pub mod rib;
 pub mod types;
 
 pub use db::Db;
+pub use net::{InvalidIpAddr, RouterIpAddr};
 pub use rib::{Rib, Rib4, Rib6, RibExt};
 pub use types::*;
 pub mod bestpath;
