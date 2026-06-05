@@ -90,7 +90,7 @@ ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.228", features = ["derive"] }
 hostname = "0.4"
 thiserror = "2.0"
-dropshot = { version = "0.17.0", features = [ "usdt-probes" ] }
+dropshot = { version = "0.17.1", features = [ "usdt-probes" ] }
 dropshot-api-manager = "0.7.2"
 dropshot-api-manager-types = "0.7.2"
 expectorate = "1.2.0"
