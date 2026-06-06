@@ -28,10 +28,6 @@ pub enum ImportExportPolicy6 {
     Allow(BTreeSet<Ipv6Net>),
 }
 
-// ---------------------------------------------------------------------------
-// Upgrade conversions: v4 → v10
-// ---------------------------------------------------------------------------
-
 impl From<v4::bgp::policy::ImportExportPolicy4> for ImportExportPolicy4 {
     fn from(old: v4::bgp::policy::ImportExportPolicy4) -> Self {
         match old {
@@ -39,12 +35,7 @@ impl From<v4::bgp::policy::ImportExportPolicy4> for ImportExportPolicy4 {
                 Self::NoFiltering
             }
             v4::bgp::policy::ImportExportPolicy4::Allow(prefixes) => {
-                Self::Allow(
-                    prefixes
-                        .into_iter()
-                        .map(|p| Ipv4Net::new_unchecked(p.value, p.length))
-                        .collect(),
-                )
+                Self::Allow(prefixes.into_iter().map(Into::into).collect())
             }
         }
     }
@@ -57,33 +48,19 @@ impl From<v4::bgp::policy::ImportExportPolicy6> for ImportExportPolicy6 {
                 Self::NoFiltering
             }
             v4::bgp::policy::ImportExportPolicy6::Allow(prefixes) => {
-                Self::Allow(
-                    prefixes
-                        .into_iter()
-                        .map(|p| Ipv6Net::new_unchecked(p.value, p.length))
-                        .collect(),
-                )
+                Self::Allow(prefixes.into_iter().map(Into::into).collect())
             }
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Downgrade conversions: v10 → v4
-// ---------------------------------------------------------------------------
-
 impl From<ImportExportPolicy4> for v4::bgp::policy::ImportExportPolicy4 {
     fn from(new: ImportExportPolicy4) -> Self {
         match new {
             ImportExportPolicy4::NoFiltering => Self::NoFiltering,
-            ImportExportPolicy4::Allow(nets) => Self::Allow(
-                nets.into_iter()
-                    .map(|n| crate::v1::rdb::prefix::Prefix4 {
-                        value: n.addr(),
-                        length: n.width(),
-                    })
-                    .collect(),
-            ),
+            ImportExportPolicy4::Allow(nets) => {
+                Self::Allow(nets.into_iter().map(Into::into).collect())
+            }
         }
     }
 }
@@ -92,14 +69,9 @@ impl From<ImportExportPolicy6> for v4::bgp::policy::ImportExportPolicy6 {
     fn from(new: ImportExportPolicy6) -> Self {
         match new {
             ImportExportPolicy6::NoFiltering => Self::NoFiltering,
-            ImportExportPolicy6::Allow(nets) => Self::Allow(
-                nets.into_iter()
-                    .map(|n| crate::v1::rdb::prefix::Prefix6 {
-                        value: n.addr(),
-                        length: n.width(),
-                    })
-                    .collect(),
-            ),
+            ImportExportPolicy6::Allow(nets) => {
+                Self::Allow(nets.into_iter().map(Into::into).collect())
+            }
         }
     }
 }

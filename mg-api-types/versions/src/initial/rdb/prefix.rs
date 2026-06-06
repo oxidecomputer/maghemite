@@ -284,21 +284,48 @@ impl std::fmt::Display for Prefix {
 impl From<oxnet::IpNet> for Prefix {
     fn from(value: oxnet::IpNet) -> Self {
         match value {
-            oxnet::IpNet::V4(n) => Self::V4(Prefix4 {
-                value: n.addr(),
-                length: n.width(),
-            }),
-            oxnet::IpNet::V6(n) => Self::V6(Prefix6 {
-                value: n.addr(),
-                length: n.width(),
-            }),
+            oxnet::IpNet::V4(p) => Self::V4(p.into()),
+            oxnet::IpNet::V6(p) => Self::V6(p.into()),
         }
     }
 }
 
-impl From<oxnet::Ipv4Net> for Prefix {
+impl From<Prefix> for oxnet::IpNet {
+    fn from(value: Prefix) -> Self {
+        match value {
+            Prefix::V4(prefix4) => oxnet::IpNet::V4(prefix4.into()),
+            Prefix::V6(prefix6) => oxnet::IpNet::V6(prefix6.into()),
+        }
+    }
+}
+
+impl From<oxnet::Ipv4Net> for Prefix4 {
     fn from(value: oxnet::Ipv4Net) -> Self {
-        oxnet::IpNet::from(value).into()
+        Self {
+            value: value.addr(),
+            length: value.width(),
+        }
+    }
+}
+
+impl From<oxnet::Ipv6Net> for Prefix6 {
+    fn from(value: oxnet::Ipv6Net) -> Self {
+        Self {
+            value: value.addr(),
+            length: value.width(),
+        }
+    }
+}
+
+impl From<Prefix4> for oxnet::Ipv4Net {
+    fn from(value: Prefix4) -> Self {
+        Self::new(value.value, value.length).unwrap()
+    }
+}
+
+impl From<Prefix6> for oxnet::Ipv6Net {
+    fn from(value: Prefix6) -> Self {
+        Self::new(value.value, value.length).unwrap()
     }
 }
 

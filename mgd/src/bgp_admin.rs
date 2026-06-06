@@ -845,6 +845,7 @@ pub async fn get_exported_v1(
             HttpError::for_internal_error(format!("error getting origin: {e}"))
         })?
         .into_iter()
+        .map(v1::rdb::prefix::Prefix4::from)
         .map(Into::into)
         .collect();
     let neighs = r.db.get_bgp_neighbors().map_err(|e| {

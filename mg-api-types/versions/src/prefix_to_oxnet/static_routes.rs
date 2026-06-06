@@ -74,7 +74,7 @@ impl From<v10::static_routes::StaticRoute4> for StaticRoute4 {
             rib_priority,
         } = old;
         Self {
-            prefix: Ipv4Net::new_unchecked(prefix.value, prefix.length),
+            prefix: prefix.into(),
             nexthop,
             vlan_id,
             rib_priority,
@@ -119,7 +119,7 @@ impl From<v1::static_routes::StaticRoute4> for StaticRoute4 {
             rib_priority,
         } = old;
         Self {
-            prefix: Ipv4Net::new_unchecked(prefix.value, prefix.length),
+            prefix: prefix.into(),
             nexthop: IpAddr::V4(nexthop),
             vlan_id,
             rib_priority,
@@ -164,7 +164,7 @@ impl From<v2::static_routes::StaticRoute6> for StaticRoute6 {
             rib_priority,
         } = old;
         Self {
-            prefix: Ipv6Net::new_unchecked(prefix.value, prefix.length),
+            prefix: prefix.into(),
             nexthop,
             vlan_id,
             rib_priority,

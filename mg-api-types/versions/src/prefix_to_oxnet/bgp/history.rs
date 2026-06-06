@@ -16,27 +16,16 @@ pub struct Origin6 {
     pub prefixes: Vec<Ipv6Net>,
 }
 
-// ---------------------------------------------------------------------------
-// Upgrade conversion: v2 → v10
-// ---------------------------------------------------------------------------
-
 impl From<v2::bgp::history::Origin6> for Origin6 {
     fn from(old: v2::bgp::history::Origin6) -> Self {
         // v2 is frozen; compile barrier protects against upstream field additions.
         let v2::bgp::history::Origin6 { asn, prefixes } = old;
         Self {
             asn,
-            prefixes: prefixes
-                .into_iter()
-                .map(|p| Ipv6Net::new_unchecked(p.value, p.length))
-                .collect(),
+            prefixes: prefixes.into_iter().map(Into::into).collect(),
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Downgrade conversion: v10 → v2
-// ---------------------------------------------------------------------------
 
 impl From<Origin6> for v2::bgp::history::Origin6 {
     fn from(new: Origin6) -> Self {
@@ -44,13 +33,7 @@ impl From<Origin6> for v2::bgp::history::Origin6 {
         let Origin6 { asn, prefixes } = new;
         Self {
             asn,
-            prefixes: prefixes
-                .into_iter()
-                .map(|n| crate::v1::rdb::prefix::Prefix6 {
-                    value: n.addr(),
-                    length: n.width(),
-                })
-                .collect(),
+            prefixes: prefixes.into_iter().map(Into::into).collect(),
         }
     }
 }

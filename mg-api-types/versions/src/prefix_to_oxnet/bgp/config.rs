@@ -10,7 +10,7 @@ use crate::v1;
 use crate::v4;
 use crate::v8;
 use oxnet::SocketAddrJson;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv4Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -164,10 +164,6 @@ pub struct Origin4 {
     pub prefixes: Vec<Ipv4Net>,
 }
 
-// ---------------------------------------------------------------------------
-// Upgrade conversions: v4 → v10 (for Ipv4/6UnicastConfig used in v8 BgpPeerParameters)
-// ---------------------------------------------------------------------------
-
 impl From<v4::bgp::config::Ipv4UnicastConfig> for Ipv4UnicastConfig {
     fn from(old: v4::bgp::config::Ipv4UnicastConfig) -> Self {
         let v4::bgp::config::Ipv4UnicastConfig {
@@ -197,10 +193,6 @@ impl From<v4::bgp::config::Ipv6UnicastConfig> for Ipv6UnicastConfig {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Upgrade conversions: v8 → v10
-// ---------------------------------------------------------------------------
 
 impl From<v8::bgp::config::BgpPeerParameters> for BgpPeerParameters {
     fn from(old: v8::bgp::config::BgpPeerParameters) -> Self {
@@ -343,17 +335,7 @@ impl From<v8::bgp::config::ApplyRequest> for ApplyRequest {
         } = old;
         Self {
             asn,
-            originate: originate
-                .into_iter()
-                .map(|p| match p {
-                    v1::rdb::prefix::Prefix::V4(p4) => {
-                        IpNet::V4(Ipv4Net::new_unchecked(p4.value, p4.length))
-                    }
-                    v1::rdb::prefix::Prefix::V6(p6) => {
-                        IpNet::V6(Ipv6Net::new_unchecked(p6.value, p6.length))
-                    }
-                })
-                .collect(),
+            originate: originate.into_iter().map(Into::into).collect(),
             checker,
             shaper,
             peers: peers
@@ -383,17 +365,10 @@ impl From<v1::bgp::config::Origin4> for Origin4 {
         let v1::bgp::config::Origin4 { asn, prefixes } = old;
         Self {
             asn,
-            prefixes: prefixes
-                .into_iter()
-                .map(|p| Ipv4Net::new_unchecked(p.value, p.length))
-                .collect(),
+            prefixes: prefixes.into_iter().map(Into::into).collect(),
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Downgrade conversions: v10 → v4 (for Ipv4/6UnicastConfig)
-// ---------------------------------------------------------------------------
 
 impl From<Ipv4UnicastConfig> for v4::bgp::config::Ipv4UnicastConfig {
     fn from(new: Ipv4UnicastConfig) -> Self {
@@ -432,10 +407,6 @@ impl From<Ipv6UnicastConfig> for v4::bgp::config::Ipv6UnicastConfig {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Downgrade conversions: v10 → v8
-// ---------------------------------------------------------------------------
 
 impl From<BgpPeerParameters> for v8::bgp::config::BgpPeerParameters {
     fn from(new: BgpPeerParameters) -> Self {
@@ -615,13 +586,7 @@ impl From<Origin4> for v1::bgp::config::Origin4 {
         let Origin4 { asn, prefixes } = new;
         Self {
             asn,
-            prefixes: prefixes
-                .into_iter()
-                .map(|n| v1::rdb::prefix::Prefix4 {
-                    value: n.addr(),
-                    length: n.width(),
-                })
-                .collect(),
+            prefixes: prefixes.into_iter().map(Into::into).collect(),
         }
     }
 }
