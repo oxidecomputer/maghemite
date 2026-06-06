@@ -22,11 +22,15 @@ use mg_api_types::bgp::config::{
     Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
 };
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use mg_api_types::common::headers::Dscp;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4};
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::Asn;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use std::num::NonZeroU8;
 use std::{
     collections::BTreeSet,
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
@@ -278,6 +282,7 @@ fn create_test_session_info(
             max: 1.0,
         }),
         deterministic_collision_resolution: false,
+        dscp: Default::default(),
     }
 }
 
@@ -1122,6 +1127,153 @@ fn test_basic_update() {
         sockaddr!(&format!("10.0.0.1:{TEST_BGP_PORT}")),
         sockaddr!(&format!("10.0.0.2:{TEST_BGP_PORT}")),
     )
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn session_update_dscp_min_ttl_helper(
+    route_exchange: RouteExchange,
+    r1_addr: SocketAddr,
+    r2_addr: SocketAddr,
+) {
+    let is_ipv6 = r1_addr.ip().is_ipv6();
+    let test_name = if is_ipv6 {
+        "test_session_update_dscp_min_ttl_ipv6"
+    } else {
+        "test_session_update_dscp_min_ttl"
+    };
+
+    let mut r1_info =
+        create_test_session_info(route_exchange, r1_addr, r2_addr, false);
+    r1_info.min_ttl = NonZeroU8::new(64);
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: r1_info,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    route_exchange,
+                    r2_addr,
+                    r1_addr,
+                    false,
+                ),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) =
+        test_setup::<BgpConnectionTcp, BgpListenerTcp>(test_name, &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get session one");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get session two");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Stage 1: bump r1 min_ttl to 65 and session stays Established
+    let peer_config = PeerConfig {
+        name: "r2".into(),
+        group: String::new(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 10,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let mut bump_info =
+        create_test_session_info(route_exchange, r1_addr, r2_addr, false);
+    bump_info.min_ttl = NonZeroU8::new(65);
+    bump_info.dscp = Dscp::CS4;
+
+    r1.router
+        .update_session(peer_config, bump_info)
+        .expect("bump r1 min_ttl to 65");
+
+    let deadline = Instant::now() + ESTABLISHED_VERIFICATION;
+    while Instant::now() < deadline {
+        assert_eq!(
+            r1_session.state(),
+            FsmStateKind::Established,
+            "Stage 1: session must stay established after min_ttl bump to 65"
+        );
+        sleep(Duration::from_millis(500));
+    }
+
+    // Stage 2: set r2 min_ttl to 64.
+    // r2 now sends TTL=64, but r1's incoming filter rejects TTL < 65 causing
+    // HoldTimeExpires to tear down the session.
+    let r2_peer_config = PeerConfig {
+        name: "r1".into(),
+        group: String::new(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 10,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let mut r2_bump =
+        create_test_session_info(route_exchange, r2_addr, r1_addr, false);
+    r2_bump.min_ttl = NonZeroU8::new(64);
+
+    r2.router
+        .update_session(r2_peer_config, r2_bump)
+        .expect("set r2 min_ttl to 64");
+
+    wait_for_neq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_neq!(r2_session.state(), FsmStateKind::Established);
+
+    // Cleanup
+    r1.shutdown();
+    r2.shutdown();
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+#[test]
+fn test_session_update_dscp_min_ttl() {
+    session_update_dscp_min_ttl_helper(
+        RouteExchange::Ipv4 { nexthop: None },
+        sockaddr!(&format!("127.0.0.14:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("127.0.0.15:{TEST_BGP_PORT}")),
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+#[test]
+fn test_session_update_dscp_min_ttl_ipv6() {
+    session_update_dscp_min_ttl_helper(
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::13]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::14]:{TEST_BGP_PORT}")),
+    );
 }
 
 #[test]
@@ -2573,6 +2725,7 @@ fn create_unnumbered_session_info(
         connect_retry_jitter: None,
         idle_hold_jitter: None,
         deterministic_collision_resolution: false,
+        dscp: Default::default(),
     }
 }
 

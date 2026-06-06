@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "10.0.0"
+    "version": "11.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1938,6 +1938,16 @@
             "format": "uint8",
             "minimum": 0
           },
+          "dscp": {
+            "nullable": true,
+            "description": "DSCP value for BFD UDP packets (0-63). Defaults to CS6 (48) when None.",
+            "default": null,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Dscp"
+              }
+            ]
+          },
           "listen": {
             "description": "Address to listen on for control messages from the peer.",
             "type": "string",
@@ -2218,6 +2228,15 @@
             "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
+          "dscp": {
+            "nullable": true,
+            "description": "IP QoS value for BGP connection (IPv4 DSCP or IPv6 Traffic Class). `None` defaults to CS6, per RFC 4271 Appendix E.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Dscp"
+              }
+            ]
+          },
           "enforce_first_as": {
             "type": "boolean"
           },
@@ -2280,7 +2299,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
@@ -2887,6 +2906,13 @@
         "required": [
           "routes"
         ]
+      },
+      "Dscp": {
+        "description": "DSCP value (0-63). Default: CS0 (0).",
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 63
       },
       "Duration": {
         "type": "object",
@@ -3951,6 +3977,15 @@
             "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
+          "dscp": {
+            "nullable": true,
+            "description": "IP QoS value for BGP connection (IPv4 DSCP or IPv6 Traffic Class). `None` defaults to CS6, per RFC 4271 Appendix E.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Dscp"
+              }
+            ]
+          },
           "enforce_first_as": {
             "type": "boolean"
           },
@@ -4016,7 +4051,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
@@ -5417,6 +5452,15 @@
             "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
+          "dscp": {
+            "nullable": true,
+            "description": "IP QoS value for BGP connection (IPv4 DSCP or IPv6 Traffic Class). `None` defaults to CS6, per RFC 4271 Appendix E.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Dscp"
+              }
+            ]
+          },
           "enforce_first_as": {
             "type": "boolean"
           },
@@ -5479,7 +5523,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
@@ -5589,6 +5633,15 @@
             "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
+          "dscp": {
+            "nullable": true,
+            "description": "IP QoS value for BGP connection (IPv4 DSCP or IPv6 Traffic Class). `None` defaults to CS6, per RFC 4271 Appendix E.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Dscp"
+              }
+            ]
+          },
           "enforce_first_as": {
             "type": "boolean"
           },
@@ -5654,7 +5707,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,

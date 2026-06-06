@@ -9,6 +9,7 @@ use crate::{
     config::PeerConfig,
     connection::{
         BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
+        SocketOption,
     },
     error::{Error, ExpectationMismatch},
     fanout::{Egress, Fanout4, Fanout6},
@@ -34,11 +35,11 @@ use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 pub(crate) use mg_api_types::bgp::session::{
     FsmEventCategory, FsmEventRecord, FsmStateKind, MessageHistory,
 };
+use mg_api_types::common::headers::Dscp;
 pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_api_types_versions::v1;
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db};
@@ -49,6 +50,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    num::NonZeroU8,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -513,6 +515,14 @@ pub enum AdminEvent {
 
     /// Fires when we need to re-send our routes to the peer.
     ReAdvertiseRoutes(Afi),
+
+    /// enforce_first_as was just enabled. Walk the RIB and remove
+    /// paths from this peer that fail the first-AS check.
+    EnforceFirstAsEnabled,
+
+    /// A live socket option (TTL, DSCP) has changed. Apply it
+    /// without resetting the session.
+    SocketOptionChanged(SocketOption),
 }
 
 impl AdminEvent {
@@ -536,6 +546,8 @@ impl AdminEvent {
                 Afi::Ipv4 => "re-advertise routes (ipv4 unicast)",
                 Afi::Ipv6 => "re-advertise routes (ipv6 unicast)",
             },
+            AdminEvent::EnforceFirstAsEnabled => "enforce first-as enabled",
+            AdminEvent::SocketOptionChanged(_) => "socket option changed",
         }
     }
 }
@@ -801,7 +813,7 @@ pub struct SessionInfo {
     /// derived by the system.
     pub bind_addr: Option<SocketAddr>,
     /// Minimum acceptable TTL value for incomming BGP packets.
-    pub min_ttl: Option<u8>,
+    pub min_ttl: Option<NonZeroU8>,
     /// Md5 peer authentication key
     pub md5_auth_key: Option<String>,
     /// Multi-exit discriminator. This an optional attribute that is intended to
@@ -848,6 +860,8 @@ pub struct SessionInfo {
     /// resolution even when one connection is already in Established state.
     /// When false, Established connection always wins (timing-based resolution).
     pub deterministic_collision_resolution: bool,
+    /// DSCP value used for QoS marking of IP packets carrying BGP TCP session.
+    pub dscp: Dscp,
 }
 
 impl SessionInfo {
@@ -884,6 +898,7 @@ impl SessionInfo {
             }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
+            dscp: Dscp::CS6,
         }
     }
 }
@@ -917,6 +932,7 @@ impl From<&BgpPeerParameters> for SessionInfo {
             connect_retry_jitter,
             src_addr,
             src_port,
+            dscp,
         } = value.clone();
 
         SessionInfo {
@@ -943,67 +959,7 @@ impl From<&BgpPeerParameters> for SessionInfo {
             deterministic_collision_resolution,
             ipv4_unicast,
             ipv6_unicast,
-        }
-    }
-}
-
-impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
-    fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
-        // v1 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v1 contract has
-        // been violated upstream.
-        let v1::bgp::config::BgpPeerParameters {
-            hold_time,
-            idle_hold_time,
-            delay_open,
-            connect_retry,
-            keepalive,
-            resolution,
-            passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities,
-            local_pref,
-            enforce_first_as,
-            allow_import,
-            allow_export,
-            vlan_id,
-        } = value.clone();
-
-        SessionInfo {
-            passive_tcp_establishment: passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities: communities.into_iter().collect(),
-            local_pref,
-            enforce_first_as,
-            vlan_id,
-            remote_id: None,
-            bind_addr: None,
-            connect_retry_time: Duration::from_secs(connect_retry),
-            keepalive_time: Duration::from_secs(keepalive),
-            hold_time: Duration::from_secs(hold_time),
-            idle_hold_time: Duration::from_secs(idle_hold_time),
-            delay_open_time: Duration::from_secs(delay_open),
-            resolution: Duration::from_millis(resolution),
-            idle_hold_jitter: None,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            deterministic_collision_resolution: false,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: ImportExportPolicy4::from(allow_import),
-                export_policy: ImportExportPolicy4::from(allow_export),
-            }),
-            ipv6_unicast: None,
+            dscp: dscp.unwrap_or(Dscp::CS6),
         }
     }
 }
@@ -1965,6 +1921,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
+    /// Apply TTL/DSCP from current session config to a live connection.
+    /// This is safe to call on any connection — failures are logged but
+    /// do not prevent the connection from being used.
+    fn apply_current_qos(&self, conn: &Arc<Cnx>) {
+        let session = lock!(self.session);
+
+        if let Err(e) =
+            conn.update_socket_option(&SocketOption::MinTtl(session.min_ttl))
+        {
+            session_log_lite!(self, warn,
+                "failed to set TTL: {e}";
+            );
+        }
+        if let Err(e) =
+            conn.update_socket_option(&SocketOption::Dscp(session.dscp))
+        {
+            session_log_lite!(self, warn,
+                "failed to set DSCP: {e}";
+            );
+        }
+    }
+
     /// Remove a connection from the registry
     fn unregister_conn(&self, conn_id: &ConnectionId) {
         // Remove from connection registry
@@ -2387,7 +2365,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled
+                    | AdminEvent::SocketOptionChanged(_) => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -2632,7 +2612,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled
+                    | AdminEvent::SocketOptionChanged(_) => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -2755,6 +2737,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                                 return FsmState::Idle;
                             }
+                            self.apply_current_qos(&accepted);
 
                             conn_timer!(&accepted, hold).restart();
 
@@ -2992,7 +2975,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled
+                    | AdminEvent::SocketOptionChanged(_) => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -3251,6 +3236,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             );
                             return FsmState::Idle;
                         }
+                        self.apply_current_qos(&accepted);
 
                         conn_timer!(&accepted, hold).restart();
 
@@ -3364,7 +3350,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         session_log!(
                             self,
@@ -3373,6 +3360,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
+                        continue;
+                    }
+
+                    AdminEvent::SocketOptionChanged(option) => {
+                        if let Err(e) = conn.update_socket_option(&option) {
+                            session_log!(
+                                self,
+                                error,
+                                conn,
+                                "failed to update socket option: {e}";
+                                "error" => format!("{e}")
+                            );
+                        }
                         continue;
                     }
                 },
@@ -3509,6 +3509,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.stop(Some(&new), None, StopReason::IoError);
                             continue;
                         }
+                        self.apply_current_qos(&new);
 
                         conn_timer!(&new, hold).restart();
 
@@ -3940,7 +3941,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 | AdminEvent::CheckerChanged(_)
                 | AdminEvent::ManualStart
                 | AdminEvent::SendRouteRefresh(_)
-                | AdminEvent::ReAdvertiseRoutes(_) => {
+                | AdminEvent::ReAdvertiseRoutes(_)
+                | AdminEvent::EnforceFirstAsEnabled => {
                     let title = admin_event.title();
                     session_log!(
                         self,
@@ -3949,6 +3951,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "unexpected admin fsm event {title}, ignoring";
                         "event" => title
                     );
+                    FsmState::OpenConfirm(pc)
+                }
+
+                AdminEvent::SocketOptionChanged(option) => {
+                    if let Err(e) = pc.conn.update_socket_option(&option) {
+                        session_log!(
+                            self,
+                            error,
+                            pc.conn,
+                            "failed to update socket option: {e}";
+                            "error" => format!("{e}")
+                        );
+                    }
                     FsmState::OpenConfirm(pc)
                 }
             },
@@ -4301,6 +4316,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.stop(Some(&new), None, StopReason::IoError);
                         return FsmState::OpenConfirm(pc);
                     }
+                    self.apply_current_qos(&new);
 
                     conn_timer!(&new, hold).restart();
 
@@ -4465,7 +4481,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled
+                    | AdminEvent::SocketOptionChanged(_) => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -5315,7 +5333,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled
+                    | AdminEvent::SocketOptionChanged(_) => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -6524,6 +6544,37 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "unexpected admin fsm event {title}, ignoring";
                         "event" => title
                     );
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::EnforceFirstAsEnabled => {
+                    let peer_as = lock!(self.session).remote_asn;
+                    if let Some(peer_as) = peer_as {
+                        let peer_id = self.peer_id();
+                        self.db.remove_bgp_peer_paths_where(
+                            &peer_id,
+                            move |props| {
+                                props
+                                    .as_path
+                                    .first()
+                                    .map(|first| *first != peer_as)
+                                    .unwrap_or(true)
+                            },
+                        );
+                    }
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::SocketOptionChanged(option) => {
+                    if let Err(e) = pc.conn.update_socket_option(&option) {
+                        session_log!(
+                            self,
+                            error,
+                            pc.conn,
+                            "failed to update socket option: {e}";
+                            "error" => format!("{e}")
+                        );
+                    }
                     FsmState::Established(pc)
                 }
             },
@@ -8876,6 +8927,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut readvertise_needed6 = false;
         let mut refresh_needed4 = false;
         let mut refresh_needed6 = false;
+        let mut socket_updates: Vec<SocketOption> = Vec::new();
+        let mut enable_first_as = false;
         let mut current = lock!(self.session);
 
         current.passive_tcp_establishment = info.passive_tcp_establishment;
@@ -8892,7 +8945,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.min_ttl != info.min_ttl {
             current.min_ttl = info.min_ttl;
-            reset_needed = true;
+            socket_updates.push(SocketOption::MinTtl(info.min_ttl));
         }
 
         if current.md5_auth_key != info.md5_auth_key {
@@ -8920,15 +8973,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.enforce_first_as != info.enforce_first_as {
             current.enforce_first_as = info.enforce_first_as;
-            // XXX: handle more gracefully.
-            //      disabling = send route refresh
-            //      enabling = run rib walker + delete paths failing check
-            reset_needed = true;
+            if info.enforce_first_as {
+                // enabling — RIB walk will happen in established handler
+                enable_first_as = true;
+            } else {
+                // disabling — send route refresh so we re-learn all routes
+                refresh_needed4 = true;
+                refresh_needed6 = true;
+            }
         }
 
         if current.vlan_id != info.vlan_id {
             current.vlan_id = info.vlan_id;
             reset_needed = true;
+        }
+
+        if current.dscp != info.dscp {
+            current.dscp = info.dscp;
+            socket_updates.push(SocketOption::Dscp(info.dscp));
         }
 
         // Update jitter settings (no session reset required)
@@ -9035,6 +9097,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if refresh_needed6 {
             self.event_tx
                 .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(Afi::Ipv6)))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        for option in socket_updates {
+            self.event_tx
+                .send(FsmEvent::Admin(AdminEvent::SocketOptionChanged(option)))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        if enable_first_as {
+            self.event_tx
+                .send(FsmEvent::Admin(AdminEvent::EnforceFirstAsEnabled))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }
 

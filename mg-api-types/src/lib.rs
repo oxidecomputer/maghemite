@@ -19,6 +19,7 @@
 
 pub mod bfd;
 pub mod bgp;
+pub mod common;
 pub mod ndp;
 pub mod rdb;
 pub mod rib;

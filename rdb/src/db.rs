@@ -17,7 +17,7 @@ use chrono::Utc;
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
-use mg_api_types::rdb::path::Path;
+use mg_api_types::rdb::path::{BgpPathProperties, Path};
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
@@ -1303,6 +1303,40 @@ impl Db {
         self.remove_bgp_prefixes(&peer_routes6, peer);
     }
 
+    /// Remove BGP paths from a specific peer that match an additional
+    /// predicate. Used for policy changes like enforce-first-AS that
+    /// need to selectively remove a subset of a peer's paths.
+    pub fn remove_bgp_peer_paths_where<F>(&self, peer: &PeerId, predicate: F)
+    where
+        F: Fn(&BgpPathProperties) -> bool,
+    {
+        let all_prefixes4: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv4))
+            .keys()
+            .copied()
+            .collect();
+        let all_prefixes6: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv6))
+            .keys()
+            .copied()
+            .collect();
+
+        let mut all_prefixes = Vec::new();
+        all_prefixes.extend(all_prefixes4);
+        all_prefixes.extend(all_prefixes6);
+
+        self.remove_path_for_prefixes(&all_prefixes, |path: &Path| match path
+            .bgp
+        {
+            Some(ref bgp) => bgp.peer == *peer && predicate(bgp),
+            None => false,
+        });
+
+        let mut pcn = PrefixChangeNotification::default();
+        pcn.changed.extend(all_prefixes);
+        self.notify(pcn);
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
@@ -2373,5 +2407,80 @@ mod test {
         assert!("invalid".parse::<Prefix6>().is_err());
         assert!("2001:db8:".parse::<Prefix6>().is_err());
         assert!("2001:db8::/abc".parse::<Prefix6>().is_err());
+    }
+
+    #[test]
+    fn test_remove_bgp_peer_paths_where() {
+        use mg_api_types::bgp::peer::PeerId;
+        use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
+        use mg_api_types::rdb::path::Path;
+        use mg_api_types::rdb::prefix::{Prefix, Prefix4};
+
+        let localhost4 = IpAddr::from(Ipv4Addr::LOCALHOST);
+        let peer = PeerId::Ip(localhost4);
+
+        let ok_path = Path {
+            nexthop: localhost4,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(mg_api_types::rdb::path::BgpPathProperties {
+                origin_as: 100,
+                peer: peer.clone(),
+                id: 1,
+                med: None,
+                local_pref: None,
+                as_path: vec![65001],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        let bad_path = Path {
+            nexthop: localhost4,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(mg_api_types::rdb::path::BgpPathProperties {
+                origin_as: 200,
+                peer: peer.clone(),
+                id: 2,
+                med: None,
+                local_pref: None,
+                as_path: vec![99999],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        let p1 = Prefix::from("10.0.0.0/24".parse::<Prefix4>().unwrap());
+        let p2 = Prefix::from("10.0.1.0/24".parse::<Prefix4>().unwrap());
+
+        let test_db = get_test_db();
+        let db = test_db.db();
+        let peer_id = PeerId::Ip(localhost4);
+
+        db.add_bgp_prefixes(&[p1], ok_path.clone());
+        db.add_bgp_prefixes(&[p2], bad_path.clone());
+
+        assert_eq!(db.get_prefix_paths(&p1).len(), 1);
+        assert_eq!(db.get_prefix_paths(&p2).len(), 1);
+
+        // Remove paths that have first AS != 65001
+        db.remove_bgp_peer_paths_where(&peer_id, |props| {
+            props
+                .as_path
+                .first()
+                .map(|asn| *asn != 65001)
+                .unwrap_or(true)
+        });
+
+        // p1 (ok_path, AS 65001) should remain
+        let p1_paths = db.get_prefix_paths(&p1);
+        assert_eq!(p1_paths.len(), 1);
+        assert_eq!(p1_paths[0].bgp.as_ref().unwrap().as_path[0], 65001);
+
+        // p2 (bad_path, AS 99999) should be removed
+        assert_eq!(db.get_prefix_paths(&p2).len(), 0);
     }
 }

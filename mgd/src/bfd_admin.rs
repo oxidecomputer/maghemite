@@ -12,6 +12,7 @@ use dropshot::{
 use mg_api_types::bfd::BfdPeerInfo;
 use mg_api_types::bfd::DeleteBfdPeerPathParams;
 use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
+use mg_api_types::common::headers::Dscp;
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
 use slog::Logger;
@@ -79,6 +80,7 @@ pub(crate) async fn get_bfd_peers(
                         "no listener for {addr}"
                     )))?,
                 mode: session.mode,
+                dscp: Some(session.dscp),
             },
             state: session.sm.current(),
         });
@@ -123,12 +125,15 @@ pub(crate) fn add_peer(
 
     let log = ctx.log.clone();
 
+    let dscp = rq.dscp.unwrap_or(Dscp::CS6);
+
     let (ch, egress_thread) = channel(
         dispatcher,
         rq.listen,
         rq.peer,
         src_port,
         dst_port,
+        dscp,
         ctx.log.clone(),
     )
     .map_err(|e| {
@@ -149,6 +154,7 @@ pub(crate) fn add_peer(
                 required_rx: Duration::from_micros(rq.required_rx),
                 detection_multiplier: rq.detection_threshold,
                 mode: rq.mode,
+                dscp,
                 endpoint: ch,
                 egress_thread: Some(egress_thread),
                 db,
@@ -216,6 +222,7 @@ pub(crate) fn channel(
     peer: IpAddr,
     src_port: u16,
     dst_port: u16,
+    dscp: Dscp,
     log: Logger,
 ) -> Result<(BfdEndpoint, Arc<ManagedThread>)> {
     let (local, remote) = bidi::channel();
@@ -227,21 +234,65 @@ pub(crate) fn channel(
 
     // Spawn an egress thread to take packets from the session and send them
     // out a UDP socket.
-    let egress_thread =
-        egress(remote.rx, listen, peer, src_port, dst_port, log.clone())?;
+    let egress_thread = egress(
+        remote.rx,
+        listen,
+        peer,
+        src_port,
+        dst_port,
+        dscp,
+        log.clone(),
+    )?;
 
     Ok((local, egress_thread))
 }
 
+#[cfg(not(target_os = "illumos"))]
+fn set_bfd_dscp(sock: &Socket, addr: IpAddr, tos: u32) -> std::io::Result<()> {
+    match addr {
+        IpAddr::V4(_) => sock.set_tos_v4(tos)?,
+        IpAddr::V6(_) => sock.set_tclass_v6(tos)?,
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "illumos")]
+fn set_bfd_dscp(sock: &Socket, addr: IpAddr, tos: u32) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let (level, opt) = match addr {
+        IpAddr::V4(_) => (libc::IPPROTO_IP, libc::IP_TOS),
+        IpAddr::V6(_) => (libc::IPPROTO_IPV6, libc::IPV6_TCLASS),
+    };
+    unsafe {
+        if libc::setsockopt(
+            sock.as_raw_fd(),
+            level,
+            opt,
+            &tos as *const u32 as *const libc::c_void,
+            std::mem::size_of::<u32>() as u32,
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Bind a UDP socket for BFD egress and configure the TTL/Hop Limit to 255
 /// per RFC 5881 (Single-Hop BFD).
-fn egress_socket(local: IpAddr, src_port: u16) -> std::io::Result<UdpSocket> {
+fn egress_socket(
+    local: IpAddr,
+    src_port: u16,
+    dscp: Dscp,
+) -> std::io::Result<UdpSocket> {
     let sk = UdpSocket::bind(SocketAddr::new(local, src_port))?;
     let sock = Socket::from(sk);
+    let tos = u32::from(dscp.as_tos_byte());
     match local {
         IpAddr::V4(_) => sock.set_ttl_v4(DEFAULT_BFD_TTL)?,
         IpAddr::V6(_) => sock.set_unicast_hops_v6(DEFAULT_BFD_TTL)?,
     };
+    set_bfd_dscp(&sock, local, tos)?;
     Ok(sock.into())
 }
 
@@ -253,6 +304,7 @@ fn egress(
     peer: IpAddr,
     src_port: u16,
     dst_port: u16,
+    dscp: Dscp,
     log: Logger,
 ) -> Result<Arc<ManagedThread>> {
     let thread = Arc::new(ManagedThread::new());
@@ -269,7 +321,7 @@ fn egress(
                     break;
                 }
 
-                let sk = match egress_socket(local, src_port) {
+                let sk = match egress_socket(local, src_port, dscp) {
                     Err(e) => {
                         bfd_log!(log, error, "failed to bind egress socket: {e}";
                             "error" => format!("{e}")
@@ -502,7 +554,7 @@ mod test {
 
     #[test]
     fn egress_socket_sets_ttl_v4() {
-        let sk = egress_socket("127.0.0.1".parse().unwrap(), 0)
+        let sk = egress_socket("127.0.0.1".parse().unwrap(), 0, Dscp::CS6)
             .expect("failed to create v4 egress socket");
         let sock = Socket::from(sk);
         assert_eq!(sock.ttl_v4().unwrap(), DEFAULT_BFD_TTL);
@@ -510,7 +562,7 @@ mod test {
 
     #[test]
     fn egress_socket_sets_hop_limit_v6() {
-        let sk = egress_socket("::1".parse().unwrap(), 0)
+        let sk = egress_socket("::1".parse().unwrap(), 0, Dscp::CS6)
             .expect("failed to create v6 egress socket");
         let sock = Socket::from(sk);
         assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);

@@ -10,6 +10,7 @@ use crate::{
     session::{FsmEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::common::headers::Dscp;
 use slog::Logger;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -56,14 +57,6 @@ pub trait BgpListener<Cnx: BgpConnection> {
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
         timeout: Duration,
     ) -> Result<Cnx, Error>;
-
-    /// Apply policy to an established connection. This is called by the
-    /// Dispatcher after accept() returns and session lookup is completed.
-    fn apply_policy(
-        conn: &Cnx,
-        min_ttl: Option<u8>,
-        md5_key: Option<String>,
-    ) -> Result<(), Error>;
 
     /// `SocketAddr` the listener is receiving connections on
     fn bind_addr(&self) -> SocketAddr;
@@ -134,6 +127,21 @@ pub trait BgpConnection: Send + Sync + Sized {
     /// Start the receive loop for this connection. This method is idempotent.
     /// Returns Ok(()) upon successful start of recv loop, else Err.
     fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
+
+    /// Update a socket option on a live connection. Used to apply
+    /// configuration changes (DSCP, TTL) without resetting the session.
+    fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error>;
+
+    /// Apply MD5 authentication key to a live connection.
+    /// This is a no-op on platforms that don't support MD5 BGP auth.
+    fn apply_md5(&self, key: &str) -> Result<(), Error>;
+}
+
+/// A socket option that can be updated on a live BGP connection.
+#[derive(Clone, Debug)]
+pub enum SocketOption {
+    Dscp(Dscp),
+    MinTtl(Option<std::num::NonZeroU8>),
 }
 
 pub use mg_common::thread::{ManagedThread, ThreadState};
