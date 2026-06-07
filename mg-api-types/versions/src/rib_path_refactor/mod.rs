@@ -7,3 +7,4 @@
 //! Updated shape of Path to allow for better composition.
 
 pub mod bgp;
+pub mod rdb;
