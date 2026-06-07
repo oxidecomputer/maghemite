@@ -416,6 +416,143 @@ impl AsPath {
     }
 }
 
+#[derive(Debug)]
+pub enum CommunityParseError {
+    BadFormat,
+    BadValue,
+}
+
+impl std::fmt::Display for CommunityParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommunityParseError::BadFormat => write!(f, "Bad Format"),
+            CommunityParseError::BadValue => write!(f, "Bad Value"),
+        }
+    }
+}
+
+impl std::error::Error for CommunityParseError {}
+
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Community(u32);
+
+impl Community {
+    // RFC 8326
+    pub const GRACEFUL_SHUTDOWN: Self = Self(0xFFFF_0000);
+
+    // RFC 7611
+    pub const ACCEPT_OWN: Self = Self(0xFFFF_0001);
+
+    // draft-l3vpn-legacy-rtc-00
+    pub const ROUTE_FILTER_TRANSLATED_V4: Self = Self(0xFFFF_0002);
+    pub const ROUTE_FILTER_V4: Self = Self(0xFFFF_0003);
+    pub const ROUTE_FILTER_TRANSLATED_V6: Self = Self(0xFFFF_0004);
+    pub const ROUTE_FILTER_V6: Self = Self(0xFFFF_0005);
+
+    // RFC 9494
+    pub const LLGR_STALE: Self = Self(0xFFFF_0006);
+    pub const NO_LLGR: Self = Self(0xFFFF_0007);
+
+    // draft-agrewal-idr-accept-own-nexthop-00
+    pub const ACCEPT_OWN_NEXTHOP: Self = Self(0xFFFF_0008);
+
+    // RFC 9026
+    pub const STANDBY_PE: Self = Self(0xFFFF_0009);
+
+    // RFC 7999
+    pub const BLACKHOLE: Self = Self(0xFFFF_029A);
+
+    // RFC 1997
+    pub const NO_EXPORT: Self = Self(0xFFFF_FF01);
+    pub const NO_ADVERTISE: Self = Self(0xFFFF_FF02);
+    pub const NO_EXPORT_SUBCONFED: Self = Self(0xFFFF_FF03);
+    // LOCAL_AS seems to be a common display alias originally coined by Cisco,
+    // rather than a standardized name. We'll support it for input convenience,
+    // but for output we will display NO_EXPORT_SUBCONFED.
+    pub const LOCAL_AS: Self = Self::NO_EXPORT_SUBCONFED;
+
+    // RFC 3765
+    pub const NO_PEER: Self = Self(0xFFFF_FF04);
+}
+
+impl From<u32> for Community {
+    fn from(v: u32) -> Self {
+        Self(v)
+    }
+}
+
+impl From<Community> for u32 {
+    fn from(c: Community) -> u32 {
+        c.0
+    }
+}
+
+impl std::fmt::Display for Community {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::GRACEFUL_SHUTDOWN => write!(f, "Graceful-Shutdown"),
+            Self::ACCEPT_OWN => write!(f, "Accept-Own"),
+            Self::ROUTE_FILTER_TRANSLATED_V4 => {
+                write!(f, "Route-Filter-Translated-V4")
+            }
+            Self::ROUTE_FILTER_V4 => write!(f, "Route-Filter-V4"),
+            Self::ROUTE_FILTER_TRANSLATED_V6 => {
+                write!(f, "Route-Filter-Translated-V6")
+            }
+            Self::ROUTE_FILTER_V6 => write!(f, "Route-Filter-V6"),
+            Self::LLGR_STALE => write!(f, "LLGR-Stale"),
+            Self::NO_LLGR => write!(f, "No-LLGR"),
+            Self::ACCEPT_OWN_NEXTHOP => write!(f, "Accept-Own-Nexthop"),
+            Self::STANDBY_PE => write!(f, "Standby-PE"),
+            Self::BLACKHOLE => write!(f, "Blackhole"),
+            Self::NO_EXPORT => write!(f, "No-Export"),
+            Self::NO_ADVERTISE => write!(f, "No-Advertise"),
+            // Display NO_EXPORT_SUBCONFED over LOCAL_AS
+            Self::NO_EXPORT_SUBCONFED => write!(f, "No-Export-SubConfed"),
+            Self::NO_PEER => write!(f, "No-Peer"),
+            Self(v) => write!(f, "{}:{}", v >> 16, v & 0xFFFF),
+        }
+    }
+}
+
+impl std::str::FromStr for Community {
+    type Err = CommunityParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "graceful-shutdown" => Ok(Self::GRACEFUL_SHUTDOWN),
+            "accept-own" => Ok(Self::ACCEPT_OWN),
+            "route-filter-translated-v4" => {
+                Ok(Self::ROUTE_FILTER_TRANSLATED_V4)
+            }
+            "route-filter-v4" => Ok(Self::ROUTE_FILTER_V4),
+            "route-filter-translated-v6" => {
+                Ok(Self::ROUTE_FILTER_TRANSLATED_V6)
+            }
+            "route-filter-v6" => Ok(Self::ROUTE_FILTER_V6),
+            "llgr-stale" => Ok(Self::LLGR_STALE),
+            "no-llgr" => Ok(Self::NO_LLGR),
+            "accept-own-nexthop" => Ok(Self::ACCEPT_OWN_NEXTHOP),
+            "standby-pe" => Ok(Self::STANDBY_PE),
+            "blackhole" => Ok(Self::BLACKHOLE),
+            "no-export" => Ok(Self::NO_EXPORT),
+            "no-advertise" => Ok(Self::NO_ADVERTISE),
+            "no-export-subconfed" => Ok(Self::NO_EXPORT_SUBCONFED),
+            "no-peer" => Ok(Self::NO_PEER),
+            s => {
+                // parse "AA:NN" format
+                let (hi, lo) =
+                    s.split_once(':').ok_or(CommunityParseError::BadFormat)?;
+                let hi: u16 =
+                    hi.parse().map_err(|_| CommunityParseError::BadValue)?;
+                let lo: u16 =
+                    lo.parse().map_err(|_| CommunityParseError::BadValue)?;
+                Ok(Self((u32::from(hi)) << 16 | u32::from(lo)))
+            }
+        }
+    }
+}
+
 /// The value encoding of a path attribute.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
