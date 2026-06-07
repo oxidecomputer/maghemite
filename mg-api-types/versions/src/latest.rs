@@ -115,16 +115,21 @@ pub mod bgp {
         pub use crate::v4::bgp::messages::PathAttributeTypeCode;
         pub use crate::v4::bgp::messages::path_attribute_flags;
 
-        pub use crate::v11::bgp::messages::Message;
         pub use crate::v11::bgp::messages::MpReachIpv4Unicast;
         pub use crate::v11::bgp::messages::MpReachIpv6Unicast;
         pub use crate::v11::bgp::messages::MpReachNlri;
         pub use crate::v11::bgp::messages::MpUnreachIpv4Unicast;
         pub use crate::v11::bgp::messages::MpUnreachIpv6Unicast;
         pub use crate::v11::bgp::messages::MpUnreachNlri;
-        pub use crate::v11::bgp::messages::PathAttribute;
-        pub use crate::v11::bgp::messages::PathAttributeValue;
-        pub use crate::v11::bgp::messages::UpdateMessage;
+
+        pub use crate::v12::bgp::messages::AsPath;
+        pub use crate::v12::bgp::messages::AsPathSegment;
+        pub use crate::v12::bgp::messages::AsSequence;
+        pub use crate::v12::bgp::messages::AsSet;
+        pub use crate::v12::bgp::messages::Message;
+        pub use crate::v12::bgp::messages::PathAttribute;
+        pub use crate::v12::bgp::messages::PathAttributeValue;
+        pub use crate::v12::bgp::messages::UpdateMessage;
     }
 
     pub mod session {
