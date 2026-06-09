@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types::db::TunnelRoute;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::db::{MulticastRoute, TunnelRoute};
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
@@ -20,6 +20,10 @@ const ORIGINATE: &str = "originate";
 /// The handle used to open a persistent key-value tree for originated
 /// tunnel endpoints.
 const TUNNEL_ORIGINATE: &str = "tunnel_originate";
+
+/// The handle used to open a persistent key-value tree for originated
+/// multicast groups.
+const MCAST_ORIGINATE: &str = "mcast_originate";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -43,10 +47,27 @@ pub struct Db {
     log: Logger,
 }
 
+/// The realized change to the imported multicast set after applying an update.
+///
+/// This holds the routes that actually became present or absent, computed as
+/// the set difference between the pre- and post-update state rather than the
+/// raw request. Downstream consumers reconcile only these groups, so an update
+/// that re-imports an existing route or withdraws an absent one yields an empty
+/// delta and triggers no work.
+#[derive(Debug, Default, Clone)]
+pub struct McastRibDelta {
+    /// Routes newly present after the update.
+    pub added: HashSet<MulticastRoute>,
+
+    /// Routes no longer present after the update.
+    pub removed: HashSet<MulticastRoute>,
+}
+
 #[derive(Default, Clone)]
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
+    pub imported_mcast: HashSet<MulticastRoute>,
 }
 
 unsafe impl Sync for Db {}
@@ -80,6 +101,32 @@ impl Db {
         lock!(self.data).imported_tunnel.len()
     }
 
+    pub fn imported_mcast(&self) -> HashSet<MulticastRoute> {
+        lock!(self.data).imported_mcast.clone()
+    }
+
+    pub fn imported_mcast_count(&self) -> usize {
+        lock!(self.data).imported_mcast.len()
+    }
+
+    /// Underlay groups imported via `nexthop`, deduplicated.
+    ///
+    /// Filters under the lock and returns only the distinct group addresses, so
+    /// the caller never clones the full imported set just to keep one peer's
+    /// routes. This is the non-destructive analog of the next-hop filter in
+    /// [`Db::remove_nexthop_routes`].
+    pub fn mcast_groups_for_nexthop(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> HashSet<Ipv6Addr> {
+        lock!(self.data)
+            .imported_mcast
+            .iter()
+            .filter(|route| route.nexthop == nexthop)
+            .map(|route| route.origin.underlay_group.ip())
+            .collect()
+    }
+
     pub fn import(&self, r: &HashSet<Route>) {
         lock!(self.data).imported.extend(r.clone());
     }
@@ -100,6 +147,38 @@ impl Db {
         for x in r {
             imported.remove(x);
         }
+    }
+
+    /// Atomically import and delete multicast routes under a single lock,
+    /// returning the effective [`McastRibDelta`] against the state before any
+    /// mutation.
+    ///
+    /// This avoids a TOCTOU race where concurrent mutations between separate
+    /// lock acquisitions could produce an incorrect view difference.
+    pub fn update_imported_mcast(
+        &self,
+        import: &HashSet<MulticastRoute>,
+        remove: &HashSet<MulticastRoute>,
+    ) -> McastRibDelta {
+        let mut data = lock!(self.data);
+
+        let before = data.imported_mcast.clone();
+        // A re-import carries the route's latest path vector. Route identity
+        // (PartialEq/Hash) excludes the path, so `extend`/`insert` would keep
+        // the existing entry and retain a stale path. `replace` overwrites the
+        // stored route, so the newest path wins.
+        for x in import {
+            data.imported_mcast.replace(x.clone());
+        }
+
+        for x in remove {
+            data.imported_mcast.remove(x);
+        }
+
+        let added = data.imported_mcast.difference(&before).cloned().collect();
+        let removed =
+            before.difference(&data.imported_mcast).cloned().collect();
+        McastRibDelta { added, removed }
     }
 
     pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
@@ -124,34 +203,67 @@ impl Db {
         Ok(())
     }
 
-    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
+    pub fn originate_mcast(
+        &self,
+        origins: &HashSet<MulticastOrigin>,
+    ) -> Result<(), Error> {
+        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+        for o in origins {
+            // Key by the metric-excluded identity, store the full origin as the
+            // value. `MulticastOrigin` equality ignores `metric`, so keying by
+            // identity lets a re-origination with a changed metric overwrite the
+            // stored entry instead of leaving a stale one under the old metric.
+            tree.insert(
+                o.identity_key()?.as_str(),
+                serde_json::to_string(o)?.as_str(),
+            )?;
+        }
+        tree.flush()?;
+        Ok(())
+    }
+
+    /// Scan a persistent origin tree, parsing each `(key, value)` pair with
+    /// `parse` and skipping entries that fail to read or parse. `kind` names the
+    /// entry kind for log context.
+    fn scan_origin_tree<T>(
+        &self,
+        tree: &str,
+        kind: &str,
+        parse: impl Fn(&[u8], &[u8]) -> Result<T, Error>,
+    ) -> Result<HashSet<T>, Error>
+    where
+        T: Eq + std::hash::Hash,
+    {
+        let tree = self.persistent_data.open_tree(tree)?;
         let result = tree
-            .scan_prefix(vec![])
+            .iter()
             .filter_map(|item| {
-                let (key, _value) = match item {
+                let (key, value) = match item {
                     Ok(item) => item,
                     Err(e) => {
                         error!(
                             self.log,
-                            "db: error ddm originated prefix: {e}"
+                            "db: error fetching ddm {kind} entry: {e}"
                         );
                         return None;
                     }
                 };
-                Some(match Ipv6Net::from_db_key(&key) {
-                    Ok(item) => item,
+                match parse(key.as_ref(), value.as_ref()) {
+                    Ok(item) => Some(item),
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing ddm origin entry value: {e}"
-                        );
-                        return None;
+                        error!(self.log, "db: error parsing ddm {kind}: {e}");
+                        None
                     }
-                })
+                }
             })
             .collect();
         Ok(result)
+    }
+
+    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
+        self.scan_origin_tree(ORIGINATE, "origin prefix", |key, _value| {
+            Ipv6Net::from_db_key(key).map_err(|e| Error::DbKey(e.to_string()))
+        })
     }
 
     pub fn originated_count(&self) -> Result<usize, Error> {
@@ -159,39 +271,28 @@ impl Db {
     }
 
     pub fn originated_tunnel(&self) -> Result<HashSet<TunnelOrigin>, Error> {
-        let tree = self.persistent_data.open_tree(TUNNEL_ORIGINATE)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching ddm tunnel origin entry: {e}"
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&key);
-                let value: TunnelOrigin = match serde_json::from_str(&value) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing ddm tunnel origin: {e}"
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
+        self.scan_origin_tree(TUNNEL_ORIGINATE, "tunnel origin", |key, _v| {
+            Ok(serde_json::from_str(&String::from_utf8_lossy(key))?)
+        })
     }
 
     pub fn originated_tunnel_count(&self) -> Result<usize, Error> {
         Ok(self.originated_tunnel()?.len())
+    }
+
+    /// Multicast origins originated locally.
+    ///
+    /// Each origin is keyed by its metric-excluded identity and stored as the
+    /// value, so the current metric is read back from the value rather than the
+    /// key.
+    pub fn originated_mcast(&self) -> Result<HashSet<MulticastOrigin>, Error> {
+        self.scan_origin_tree(MCAST_ORIGINATE, "mcast origin", |_key, value| {
+            Ok(serde_json::from_str(&String::from_utf8_lossy(value))?)
+        })
+    }
+
+    pub fn originated_mcast_count(&self) -> Result<usize, Error> {
+        Ok(self.originated_mcast()?.len())
     }
 
     pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
@@ -216,10 +317,24 @@ impl Db {
         Ok(())
     }
 
+    pub fn withdraw_mcast(
+        &self,
+        origins: &HashSet<MulticastOrigin>,
+    ) -> Result<(), Error> {
+        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+        for o in origins {
+            // Remove by identity so a withdraw matches regardless of the metric
+            // the origin was advertised with (e.g. the CLI's default metric).
+            tree.remove(o.identity_key()?.as_str())?;
+        }
+        tree.flush()?;
+        Ok(())
+    }
+
     pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
-    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
+    ) -> RemovedNexthopRoutes {
         let mut data = lock!(self.data);
         // Routes are generally held in sets to prevent duplication and provide
         // handy set-algebra operations.
@@ -242,7 +357,22 @@ impl Db {
         for x in &tnl_removed {
             data.imported_tunnel.remove(x);
         }
-        (removed, tnl_removed)
+
+        let mut mcast_removed = HashSet::new();
+        for x in &data.imported_mcast {
+            if x.nexthop == nexthop {
+                mcast_removed.insert(x.clone());
+            }
+        }
+        for x in &mcast_removed {
+            data.imported_mcast.remove(x);
+        }
+
+        RemovedNexthopRoutes {
+            underlay: removed,
+            tunnel: tnl_removed,
+            multicast: mcast_removed,
+        }
     }
 
     pub fn routes_by_vector(
@@ -259,6 +389,13 @@ impl Db {
         }
         result
     }
+}
+
+/// Routes withdrawn for a next hop, grouped by route family.
+pub struct RemovedNexthopRoutes {
+    pub underlay: HashSet<Route>,
+    pub tunnel: HashSet<TunnelRoute>,
+    pub multicast: HashSet<MulticastRoute>,
 }
 
 #[derive(

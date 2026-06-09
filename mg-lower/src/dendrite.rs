@@ -17,12 +17,11 @@ use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
     hash::Hash,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 
-const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 const UNIT_DPD: &str = "dpd";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -335,68 +334,12 @@ where
     Ok(())
 }
 
-// Translate a tfport name into the underlying (port, link, vlan) tuple.
-//    tfportqsfp10_0 would translate to (10, 0, None)
-//    tfportqsfp10_0.100 would translate to (10, 0, Some(100))
-// TODO this is gross, use link type properties rather than futzing
-// around with strings.
-fn parse_tfport_name(name: &str) -> Result<(u8, u8, Option<u16>), Error> {
-    let body =
-        name.strip_prefix(TFPORT_QSFP_DEVICE_PREFIX)
-            .ok_or(Error::Tfport(format!(
-                "{} missing expected prefix {}",
-                name, TFPORT_QSFP_DEVICE_PREFIX
-            )))?;
-    let fields: Vec<&str> = body.split('.').collect();
-    let (port, link) = fields[0]
-        .split_once('_')
-        .ok_or(Error::Tfport(format!("{} has no link id", name)))?;
-
-    let port = port.parse::<u8>().map_err(|_| {
-        Error::Tfport(format!("{} has invalid port {}", name, port))
-    })?;
-
-    let link = link.parse::<u8>().map_err(|_| {
-        Error::Tfport(format!("{} has invalid link id {}", name, link))
-    })?;
-
-    let vlan = match fields.len() {
-        1 => Ok(None),
-        2 => fields[1].parse::<u16>().map(Some).map_err(|_| {
-            Error::Tfport(format!("{} has invalid vlan {}", name, fields[1]))
-        }),
-        _ => Err(Error::Tfport(format!(
-            "{} has multiple vlan deliminators",
-            name
-        ))),
-    }?;
-
-    Ok((port, link, vlan))
-}
-
-#[test]
-fn test_tfport_parser() {
-    // Test valid names
-    assert_eq!(parse_tfport_name("tfportqsfp10_0").unwrap(), (10, 0, None));
-    assert_eq!(
-        parse_tfport_name("tfportqsfp10_0.100").unwrap(),
-        (10, 0, Some(100))
-    );
-    assert_eq!(parse_tfport_name("tfportqsfp1_1").unwrap(), (1, 1, None));
-
-    // test malformed names
-    assert!(parse_tfport_name("fportqsfp10_0").is_err());
-    assert!(parse_tfport_name("10_0").is_err());
-    assert!(parse_tfport_name("tfportqsfp10").is_err());
-    assert!(parse_tfport_name("tfportqsfp_10").is_err());
-    assert!(parse_tfport_name("tfportqsfp0_").is_err());
-    assert!(parse_tfport_name("tfportqsfp10_10_10").is_err());
-    assert!(parse_tfport_name("tfportqsfp10.100_0").is_err());
-
-    // test invalid components
-    assert!(parse_tfport_name("tfportqsfp1X_0.100").is_err());
-    assert!(parse_tfport_name("tfportqsfp10_X.100").is_err());
-    assert!(parse_tfport_name("tfportqsfp10_0.X").is_err());
+/// Resolve a tfport datalink name (e.g. `tfportrear0_0`) to the dpd
+/// `(PortId, LinkId)` pair that names the switch port and link.
+pub(crate) fn port_link_from_ifname(
+    ifname: &str,
+) -> Result<(types::PortId, types::LinkId), Error> {
+    mg_common::tfport::port_link_from_ifname(ifname).map_err(Error::Tfport)
 }
 
 fn get_port_and_link(
@@ -408,18 +351,7 @@ fn get_port_and_link(
         && nh6.is_unicast_link_local()
         && let Some(ref iface) = path.nexthop_interface
     {
-        let (port, link, _vlan) = parse_tfport_name(iface)?;
-        let port_name = format!("qsfp{port}");
-        let port_id = types::Qsfp::try_from(&port_name)
-            .map(types::PortId::Qsfp)
-            .map_err(|e| {
-                Error::Tfport(format!(
-                    "bad port name ifname: {iface}  port name: {port_name}: {e}",
-                ))
-            })?;
-        // TODO breakout considerations
-        let link_id = types::LinkId(link);
-        return Ok((port_id, link_id));
+        return port_link_from_ifname(iface);
     }
 
     // Standard nexthop resolution for numbered peers
@@ -443,19 +375,7 @@ fn resolve_port_and_link(
         }
     };
 
-    let (port, link, _vlan) = parse_tfport_name(&ifname)?;
-    let port_name = format!("qsfp{port}");
-    let port_id = types::Qsfp::try_from(&port_name)
-        .map(types::PortId::Qsfp)
-        .map_err(|e| {
-            Error::Tfport(format!(
-                "bad port name ifname: {ifname}  port name: {port_name}: {e}"
-            ))
-        })?;
-
-    // TODO breakout considerations
-    let link_id = types::LinkId(link);
-    Ok((port_id, link_id))
+    port_link_from_ifname(&ifname)
 }
 
 pub(crate) fn get_routes_for_prefix(
@@ -568,16 +488,21 @@ pub(crate) fn get_routes_for_prefix(
     Ok(result.into_iter().collect())
 }
 
-/// Create a new Dendrite/dpd client. The lower half always runs on the same
-/// host/zone as the underlying platform.
+/// Create a new Dendrite (DPD) client.
+///
+/// In production the lower half runs in the same zone as DPD, so `addr` is
+/// `None` and the client targets `localhost` on the default DPD port. Tests
+/// pass an explicit `addr` to reach a DPD listening elsewhere (for example a
+/// dynamically assigned port in an integration harness).
 #[cfg(target_os = "illumos")]
-pub fn new_dpd_client(log: &Logger) -> DpdClient {
+pub fn new_dpd_client(log: &Logger, addr: Option<SocketAddr>) -> DpdClient {
     let client_state = dpd_client::ClientState {
         tag: MG_LOWER_TAG.into(),
         log: log.clone(),
     };
-    DpdClient::new(
-        &format!("http://localhost:{}", dpd_client::default_port()),
-        client_state,
-    )
+    let host = match addr {
+        Some(addr) => format!("http://{addr}"),
+        None => format!("http://localhost:{}", dpd_client::default_port()),
+    };
+    DpdClient::new(&host, client_state)
 }

@@ -80,7 +80,7 @@
 //!                      1                   2                   3
 //!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |   version     |S A r r r r r r|  router kind  | hostname len  |
+//! |   version     |S A C r r r r r|  router kind  | hostname len  |
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! |                           hostname                            :
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -88,13 +88,15 @@
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! ```
 //!
-//! The first byte indicates the version. The only valid version at present is
-//! version 1. The second byte is a flags bitfield. The first position `S`
-//! indicates a solicitation. The second position `A` indicates and
-//! advertisement. All other positions are reserved for future use. The third
-//! byte indicates the kind of router. Current values are 0 for a server router
-//! and 1 for a transit routers. The fourth byte is a hostname length followed
-//! directly by a hostname of up to 255 bytes in length.
+//! The first byte indicates the version. The second byte is a flags bitfield.
+//! The first position `S` indicates a solicitation. The second position `A`
+//! indicates an advertisement. The third position `C` indicates V4 multicast
+//! capability, advertised independently of the version byte so old peers that
+//! ignore it still peer at the floor version. All other positions are reserved
+//! for future use. The third byte indicates the kind of router. Current values
+//! are 0 for a server router and 1 for a transit routers. The fourth byte is a
+//! hostname length followed directly by a hostname of up to 255 bytes in
+//! length.
 
 use thiserror::Error;
 
@@ -104,11 +106,12 @@ mod runtime;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Version {
     V2 = 2,
     V3 = 3,
+    V4 = 4,
 }
 
 #[derive(Error, Debug)]
