@@ -20,12 +20,12 @@ use client_common::println_nopipe;
 use mg_admin_client::Client;
 use mg_admin_client::types::{
     MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
-    RouteOriginFilter, Vni,
+    RouteOriginFilter,
 };
 use mg_api_types::mrib::DEFAULT_MULTICAST_VNI;
 use mg_api_types::rdb::rib::AddressFamily;
 
-const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI.as_u32();
+const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI;
 
 fn parse_route_origin(s: &str) -> Result<RouteOriginFilter, String> {
     match s.to_lowercase().as_str() {
@@ -73,7 +73,7 @@ pub enum StatusCmd {
         source: Option<IpAddr>,
 
         /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
-        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::Vni::MAX_VNI as i64)))]
+        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::MAX_VNI as i64)))]
         vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
@@ -100,7 +100,7 @@ pub enum StatusCmd {
         source: Option<IpAddr>,
 
         /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
-        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::Vni::MAX_VNI as i64)))]
+        #[arg(short, long, default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(mg_api_types::mrib::MAX_VNI as i64)))]
         vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
@@ -199,15 +199,8 @@ async fn get_route(
     source: Option<IpAddr>,
     vni: u32,
 ) -> Result<()> {
-    let vni = Vni::from(vni);
     let routes = c
-        .get_mrib_imported(
-            None,
-            Some(&group),
-            None,
-            source.as_ref(),
-            Some(&vni),
-        )
+        .get_mrib_imported(None, Some(&group), None, source.as_ref(), Some(vni))
         .await?
         .into_inner();
     if let Some(route) = routes.first() {
@@ -224,15 +217,8 @@ async fn get_route_selected(
     source: Option<IpAddr>,
     vni: u32,
 ) -> Result<()> {
-    let vni = Vni::from(vni);
     let routes = c
-        .get_mrib_selected(
-            None,
-            Some(&group),
-            None,
-            source.as_ref(),
-            Some(&vni),
-        )
+        .get_mrib_selected(None, Some(&group), None, source.as_ref(), Some(vni))
         .await?
         .into_inner();
     if let Some(route) = routes.first() {
@@ -268,12 +254,12 @@ fn print_routes(routes: &[MulticastRoute]) {
             MulticastRouteKey::V4(k) => {
                 let src = k.source.map_or("*".to_string(), |s| s.to_string());
                 let grp = k.group.to_string();
-                (src, grp, k.vni.clone())
+                (src, grp, k.vni)
             }
             MulticastRouteKey::V6(k) => {
                 let src = k.source.map_or("*".to_string(), |s| s.to_string());
                 let grp = k.group.to_string();
-                (src, grp, k.vni.clone())
+                (src, grp, k.vni)
             }
         };
         println_nopipe!(

@@ -18,20 +18,28 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use omicron_common::address::{
+use client_common::address::{
     IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET,
     IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET, IPV6_LINK_LOCAL_MULTICAST_SUBNET,
     IPV6_MULTICAST_RANGE, IPV6_RESERVED_SCOPE_MULTICAST_SUBNET,
     IPV6_SSM_SUBNET, UNDERLAY_MULTICAST_SUBNET,
 };
-pub use omicron_common::api::external::Vni;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::v1::rdb::rib::AddressFamily;
 
+/// Maximum Geneve VNI value.
+///
+/// Virtual Network Identifiers are constrained to 24-bit values per the
+/// Geneve specification (RFC 8926 Section 3.3).
+pub const MAX_VNI: u32 = 0xFF_FFFF;
+
 /// Default VNI for fleet-wide multicast routing.
-pub const DEFAULT_MULTICAST_VNI: Vni = Vni::DEFAULT_MULTICAST_VNI;
+///
+/// A low-numbered VNI chosen to avoid colliding with user VNIs, though it is
+/// not yet within the Oxide-reserved range.
+pub const DEFAULT_MULTICAST_VNI: u32 = 77;
 
 /// Errors raised while validating or serializing multicast route data.
 #[derive(thiserror::Error, Debug)]
@@ -47,6 +55,82 @@ pub enum MulticastError {
     /// A database key could not be decoded.
     #[error("db key error {0}")]
     DbKey(String),
+}
+
+/// A validated Geneve Virtual Network Identifier.
+///
+/// Wraps a 24-bit VNI, rejecting any value above [`MAX_VNI`] at construction
+/// and deserialization so an out-of-range identifier is unrepresentable.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(try_from = "u32", into = "u32")]
+#[schemars(transparent)]
+pub struct Vni(u32);
+
+impl Vni {
+    /// Default VNI for fleet-wide multicast routing.
+    pub const DEFAULT_MULTICAST: Self = Self(DEFAULT_MULTICAST_VNI);
+
+    /// Create a validated VNI.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MulticastError::Validation`] if `value` exceeds [`MAX_VNI`],
+    /// the largest 24-bit Geneve VNI.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mg_api_types_versions::latest::mrib::{MAX_VNI, Vni};
+    ///
+    /// assert!(Vni::new(77).is_ok());
+    /// assert!(Vni::new(MAX_VNI + 1).is_err());
+    /// ```
+    pub fn new(value: u32) -> Result<Self, MulticastError> {
+        if value > MAX_VNI {
+            return Err(MulticastError::Validation(format!(
+                "VNI {value} exceeds the maximum 24-bit value {MAX_VNI}"
+            )));
+        }
+        Ok(Self(value))
+    }
+
+    /// Return the underlying 24-bit value.
+    #[inline]
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for Vni {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<u32> for Vni {
+    type Error = MulticastError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<Vni> for u32 {
+    fn from(vni: Vni) -> Self {
+        vni.0
+    }
 }
 
 /// Input for adding static multicast routes.
@@ -129,7 +213,7 @@ pub struct MribQuery {
 }
 
 const fn default_multicast_vni() -> Vni {
-    Vni::DEFAULT_MULTICAST_VNI
+    Vni::DEFAULT_MULTICAST
 }
 
 /// A validated IPv4 unicast address suitable for multicast source fields.
@@ -453,8 +537,8 @@ impl From<MulticastAddrV6> for Ipv6Addr {
 /// IPv6 multicast addresses in `UNDERLAY_MULTICAST_SUBNET` (ff04::/64).
 /// This type enforces that invariant at construction time.
 // TODO: Duplicates `dpd_types::mcast::UnderlayMulticastIpv6` in dendrite.
-// Both should be consolidated into `omicron_common` so maghemite, dendrite,
-// and omicron share a single definition.
+// Both should be consolidated into `oxnet`, the cycle-free leaf crate that
+// maghemite, dendrite, and omicron already share.
 #[derive(
     Debug,
     Copy,
@@ -769,12 +853,12 @@ impl MulticastRouteKey {
             MulticastAddr::V4(g) => Self::V4(MulticastRouteKeyV4 {
                 source: None,
                 group: g,
-                vni: Vni::DEFAULT_MULTICAST_VNI,
+                vni: Vni::DEFAULT_MULTICAST,
             }),
             MulticastAddr::V6(g) => Self::V6(MulticastRouteKeyV6 {
                 source: None,
                 group: g,
-                vni: Vni::DEFAULT_MULTICAST_VNI,
+                vni: Vni::DEFAULT_MULTICAST,
             }),
         }
     }
@@ -787,7 +871,7 @@ impl MulticastRouteKey {
         Self::V4(MulticastRouteKeyV4 {
             source: Some(source),
             group,
-            vni: Vni::DEFAULT_MULTICAST_VNI,
+            vni: Vni::DEFAULT_MULTICAST,
         })
     }
 
@@ -799,7 +883,7 @@ impl MulticastRouteKey {
         Self::V6(MulticastRouteKeyV6 {
             source: Some(source),
             group,
-            vni: Vni::DEFAULT_MULTICAST_VNI,
+            vni: Vni::DEFAULT_MULTICAST,
         })
     }
 
@@ -899,7 +983,8 @@ impl MulticastRouteKey {
     /// - (S,G) joins on ASM ranges are permitted, giving source
     ///   filtering outside the SSM range (IGMPv3/MLDv2 semantics)
     ///
-    /// VNI validity is enforced by the [`Vni`] type at construction.
+    /// The 24-bit VNI range is enforced by the [`Vni`] newtype at construction
+    /// and deserialization, so it is not re-checked here.
     pub fn validate(&self) -> Result<(), MulticastError> {
         // SSM addresses require a source (RFC 4607). This is consistent with
         // DPD's validate_ipv4_multicast / validate_ipv6_multicast.
@@ -1050,5 +1135,37 @@ impl From<MulticastRouteKey> for MribChangeNotification {
         Self {
             changed: BTreeSet::from([value]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omicron_common::api::external::Vni as CanonicalVni;
+
+    use super::*;
+
+    /// Assert the locally copied VNI literals equal their
+    /// `omicron_common::api::external::Vni` originals so they cannot drift.
+    ///
+    /// `omicron_common` is a dev-dependency only, so it does not appear in the
+    /// normal dependency tree the no-omicron CI check inspects.
+    #[test]
+    fn vni_constants_match_canonical_values() {
+        assert_eq!(MAX_VNI, CanonicalVni::MAX_VNI);
+        assert_eq!(
+            DEFAULT_MULTICAST_VNI,
+            CanonicalVni::DEFAULT_MULTICAST_VNI.as_u32()
+        );
+    }
+
+    /// The [`Vni`] newtype accepts in-range values and rejects values above
+    /// [`MAX_VNI`], enforcing the 24-bit invariant at construction.
+    #[test]
+    fn vni_rejects_out_of_range() {
+        assert_eq!(Vni::new(0).unwrap().as_u32(), 0);
+        assert_eq!(Vni::new(MAX_VNI).unwrap().as_u32(), MAX_VNI);
+        assert_eq!(Vni::DEFAULT_MULTICAST.as_u32(), DEFAULT_MULTICAST_VNI);
+        assert!(Vni::new(MAX_VNI + 1).is_err());
+        assert!(Vni::new(u32::MAX).is_err());
     }
 }

@@ -13,7 +13,11 @@
 use crate::types::{
     MulticastAddrV4, MulticastAddrV6, MulticastRoute, MulticastRouteKey,
     MulticastSourceProtocol, StaticRouteKey, UnderlayMulticastIpv6,
-    UnicastAddrV4,
+    UnicastAddrV4, Vni,
+};
+use client_common::address::{
+    IPV4_MULTICAST_RANGE, IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET,
+    IPV6_LINK_LOCAL_MULTICAST_SUBNET,
 };
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types::mrib::{
@@ -25,11 +29,6 @@ use mg_api_types::mrib::{
 };
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
 use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
-use omicron_common::address::{
-    IPV4_MULTICAST_RANGE, IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET,
-    IPV6_LINK_LOCAL_MULTICAST_SUBNET,
-};
-use omicron_common::api::external::Vni;
 use proptest::prelude::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -749,14 +748,12 @@ proptest! {
         );
     }
 
-    /// Property: invalid VNI is rejected at construction by Vni::try_from.
+    /// Property: a VNI outside the 24-bit range is rejected at construction.
     #[test]
-    fn prop_route_key_invalid_vni(
-        vni in invalid_vni_strategy(),
-    ) {
+    fn prop_vni_rejects_out_of_range(vni in invalid_vni_strategy()) {
         prop_assert!(
-            Vni::try_from(vni).is_err(),
-            "VNI {vni} should be rejected by Vni::try_from"
+            Vni::new(vni).is_err(),
+            "VNI {vni} above the 24-bit max should be rejected"
         );
     }
 

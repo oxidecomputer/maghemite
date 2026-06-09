@@ -828,6 +828,10 @@ dependencies = [
 [[package]]
 name = "client-common"
 version = "0.1.0"
+dependencies = [
+ "omicron-common",
+ "oxnet",
+]
 
 [[package]]
 name = "cmake"
@@ -3826,6 +3830,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "client-common",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "omicron-common",
@@ -5995,7 +6000,6 @@ dependencies = [
  "mg-api-types",
  "mg-common",
  "ndp",
- "omicron-common",
  "oxnet",
  "poptrie",
  "proptest",

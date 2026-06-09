@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 chrono.workspace = true
 clap = { workspace = true, optional = true }
+client-common.workspace = true
 nom.workspace = true
 num_enum.workspace = true
-omicron-common.workspace = true
 oxnet.workspace = true
 proptest = { workspace = true, optional = true }
 schemars.workspace = true
@@ -19,6 +19,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+omicron-common.workspace = true
 serde_json.workspace = true
 
 [features]

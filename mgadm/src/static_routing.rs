@@ -139,12 +139,12 @@ fn print_mroutes(routes: &[types::MulticastRoute]) {
             types::MulticastRouteKey::V4(k) => {
                 let src = k.source.map_or("*".to_string(), |s| s.to_string());
                 let grp = k.group.to_string();
-                (src, grp, k.vni.clone())
+                (src, grp, k.vni)
             }
             types::MulticastRouteKey::V6(k) => {
                 let src = k.source.map_or("*".to_string(), |s| s.to_string());
                 let grp = k.group.to_string();
-                (src, grp, k.vni.clone())
+                (src, grp, k.vni)
             }
         };
         println_nopipe!(

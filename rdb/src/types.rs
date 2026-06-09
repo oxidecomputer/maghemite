@@ -686,7 +686,7 @@ mod test {
         let result = MulticastRouteKey::new(
             Some(IpAddr::V4(src.ip())),
             group.into(),
-            DEFAULT_MULTICAST_VNI,
+            Vni::DEFAULT_MULTICAST,
         );
         assert!(
             result.is_err(),
@@ -701,7 +701,7 @@ mod test {
         let result = MulticastRouteKey::new(
             Some(IpAddr::V6(src)),
             group.into(),
-            DEFAULT_MULTICAST_VNI,
+            Vni::DEFAULT_MULTICAST,
         );
         assert!(
             result.is_err(),

@@ -8,18 +8,17 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use omicron_common::address::{
+use client_common::address::{
     IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET, IPV6_ADMIN_SCOPED_MULTICAST_PREFIX,
     IPV6_MULTICAST_PREFIX, IPV6_SSM_SUBNET,
 };
-use omicron_common::api::external::Vni;
 use proptest::prelude::*;
 use proptest::strategy::Just;
 
 use crate::latest::mrib::{
-    MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRouteKey,
-    MulticastRouteKeyV4, MulticastRouteKeyV6, UnderlayMulticastIpv6,
-    UnicastAddrV4, UnicastAddrV6,
+    MAX_VNI, MulticastAddr, MulticastAddrV4, MulticastAddrV6,
+    MulticastRouteKey, MulticastRouteKeyV4, MulticastRouteKeyV6,
+    UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6, Vni,
 };
 
 /// Minimum valid IPv6 multicast scope for proptest strategies.
@@ -55,14 +54,14 @@ pub fn ipv4_unicast_strategy() -> impl Strategy<Value = UnicastAddrV4> {
     })
 }
 
-/// Generate valid VNIs in `[0, Vni::MAX_VNI]`.
+/// Generate valid [`Vni`] values in `[0, MAX_VNI]`.
 pub fn valid_vni_strategy() -> impl Strategy<Value = Vni> {
-    (0u32..=Vni::MAX_VNI).prop_map(|v| Vni::try_from(v).unwrap())
+    (0u32..=MAX_VNI).prop_map(|v| Vni::new(v).expect("VNI is in range"))
 }
 
-/// Generate raw u32 values that exceed `Vni::MAX_VNI`.
+/// Generate raw u32 values that exceed [`MAX_VNI`], rejected by [`Vni::new`].
 pub fn invalid_vni_strategy() -> impl Strategy<Value = u32> {
-    (Vni::MAX_VNI + 1)..=u32::MAX
+    (MAX_VNI + 1)..=u32::MAX
 }
 
 /// Generate validated underlay multicast addresses within `ff04::/64`.
@@ -331,7 +330,8 @@ impl Arbitrary for MulticastRouteKey {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // Generate directly without filtering for efficiency with high case counts
-        let vni = (0u32..=Vni::MAX_VNI).prop_map(|v| Vni::try_from(v).unwrap());
+        let vni = (0u32..=MAX_VNI)
+            .prop_map(|v| Vni::new(v).expect("VNI is in range"));
 
         prop_oneof![
             // V4 ASM (*,G)
