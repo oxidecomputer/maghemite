@@ -16,6 +16,7 @@ use std::net::IpAddr;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+use client_common::println_nopipe;
 use mg_admin_client::Client;
 use mg_admin_client::types::{
     MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
@@ -23,7 +24,6 @@ use mg_admin_client::types::{
 };
 use mg_api_types::mrib::DEFAULT_MULTICAST_VNI;
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_common::println_nopipe;
 
 const DEFAULT_VNI: u32 = DEFAULT_MULTICAST_VNI.as_u32();
 

@@ -689,7 +689,9 @@ mod tests {
     use mg_common::wait_for;
 
     use crate::test::TEST_WAIT_ITERATIONS;
-    use crate::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC};
+    use mg_api_types::rdb::{
+        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+    };
 
     /// Helper to create empty Rib4 for tests
     fn empty_rib4() -> Arc<Mutex<Rib4>> {

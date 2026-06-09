@@ -16,6 +16,7 @@ use crate::{
     unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
 };
+use client_common::{eprintln_nopipe, println_nopipe};
 use lazy_static::lazy_static;
 use mg_api_types::bgp::config::{
     Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,

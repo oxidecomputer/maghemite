@@ -41,8 +41,10 @@ pub mod proptest {
 }
 #[path = "initial/mod.rs"]
 pub mod v1;
-#[path = "multicast_support/mod.rs"]
+#[path = "v4_over_v6_static_routes/mod.rs"]
 pub mod v10;
+#[path = "multicast_support/mod.rs"]
+pub mod v11;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

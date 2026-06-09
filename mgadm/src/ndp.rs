@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use client_common::println_nopipe;
 use colored::Colorize;
 use mg_admin_client::Client;
-use mg_common::println_nopipe;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
 

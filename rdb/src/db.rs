@@ -2025,7 +2025,7 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        DEFAULT_MULTICAST_VNI, DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey,
+        DEFAULT_MULTICAST_VNI, StaticRouteKey,
         db::Db,
         test::{TEST_WAIT_ITERATIONS, TestDb},
         types::{
@@ -2035,10 +2035,11 @@ mod test {
             test_helpers::path_vecs_equal,
         },
     };
+    use client_common::eprintln_nopipe;
+    use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
     use mg_api_types::rdb::path::Path;
     use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
     use mg_api_types::rdb::rib::AddressFamily;
-    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
     use mg_common::test::DEFAULT_INTERVAL;
     use mg_common::wait_for;
@@ -2081,12 +2082,13 @@ mod test {
     #[test]
     fn test_rib() {
         use crate::StaticRouteKey;
-        use crate::{
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC, db::Db,
-        };
+        use crate::db::Db;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
         use mg_api_types::rdb::prefix::{Prefix, Prefix4};
+        use mg_api_types::rdb::{
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
@@ -3105,13 +3107,13 @@ mod test {
     /// `shutdown` is not part of `Path::Ord` identity.
     #[test]
     fn test_set_nexthop_shutdown_replaces_path() {
-        use crate::{
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
-            StaticRouteKey,
-        };
+        use crate::StaticRouteKey;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
         use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+        use mg_api_types::rdb::{
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
 
         let db = get_test_db();
 

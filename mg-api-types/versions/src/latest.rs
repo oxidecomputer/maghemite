@@ -170,6 +170,9 @@ pub mod rdb {
     pub mod router {
         pub use crate::v1::rdb::router::BgpRouterInfo;
     }
+
+    pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_BGP;
+    pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_STATIC;
 }
 
 pub mod ndp {
@@ -182,7 +185,7 @@ pub mod ndp {
 }
 
 pub mod mrib {
-    pub use crate::v10::mrib::*;
+    pub use crate::v11::mrib::*;
 }
 
 pub mod rib {
@@ -196,10 +199,10 @@ pub mod rib {
 }
 
 pub mod static_routes {
-    pub use crate::v1::static_routes::AddStaticRoute4Request;
-    pub use crate::v1::static_routes::DeleteStaticRoute4Request;
-    pub use crate::v1::static_routes::StaticRoute4;
-    pub use crate::v1::static_routes::StaticRoute4List;
+    pub use crate::v10::static_routes::AddStaticRoute4Request;
+    pub use crate::v10::static_routes::DeleteStaticRoute4Request;
+    pub use crate::v10::static_routes::StaticRoute4;
+    pub use crate::v10::static_routes::StaticRoute4List;
 
     pub use crate::v2::static_routes::AddStaticRoute6Request;
     pub use crate::v2::static_routes::DeleteStaticRoute6Request;

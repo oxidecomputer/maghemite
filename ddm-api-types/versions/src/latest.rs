@@ -20,12 +20,8 @@ pub mod db {
 
 pub mod exchange {
     pub use crate::v1::exchange::PathVector;
-    pub use crate::v1::exchange::PathVectorV2;
 }
 
 pub mod net {
-    pub use crate::v1::net::IpPrefix;
-    pub use crate::v1::net::Ipv4Prefix;
-    pub use crate::v1::net::Ipv6Prefix;
     pub use crate::v1::net::TunnelOrigin;
 }

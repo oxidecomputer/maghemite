@@ -7,7 +7,7 @@
 //! Test utilities for rdb tests.
 
 use crate::{Db, error::Error};
-use mg_common::eprintln_nopipe;
+use client_common::eprintln_nopipe;
 use slog::Logger;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -95,7 +95,8 @@ impl Drop for TestDb {
 ///
 /// ```no_run
 /// use rdb::test::get_test_db;
-/// use rdb::{StaticRouteKey, Prefix, Prefix4};
+/// use rdb::StaticRouteKey;
+/// use mg_api_types::rdb::prefix::{Prefix, Prefix4};
 /// use mg_common::log::init_file_logger;
 /// use std::net::{IpAddr, Ipv4Addr};
 ///

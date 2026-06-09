@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
+use client_common::{print_nopipe, println_nopipe};
 use colored::*;
 use mg_admin_client::{Client, types};
 use mg_api_types::bgp::config::{
@@ -12,7 +13,6 @@ use mg_api_types::bgp::config::{
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
-use mg_common::{print_nopipe, println_nopipe};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},

@@ -7,4 +7,4 @@
 pub(crate) mod bgp;
 #[cfg(feature = "proptest")]
 pub mod mrib;
-mod rdb;
+pub(crate) mod rdb;
