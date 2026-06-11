@@ -6,7 +6,7 @@ use dpd_client::types::{
     PortSpeed, Route,
 };
 use mg_api_types::rdb::path::Path;
-use mg_api_types::rdb::prefix::Prefix4;
+use oxnet::{IpNet, Ipv4Net};
 use rdb::Rib;
 
 use crate::dendrite::get_routes_for_prefix;
@@ -33,7 +33,7 @@ async fn sync_prefix_test() {
 
         // extra prefix should get picked up by tunnel routing
         rib.insert(
-            "4.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+            "4.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
             vec![Path {
                 nexthop: "3.0.0.1".parse().unwrap(),
                 nexthop_interface: None,
@@ -51,7 +51,7 @@ async fn sync_prefix_test() {
         crate::sync_prefix(
             tep,
             &rib,
-            &"4.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+            &"4.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
             &dpd,
             &ddm,
             &sw,
@@ -102,7 +102,7 @@ async fn sync_link_down_test() {
             crate::sync_prefix(
                 tep,
                 &rib,
-                &"3.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+                &"3.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
                 &dpd,
                 &ddm,
                 &sw,
@@ -237,7 +237,7 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
 
     // Add three initial prefixes to rib
     rib.insert(
-        "1.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+        "1.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
         vec![Path {
             nexthop: "1.0.0.1".parse().unwrap(),
             nexthop_interface: None,
@@ -250,7 +250,7 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
         .collect(),
     );
     rib.insert(
-        "2.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+        "2.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
         vec![Path {
             nexthop: "2.0.0.1".parse().unwrap(),
             nexthop_interface: None,
@@ -263,7 +263,7 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
         .collect(),
     );
     rib.insert(
-        "3.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+        "3.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
         vec![Path {
             nexthop: "3.0.0.1".parse().unwrap(),
             nexthop_interface: None,
@@ -328,8 +328,7 @@ async fn sync_v4_over_v6_readback() {
         );
 
         let log = util::test::logger();
-        let prefix: mg_api_types::rdb::prefix::Prefix =
-            "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
+        let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
         let result =
             get_routes_for_prefix(&dpd, &prefix, rt.clone(), log.clone())
@@ -372,7 +371,7 @@ async fn sync_v4_over_v6_idempotent() {
         // RIB contains one v4-over-v6 path for 5.0.0.0/24.
         let mut rib = Rib::default();
         rib.insert(
-            "5.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+            "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
             vec![Path {
                 nexthop: "fe80::1".parse().unwrap(),
                 nexthop_interface: Some(String::from("tfportqsfp0_0")),
@@ -394,8 +393,7 @@ async fn sync_v4_over_v6_idempotent() {
         });
 
         let log = util::test::logger();
-        let prefix: mg_api_types::rdb::prefix::Prefix =
-            "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
+        let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
         // First sync — installs the route.
         crate::sync_prefix(tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt)
@@ -471,8 +469,7 @@ async fn sync_v4_over_v6_removal() {
         let rib = Rib::default();
 
         let log = util::test::logger();
-        let prefix: mg_api_types::rdb::prefix::Prefix =
-            "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
+        let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
         crate::sync_prefix(tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt)
             .expect("sync_prefix");
@@ -542,7 +539,7 @@ async fn sync_mixed_v4_and_v4_over_v6() {
         // RIB has matching paths for both routes.
         let mut rib = Rib::default();
         rib.insert(
-            "5.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+            "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
             vec![
                 Path {
                     nexthop: "10.0.0.1".parse().unwrap(),
@@ -574,8 +571,7 @@ async fn sync_mixed_v4_and_v4_over_v6() {
         });
 
         let log = util::test::logger();
-        let prefix: mg_api_types::rdb::prefix::Prefix =
-            "5.0.0.0/24".parse::<Prefix4>().unwrap().into();
+        let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
         crate::sync_prefix(tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt)
             .expect("sync_prefix");

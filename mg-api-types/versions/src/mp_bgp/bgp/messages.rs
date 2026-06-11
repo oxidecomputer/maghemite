@@ -4,16 +4,12 @@
 
 //! BGP wire-message types added in the MP_BGP API version.
 
-use std::net::Ipv4Addr;
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::v1::rdb::prefix::Prefix4;
-use crate::v1::rdb::prefix::Prefix6;
-use num_enum::IntoPrimitive;
-use num_enum::TryFromPrimitive;
+use crate::v1::rdb::prefix::{Prefix4, Prefix6};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::v1::bgp::messages::As4PathSegment;
 use crate::v1::bgp::messages::Community;
