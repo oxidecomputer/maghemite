@@ -18,6 +18,7 @@ use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
@@ -326,7 +327,7 @@ fn start_bgp_routers(
                 asn: nbr.asn,
                 group: nbr.group.clone(),
                 name: nbr.name.clone(),
-                host: nbr.host,
+                host: nbr.host.into(),
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
                     min_ttl: nbr.parameters.min_ttl,
@@ -350,8 +351,16 @@ fn start_bgp_routers(
                     ipv4_unicast: if nbr.parameters.ipv4_enabled {
                         Some(Ipv4UnicastConfig {
                             nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr.parameters.allow_import4.clone(),
-                            export_policy: nbr.parameters.allow_export4.clone(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import4
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export4
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -359,8 +368,16 @@ fn start_bgp_routers(
                     ipv6_unicast: if nbr.parameters.ipv6_enabled {
                         Some(Ipv6UnicastConfig {
                             nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr.parameters.allow_import6.clone(),
-                            export_policy: nbr.parameters.allow_export6.clone(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import6
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export6
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -407,8 +424,16 @@ fn start_bgp_routers(
                     ipv4_unicast: if nbr.parameters.ipv4_enabled {
                         Some(Ipv4UnicastConfig {
                             nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr.parameters.allow_import4.clone(),
-                            export_policy: nbr.parameters.allow_export4.clone(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import4
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export4
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -416,8 +441,16 @@ fn start_bgp_routers(
                     ipv6_unicast: if nbr.parameters.ipv6_enabled {
                         Some(Ipv6UnicastConfig {
                             nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr.parameters.allow_import6.clone(),
-                            export_policy: nbr.parameters.allow_export6.clone(),
+                            import_policy: nbr
+                                .parameters
+                                .allow_import6
+                                .clone()
+                                .into(),
+                            export_policy: nbr
+                                .parameters
+                                .allow_export6
+                                .clone()
+                                .into(),
                         })
                     } else {
                         None
@@ -463,7 +496,15 @@ fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
         .iter()
         .map(|srk| {
             let mut normalized = *srk;
-            normalized.prefix.unset_host_bits();
+            // Clear host bits by reconstructing from network address
+            normalized.prefix = match normalized.prefix {
+                IpNet::V4(net) => {
+                    IpNet::V4(Ipv4Net::new_unchecked(net.prefix(), net.width()))
+                }
+                IpNet::V6(net) => {
+                    IpNet::V6(Ipv6Net::new_unchecked(net.prefix(), net.width()))
+                }
+            };
             normalized
         })
         .collect();
@@ -516,7 +557,6 @@ fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
     use rdb::StaticRouteKey;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
@@ -538,19 +578,13 @@ mod tests {
         // They should normalize to the same route and deduplicate
         let routes = vec![
             StaticRouteKey {
-                prefix: Prefix::V4(Prefix4 {
-                    value: Ipv4Addr::from_str("10.0.0.1").unwrap(),
-                    length: 24,
-                }),
+                prefix: "10.0.0.1/24".parse().unwrap(),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
             },
             StaticRouteKey {
-                prefix: Prefix::V4(Prefix4 {
-                    value: Ipv4Addr::from_str("10.0.0.5").unwrap(),
-                    length: 24,
-                }),
+                prefix: "10.0.0.5/24".parse().unwrap(),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
@@ -574,10 +608,7 @@ mod tests {
         let route = &after[0];
         assert_eq!(
             route.prefix,
-            Prefix::V4(Prefix4::new(
-                Ipv4Addr::from_str("10.0.0.0").unwrap(),
-                24
-            ))
+            "10.0.0.0/24".parse::<oxnet::IpNet>().unwrap(),
         );
         assert_eq!(
             route.nexthop,
@@ -593,19 +624,13 @@ mod tests {
         // They should normalize to the same prefix but keep both routes (ECMP)
         let routes = vec![
             StaticRouteKey {
-                prefix: Prefix::V4(Prefix4 {
-                    value: Ipv4Addr::from_str("10.0.0.1").unwrap(),
-                    length: 24,
-                }),
+                prefix: "10.0.0.1/24".parse().unwrap(),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
             },
             StaticRouteKey {
-                prefix: Prefix::V4(Prefix4 {
-                    value: Ipv4Addr::from_str("10.0.0.5").unwrap(),
-                    length: 24,
-                }),
+                prefix: "10.0.0.5/24".parse().unwrap(),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.2").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
@@ -629,10 +654,7 @@ mod tests {
         for route in &after {
             assert_eq!(
                 route.prefix,
-                Prefix::V4(Prefix4::new(
-                    Ipv4Addr::from_str("10.0.0.0").unwrap(),
-                    24
-                ))
+                "10.0.0.0/24".parse::<oxnet::IpNet>().unwrap()
             );
         }
         assert_ne!(after[0].nexthop, after[1].nexthop);
@@ -644,10 +666,7 @@ mod tests {
 
         // Add a route that's already normalized
         let routes = vec![StaticRouteKey {
-            prefix: Prefix::V4(Prefix4::new(
-                Ipv4Addr::from_str("10.0.0.0").unwrap(),
-                24,
-            )),
+            prefix: "10.0.0.0/24".parse().unwrap(),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
             vlan_id: None,
             rib_priority: 0,
@@ -683,19 +702,13 @@ mod tests {
         // Test IPv6 normalization
         let routes = vec![
             StaticRouteKey {
-                prefix: Prefix::V6(Prefix6 {
-                    value: Ipv6Addr::from_str("2001:db8::1").unwrap(),
-                    length: 64,
-                }),
+                prefix: "2001:db8::1/64".parse::<oxnet::IpNet>().unwrap(),
                 nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
             },
             StaticRouteKey {
-                prefix: Prefix::V6(Prefix6 {
-                    value: Ipv6Addr::from_str("2001:db8::5").unwrap(),
-                    length: 64,
-                }),
+                prefix: "2001:db8::5/64".parse::<oxnet::IpNet>().unwrap(),
                 nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::2").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
@@ -713,10 +726,7 @@ mod tests {
         for route in &after {
             assert_eq!(
                 route.prefix,
-                Prefix::V6(Prefix6::new(
-                    Ipv6Addr::from_str("2001:db8::").unwrap(),
-                    64
-                ))
+                "2001:db8::/64".parse::<oxnet::IpNet>().unwrap()
             );
         }
     }
@@ -728,19 +738,13 @@ mod tests {
         // Test mixed IPv4 and IPv6 routes
         let routes = vec![
             StaticRouteKey {
-                prefix: Prefix::V4(Prefix4 {
-                    value: Ipv4Addr::from_str("10.0.0.1").unwrap(),
-                    length: 24,
-                }),
+                prefix: "10.0.0.1/24".parse::<oxnet::IpNet>().unwrap(),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
             },
             StaticRouteKey {
-                prefix: Prefix::V6(Prefix6 {
-                    value: Ipv6Addr::from_str("2001:db8::1").unwrap(),
-                    length: 64,
-                }),
+                prefix: "2001:db8::1/64".parse::<oxnet::IpNet>().unwrap(),
                 nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
                 vlan_id: None,
                 rib_priority: 0,
@@ -755,7 +759,7 @@ mod tests {
         // Verify both routes are normalized
         let after = db.get_static(None).unwrap();
         assert_eq!(after.len(), 2);
-        assert!(after[0].prefix.host_bits_are_unset());
-        assert!(after[1].prefix.host_bits_are_unset());
+        assert!(after[0].prefix.is_network_address());
+        assert!(after[1].prefix.is_network_address());
     }
 }

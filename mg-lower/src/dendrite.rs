@@ -11,8 +11,7 @@ use crate::{
 use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
-use mg_api_types::rdb::prefix::Prefix;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::IpNet;
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -56,17 +55,12 @@ impl RouteHash {
 
     pub fn for_prefix_path(
         sw: &impl SwitchZone,
-        prefix: Prefix,
+        prefix: IpNet,
         path: Path,
     ) -> Result<RouteHash, Error> {
         let (port_id, link_id) = get_port_and_link(sw, &path)?;
 
-        let cidr = match prefix {
-            Prefix::V4(p) => Ipv4Net::new(p.value, p.length)?.into(),
-            Prefix::V6(p) => Ipv6Net::new(p.value, p.length)?.into(),
-        };
-
-        RouteHash::new(cidr, port_id, link_id, path.nexthop, path.vlan_id)
+        RouteHash::new(prefix, port_id, link_id, path.nexthop, path.vlan_id)
             .map_err(|e| Error::AddressFamilyMismatch(e.to_string()))
     }
 }
@@ -460,15 +454,14 @@ fn resolve_port_and_link(
 
 pub(crate) fn get_routes_for_prefix(
     dpd: &impl Dpd,
-    prefix: &Prefix,
+    prefix: &IpNet,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<HashSet<RouteHash>, Error> {
     let result = match prefix {
-        Prefix::V4(p) => {
-            let cidr = Ipv4Net::new(p.value, p.length)?;
+        IpNet::V4(cidr) => {
             let dpd_routes =
-                match rt.block_on(async { dpd.route_ipv4_get(&cidr).await }) {
+                match rt.block_on(async { dpd.route_ipv4_get(cidr).await }) {
                     Ok(routes) => routes,
                     Err(e) => {
                         if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
@@ -501,7 +494,7 @@ pub(crate) fn get_routes_for_prefix(
                     continue;
                 }
                 match RouteHash::new(
-                    cidr.into(),
+                    (*cidr).into(),
                     port_id.clone(),
                     link_id,
                     tgt_ip,
@@ -523,10 +516,9 @@ pub(crate) fn get_routes_for_prefix(
 
             result
         }
-        Prefix::V6(p) => {
-            let cidr = Ipv6Net::new(p.value, p.length)?;
+        IpNet::V6(cidr) => {
             let dpd_routes =
-                match rt.block_on(async { dpd.route_ipv6_get(&cidr).await }) {
+                match rt.block_on(async { dpd.route_ipv6_get(cidr).await }) {
                     Ok(routes) => routes,
                     Err(e) => {
                         if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
@@ -543,7 +535,7 @@ pub(crate) fn get_routes_for_prefix(
                     continue;
                 }
                 match RouteHash::new(
-                    cidr.into(),
+                    (*cidr).into(),
                     r.port_id.clone(),
                     r.link_id,
                     r.tgt_ip.into(),

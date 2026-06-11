@@ -131,11 +131,11 @@ mod test {
     use std::str::FromStr;
 
     use super::bestpaths;
-    use crate::{
-        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
-        types::test_helpers::path_sets_equal,
-    };
+    use crate::types::test_helpers::path_sets_equal;
     use mg_api_types::rdb::path::{BgpPathProperties, Path};
+    use mg_api_types::rdb::{
+        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+    };
 
     // Bestpaths is purely a function of the path info itself, so we don't
     // need a Rib or Prefix, just a set of candidate paths and a set of

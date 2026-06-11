@@ -47,11 +47,11 @@ use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5};
+use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -238,7 +238,12 @@ pub async fn read_neighbors_v1(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x).into())
+        .map(|x| {
+            v8::bgp::config::Neighbor::from(Neighbor::from_rdb_neighbor_info(
+                rq.asn, &x,
+            ))
+            .into()
+        })
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -270,8 +275,10 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result: v1::bgp::config::Neighbor =
-        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info).into();
+    let result: v1::bgp::config::Neighbor = v8::bgp::config::Neighbor::from(
+        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info),
+    )
+    .into();
     Ok(HttpResponseOk(result))
 }
 
@@ -362,7 +369,8 @@ pub async fn read_neighbor(
                 host: std::net::SocketAddr::new(
                     std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
                     179,
-                ),
+                )
+                .into(),
                 parameters: result.parameters,
             }))
         }
@@ -718,7 +726,6 @@ pub async fn create_origin4(
 
     // Validate prefixes before processing
     validate_prefixes_v4(&rq.prefixes)?;
-
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -757,7 +764,6 @@ pub async fn update_origin4(
 
     // Validate prefixes before processing
     validate_prefixes_v4(&rq.prefixes)?;
-
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -790,7 +796,6 @@ pub async fn create_origin6(
 
     // Validate prefixes before processing
     validate_prefixes_v6(&rq.prefixes)?;
-
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -829,7 +834,6 @@ pub async fn update_origin6(
 
     // Validate prefixes before processing
     validate_prefixes_v6(&rq.prefixes)?;
-
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -865,9 +869,16 @@ pub async fn get_exported_v1(
     let rq = request.into_inner();
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
-    let orig4 = r.db.get_origin4().map_err(|e| {
-        HttpError::for_internal_error(format!("error getting origin: {e}"))
-    })?;
+    let orig4: Vec<v1::rdb::prefix::Prefix> = r
+        .db
+        .get_origin4()
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("error getting origin: {e}"))
+        })?
+        .into_iter()
+        .map(v1::rdb::prefix::Prefix4::from)
+        .map(Into::into)
+        .collect();
     let neighs = r.db.get_bgp_neighbors().map_err(|e| {
         HttpError::for_internal_error(format!("error getting neighbors: {e}"))
     })?;
@@ -887,8 +898,7 @@ pub async fn get_exported_v1(
             continue;
         }
 
-        let mut orig_routes: Vec<Prefix> =
-            orig4.clone().iter().map(|p| Prefix::from(*p)).collect();
+        let mut orig_routes = orig4.clone();
 
         // Combine per-AF export policies into legacy format for filtering
         let allow_export =
@@ -896,7 +906,7 @@ pub async fn get_exported_v1(
                 &n.parameters.allow_export4,
                 &n.parameters.allow_export6,
             );
-        let mut exported_routes: Vec<Prefix> = match allow_export {
+        let mut exported_routes = match allow_export {
             v1::bgp::policy::ImportExportPolicy::NoFiltering => orig_routes,
             v1::bgp::policy::ImportExportPolicy::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
@@ -951,7 +961,8 @@ pub async fn get_exported_v5(
                 process_ipv6,
             )
         {
-            exported.insert(peer_key, routes);
+            exported
+                .insert(peer_key, routes.into_iter().map(Into::into).collect());
         }
     } else {
         // No peer filter - iterate all sessions
@@ -963,7 +974,10 @@ pub async fn get_exported_v5(
                 process_ipv4,
                 process_ipv6,
             ) {
-                exported.insert(peer_key, routes);
+                exported.insert(
+                    peer_key,
+                    routes.into_iter().map(Into::into).collect(),
+                );
             }
         }
     }
@@ -975,7 +989,7 @@ pub async fn get_exported_v5(
 pub async fn get_exported(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ExportedSelector>,
-) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<String, Vec<IpNet>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
@@ -1219,7 +1233,7 @@ pub async fn get_neighbors_v4(
             PeerId::Ip(ip) => ip,
             PeerId::Interface(_) => continue, // Skip unnumbered sessions
         };
-        peers.insert(peer_ip, s.get_peer_info());
+        peers.insert(peer_ip, s.get_peer_info().into());
     }
 
     Ok(HttpResponseOk(peers))
@@ -1595,7 +1609,12 @@ pub async fn message_history_v1(
         // Only include IP-based sessions in the history
         if let PeerId::Ip(addr) = key {
             let mh = lock!(session.message_history).clone();
-            result.insert(*addr, v1::bgp::session::MessageHistory::from(mh));
+            result.insert(
+                *addr,
+                v1::bgp::session::MessageHistory::from(
+                    v4::bgp::session::MessageHistory::from(mh),
+                ),
+            );
         }
     }
 
@@ -1624,7 +1643,9 @@ pub async fn message_history_v4(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history)| {
-            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+            key.parse::<IpAddr>().ok().map(|addr| {
+                (addr, v4::bgp::session::MessageHistory::from(history))
+            })
         })
         .collect();
 
@@ -1653,7 +1674,12 @@ pub async fn message_history_v2(
         .into_iter()
         .filter_map(|(key, history)| {
             key.parse::<IpAddr>().ok().map(|addr| {
-                (addr, v2::bgp::history::MessageHistory::from(history))
+                (
+                    addr,
+                    v2::bgp::history::MessageHistory::from(
+                        v4::bgp::session::MessageHistory::from(history),
+                    ),
+                )
             })
         })
         .collect();
@@ -1931,10 +1957,12 @@ pub(crate) mod helpers {
         let (event_tx, event_rx) = channel();
 
         // V1 API is IPv4-only; extract only IPv4 policies
-        let allow_import4 =
-            ImportExportPolicy4::from(rq.parameters.allow_import.clone());
-        let allow_export4 =
-            ImportExportPolicy4::from(rq.parameters.allow_export.clone());
+        let allow_import4 = v4::bgp::policy::ImportExportPolicy4::from(
+            rq.parameters.allow_import.clone(),
+        );
+        let allow_export4 = v4::bgp::policy::ImportExportPolicy4::from(
+            rq.parameters.allow_export.clone(),
+        );
 
         let info = SessionInfo::from(&rq.parameters);
 
@@ -1990,8 +2018,10 @@ pub(crate) mod helpers {
                     // V1 API is IPv4-only and doesn't support nexthop override
                     ipv4_enabled: true,
                     ipv6_enabled: false,
-                    allow_import6: ImportExportPolicy6::NoFiltering,
-                    allow_export6: ImportExportPolicy6::NoFiltering,
+                    allow_import6:
+                        v4::bgp::policy::ImportExportPolicy6::NoFiltering,
+                    allow_export6:
+                        v4::bgp::policy::ImportExportPolicy6::NoFiltering,
                     nexthop4: None,
                     nexthop6: None,
                     src_addr: None,
@@ -2081,7 +2111,7 @@ pub(crate) mod helpers {
                 asn: rq.asn,
                 group: rq.group.clone(),
                 name: rq.name.clone(),
-                host: rq.host,
+                host: *rq.host,
                 parameters: BgpNeighborParameters {
                     remote_asn: rq.parameters.remote_asn,
                     min_ttl: rq.parameters.min_ttl,
@@ -2099,10 +2129,10 @@ pub(crate) mod helpers {
                     communities: rq.parameters.communities,
                     local_pref: rq.parameters.local_pref,
                     enforce_first_as: rq.parameters.enforce_first_as,
-                    allow_import4,
-                    allow_import6,
-                    allow_export4,
-                    allow_export6,
+                    allow_import4: allow_import4.into(),
+                    allow_import6: allow_import6.into(),
+                    allow_export4: allow_export4.into(),
+                    allow_export6: allow_export6.into(),
                     ipv4_enabled: rq.parameters.ipv4_unicast.is_some(),
                     ipv6_enabled: rq.parameters.ipv6_unicast.is_some(),
                     nexthop4,
@@ -2225,10 +2255,10 @@ pub(crate) mod helpers {
                     communities: rq.parameters.communities.clone(),
                     local_pref: rq.parameters.local_pref,
                     enforce_first_as: rq.parameters.enforce_first_as,
-                    allow_import4,
-                    allow_import6,
-                    allow_export4,
-                    allow_export6,
+                    allow_import4: allow_import4.into(),
+                    allow_import6: allow_import6.into(),
+                    allow_export4: allow_export4.into(),
+                    allow_export6: allow_export6.into(),
                     ipv4_enabled: rq.parameters.ipv4_unicast.is_some(),
                     ipv6_enabled: rq.parameters.ipv6_unicast.is_some(),
                     nexthop4,
@@ -2526,11 +2556,11 @@ pub(crate) mod helpers {
     /// Returns None if the peer is not Established or has no routes to export.
     pub(crate) fn get_exported<Cnx: BgpConnection>(
         session: &SessionRunner<Cnx>,
-        orig4: &[Prefix4],
-        orig6: &[Prefix6],
+        orig4: &[Ipv4Net],
+        orig6: &[Ipv6Net],
         process_ipv4: bool,
         process_ipv6: bool,
-    ) -> Option<(PeerId, Vec<Prefix>)> {
+    ) -> Option<(PeerId, Vec<IpNet>)> {
         // Only process Established peers
         if session.state() != FsmStateKind::Established {
             return None;
@@ -2553,15 +2583,15 @@ pub(crate) mod helpers {
 
         // Get session configuration for export policies
         let session_info = lock!(session.session);
-        let mut peer_exported_routes: Vec<Prefix> = Vec::new();
+        let mut peer_exported_routes: Vec<IpNet> = Vec::new();
 
         // Process IPv4 routes if requested and negotiated
         if process_ipv4
             && ipv4_negotiated
             && let Some(ref ipv4_config) = session_info.ipv4_unicast
         {
-            let mut v4_routes: Vec<Prefix> =
-                orig4.iter().map(|p| Prefix::from(*p)).collect();
+            let mut v4_routes: Vec<IpNet> =
+                orig4.iter().map(|p| IpNet::from(*p)).collect();
 
             // Apply export policy
             match &ipv4_config.export_policy {
@@ -2570,7 +2600,7 @@ pub(crate) mod helpers {
                 }
                 ImportExportPolicy4::Allow(allowed) => {
                     v4_routes.retain(|p| {
-                        if let Prefix::V4(p4) = p {
+                        if let IpNet::V4(p4) = p {
                             allowed.contains(p4)
                         } else {
                             false
@@ -2586,8 +2616,8 @@ pub(crate) mod helpers {
             && ipv6_negotiated
             && let Some(ref ipv6_config) = session_info.ipv6_unicast
         {
-            let mut v6_routes: Vec<Prefix> =
-                orig6.iter().map(|p| Prefix::from(*p)).collect();
+            let mut v6_routes: Vec<IpNet> =
+                orig6.iter().map(|p| IpNet::from(*p)).collect();
 
             // Apply export policy
             match &ipv6_config.export_policy {
@@ -2596,7 +2626,7 @@ pub(crate) mod helpers {
                 }
                 ImportExportPolicy6::Allow(allowed) => {
                     v6_routes.retain(|p| {
-                        if let Prefix::V6(p6) = p {
+                        if let IpNet::V6(p6) = p {
                             allowed.contains(p6)
                         } else {
                             false
@@ -2625,16 +2655,15 @@ mod tests {
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
     use bgp::router::SessionMap;
-    use mg_api_types_versions::v4::bgp::config::{
-        Ipv4UnicastConfig, Ipv6UnicastConfig,
+    use client_common::println_nopipe;
+    use mg_api_types::bgp::config::{
+        ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
+        Ipv6UnicastConfig, UnnumberedBgpPeerConfig,
     };
-    use mg_api_types_versions::v4::bgp::policy::{
+    use mg_api_types::bgp::policy::{
         ImportExportPolicy4, ImportExportPolicy6,
     };
-    use mg_api_types_versions::v8::bgp::config::{
-        ApplyRequest, BgpPeerConfig, BgpPeerParameters, UnnumberedBgpPeerConfig,
-    };
-    use mg_common::{println_nopipe, stats::MgLowerStats};
+    use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     use std::net::Ipv6Addr;
@@ -2712,7 +2741,7 @@ mod tests {
 
     fn numbered(ip: &str, name: &str, hold_time: u64) -> BgpPeerConfig {
         BgpPeerConfig {
-            host: SocketAddr::new(ip.parse().unwrap(), 179),
+            host: oxnet::SocketAddrJson(SocketAddr::new(ip.parse().unwrap(), 179)),
             name: name.into(),
             parameters: params(hold_time),
         }
@@ -2779,6 +2808,7 @@ mod tests {
         do_bgp_apply(&ctx, req.clone())
             .await
             .expect("bgp apply request");
+
         assert_eq!(
             ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
             2,

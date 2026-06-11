@@ -26,12 +26,10 @@
 //!
 //! Policy scripts are operator defined and written in Rhai.
 
-use crate::messages::{
-    CapabilityCode, Message, OpenMessage, Prefix, UpdateMessage,
-};
+use crate::messages::{CapabilityCode, Message, OpenMessage, UpdateMessage};
 use crate::rhai_integration::*;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use oxnet::{IpNet, Ipv4Net};
 
 /// Address-family-specific import/export policy wrapper for internal session
 /// signaling. Carries either an IPv4 or IPv6 policy so per-AF policy-change
@@ -136,12 +134,11 @@ impl ShaperResult {
     ) -> UpdateMessage {
         // anything that was previously being announced that is no longer
         // being announced, must be withdrawn
-        let previous: HashSet<Prefix4> = a.nlri.iter().cloned().collect();
-
-        let current: HashSet<Prefix4> = b.nlri.iter().cloned().collect();
+        let previous: HashSet<Ipv4Net> = a.nlri.iter().copied().collect();
+        let current: HashSet<Ipv4Net> = b.nlri.iter().copied().collect();
 
         let mut new = b.clone();
-        new.withdrawn = previous.difference(&current).cloned().collect();
+        new.withdrawn = previous.difference(&current).copied().collect();
 
         new
     }
@@ -229,7 +226,7 @@ pub fn new_rhai_engine() -> Engine {
                 // get the passed in function
                 let fp = args[1].take().cast::<FnPtr>();
                 let mut msg = args[0].write_lock::<UpdateMessage>().unwrap();
-                rhai_update_message_prefix_filter(&mut msg, |p: &Prefix4| {
+                rhai_update_message_prefix_filter(&mut msg, |p: &Ipv4Net| {
                     fp.call_raw(&context, None, [Dynamic::from(*p)])
                         .unwrap()
                         .cast::<bool>()
@@ -239,16 +236,16 @@ pub fn new_rhai_engine() -> Engine {
         );
 
     engine
-        .register_type_with_name::<Prefix>("Prefix")
+        .register_type_with_name::<IpNet>("Prefix")
         .register_fn("within", prefix_within_rhai)
-        .register_type_with_name::<Prefix4>("Prefix4")
+        .register_type_with_name::<Ipv4Net>("Prefix4")
         .register_fn("within", prefix4_within_rhai)
-        .register_type_with_name::<Prefix6>("Prefix6")
+        .register_type_with_name::<oxnet::Ipv6Net>("Prefix6")
         .register_fn("within", prefix6_within_rhai);
 
     #[cfg(debug_assertions)]
     {
-        use mg_common::println_nopipe;
+        use client_common::println_nopipe;
         println_nopipe!("Functions registered:");
         engine
             .gen_fn_signatures(false)
@@ -545,13 +542,13 @@ mod test {
         let addr = "198.51.100.1".parse().unwrap();
         let originated = UpdateMessage {
             nlri: vec![
-                "10.10.0.0/16".parse::<Prefix4>().unwrap(),
-                "10.128.0.0/16".parse::<Prefix4>().unwrap(),
+                "10.10.0.0/16".parse::<Ipv4Net>().unwrap(),
+                "10.128.0.0/16".parse::<Ipv4Net>().unwrap(),
             ],
             ..Default::default()
         };
         let filtered = UpdateMessage {
-            nlri: vec!["10.128.0.0/16".parse::<Prefix4>().unwrap()],
+            nlri: vec!["10.128.0.0/16".parse::<Ipv4Net>().unwrap()],
             ..Default::default()
         };
         let source =

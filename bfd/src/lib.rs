@@ -217,7 +217,7 @@ pub enum AddPeerError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use mg_common::eprintln_nopipe;
+    use client_common::eprintln_nopipe;
     use pretty_assertions::assert_eq;
     use slog::Drain;
     use std::net::IpAddr;

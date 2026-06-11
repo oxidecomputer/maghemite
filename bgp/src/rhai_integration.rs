@@ -6,13 +6,13 @@ use std::collections::BTreeSet;
 
 use crate::{
     messages::{
-        Capability, CapabilityCode, Community, Message, OpenMessage, Prefix,
+        Capability, CapabilityCode, Community, Message, OpenMessage,
         UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult},
 };
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
-use rhai::{Module, export_module, plugin::*};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use rhai::export_module;
 
 macro_rules! create_enum_module {
     ($module:ident : $typ:ty => $($variant:ident),+) => {
@@ -116,21 +116,21 @@ pub fn rhai_update_message_emit(um: &mut UpdateMessage) -> ShaperResult {
 
 pub fn rhai_update_message_prefix_filter<F>(um: &mut UpdateMessage, f: F)
 where
-    F: Clone + Fn(&Prefix4) -> bool,
+    F: Clone + Fn(&Ipv4Net) -> bool,
 {
-    um.withdrawn.retain(f.clone());
-    um.nlri.retain(f);
+    um.withdrawn.retain(|p| f(p));
+    um.nlri.retain(|p| f(p));
 }
 
 #[allow(dead_code)]
-pub fn rhai_update_message_get_nlri(um: &mut UpdateMessage) -> Vec<Prefix4> {
+pub fn rhai_update_message_get_nlri(um: &mut UpdateMessage) -> Vec<Ipv4Net> {
     um.nlri.clone()
 }
 
 #[allow(dead_code)]
 pub fn rhai_update_message_set_nlri(
     um: &mut UpdateMessage,
-    value: Vec<Prefix4>,
+    value: Vec<Ipv4Net>,
 ) {
     um.nlri = value;
 }
@@ -197,29 +197,26 @@ pub mod shaper_result_module {
     }
 }
 
-pub fn prefix_within_rhai(prefix: &mut Prefix, x: &str) -> bool {
-    let x: Prefix = match x.parse() {
+pub fn prefix_within_rhai(prefix: &mut IpNet, x: &str) -> bool {
+    let x: IpNet = match x.parse() {
         Ok(p) => p,
         Err(_) => return false,
     };
-    let s = *prefix;
-    s.within(&x)
+    prefix.is_subnet_of(&x)
 }
 
-pub fn prefix4_within_rhai(prefix: &mut Prefix4, x: &str) -> bool {
-    let x: Prefix = match x.parse() {
+pub fn prefix4_within_rhai(prefix: &mut Ipv4Net, x: &str) -> bool {
+    let x: IpNet = match x.parse() {
         Ok(p) => p,
         Err(_) => return false,
     };
-    let s = Prefix::V4(*prefix);
-    s.within(&x)
+    IpNet::V4(*prefix).is_subnet_of(&x)
 }
 
-pub fn prefix6_within_rhai(prefix: &mut Prefix6, x: &str) -> bool {
-    let x: Prefix = match x.parse() {
+pub fn prefix6_within_rhai(prefix: &mut Ipv6Net, x: &str) -> bool {
+    let x: IpNet = match x.parse() {
         Ok(p) => p,
         Err(_) => return false,
     };
-    let s = Prefix::V6(*prefix);
-    s.within(&x)
+    IpNet::V6(*prefix).is_subnet_of(&x)
 }

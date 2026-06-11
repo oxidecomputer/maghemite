@@ -8,7 +8,6 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_api_types::rdb::prefix::Prefix;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::GetRibResult;
 use mg_api_types::static_routes::{
@@ -16,6 +15,7 @@ use mg_api_types::static_routes::{
     DeleteStaticRoute6Request, StaticRoute4, StaticRoute6,
 };
 use mg_api_types::switch::SwitchIdentifiers;
+use oxnet::IpNet;
 use rdb::StaticRouteKey;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -35,7 +35,7 @@ fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
     } = v;
     StaticRouteKey {
         prefix: prefix.into(),
-        nexthop: nexthop.into(),
+        nexthop,
         vlan_id,
         rib_priority,
     }
@@ -72,7 +72,7 @@ pub async fn static_add_v4_route(
         .collect();
 
     // Validate that all prefixes have host bits unset
-    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    let prefixes: Vec<IpNet> = routes.iter().map(|r| r.prefix).collect();
     validate_prefixes(&prefixes)?;
 
     ctx.context()
@@ -132,7 +132,7 @@ pub async fn static_add_v6_route(
         .collect();
 
     // Validate that all prefixes have host bits unset
-    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    let prefixes: Vec<IpNet> = routes.iter().map(|r| r.prefix).collect();
     validate_prefixes(&prefixes)?;
 
     ctx.context()

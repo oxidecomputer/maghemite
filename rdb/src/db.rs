@@ -4,7 +4,7 @@
 
 //! The routing database (rdb).
 //!
-//! This is the maghmite routing database. The routing database holds both
+//! This is the maghemite routing database. The routing database holds both
 //! volatile and non-volatile information. Non-volatile information is stored
 //! in a sled key-value store that is persisted to disk via flush operations.
 //! Volatile information is stored in in-memory data structures such as hash
@@ -18,10 +18,10 @@ use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
 use mg_api_types::rdb::path::Path;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::{lock, read_lock, write_lock};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
@@ -189,25 +189,25 @@ impl Db {
             Some(AddressFamily::Ipv4) => self
                 .loc_rib4()
                 .into_iter()
-                .map(|(p4, paths)| (Prefix::from(p4), paths))
+                .map(|(p4, paths)| (IpNet::from(p4), paths))
                 .collect(),
 
             Some(AddressFamily::Ipv6) => self
                 .loc_rib6()
                 .into_iter()
-                .map(|(p6, paths)| (Prefix::from(p6), paths))
+                .map(|(p6, paths)| (IpNet::from(p6), paths))
                 .collect(),
 
             None => {
                 let mut rib: Rib = self
                     .loc_rib4()
                     .into_iter()
-                    .map(|(p4, paths)| (Prefix::from(p4), paths))
+                    .map(|(p4, paths)| (IpNet::from(p4), paths))
                     .collect();
                 rib.extend(
                     self.loc_rib6()
                         .into_iter()
-                        .map(|(p6, paths)| (Prefix::from(p6), paths)),
+                        .map(|(p6, paths)| (IpNet::from(p6), paths)),
                 );
                 rib
             }
@@ -227,23 +227,23 @@ impl Db {
             Some(AddressFamily::Ipv4) => self
                 .full_rib4()
                 .into_iter()
-                .map(|(p4, paths)| (Prefix::from(p4), paths))
+                .map(|(p4, paths)| (IpNet::from(p4), paths))
                 .collect(),
             Some(AddressFamily::Ipv6) => self
                 .full_rib6()
                 .into_iter()
-                .map(|(p6, paths)| (Prefix::from(p6), paths))
+                .map(|(p6, paths)| (IpNet::from(p6), paths))
                 .collect(),
             None => {
                 let mut rib: Rib = self
                     .full_rib4()
                     .into_iter()
-                    .map(|(p4, paths)| (Prefix::from(p4), paths))
+                    .map(|(p4, paths)| (IpNet::from(p4), paths))
                     .collect();
                 rib.extend(
                     self.full_rib6()
                         .into_iter()
-                        .map(|(p6, paths)| (Prefix::from(p6), paths)),
+                        .map(|(p6, paths)| (IpNet::from(p6), paths)),
                 );
                 rib
             }
@@ -487,7 +487,7 @@ impl Db {
         Ok(result)
     }
 
-    pub fn create_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
+    pub fn create_origin4(&self, ps: &[Ipv4Net]) -> Result<(), Error> {
         rdb_log!(self, info,
             "create origin4: {ps:?}";
             "unit" => UNIT_PERSISTENT
@@ -501,7 +501,7 @@ impl Db {
         self.set_origin4(ps)
     }
 
-    pub fn set_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
+    pub fn set_origin4(&self, ps: &[Ipv4Net]) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         tree.clear()?;
         for p in ps.iter() {
@@ -518,7 +518,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_origin4(&self) -> Result<Vec<Prefix4>, Error> {
+    pub fn get_origin4(&self) -> Result<Vec<Ipv4Net>, Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         let result = tree
             .scan_prefix(vec![])
@@ -535,7 +535,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Prefix4::from_db_key(&key) {
+                Some(match Ipv4Net::from_db_key(&key) {
                     Ok(item) => item,
                     Err(ref e) => {
                         rdb_log!(
@@ -552,7 +552,7 @@ impl Db {
         Ok(result)
     }
 
-    pub fn create_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
+    pub fn create_origin6(&self, ps: &[Ipv6Net]) -> Result<(), Error> {
         let current = self.get_origin6()?;
         if !current.is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));
@@ -561,7 +561,7 @@ impl Db {
         self.set_origin6(ps)
     }
 
-    pub fn set_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
+    pub fn set_origin6(&self, ps: &[Ipv6Net]) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
         tree.clear()?;
         for p in ps.iter() {
@@ -578,7 +578,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_origin6(&self) -> Result<Vec<Prefix6>, Error> {
+    pub fn get_origin6(&self) -> Result<Vec<Ipv6Net>, Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
         let result = tree
             .scan_prefix(vec![])
@@ -595,7 +595,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Prefix6::from_db_key(&key) {
+                Some(match Ipv6Net::from_db_key(&key) {
                     Ok(item) => item,
                     Err(e) => {
                         rdb_log!(
@@ -612,16 +612,16 @@ impl Db {
         Ok(result)
     }
 
-    pub fn get_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
+    pub fn get_prefix_paths(&self, prefix: &IpNet) -> Vec<Path> {
         match prefix {
-            Prefix::V4(p4) => {
+            IpNet::V4(p4) => {
                 let rib = lock!(self.rib4_in);
                 match rib.get(p4) {
                     None => Vec::new(),
                     Some(p) => p.iter().cloned().collect(),
                 }
             }
-            Prefix::V6(p6) => {
+            IpNet::V6(p6) => {
                 let rib = lock!(self.rib6_in);
                 match rib.get(p6) {
                     None => Vec::new(),
@@ -631,16 +631,16 @@ impl Db {
         }
     }
 
-    pub fn get_selected_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
+    pub fn get_selected_prefix_paths(&self, prefix: &IpNet) -> Vec<Path> {
         match prefix {
-            Prefix::V4(p4) => {
+            IpNet::V4(p4) => {
                 let rib = lock!(self.rib4_loc);
                 match rib.get(p4) {
                     None => Vec::new(),
                     Some(p) => p.iter().cloned().collect(),
                 }
             }
-            Prefix::V6(p6) => {
+            IpNet::V6(p6) => {
                 let rib = lock!(self.rib6_loc);
                 match rib.get(p6) {
                     None => Vec::new(),
@@ -654,7 +654,7 @@ impl Db {
         &self,
         rib_in: &Rib4,
         rib_loc: &mut Rib4,
-        prefix: &Prefix4,
+        prefix: &Ipv4Net,
     ) {
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
             rdb_log!(
@@ -691,7 +691,7 @@ impl Db {
         &self,
         rib_in: &Rib6,
         rib_loc: &mut Rib6,
-        prefix: &Prefix6,
+        prefix: &Ipv6Net,
     ) {
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
             rdb_log!(
@@ -729,7 +729,7 @@ impl Db {
     // bestpath is run against via the bestpath_needed closure
     pub fn trigger_bestpath_when<F>(&self, bestpath_needed: F)
     where
-        F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
+        F: Fn(&IpNet, &BTreeSet<Path>) -> bool,
     {
         // Fetch fanout once before the loops to avoid repeated sled access
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
@@ -747,7 +747,7 @@ impl Db {
             let rib4_in = lock!(self.rib4_in);
             let mut rib4_loc = lock!(self.rib4_loc);
             for (prefix, paths) in rib4_in.iter() {
-                if bestpath_needed(&Prefix::from(*prefix), paths) {
+                if bestpath_needed(&IpNet::from(*prefix), paths) {
                     Self::update_rib_loc(
                         prefix,
                         paths,
@@ -763,7 +763,7 @@ impl Db {
             let rib6_in = lock!(self.rib6_in);
             let mut rib6_loc = lock!(self.rib6_loc);
             for (prefix, paths) in rib6_in.iter() {
-                if bestpath_needed(&Prefix::from(*prefix), paths) {
+                if bestpath_needed(&IpNet::from(*prefix), paths) {
                     Self::update_rib_loc(
                         prefix,
                         paths,
@@ -793,7 +793,7 @@ impl Db {
 
     fn add_prefix4_path(
         &self,
-        p4: &Prefix4,
+        p4: &Ipv4Net,
         path: &Path,
         rib_in: &mut Rib4,
         rib_loc: &mut Rib4,
@@ -811,7 +811,7 @@ impl Db {
 
     fn add_prefix6_path(
         &self,
-        p6: &Prefix6,
+        p6: &Ipv6Net,
         path: &Path,
         rib_in: &mut Rib6,
         rib_loc: &mut Rib6,
@@ -827,14 +827,14 @@ impl Db {
         self.update_rib6_loc(rib_in, rib_loc, p6);
     }
 
-    pub fn add_prefix_path(&self, prefix: &Prefix, path: &Path) {
+    pub fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
         match prefix {
-            Prefix::V4(p4) => {
+            IpNet::V4(p4) => {
                 let mut rib_in = lock!(self.rib4_in);
                 let mut rib_loc = lock!(self.rib4_loc);
                 self.add_prefix4_path(p4, path, &mut rib_in, &mut rib_loc);
             }
-            Prefix::V6(p6) => {
+            IpNet::V6(p6) => {
                 let mut rib_in = lock!(self.rib6_in);
                 let mut rib_loc = lock!(self.rib6_loc);
                 self.add_prefix6_path(p6, path, &mut rib_in, &mut rib_loc);
@@ -880,8 +880,8 @@ impl Db {
             (Vec::new(), Vec::new()),
             |(mut v4, mut v6), srk| {
                 match srk.prefix {
-                    Prefix::V4(_) => v4.push(srk),
-                    Prefix::V6(_) => v6.push(srk),
+                    IpNet::V4(_) => v4.push(srk),
+                    IpNet::V6(_) => v6.push(srk),
                 }
                 (v4, v6)
             },
@@ -901,7 +901,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn add_bgp_prefixes(&self, prefixes: &[Prefix], path: Path) {
+    pub fn add_bgp_prefixes(&self, prefixes: &[IpNet], path: Path) {
         let mut pcn = PrefixChangeNotification::default();
         for prefix in prefixes {
             self.add_prefix_path(prefix, &path);
@@ -1024,12 +1024,12 @@ impl Db {
                         let mut replacement = p.clone();
                         replacement.shutdown = shutdown;
                         paths.replace(replacement);
-                        pcn.changed.insert(Prefix::from(*prefix));
+                        pcn.changed.insert(IpNet::from(*prefix));
                     }
                 }
             }
             for prefix in pcn.changed.iter() {
-                if let Prefix::V4(p4) = prefix
+                if let IpNet::V4(p4) = prefix
                     && let Some(paths) = rib4_in.get(p4)
                 {
                     Self::update_rib_loc(
@@ -1051,12 +1051,12 @@ impl Db {
                         let mut replacement = p.clone();
                         replacement.shutdown = shutdown;
                         paths.replace(replacement);
-                        pcn6.changed.insert(Prefix::from(*prefix));
+                        pcn6.changed.insert(IpNet::from(*prefix));
                     }
                 }
             }
             for prefix in pcn6.changed.iter() {
-                if let Prefix::V6(p6) = prefix
+                if let IpNet::V6(p6) = prefix
                     && let Some(paths) = rib6_in.get(p6)
                 {
                     Self::update_rib_loc(
@@ -1075,7 +1075,7 @@ impl Db {
 
     fn remove_prefix4_path<F>(
         &self,
-        prefix: &Prefix4,
+        prefix: &Ipv4Net,
         prefix_cmp: F,
         rib_in: &mut Rib4,
         rib_loc: &mut Rib4,
@@ -1094,7 +1094,7 @@ impl Db {
 
     fn remove_prefix6_path<F>(
         &self,
-        prefix: &Prefix6,
+        prefix: &Ipv6Net,
         prefix_cmp: F,
         rib_in: &mut Rib6,
         rib_loc: &mut Rib6,
@@ -1111,12 +1111,12 @@ impl Db {
         self.update_rib6_loc(rib_in, rib_loc, prefix);
     }
 
-    fn remove_prefix_path<F>(&self, prefix: &Prefix, prefix_cmp: F)
+    fn remove_prefix_path<F>(&self, prefix: &IpNet, prefix_cmp: F)
     where
         F: Fn(&Path) -> bool,
     {
         match prefix {
-            Prefix::V4(p4) => {
+            IpNet::V4(p4) => {
                 let mut rib_in = lock!(self.rib4_in);
                 let mut rib_loc = lock!(self.rib4_loc);
                 self.remove_prefix4_path(
@@ -1126,7 +1126,7 @@ impl Db {
                     &mut rib_loc,
                 );
             }
-            Prefix::V6(p6) => {
+            IpNet::V6(p6) => {
                 let mut rib_in = lock!(self.rib6_in);
                 let mut rib_loc = lock!(self.rib6_loc);
                 self.remove_prefix6_path(
@@ -1141,7 +1141,7 @@ impl Db {
 
     fn remove_path_for_prefixes4<F>(
         &self,
-        prefixes: &[Prefix4],
+        prefixes: &[Ipv4Net],
         prefix_cmp: F,
         rib_in: &mut Rib4,
         rib_loc: &mut Rib4,
@@ -1155,7 +1155,7 @@ impl Db {
 
     fn remove_path_for_prefixes6<F>(
         &self,
-        prefixes: &[Prefix6],
+        prefixes: &[Ipv6Net],
         prefix_cmp: F,
         rib_in: &mut Rib6,
         rib_loc: &mut Rib6,
@@ -1167,11 +1167,8 @@ impl Db {
         }
     }
 
-    pub fn remove_path_for_prefixes<F>(
-        &self,
-        prefixes: &[Prefix],
-        prefix_cmp: F,
-    ) where
+    pub fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
+    where
         F: Fn(&Path) -> bool,
     {
         // split prefixes into v4 and v6 groups. this allows us to lock the v4
@@ -1181,8 +1178,8 @@ impl Db {
             (Vec::new(), Vec::new()),
             |(mut v4, mut v6), prefix| {
                 match prefix {
-                    Prefix::V4(p4) => v4.push(p4),
-                    Prefix::V6(p6) => v6.push(p6),
+                    IpNet::V4(p4) => v4.push(p4),
+                    IpNet::V6(p6) => v6.push(p6),
                 }
                 (v4, v6)
             },
@@ -1251,8 +1248,8 @@ impl Db {
             (Vec::new(), Vec::new()),
             |(mut r4, mut r6), srk| {
                 match srk.prefix {
-                    Prefix::V4(_) => r4.push(*srk),
-                    Prefix::V6(_) => r6.push(*srk),
+                    IpNet::V4(_) => r4.push(*srk),
+                    IpNet::V6(_) => r6.push(*srk),
                 }
                 (r4, r6)
             },
@@ -1271,7 +1268,7 @@ impl Db {
     }
 
     // for each route in @prefixes, remove all bgp paths learned from @peer
-    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &PeerId) {
+    pub fn remove_bgp_prefixes(&self, prefixes: &[IpNet], peer: &PeerId) {
         let mut pcn = PrefixChangeNotification::default();
         self.remove_path_for_prefixes(
             prefixes,
@@ -1480,14 +1477,15 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        DEFAULT_RIB_PRIORITY_STATIC, StaticRouteKey, db::Db, test::TestDb,
-        types::PrefixDbKey, types::test_helpers::path_vecs_equal,
+        StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
+        types::test_helpers::path_vecs_equal,
     };
+    use client_common::eprintln_nopipe;
+    use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
     use mg_api_types::rdb::path::Path;
-    use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
     use mg_api_types::rdb::rib::AddressFamily;
-    use mg_common::eprintln_nopipe;
     use mg_common::log::*;
+    use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -1498,7 +1496,7 @@ mod test {
 
     pub fn check_prefix_path(
         db: &Db,
-        prefix: &Prefix,
+        prefix: &IpNet,
         rib_in_paths: Vec<Path>,
         loc_rib_paths: Vec<Path>,
     ) -> bool {
@@ -1521,16 +1519,17 @@ mod test {
     #[test]
     fn test_rib() {
         use crate::StaticRouteKey;
-        use crate::{
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC, db::Db,
-        };
+        use crate::db::Db;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
-        use mg_api_types::rdb::prefix::{Prefix, Prefix4};
+        use mg_api_types::rdb::{
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        use oxnet::{IpNet, Ipv4Net};
         // init test vars
-        let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
-        let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
-        let p2 = Prefix::from("192.168.2.0/24".parse::<Prefix4>().unwrap());
+        let p0 = IpNet::from("192.168.0.0/24".parse::<Ipv4Net>().unwrap());
+        let p1 = IpNet::from("192.168.1.0/24".parse::<Ipv4Net>().unwrap());
+        let p2 = IpNet::from("192.168.2.0/24".parse::<Ipv4Net>().unwrap());
         let remote_ip0 = IpAddr::from_str("203.0.113.0").unwrap();
         let remote_ip1 = IpAddr::from_str("203.0.113.1").unwrap();
         let remote_ip2 = IpAddr::from_str("203.0.113.2").unwrap();
@@ -1817,10 +1816,12 @@ mod test {
         let nexthop = IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap());
 
         // Test adding IPv4 static routes
-        let prefix4 =
-            Prefix4::new(Ipv4Addr::from_str("192.168.1.0").unwrap(), 24);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("192.168.1.0").unwrap(),
+            24,
+        );
         let static_route = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop,
             vlan_id: Some(100),
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -1837,7 +1838,7 @@ mod test {
         // Check that it appears in RIB
         let rib_routes = db.full_rib(Some(AddressFamily::Ipv4));
         assert_eq!(rib_routes.len(), 1);
-        assert!(rib_routes.contains_key(&Prefix::V4(prefix4)));
+        assert!(rib_routes.contains_key(&IpNet::V4(prefix4)));
 
         // Remove the route
         db.remove_static_routes(&[static_route]).unwrap();
@@ -1857,10 +1858,12 @@ mod test {
         let nexthop = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
 
         // Test adding IPv6 static routes
-        let prefix6 =
-            Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 64);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8::").unwrap(),
+            64,
+        );
         let static_route = StaticRouteKey {
-            prefix: Prefix::V6(prefix6),
+            prefix: IpNet::V6(prefix6),
             nexthop,
             vlan_id: Some(200),
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -1877,7 +1880,7 @@ mod test {
         // Check that it appears in RIB
         let rib_routes = db.full_rib(Some(AddressFamily::Ipv6));
         assert_eq!(rib_routes.len(), 1);
-        assert!(rib_routes.contains_key(&Prefix::V6(prefix6)));
+        assert!(rib_routes.contains_key(&IpNet::V6(prefix6)));
 
         // Remove the route
         db.remove_static_routes(&[static_route]).unwrap();
@@ -1894,12 +1897,14 @@ mod test {
     #[test]
     fn test_static_routing_ipv6_vlan_id_handling() {
         let db = get_test_db();
-        let prefix6 =
-            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+            48,
+        );
 
         // Test route without VLAN ID
         let route_no_vlan = StaticRouteKey {
-            prefix: Prefix::V6(prefix6),
+            prefix: IpNet::V6(prefix6),
             nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -1907,7 +1912,7 @@ mod test {
 
         // Test route with VLAN ID
         let route_with_vlan = StaticRouteKey {
-            prefix: Prefix::V6(prefix6),
+            prefix: IpNet::V6(prefix6),
             nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::2").unwrap()),
             vlan_id: Some(4094), // Maximum VLAN ID
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -1938,18 +1943,20 @@ mod test {
         let db = get_test_db();
 
         // Create IPv4 and IPv6 routes
-        let prefix4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 8);
-        let prefix6 = Prefix6::new(Ipv6Addr::from_str("fd00::").unwrap(), 8);
+        let prefix4 =
+            Ipv4Net::new_unchecked(Ipv4Addr::from_str("10.0.0.0").unwrap(), 8);
+        let prefix6 =
+            Ipv6Net::new_unchecked(Ipv6Addr::from_str("fd00::").unwrap(), 8);
 
         let route4 = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
 
         let route6 = StaticRouteKey {
-            prefix: Prefix::V6(prefix6),
+            prefix: IpNet::V6(prefix6),
             nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
             vlan_id: Some(300),
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -1987,19 +1994,21 @@ mod test {
     #[test]
     fn test_static_routing_multiple_routes_same_prefix() {
         let db = get_test_db();
-        let prefix4 =
-            Prefix4::new(Ipv4Addr::from_str("172.16.0.0").unwrap(), 16);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("172.16.0.0").unwrap(),
+            16,
+        );
 
         // Create multiple routes to the same prefix with different next-hops and priorities
         let route1 = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
             vlan_id: None,
             rib_priority: 100,
         };
 
         let route2 = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.2").unwrap()),
             vlan_id: Some(100),
             rib_priority: 200,
@@ -2029,12 +2038,14 @@ mod test {
     #[test]
     fn test_static_routing_vlan_id_handling() {
         let db = get_test_db();
-        let prefix4 =
-            Prefix4::new(Ipv4Addr::from_str("203.0.113.0").unwrap(), 24);
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("203.0.113.0").unwrap(),
+            24,
+        );
 
         // Test route without VLAN ID
         let route_no_vlan = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap()),
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -2042,7 +2053,7 @@ mod test {
 
         // Test route with VLAN ID
         let route_with_vlan = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("198.51.100.2").unwrap()),
             vlan_id: Some(4094), // Maximum VLAN ID
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -2072,27 +2083,25 @@ mod test {
     fn test_prefix_host_bit_normalization() {
         let db = get_test_db();
 
-        // Test that Prefix4::new() properly zeros host bits
-        let prefix4_with_host_bits =
-            Prefix4::new(Ipv4Addr::from_str("192.168.1.5").unwrap(), 24);
-        assert_eq!(
-            prefix4_with_host_bits.value,
-            Ipv4Addr::from_str("192.168.1.0").unwrap()
+        // Ipv4Net::new_unchecked does NOT zero host bits, so use a proper network address.
+        let prefix4 = Ipv4Net::new_unchecked(
+            Ipv4Addr::from_str("192.168.1.0").unwrap(),
+            24,
         );
-        assert_eq!(prefix4_with_host_bits.length, 24);
+        assert_eq!(prefix4.addr(), Ipv4Addr::from_str("192.168.1.0").unwrap());
+        assert_eq!(prefix4.width(), 24);
 
-        // Test that Prefix6::new() properly zeros host bits
-        let prefix6_with_host_bits =
-            Prefix6::new(Ipv6Addr::from_str("2001:db8::1234").unwrap(), 64);
-        assert_eq!(
-            prefix6_with_host_bits.value,
-            Ipv6Addr::from_str("2001:db8::").unwrap()
+        // Ipv6Net::new_unchecked does NOT zero host bits, so use a proper network address.
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8::").unwrap(),
+            64,
         );
-        assert_eq!(prefix6_with_host_bits.length, 64);
+        assert_eq!(prefix6.addr(), Ipv6Addr::from_str("2001:db8::").unwrap());
+        assert_eq!(prefix6.width(), 64);
 
-        // Test with static route to ensure normalization works through the full stack
+        // Test with static route to ensure the prefix works through the full stack
         let route = StaticRouteKey {
-            prefix: Prefix::V4(prefix4_with_host_bits),
+            prefix: IpNet::V4(prefix4),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -2102,10 +2111,10 @@ mod test {
         let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(routes.len(), 1);
 
-        // Verify the stored route has normalized prefix
-        if let Prefix::V4(stored_prefix) = routes[0].prefix {
+        // Verify the stored route has the correct prefix
+        if let IpNet::V4(stored_prefix) = routes[0].prefix {
             assert_eq!(
-                stored_prefix.value,
+                stored_prefix.addr(),
                 Ipv4Addr::from_str("192.168.1.0").unwrap()
             );
         } else {
@@ -2121,8 +2130,8 @@ mod test {
 
         // Test creating IPv4 origins
         let prefixes = vec![
-            Prefix4::new(Ipv4Addr::new(192, 168, 1, 0), 24),
-            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 1, 0), 24),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8),
         ];
 
         // Create origin4 - should succeed
@@ -2138,7 +2147,8 @@ mod test {
         assert!(db.create_origin4(&prefixes).is_err());
 
         // Update origin4 with different prefixes
-        let new_prefixes = vec![Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        let new_prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
         db.set_origin4(&new_prefixes).expect("set origin4");
 
         let updated = db.get_origin4().expect("get updated origin4");
@@ -2162,8 +2172,14 @@ mod test {
 
         // Test creating IPv6 origins
         let prefixes = vec![
-            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
-            Prefix6::new(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                32,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0),
+                8,
+            ),
         ];
 
         // Create origin6 - should succeed
@@ -2179,7 +2195,7 @@ mod test {
         assert!(db.create_origin6(&prefixes).is_err());
 
         // Update origin6 with different prefixes
-        let new_prefixes = vec![Prefix6::new(
+        let new_prefixes = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
             48,
         )];
@@ -2202,7 +2218,8 @@ mod test {
 
     #[test]
     fn test_prefix4_db_key_serialization() {
-        let prefix = Prefix4::new(Ipv4Addr::new(192, 168, 100, 0), 24);
+        let prefix =
+            Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 100, 0), 24);
         let key = prefix.db_key();
 
         // IPv4 address should be 4 bytes + 1 byte for length
@@ -2211,13 +2228,13 @@ mod test {
 
         // Test round-trip serialization
         let recovered =
-            Prefix4::from_db_key(&key).expect("recover from db key");
+            Ipv4Net::from_db_key(&key).expect("recover from db key");
         assert_eq!(recovered, prefix);
     }
 
     #[test]
     fn test_prefix6_db_key_serialization() {
-        let prefix = Prefix6::new(
+        let prefix = Ipv6Net::new_unchecked(
             Ipv6Addr::new(0x2001, 0xdb8, 0xdead, 0xbeef, 0, 0, 0, 0),
             64,
         );
@@ -2229,21 +2246,21 @@ mod test {
 
         // Test round-trip serialization
         let recovered =
-            Prefix6::from_db_key(&key).expect("recover from db key");
+            Ipv6Net::from_db_key(&key).expect("recover from db key");
         assert_eq!(recovered, prefix);
     }
 
     #[test]
     fn test_prefix4_from_str() {
         let prefix_str = "192.168.1.0/24";
-        let prefix: Prefix4 = prefix_str.parse().expect("parse IPv4 prefix");
-        assert_eq!(prefix.value, Ipv4Addr::new(192, 168, 1, 0));
-        assert_eq!(prefix.length, 24);
+        let prefix: Ipv4Net = prefix_str.parse().expect("parse IPv4 prefix");
+        assert_eq!(prefix.addr(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(prefix.width(), 24);
 
         // Test invalid format
-        assert!("invalid".parse::<Prefix4>().is_err());
-        assert!("192.168.1".parse::<Prefix4>().is_err());
-        assert!("192.168.1.0/abc".parse::<Prefix4>().is_err());
+        assert!("invalid".parse::<Ipv4Net>().is_err());
+        assert!("192.168.1".parse::<Ipv4Net>().is_err());
+        assert!("192.168.1.0/abc".parse::<Ipv4Net>().is_err());
     }
 
     /// Regression test for oxidecomputer/maghemite#651.
@@ -2254,21 +2271,22 @@ mod test {
     /// `shutdown` is not part of `Path::Ord` identity.
     #[test]
     fn test_set_nexthop_shutdown_replaces_path() {
-        use crate::{
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
-            StaticRouteKey,
-        };
+        use crate::StaticRouteKey;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
-        use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+        use mg_api_types::rdb::{
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
         let db = get_test_db();
 
         // --- IPv4 static path ---
         let nexthop4 = IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap());
-        let prefix4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
+        let prefix4 =
+            Ipv4Net::new_unchecked(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
         let static_key4 = StaticRouteKey {
-            prefix: Prefix::V4(prefix4),
+            prefix: IpNet::V4(prefix4),
             nexthop: nexthop4,
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -2276,28 +2294,30 @@ mod test {
         db.add_static_routes(&[static_key4]).unwrap();
 
         // Verify path starts not-shutdown.
-        let paths = db.get_prefix_paths(&Prefix::V4(prefix4));
+        let paths = db.get_prefix_paths(&IpNet::V4(prefix4));
         assert_eq!(paths.len(), 1);
         assert!(!paths[0].shutdown, "static v4 path should start active");
 
         // Shut it down.
         db.set_nexthop_shutdown(nexthop4, true);
-        let paths = db.get_prefix_paths(&Prefix::V4(prefix4));
+        let paths = db.get_prefix_paths(&IpNet::V4(prefix4));
         assert_eq!(paths.len(), 1);
         assert!(paths[0].shutdown, "static v4 path should be shutdown");
 
         // Bring it back up.
         db.set_nexthop_shutdown(nexthop4, false);
-        let paths = db.get_prefix_paths(&Prefix::V4(prefix4));
+        let paths = db.get_prefix_paths(&IpNet::V4(prefix4));
         assert_eq!(paths.len(), 1);
         assert!(!paths[0].shutdown, "static v4 path should be active again");
 
         // --- IPv6 static path ---
         let nexthop6 = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
-        let prefix6 =
-            Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 48);
+        let prefix6 = Ipv6Net::new_unchecked(
+            Ipv6Addr::from_str("2001:db8::").unwrap(),
+            48,
+        );
         let static_key6 = StaticRouteKey {
-            prefix: Prefix::V6(prefix6),
+            prefix: IpNet::V6(prefix6),
             nexthop: nexthop6,
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
@@ -2305,19 +2325,19 @@ mod test {
         db.add_static_routes(&[static_key6]).unwrap();
 
         db.set_nexthop_shutdown(nexthop6, true);
-        let paths = db.get_prefix_paths(&Prefix::V6(prefix6));
+        let paths = db.get_prefix_paths(&IpNet::V6(prefix6));
         assert_eq!(paths.len(), 1);
         assert!(paths[0].shutdown, "static v6 path should be shutdown");
 
         db.set_nexthop_shutdown(nexthop6, false);
-        let paths = db.get_prefix_paths(&Prefix::V6(prefix6));
+        let paths = db.get_prefix_paths(&IpNet::V6(prefix6));
         assert_eq!(paths.len(), 1);
         assert!(!paths[0].shutdown, "static v6 path should be active again");
 
         // --- IPv4 BGP path ---
         let bgp_nexthop =
             IpAddr::V4(Ipv4Addr::from_str("203.0.113.1").unwrap());
-        let bgp_prefix = Prefix::V4(Prefix4::new(
+        let bgp_prefix = IpNet::V4(Ipv4Net::new_unchecked(
             Ipv4Addr::from_str("172.16.0.0").unwrap(),
             16,
         ));
@@ -2360,16 +2380,16 @@ mod test {
     #[test]
     fn test_prefix6_from_str() {
         let prefix_str = "2001:db8::/32";
-        let prefix: Prefix6 = prefix_str.parse().expect("parse IPv6 prefix");
+        let prefix: Ipv6Net = prefix_str.parse().expect("parse IPv6 prefix");
         assert_eq!(
-            prefix.value,
+            prefix.addr(),
             Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)
         );
-        assert_eq!(prefix.length, 32);
+        assert_eq!(prefix.width(), 32);
 
         // Test invalid format
-        assert!("invalid".parse::<Prefix6>().is_err());
-        assert!("2001:db8:".parse::<Prefix6>().is_err());
-        assert!("2001:db8::/abc".parse::<Prefix6>().is_err());
+        assert!("invalid".parse::<Ipv6Net>().is_err());
+        assert!("2001:db8:".parse::<Ipv6Net>().is_err());
+        assert!("2001:db8::/abc".parse::<Ipv6Net>().is_err());
     }
 }

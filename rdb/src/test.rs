@@ -5,7 +5,7 @@
 //! Test utilities for rdb tests.
 
 use crate::{Db, error::Error};
-use mg_common::eprintln_nopipe;
+use client_common::eprintln_nopipe;
 use slog::Logger;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -90,7 +90,7 @@ impl Drop for TestDb {
 ///
 /// ```no_run
 /// use rdb::test::get_test_db;
-/// use rdb::{StaticRouteKey, Prefix, Prefix4};
+/// use rdb::StaticRouteKey;
 /// use mg_common::log::init_file_logger;
 /// use std::net::{IpAddr, Ipv4Addr};
 ///
@@ -100,7 +100,7 @@ impl Drop for TestDb {
 /// // Create some example static routes
 /// let routes = vec![
 ///     StaticRouteKey {
-///         prefix: Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
+///         prefix: "10.0.0.0/24".parse().unwrap(),
 ///         nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
 ///         vlan_id: None,
 ///         rib_priority: 0,

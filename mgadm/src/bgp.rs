@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
+use client_common::{print_nopipe, println_nopipe};
 use colored::*;
 use mg_admin_client::{Client, types};
 use mg_api_types::bgp::config::{
@@ -11,8 +12,7 @@ use mg_api_types::bgp::config::{
 };
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
-use mg_common::{print_nopipe, println_nopipe};
+use oxnet::{Ipv4Net, Ipv6Net};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -485,7 +485,7 @@ pub struct Originate4 {
     pub asn: u32,
 
     /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
+    pub prefixes: Vec<Ipv4Net>,
 }
 
 #[derive(Args, Debug)]
@@ -495,13 +495,13 @@ pub struct Originate6 {
     pub asn: u32,
 
     /// Set of IPv6 prefixes to originate.
-    pub prefixes: Vec<Prefix6>,
+    pub prefixes: Vec<Ipv6Net>,
 }
 
 #[derive(Args, Debug)]
 pub struct Withdraw4 {
     /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
+    pub prefixes: Vec<Ipv4Net>,
 
     /// Autonomous system number for the router to originated the prefixes from.
     #[clap(env)]
@@ -618,11 +618,11 @@ pub struct Neighbor {
 
     /// IPv4 prefixes to allow importing (requires --enable-ipv4).
     #[arg(long, requires = "enable_ipv4")]
-    pub allow_import4: Option<Vec<Prefix4>>,
+    pub allow_import4: Option<Vec<Ipv4Net>>,
 
     /// IPv4 prefixes to allow exporting (requires --enable-ipv4).
     #[arg(long, requires = "enable_ipv4")]
-    pub allow_export4: Option<Vec<Prefix4>>,
+    pub allow_export4: Option<Vec<Ipv4Net>>,
 
     /// IPv4 nexthop override for this neighbor (requires --enable-ipv4).
     #[arg(long, requires = "enable_ipv4")]
@@ -634,11 +634,11 @@ pub struct Neighbor {
 
     /// IPv6 prefixes to allow importing (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
-    pub allow_import6: Option<Vec<Prefix6>>,
+    pub allow_import6: Option<Vec<Ipv6Net>>,
 
     /// IPv6 prefixes to allow exporting (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
-    pub allow_export6: Option<Vec<Prefix6>>,
+    pub allow_export6: Option<Vec<Ipv6Net>>,
 
     /// IPv6 nexthop override for this neighbor (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
@@ -730,7 +730,7 @@ impl Neighbor {
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
             name: self.name.clone(),
-            host: SocketAddr::new(addr, self.port).to_string(),
+            host: SocketAddr::new(addr, self.port),
             hold_time: self.hold_time,
             idle_hold_time: self.idle_hold_time,
             connect_retry: self.connect_retry_time,
@@ -1442,12 +1442,7 @@ async fn clear_nbr(
 async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
     c.create_origin4(&mg_api_types::bgp::config::Origin4 {
         asn: originate.asn,
-        prefixes: originate
-            .prefixes
-            .clone()
-            .into_iter()
-            .map(|x| Prefix4::new(x.value, x.length))
-            .collect(),
+        prefixes: originate.prefixes.clone(),
     })
     .await?;
     Ok(())
@@ -1456,12 +1451,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
 async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
     c.update_origin4(&mg_api_types::bgp::config::Origin4 {
         asn: originate.asn,
-        prefixes: originate
-            .prefixes
-            .clone()
-            .into_iter()
-            .map(|x| Prefix4::new(x.value, x.length))
-            .collect(),
+        prefixes: originate.prefixes.clone(),
     })
     .await?;
     Ok(())
@@ -1481,12 +1471,7 @@ async fn read_origin4(asn: u32, c: Client) -> Result<()> {
 async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
     c.create_origin6(&mg_api_types::bgp::history::Origin6 {
         asn: originate.asn,
-        prefixes: originate
-            .prefixes
-            .clone()
-            .into_iter()
-            .map(|x| Prefix6::new(x.value, x.length))
-            .collect(),
+        prefixes: originate.prefixes.clone(),
     })
     .await?;
     Ok(())
@@ -1495,12 +1480,7 @@ async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
 async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
     c.update_origin6(&mg_api_types::bgp::history::Origin6 {
         asn: originate.asn,
-        prefixes: originate
-            .prefixes
-            .clone()
-            .into_iter()
-            .map(|x| Prefix6::new(x.value, x.length))
-            .collect(),
+        prefixes: originate.prefixes.clone(),
     })
     .await?;
     Ok(())
@@ -1872,10 +1852,10 @@ mod tests {
     fn test_ipv4_prefix_parsing_in_cli() {
         // Test that IPv4 prefixes can be parsed for CLI usage
         let prefix_str = "192.168.1.0/24";
-        let prefix = Prefix4::from_str(prefix_str).expect("parse IPv4 prefix");
+        let prefix = Ipv4Net::from_str(prefix_str).expect("parse IPv4 prefix");
 
-        assert_eq!(prefix.value.to_string(), "192.168.1.0");
-        assert_eq!(prefix.length, 24);
+        assert_eq!(prefix.addr().to_string(), "192.168.1.0");
+        assert_eq!(prefix.width(), 24);
 
         // Test Originate4 struct creation (simulating CLI argument parsing)
         let originate4 = Originate4 {
@@ -1885,18 +1865,18 @@ mod tests {
 
         assert_eq!(originate4.asn, 65001);
         assert_eq!(originate4.prefixes.len(), 1);
-        assert_eq!(originate4.prefixes[0].value.to_string(), "192.168.1.0");
-        assert_eq!(originate4.prefixes[0].length, 24);
+        assert_eq!(originate4.prefixes[0].addr().to_string(), "192.168.1.0");
+        assert_eq!(originate4.prefixes[0].width(), 24);
     }
 
     #[test]
     fn test_ipv6_prefix_parsing_in_cli() {
         // Test that IPv6 prefixes can be parsed for CLI usage
         let prefix_str = "2001:db8::/32";
-        let prefix = Prefix6::from_str(prefix_str).expect("parse IPv6 prefix");
+        let prefix = Ipv6Net::from_str(prefix_str).expect("parse IPv6 prefix");
 
-        assert_eq!(prefix.value.to_string(), "2001:db8::");
-        assert_eq!(prefix.length, 32);
+        assert_eq!(prefix.addr().to_string(), "2001:db8::");
+        assert_eq!(prefix.width(), 32);
 
         // Test Originate6 struct creation (simulating CLI argument parsing)
         let originate6 = Originate6 {
@@ -1906,8 +1886,8 @@ mod tests {
 
         assert_eq!(originate6.asn, 65001);
         assert_eq!(originate6.prefixes.len(), 1);
-        assert_eq!(originate6.prefixes[0].value.to_string(), "2001:db8::");
-        assert_eq!(originate6.prefixes[0].length, 32);
+        assert_eq!(originate6.prefixes[0].addr().to_string(), "2001:db8::");
+        assert_eq!(originate6.prefixes[0].width(), 32);
     }
 
     #[test]

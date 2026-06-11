@@ -247,7 +247,6 @@ pub enum Safi {
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
-#[schemars(rename = "PathAttributeTypeCode")]
 pub enum PathAttributeTypeCode {
     /// RFC 4271
     Origin = 1,
@@ -587,17 +586,14 @@ pub struct AddPathElement {
 //
 // These match the initial API schema. They have the same source name as the
 // MP-BGP-aware versions in [`crate::v4::bgp::messages`], disambiguated by the
-// `v1::messages` module path. The schemars name matches the in-source name
-// (`Prefix`, `PathAttribute`, `PathAttributeType`, `PathAttributeValue`),
-// since the schema name is "PathAttribute" in v1 and "PathAttribute" in v4
-// — but each version generates its own schema document.
+// `v1::messages` module path.
 // ============================================================================
 
 /// V1 Prefix wire-shape (length + raw octets), used by the v1 admin API.
 #[derive(
     Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
 )]
-pub struct Prefix {
+pub(crate) struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,
 }
@@ -1022,8 +1018,7 @@ pub struct RouteRefreshMessage {
 #[derive(
     Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
 )]
-#[schemars(rename = "UpdateMessage")]
-pub struct UpdateMessage {
+pub(crate) struct UpdateMessage {
     pub withdrawn: Vec<Prefix>,
     pub path_attributes: Vec<PathAttribute>,
     pub nlri: Vec<Prefix>,
@@ -1032,8 +1027,7 @@ pub struct UpdateMessage {
 /// V1 Message enum for API compatibility.
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
-#[schemars(rename = "Message")]
-pub enum Message {
+pub(crate) enum Message {
     Open(OpenMessage),
     Update(UpdateMessage),
     Notification(NotificationMessage),

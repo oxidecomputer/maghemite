@@ -3,13 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{BGP_VERSION, error::Error};
-pub(crate) use mg_api_types::rdb::prefix::Prefix;
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use nom::{
     bytes::complete::take,
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use path_attribute_flags::*;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -92,13 +91,13 @@ impl PrefixParseError {
     }
 }
 
-impl BgpWireFormat<Prefix4> for Prefix4 {
+impl BgpWireFormat<Ipv4Net> for Ipv4Net {
     type Error = PrefixParseError;
 
     fn to_wire(&self) -> Vec<u8> {
-        let mut buf = vec![self.length];
-        let n = usize::from(self.length).div_ceil(8);
-        buf.extend_from_slice(&self.value.octets()[..n]);
+        let mut buf = vec![self.width()];
+        let n = usize::from(self.width()).div_ceil(8);
+        buf.extend_from_slice(&self.addr().octets()[..n]);
         buf
     }
 
@@ -110,10 +109,10 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
         let len = input[0];
 
         // Validate length bound for IPv4 (structural validation)
-        if len > Prefix4::HOST_MASK {
+        if len > oxnet::IPV4_NET_WIDTH_MAX {
             return Err(PrefixParseError::InvalidMask {
                 length: len,
-                max: Prefix4::HOST_MASK,
+                max: oxnet::IPV4_NET_WIDTH_MAX,
             });
         }
 
@@ -147,22 +146,23 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
         // The last encoded byte carries the 25th bit of the prefix plus 7
         // padding bits (128 = 0b10000000).
         //
-        // We make the trailing bits irrelevant by zeroing them during Prefix
-        // type instantiation.
+        // We make the trailing bits irrelevant by zeroing them: construct the
+        // net and then take the network address (host bits zeroed).
+        let net = Ipv4Net::new_unchecked(Ipv4Addr::from(bytes), len);
         Ok((
             &input[1 + byte_count..],
-            Prefix4::new(Ipv4Addr::from(bytes), len),
+            Ipv4Net::new_unchecked(net.prefix(), len),
         ))
     }
 }
 
-impl BgpWireFormat<Prefix6> for Prefix6 {
+impl BgpWireFormat<Ipv6Net> for Ipv6Net {
     type Error = PrefixParseError;
 
     fn to_wire(&self) -> Vec<u8> {
-        let mut buf = vec![self.length];
-        let n = usize::from(self.length).div_ceil(8);
-        buf.extend_from_slice(&self.value.octets()[..n]);
+        let mut buf = vec![self.width()];
+        let n = usize::from(self.width()).div_ceil(8);
+        buf.extend_from_slice(&self.addr().octets()[..n]);
         buf
     }
 
@@ -174,10 +174,10 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
         let len = input[0];
 
         // Validate length bound for IPv6 (structural validation)
-        if len > Prefix6::HOST_MASK {
+        if len > oxnet::IPV6_NET_WIDTH_MAX {
             return Err(PrefixParseError::InvalidMask {
                 length: len,
-                max: Prefix6::HOST_MASK,
+                max: oxnet::IPV6_NET_WIDTH_MAX,
             });
         }
 
@@ -211,11 +211,12 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
         // The last encoded byte carries the 25th bit of the prefix plus 7
         // padding bits (0x80 = 0b10000000).
         //
-        // We make the trailing bits irrelevant by zeroing them during Prefix
-        // type instantiation.
+        // We make the trailing bits irrelevant by zeroing them: construct the
+        // net and then take the network address (host bits zeroed).
+        let net = Ipv6Net::new_unchecked(Ipv6Addr::from(bytes), len);
         Ok((
             &input[1 + byte_count..],
-            Prefix6::new(Ipv6Addr::from(bytes), len),
+            Ipv6Net::new_unchecked(net.prefix(), len),
         ))
     }
 }
@@ -639,22 +640,22 @@ pub fn update_message_from_wire(
 pub fn update_message_prefixes_from_wire(
     buf: &[u8],
     afi: AddressFamily,
-) -> Result<Vec<Prefix>, PrefixParseError> {
+) -> Result<Vec<IpNet>, PrefixParseError> {
     match afi {
         AddressFamily::Ipv4 => update_message_prefixes4_from_wire(buf)
-            .map(|v| v.into_iter().map(Prefix::V4).collect()),
+            .map(|v| v.into_iter().map(IpNet::V4).collect()),
         AddressFamily::Ipv6 => update_message_prefixes6_from_wire(buf)
-            .map(|v| v.into_iter().map(Prefix::V6).collect()),
+            .map(|v| v.into_iter().map(IpNet::V6).collect()),
     }
 }
 
 /// Parse IPv4 prefixes from wire format.
-pub fn update_message_prefixes4_from_wire(
+fn update_message_prefixes4_from_wire(
     mut buf: &[u8],
-) -> Result<Vec<Prefix4>, PrefixParseError> {
+) -> Result<Vec<Ipv4Net>, PrefixParseError> {
     let mut result = Vec::new();
     while !buf.is_empty() {
-        let (out, prefix4) = Prefix4::from_wire(buf)?;
+        let (out, prefix4) = Ipv4Net::from_wire(buf)?;
         result.push(prefix4);
         buf = out;
     }
@@ -662,12 +663,12 @@ pub fn update_message_prefixes4_from_wire(
 }
 
 /// Parse IPv6 prefixes from wire format.
-pub fn update_message_prefixes6_from_wire(
+fn update_message_prefixes6_from_wire(
     mut buf: &[u8],
-) -> Result<Vec<Prefix6>, PrefixParseError> {
+) -> Result<Vec<Ipv6Net>, PrefixParseError> {
     let mut result = Vec::new();
     while !buf.is_empty() {
-        let (out, prefix6) = Prefix6::from_wire(buf)?;
+        let (out, prefix6) = Ipv6Net::from_wire(buf)?;
         result.push(prefix6);
         buf = out;
     }
@@ -1594,10 +1595,10 @@ pub fn as4_path_segment_from_wire(
 /// Parse IPv4 prefixes from wire format
 fn prefixes4_from_wire(
     mut buf: &[u8],
-) -> Result<Vec<Prefix4>, PrefixParseError> {
+) -> Result<Vec<Ipv4Net>, PrefixParseError> {
     let mut result = Vec::new();
     while !buf.is_empty() {
-        let (out, prefix4) = Prefix4::from_wire(buf)?;
+        let (out, prefix4) = Ipv4Net::from_wire(buf)?;
         result.push(prefix4);
         buf = out;
     }
@@ -1607,10 +1608,10 @@ fn prefixes4_from_wire(
 /// Parse IPv6 prefixes from wire format
 fn prefixes6_from_wire(
     mut buf: &[u8],
-) -> Result<Vec<Prefix6>, PrefixParseError> {
+) -> Result<Vec<Ipv6Net>, PrefixParseError> {
     let mut result = Vec::new();
     while !buf.is_empty() {
-        let (out, prefix6) = Prefix6::from_wire(buf)?;
+        let (out, prefix6) = Ipv6Net::from_wire(buf)?;
         result.push(prefix6);
         buf = out;
     }
@@ -1618,7 +1619,7 @@ fn prefixes6_from_wire(
 }
 
 /// Free-fn replacement for `MpReachNlri::to_wire`. Stays in `bgp` because it
-/// calls the bgp-local `BgpWireFormat<Prefix4>` impl on `Prefix4`/`Prefix6`.
+/// calls the bgp-local `BgpWireFormat<Ipv4Net>` impl on `Ipv4Net`/`Ipv6Net`.
 pub fn mp_reach_nlri_to_wire(mp: &MpReachNlri) -> Vec<u8> {
     let mut buf = Vec::new();
 
@@ -2533,10 +2534,10 @@ impl Display for MessageParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mg_api_types::rdb::prefix::Prefix;
-    use mg_common::{cidr, ip, parse, println_nopipe};
+    use client_common::println_nopipe;
+    use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
-    use pretty_hex::*;
+    use pretty_hex::PrettyHex;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -2630,7 +2631,7 @@ mod tests {
     #[test]
     fn update_round_trip() {
         let um0 = UpdateMessage {
-            withdrawn: vec![Prefix4::new(
+            withdrawn: vec![Ipv4Net::new_unchecked(
                 std::net::Ipv4Addr::new(0, 23, 1, 12),
                 32,
             )],
@@ -2663,8 +2664,14 @@ mod tests {
                 },
             ],
             nlri: vec![
-                Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
-                Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
+                Ipv4Net::new_unchecked(
+                    std::net::Ipv4Addr::new(0, 23, 1, 13),
+                    32,
+                ),
+                Ipv4Net::new_unchecked(
+                    std::net::Ipv4Addr::new(0, 23, 1, 14),
+                    32,
+                ),
             ],
             errors: vec![],
         };
@@ -2727,7 +2734,7 @@ mod tests {
     #[test]
     fn prefix_within() {
         // Test IPv4 prefix containment
-        let ipv4_prefixes: &[Prefix] = &[
+        let ipv4_prefixes: &[IpNet] = &[
             cidr!("10.10.10.10/32"),
             cidr!("10.10.10.0/24"),
             cidr!("10.10.0.0/16"),
@@ -2738,16 +2745,16 @@ mod tests {
         for i in 0..ipv4_prefixes.len() {
             for j in i..ipv4_prefixes.len() {
                 // shorter prefixes contain longer or equal
-                assert!(ipv4_prefixes[i].within(&ipv4_prefixes[j]));
+                assert!(ipv4_prefixes[i].is_subnet_of(&ipv4_prefixes[j]));
                 if i != j {
                     // longer prefixes should not contain shorter
-                    assert!(!ipv4_prefixes[j].within(&ipv4_prefixes[i]))
+                    assert!(!ipv4_prefixes[j].is_subnet_of(&ipv4_prefixes[i]))
                 }
             }
         }
 
         // Test IPv6 prefix containment
-        let ipv6_prefixes: &[Prefix] = &[
+        let ipv6_prefixes: &[IpNet] = &[
             cidr!("2001:db8:1:1::1/128"),
             cidr!("2001:db8:1:1::/64"),
             cidr!("2001:db8:1::/48"),
@@ -2758,43 +2765,43 @@ mod tests {
         for i in 0..ipv6_prefixes.len() {
             for j in i..ipv6_prefixes.len() {
                 // shorter prefixes contain longer or equal
-                assert!(ipv6_prefixes[i].within(&ipv6_prefixes[j]));
+                assert!(ipv6_prefixes[i].is_subnet_of(&ipv6_prefixes[j]));
                 if i != j {
                     // longer prefixes should not contain shorter
-                    assert!(!ipv6_prefixes[j].within(&ipv6_prefixes[i]))
+                    assert!(!ipv6_prefixes[j].is_subnet_of(&ipv6_prefixes[i]))
                 }
             }
         }
 
         // Test non-overlapping prefixes
-        let a: Prefix = cidr!("10.10.0.0/16");
-        let b: Prefix = cidr!("10.20.0.0/16");
-        assert!(!a.within(&b));
-        let a: Prefix = cidr!("10.10.0.0/24");
-        assert!(!a.within(&b));
+        let a: IpNet = cidr!("10.10.0.0/16");
+        let b: IpNet = cidr!("10.20.0.0/16");
+        assert!(!a.is_subnet_of(&b));
+        let a: IpNet = cidr!("10.10.0.0/24");
+        assert!(!a.is_subnet_of(&b));
 
-        let a: Prefix = cidr!("2001:db8:1::/48");
-        let b: Prefix = cidr!("2001:db8:2::/48");
-        assert!(!a.within(&b));
+        let a: IpNet = cidr!("2001:db8:1::/48");
+        let b: IpNet = cidr!("2001:db8:2::/48");
+        assert!(!a.is_subnet_of(&b));
 
         // Test default routes contain same-family prefixes
-        let ipv4_default: Prefix = cidr!("0.0.0.0/0");
-        let ipv6_default: Prefix = cidr!("::/0");
+        let ipv4_default: IpNet = cidr!("0.0.0.0/0");
+        let ipv6_default: IpNet = cidr!("::/0");
 
-        let any_ipv4: Prefix = cidr!("192.168.1.0/24");
-        let any_ipv6: Prefix = cidr!("2001:db8::/48");
+        let any_ipv4: IpNet = cidr!("192.168.1.0/24");
+        let any_ipv6: IpNet = cidr!("2001:db8::/48");
 
-        assert!(any_ipv4.within(&ipv4_default));
-        assert!(any_ipv6.within(&ipv6_default));
+        assert!(any_ipv4.is_subnet_of(&ipv4_default));
+        assert!(any_ipv6.is_subnet_of(&ipv6_default));
 
         // Test cross-family default route edge cases
         // IPv4 prefixes should NOT be within IPv6 default route
-        assert!(!any_ipv4.within(&ipv6_default));
-        assert!(!ipv4_default.within(&ipv6_default));
+        assert!(!any_ipv4.is_subnet_of(&ipv6_default));
+        assert!(!ipv4_default.is_subnet_of(&ipv6_default));
 
         // IPv6 prefixes should NOT be within IPv4 default route
-        assert!(!any_ipv6.within(&ipv4_default));
-        assert!(!ipv6_default.within(&ipv4_default));
+        assert!(!any_ipv6.is_subnet_of(&ipv4_default));
+        assert!(!ipv6_default.is_subnet_of(&ipv4_default));
     }
 
     #[test]
@@ -2915,16 +2922,26 @@ mod tests {
                 AddressFamily::Ipv4 => {
                     let mut octets = [0u8; 4];
                     octets.copy_from_slice(&test_case.input_bytes);
-                    Prefix::V4(Prefix4::new(
+                    let n = Ipv4Net::new_unchecked(
                         Ipv4Addr::from(octets),
+                        test_case.prefix_length,
+                    );
+                    // Normalize the IpNet
+                    IpNet::V4(Ipv4Net::new_unchecked(
+                        n.prefix(),
                         test_case.prefix_length,
                     ))
                 }
                 AddressFamily::Ipv6 => {
                     let mut octets = [0u8; 16];
                     octets.copy_from_slice(&test_case.input_bytes);
-                    Prefix::V6(Prefix6::new(
+                    let n = Ipv6Net::new_unchecked(
                         Ipv6Addr::from(octets),
+                        test_case.prefix_length,
+                    );
+                    // Normalize the IpNet
+                    IpNet::V6(Ipv6Net::new_unchecked(
+                        n.prefix(),
                         test_case.prefix_length,
                     ))
                 }
@@ -2932,23 +2949,24 @@ mod tests {
 
             match test_case.address_family {
                 AddressFamily::Ipv4 => {
-                    if let Prefix::V4(rdb_prefix4) = prefix {
+                    if let IpNet::V4(net4) = prefix {
                         assert_eq!(
-                            rdb_prefix4.length, test_case.prefix_length,
+                            net4.width(),
+                            test_case.prefix_length,
                             "IPv4 length mismatch for {}",
                             test_case.description
                         );
                         assert_eq!(
-                            rdb_prefix4.value,
+                            net4.addr(),
                             Ipv4Addr::from_str(test_case.expected_address)
                                 .unwrap(),
                             "IPv4 address mismatch for {}: expected {}, got {}",
                             test_case.description,
                             test_case.expected_address,
-                            rdb_prefix4.value
+                            net4.addr()
                         );
                         assert!(
-                            rdb_prefix4.host_bits_are_unset(),
+                            net4.is_network_address(),
                             "IPv4 host bits not properly zeroed for {}",
                             test_case.description
                         );
@@ -2957,23 +2975,24 @@ mod tests {
                     }
                 }
                 AddressFamily::Ipv6 => {
-                    if let Prefix::V6(rdb_prefix6) = prefix {
+                    if let IpNet::V6(net6) = prefix {
                         assert_eq!(
-                            rdb_prefix6.length, test_case.prefix_length,
+                            net6.width(),
+                            test_case.prefix_length,
                             "IPv6 length mismatch for {}",
                             test_case.description
                         );
                         assert_eq!(
-                            rdb_prefix6.value,
+                            net6.addr(),
                             Ipv6Addr::from_str(test_case.expected_address)
                                 .unwrap(),
                             "IPv6 address mismatch for {}: expected {}, got {}",
                             test_case.description,
                             test_case.expected_address,
-                            rdb_prefix6.value
+                            net6.addr()
                         );
                         assert!(
-                            rdb_prefix6.host_bits_are_unset(),
+                            net6.is_network_address(),
                             "IPv6 host bits not properly zeroed for {}",
                             test_case.description
                         );
@@ -3238,8 +3257,8 @@ mod tests {
     fn mp_reach_nlri_ipv4_unicast() {
         let nh = BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1));
         let nlri = vec![
-            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
-            Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12),
         ];
 
         let mp_reach = MpReachNlri::ipv4_unicast(nh, nlri.clone());
@@ -3262,8 +3281,14 @@ mod tests {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
         let nlri = vec![
-            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
-            Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                48,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+                48,
+            ),
         ];
 
         let mp_reach = MpReachNlri::ipv6_unicast(nh, nlri.clone());
@@ -3285,7 +3310,7 @@ mod tests {
     fn mp_reach_nlri_round_trip() {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
-        let nlri = vec![Prefix6::new(
+        let nlri = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::from_str("2001:db8:1::").unwrap(),
             48,
         )];
@@ -3319,8 +3344,8 @@ mod tests {
     #[test]
     fn mp_unreach_nlri_ipv4_unicast() {
         let withdrawn = vec![
-            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
-            Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12),
         ];
 
         let mp_unreach = MpUnreachNlri::ipv4_unicast(withdrawn.clone());
@@ -3340,8 +3365,14 @@ mod tests {
     #[test]
     fn mp_unreach_nlri_ipv6_unicast() {
         let withdrawn = vec![
-            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
-            Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                48,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+                48,
+            ),
         ];
 
         let mp_unreach = MpUnreachNlri::ipv6_unicast(withdrawn.clone());
@@ -3360,7 +3391,7 @@ mod tests {
 
     #[test]
     fn mp_unreach_nlri_round_trip() {
-        let withdrawn = vec![Prefix6::new(
+        let withdrawn = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::from_str("2001:db8:dead::").unwrap(),
             48,
         )];
@@ -3452,7 +3483,10 @@ mod tests {
         // Create an UPDATE with both traditional NLRI and MP_REACH_NLRI
         let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 32)],
+            vec![Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8::").unwrap(),
+                32,
+            )],
         );
 
         let update = UpdateMessage {
@@ -3464,7 +3498,7 @@ mod tests {
                 },
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
-            nlri: vec![Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
+            nlri: vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8)],
             errors: vec![],
         };
 
@@ -3495,16 +3529,17 @@ mod tests {
     fn decoding_accepts_reach_and_unreach_together() {
         let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![Prefix6::new(
+            vec![Ipv6Net::new_unchecked(
                 Ipv6Addr::from_str("2001:db8:1::").unwrap(),
                 48,
             )],
         );
 
-        let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![Prefix6::new(
-            Ipv6Addr::from_str("2001:db8:2::").unwrap(),
-            48,
-        )]);
+        let mp_unreach =
+            MpUnreachNlri::ipv6_unicast(vec![Ipv6Net::new_unchecked(
+                Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+                48,
+            )]);
 
         let update = UpdateMessage {
             withdrawn: vec![],
@@ -3557,13 +3592,15 @@ mod tests {
     fn ipv4_unicast_dual_encoding() {
         // Traditional IPv4 prefixes
         let traditional_nlri =
-            vec![Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)];
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8)];
         let traditional_withdrawn =
-            vec![Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16)];
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 0, 0), 16)];
 
         // MP-BGP IPv4 prefixes (different from traditional)
-        let mp_nlri = vec![Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
-        let mp_withdrawn = vec![Prefix4::new(Ipv4Addr::new(10, 10, 0, 0), 16)];
+        let mp_nlri =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        let mp_withdrawn =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 10, 0, 0), 16)];
 
         let mp_reach = MpReachNlri::ipv4_unicast(
             BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1)),
@@ -4689,7 +4726,7 @@ mod tests {
             path_attribute_value_from_wire, path_attribute_value_to_wire,
             treat_as_withdraw, update_message_from_wire,
         };
-        use mg_api_types::rdb::prefix::Prefix6;
+        use oxnet::Ipv6Net;
 
         /// Build an UPDATE message wire format with the given path attributes bytes.
         fn build_update_wire(path_attrs: &[u8], nlri: &[u8]) -> Vec<u8> {
@@ -4738,7 +4775,7 @@ mod tests {
                 BgpNexthop::Ipv6Single(
                     Ipv6Addr::from_str("2001:db8::1").unwrap(),
                 ),
-                vec![Prefix6::new(
+                vec![Ipv6Net::new_unchecked(
                     Ipv6Addr::from_str("2001:db8:1::").unwrap(),
                     48,
                 )],
@@ -4838,10 +4875,11 @@ mod tests {
         fn mp_unreach_only_update_does_not_require_mandatory_attrs() {
             // An UPDATE that only carries MP_UNREACH_NLRI (MP-BGP withdrawals)
             // doesn't need mandatory attributes because there's no reachable NLRI.
-            let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![Prefix6::new(
-                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
-                48,
-            )]);
+            let mp_unreach =
+                MpUnreachNlri::ipv6_unicast(vec![Ipv6Net::new_unchecked(
+                    Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                    48,
+                )]);
             let value_bytes = mp_unreach_nlri_to_wire(&mp_unreach)
                 .expect("MP_UNREACH_NLRI encoding");
 
