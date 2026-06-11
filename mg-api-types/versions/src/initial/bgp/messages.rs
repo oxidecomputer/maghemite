@@ -229,10 +229,6 @@ pub enum Safi {
 
 /// An enumeration describing available path attribute type codes (initial
 /// API version, prior to MP-BGP).
-///
-/// The schema-published name is `PathAttributeTypeCode` (preserved via
-/// `#[schemars(rename = ...)]`); the in-source name disambiguates from the
-/// 12-variant MP-BGP form at [`crate::v4::bgp::messages::PathAttributeTypeCode`].
 #[derive(
     Clone,
     Copy,
