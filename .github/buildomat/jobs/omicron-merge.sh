@@ -5,8 +5,6 @@
 #: target = "ubuntu-24.04"
 #: skip_clone = true
 # 
-#: enable = false
-#:
 #: [dependencies.linux]
 #: job = "linux"
 #:
