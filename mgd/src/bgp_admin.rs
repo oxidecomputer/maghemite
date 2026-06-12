@@ -211,6 +211,9 @@ async fn do_delete_router(
             .await?;
     }
 
+    ctx.db.clear_origin4(asn.into()).map_err(Error::Db)?;
+    ctx.db.clear_origin6(asn.into()).map_err(Error::Db)?;
+
     ctx.db.remove_bgp_router(asn).map_err(Error::Db)?;
 
     let mut routers = lock!(ctx.bgp.router);
