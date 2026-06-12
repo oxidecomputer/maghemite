@@ -122,6 +122,33 @@ pub struct Db {
 unsafe impl Sync for Db {}
 unsafe impl Send for Db {}
 
+/// Width in bytes of the ASN prefix prepended to keys in router-scoped trees
+/// (neighbors, originated prefixes). Scoping every per-router key by ASN keeps
+/// state belonging to distinct routers from colliding in the shared sled trees
+/// and lets a router's state be enumerated/dropped with a single prefix scan.
+const ASN_KEY_LEN: usize = 4;
+
+/// Prepend `asn` to `key`, producing the on-disk key for a router-scoped entry.
+fn asn_scoped_key(asn: u32, key: &[u8]) -> Vec<u8> {
+    let mut buf = asn.to_be_bytes().to_vec();
+    buf.extend_from_slice(key);
+    buf
+}
+
+/// Strip the ASN prefix from a router-scoped key, yielding the inner key bytes.
+fn strip_asn(key: &[u8]) -> &[u8] {
+    &key[ASN_KEY_LEN..]
+}
+
+/// Remove every entry in `tree` scoped to `asn`.
+fn remove_asn_scoped(tree: &sled::Tree, asn: u32) -> Result<(), Error> {
+    for item in tree.scan_prefix(asn.to_be_bytes()) {
+        let (key, _) = item?;
+        tree.remove(key)?;
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct Watcher {
     tag: String,
@@ -320,9 +347,9 @@ impl Db {
 
     pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        let key = nbr.host.ip().to_string();
+        let key = asn_scoped_key(nbr.asn, nbr.host.ip().to_string().as_bytes());
         let value = serde_json::to_string(&nbr)?;
-        tree.insert(key.as_str(), value.as_str())?;
+        tree.insert(key, value.as_str())?;
         tree.flush()?;
         Ok(())
     }
@@ -332,27 +359,31 @@ impl Db {
         nbr: BgpUnnumberedNeighborInfo,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        let key = nbr.interface.clone();
+        let key = asn_scoped_key(nbr.asn, nbr.interface.as_bytes());
         let value = serde_json::to_string(&nbr)?;
-        tree.insert(key.as_str(), value.as_str())?;
+        tree.insert(key, value.as_str())?;
         tree.flush()?;
         Ok(())
     }
 
     pub fn remove_unnumbered_bgp_neighbor(
         &self,
+        asn: Asn,
         interface: &str,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        tree.remove(interface)?;
+        tree.remove(asn_scoped_key(asn.as_u32(), interface.as_bytes()))?;
         tree.flush()?;
         Ok(())
     }
 
-    pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
+    pub fn remove_bgp_neighbor(
+        &self,
+        asn: Asn,
+        addr: IpAddr,
+    ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        let key = addr.to_string();
-        tree.remove(key)?;
+        tree.remove(asn_scoped_key(asn.as_u32(), addr.to_string().as_bytes()))?;
         tree.flush()?;
         Ok(())
     }
@@ -487,41 +518,48 @@ impl Db {
         Ok(result)
     }
 
-    pub fn create_origin4(&self, ps: &[Ipv4Net]) -> Result<(), Error> {
+    pub fn create_origin4(
+        &self,
+        asn: Asn,
+        ps: &[Ipv4Net],
+    ) -> Result<(), Error> {
         rdb_log!(self, info,
-            "create origin4: {ps:?}";
+            "create origin4 (asn {asn}): {ps:?}";
             "unit" => UNIT_PERSISTENT
         );
 
-        let current = self.get_origin4()?;
+        let current = self.get_origin4(asn)?;
         if !current.is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));
         }
 
-        self.set_origin4(ps)
+        self.set_origin4(asn, ps)
     }
 
-    pub fn set_origin4(&self, ps: &[Ipv4Net]) -> Result<(), Error> {
+    pub fn set_origin4(&self, asn: Asn, ps: &[Ipv4Net]) -> Result<(), Error> {
+        let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        tree.clear()?;
+        remove_asn_scoped(&tree, asn)?;
         for p in ps.iter() {
-            tree.insert(p.db_key(), "")?;
+            tree.insert(asn_scoped_key(asn, &p.db_key()), "")?;
         }
         tree.flush()?;
         Ok(())
     }
 
-    pub fn clear_origin4(&self) -> Result<(), Error> {
+    pub fn clear_origin4(&self, asn: Asn) -> Result<(), Error> {
+        let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        tree.clear()?;
+        remove_asn_scoped(&tree, asn)?;
         tree.flush()?;
         Ok(())
     }
 
-    pub fn get_origin4(&self) -> Result<Vec<Ipv4Net>, Error> {
+    pub fn get_origin4(&self, asn: Asn) -> Result<Vec<Ipv4Net>, Error> {
+        let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         let result = tree
-            .scan_prefix(vec![])
+            .scan_prefix(asn.to_be_bytes())
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
@@ -535,7 +573,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Ipv4Net::from_db_key(&key) {
+                Some(match Ipv4Net::from_db_key(strip_asn(&key)) {
                     Ok(item) => item,
                     Err(ref e) => {
                         rdb_log!(
@@ -552,36 +590,43 @@ impl Db {
         Ok(result)
     }
 
-    pub fn create_origin6(&self, ps: &[Ipv6Net]) -> Result<(), Error> {
-        let current = self.get_origin6()?;
+    pub fn create_origin6(
+        &self,
+        asn: Asn,
+        ps: &[Ipv6Net],
+    ) -> Result<(), Error> {
+        let current = self.get_origin6(asn)?;
         if !current.is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));
         }
 
-        self.set_origin6(ps)
+        self.set_origin6(asn, ps)
     }
 
-    pub fn set_origin6(&self, ps: &[Ipv6Net]) -> Result<(), Error> {
+    pub fn set_origin6(&self, asn: Asn, ps: &[Ipv6Net]) -> Result<(), Error> {
+        let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        tree.clear()?;
+        remove_asn_scoped(&tree, asn)?;
         for p in ps.iter() {
-            tree.insert(p.db_key(), "")?;
+            tree.insert(asn_scoped_key(asn, &p.db_key()), "")?;
         }
         tree.flush()?;
         Ok(())
     }
 
-    pub fn clear_origin6(&self) -> Result<(), Error> {
+    pub fn clear_origin6(&self, asn: Asn) -> Result<(), Error> {
+        let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        tree.clear()?;
+        remove_asn_scoped(&tree, asn)?;
         tree.flush()?;
         Ok(())
     }
 
-    pub fn get_origin6(&self) -> Result<Vec<Ipv6Net>, Error> {
+    pub fn get_origin6(&self, asn: Asn) -> Result<Vec<Ipv6Net>, Error> {
+        let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
         let result = tree
-            .scan_prefix(vec![])
+            .scan_prefix(asn.to_be_bytes())
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
@@ -595,7 +640,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Ipv6Net::from_db_key(&key) {
+                Some(match Ipv6Net::from_db_key(strip_asn(&key)) {
                     Ok(item) => item,
                     Err(e) => {
                         rdb_log!(
@@ -1477,7 +1522,7 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
+        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
         types::test_helpers::path_vecs_equal,
     };
     use client_common::eprintln_nopipe;
@@ -2134,35 +2179,56 @@ mod test {
             Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8),
         ];
 
+        const ASN: Asn = Asn::FourOctet(65001);
+
         // Create origin4 - should succeed
-        db.create_origin4(&prefixes).expect("create origin4");
+        db.create_origin4(ASN, &prefixes).expect("create origin4");
 
         // Get origin4 - should return created prefixes
-        let retrieved = db.get_origin4().expect("get origin4");
+        let retrieved = db.get_origin4(ASN).expect("get origin4");
         assert_eq!(retrieved.len(), 2);
         assert!(retrieved.contains(&prefixes[0]));
         assert!(retrieved.contains(&prefixes[1]));
 
         // Try to create again - should fail with conflict
-        assert!(db.create_origin4(&prefixes).is_err());
+        assert!(db.create_origin4(ASN, &prefixes).is_err());
+
+        // A different ASN must not see the first ASN's origins, and may
+        // create its own without conflicting.
+        const OTHER_ASN: Asn = Asn::FourOctet(65002);
+        assert!(
+            db.get_origin4(OTHER_ASN)
+                .expect("get other origin4")
+                .is_empty()
+        );
+        let other_prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(203, 0, 113, 0), 24)];
+        db.create_origin4(OTHER_ASN, &other_prefixes)
+            .expect("create other origin4");
+        assert_eq!(db.get_origin4(ASN).expect("get origin4").len(), 2);
 
         // Update origin4 with different prefixes
         let new_prefixes =
             vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
-        db.set_origin4(&new_prefixes).expect("set origin4");
+        db.set_origin4(ASN, &new_prefixes).expect("set origin4");
 
-        let updated = db.get_origin4().expect("get updated origin4");
+        let updated = db.get_origin4(ASN).expect("get updated origin4");
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0], new_prefixes[0]);
 
-        // Clear origin4
-        db.clear_origin4().expect("clear origin4");
-        let empty = db.get_origin4().expect("get empty origin4");
+        // Clear origin4 - must only clear this ASN's entries
+        db.clear_origin4(ASN).expect("clear origin4");
+        let empty = db.get_origin4(ASN).expect("get empty origin4");
         assert!(empty.is_empty());
+        assert_eq!(
+            db.get_origin4(OTHER_ASN).expect("get other origin4").len(),
+            1
+        );
 
         // Create again after clear - should succeed
-        db.create_origin4(&prefixes).expect("create after clear");
-        let final_result = db.get_origin4().expect("get final origin4");
+        db.create_origin4(ASN, &prefixes)
+            .expect("create after clear");
+        let final_result = db.get_origin4(ASN).expect("get final origin4");
         assert_eq!(final_result.len(), 2);
     }
 
@@ -2182,37 +2248,48 @@ mod test {
             ),
         ];
 
+        const ASN: Asn = Asn::FourOctet(65001);
+
         // Create origin6 - should succeed
-        db.create_origin6(&prefixes).expect("create origin6");
+        db.create_origin6(ASN, &prefixes).expect("create origin6");
 
         // Get origin6 - should return created prefixes
-        let retrieved = db.get_origin6().expect("get origin6");
+        let retrieved = db.get_origin6(ASN).expect("get origin6");
         assert_eq!(retrieved.len(), 2);
         assert!(retrieved.contains(&prefixes[0]));
         assert!(retrieved.contains(&prefixes[1]));
 
         // Try to create again - should fail with conflict
-        assert!(db.create_origin6(&prefixes).is_err());
+        assert!(db.create_origin6(ASN, &prefixes).is_err());
+
+        // A different ASN must not see the first ASN's origins.
+        const OTHER_ASN: Asn = Asn::FourOctet(65002);
+        assert!(
+            db.get_origin6(OTHER_ASN)
+                .expect("get other origin6")
+                .is_empty()
+        );
 
         // Update origin6 with different prefixes
         let new_prefixes = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
             48,
         )];
-        db.set_origin6(&new_prefixes).expect("set origin6");
+        db.set_origin6(ASN, &new_prefixes).expect("set origin6");
 
-        let updated = db.get_origin6().expect("get updated origin6");
+        let updated = db.get_origin6(ASN).expect("get updated origin6");
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0], new_prefixes[0]);
 
         // Clear origin6
-        db.clear_origin6().expect("clear origin6");
-        let empty = db.get_origin6().expect("get empty origin6");
+        db.clear_origin6(ASN).expect("clear origin6");
+        let empty = db.get_origin6(ASN).expect("get empty origin6");
         assert!(empty.is_empty());
 
         // Create again after clear - should succeed
-        db.create_origin6(&prefixes).expect("create after clear");
-        let final_result = db.get_origin6().expect("get final origin6");
+        db.create_origin6(ASN, &prefixes)
+            .expect("create after clear");
+        let final_result = db.get_origin6(ASN).expect("get final origin6");
         assert_eq!(final_result.len(), 2);
     }
 

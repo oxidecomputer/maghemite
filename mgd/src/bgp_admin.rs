@@ -734,7 +734,7 @@ pub async fn create_origin4(
 
     get_router!(ctx, rq.asn)?
         .create_origin4(prefixes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(Error::Bgp)?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -745,10 +745,8 @@ pub async fn read_origin4(
 ) -> Result<HttpResponseOk<Origin4>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let mut originated = get_router!(ctx, rq.asn)?
-        .db
-        .get_origin4()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let mut originated =
+        get_router!(ctx, rq.asn)?.originated4().map_err(Error::Db)?;
 
     // stable output order for clients
     originated.sort();
@@ -772,7 +770,7 @@ pub async fn update_origin4(
 
     get_router!(ctx, rq.asn)?
         .set_origin4(prefixes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(Error::Bgp)?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -786,7 +784,7 @@ pub async fn delete_origin4(
 
     get_router!(ctx, rq.asn)?
         .clear_origin4()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(Error::Bgp)?;
 
     Ok(HttpResponseDeleted())
 }
@@ -804,7 +802,7 @@ pub async fn create_origin6(
 
     get_router!(ctx, rq.asn)?
         .create_origin6(prefixes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(Error::Bgp)?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -815,10 +813,8 @@ pub async fn read_origin6(
 ) -> Result<HttpResponseOk<Origin6>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let mut originated = get_router!(ctx, rq.asn)?
-        .db
-        .get_origin6()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let mut originated =
+        get_router!(ctx, rq.asn)?.originated6().map_err(Error::Db)?;
 
     // stable output order for clients
     originated.sort();
@@ -842,7 +838,7 @@ pub async fn update_origin6(
 
     get_router!(ctx, rq.asn)?
         .set_origin6(prefixes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(Error::Bgp)?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -856,7 +852,7 @@ pub async fn delete_origin6(
 
     get_router!(ctx, rq.asn)?
         .clear_origin6()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(Error::Bgp)?;
 
     Ok(HttpResponseDeleted())
 }
@@ -873,11 +869,8 @@ pub async fn get_exported_v1(
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
     let orig4: Vec<v1::rdb::prefix::Prefix> = r
-        .db
-        .get_origin4()
-        .map_err(|e| {
-            HttpError::for_internal_error(format!("error getting origin: {e}"))
-        })?
+        .originated4()
+        .map_err(Error::Db)?
         .into_iter()
         .map(v1::rdb::prefix::Prefix4::from)
         .map(Into::into)
@@ -940,12 +933,8 @@ pub async fn get_exported_v5(
     let r = get_router!(ctx, rq.asn)?.clone();
 
     // Get originated prefixes for both address families
-    let orig4 = r.db.get_origin4().map_err(|e| {
-        HttpError::for_internal_error(format!("error getting origin4: {e}"))
-    })?;
-    let orig6 = r.db.get_origin6().map_err(|e| {
-        HttpError::for_internal_error(format!("error getting origin6: {e}"))
-    })?;
+    let orig4 = r.originated4().map_err(Error::Db)?;
+    let orig6 = r.originated6().map_err(Error::Db)?;
 
     // Determine which address families to process
     let process_ipv4 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv4);
@@ -1003,16 +992,12 @@ pub async fn get_exported(
 
     // Only query originated prefixes for requested address families
     let orig4 = if process_ipv4 {
-        r.db.get_origin4().map_err(|e| {
-            HttpError::for_internal_error(format!("error getting origin4: {e}"))
-        })?
+        r.originated4().map_err(Error::Db)?
     } else {
         Vec::new()
     };
     let orig6 = if process_ipv6 {
-        r.db.get_origin6().map_err(|e| {
-            HttpError::for_internal_error(format!("error getting origin6: {e}"))
-        })?
+        r.originated6().map_err(Error::Db)?
     } else {
         Vec::new()
     };
@@ -1916,7 +1901,7 @@ pub(crate) mod helpers {
         bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
         ctx.db.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
-        ctx.db.remove_bgp_neighbor(addr)?;
+        ctx.db.remove_bgp_neighbor(asn.into(), addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
         Ok(HttpResponseDeleted())
@@ -1942,7 +1927,8 @@ pub(crate) mod helpers {
         ctx.bgp.unnumbered_manager.remove_interface(interface)?;
 
         // And now clear out the top level database entry
-        ctx.db.remove_unnumbered_bgp_neighbor(interface)?;
+        ctx.db
+            .remove_unnumbered_bgp_neighbor(asn.into(), interface)?;
 
         Ok(HttpResponseDeleted())
     }
@@ -2663,9 +2649,7 @@ mod tests {
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
         Ipv6UnicastConfig, UnnumberedBgpPeerConfig,
     };
-    use mg_api_types::bgp::policy::{
-        ImportExportPolicy4, ImportExportPolicy6,
-    };
+    use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
     use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
@@ -2744,7 +2728,10 @@ mod tests {
 
     fn numbered(ip: &str, name: &str, hold_time: u64) -> BgpPeerConfig {
         BgpPeerConfig {
-            host: oxnet::SocketAddrJson(SocketAddr::new(ip.parse().unwrap(), 179)),
+            host: oxnet::SocketAddrJson(SocketAddr::new(
+                ip.parse().unwrap(),
+                179,
+            )),
             name: name.into(),
             parameters: params(hold_time),
         }
