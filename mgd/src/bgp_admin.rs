@@ -64,8 +64,12 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 const UNIT_BGP: &str = "bgp";
-const DEFAULT_BGP_LISTEN: SocketAddr =
-    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
+const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
+    Ipv6Addr::UNSPECIFIED,
+    BGP_PORT.get(),
+    0,
+    0,
+));
 
 #[derive(Clone)]
 pub struct BgpContext {
@@ -335,9 +339,9 @@ pub async fn read_neighbor(
                 asn: result.asn,
                 name: result.name,
                 group: result.group,
-                host: std::net::SocketAddr::new(
-                    std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
-                    179,
+                host: SocketAddr::new(
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    BGP_PORT.get(),
                 )
                 .into(),
                 parameters: result.parameters,
@@ -2159,12 +2163,8 @@ pub(crate) mod helpers {
         let info = SessionInfo::from(&rq.parameters);
 
         // XXX: remove this when PeerConfig no longer requires a SocketAddr
-        let placeholder_host = std::net::SocketAddrV6::new(
-            std::net::Ipv6Addr::UNSPECIFIED,
-            BGP_PORT,
-            0,
-            0,
-        );
+        let placeholder_host =
+            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT.get(), 0, 0);
 
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
@@ -2644,6 +2644,7 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
+    use bgp::BGP_PORT;
     use bgp::router::SessionMap;
     use client_common::println_nopipe;
     use mg_api_types_versions::v1::bgp::config::{
@@ -2697,7 +2698,10 @@ mod tests {
         peers.insert(
             String::from("qsfp0"),
             vec![BgpPeerConfig {
-                host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179),
+                host: SocketAddr::new(
+                    "203.0.113.1".parse().unwrap(),
+                    BGP_PORT.get(),
+                ),
                 name: String::from("bob"),
                 parameters: BgpPeerParameters {
                     hold_time: 3,
@@ -2725,7 +2729,10 @@ mod tests {
         peers.insert(
             String::from("qsfp1"),
             vec![BgpPeerConfig {
-                host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179),
+                host: SocketAddr::new(
+                    "203.0.113.2".parse().unwrap(),
+                    BGP_PORT.get(),
+                ),
                 name: String::from("alice"),
                 parameters: BgpPeerParameters {
                     hold_time: 3,

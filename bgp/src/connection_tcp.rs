@@ -1382,7 +1382,7 @@ fn get_md5_source_addrs(peer_ip: IpAddr) -> Result<Vec<SocketAddr>, Error> {
 
     Ok(sources
         .iter()
-        .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+        .map(|x| SocketAddr::new(*x, crate::BGP_PORT.get()))
         .collect())
 }
 
@@ -1520,7 +1520,7 @@ fn setup_outbound_md5(
 
     let local: Vec<SocketAddr> = sources
         .iter()
-        .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+        .map(|x| SocketAddr::new(*x, crate::BGP_PORT.get()))
         .collect();
 
     init_md5_associations(fd, key, local.clone(), peer)?;
