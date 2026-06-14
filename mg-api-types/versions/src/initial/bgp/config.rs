@@ -27,7 +27,6 @@ pub struct NeighborSelector {
 
 /// V1 API neighbor reset operations (backwards compatibility)
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "NeighborResetOp")]
 pub enum NeighborResetOp {
     Hard,
     SoftInbound,
@@ -54,7 +53,6 @@ pub struct MessageHistoryResponse {
 
 /// Legacy neighbor configuration (v1/v2 API compatibility)
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "Neighbor")]
 pub struct Neighbor {
     pub asn: u32,
     pub name: String,
@@ -66,7 +64,6 @@ pub struct Neighbor {
 
 /// Apply changes to an ASN (v1/v2 API - legacy format).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "ApplyRequest")]
 pub struct ApplyRequest {
     /// ASN to apply changes to.
     pub asn: u32,
@@ -95,7 +92,6 @@ pub struct ApplyRequest {
 
 /// BGP peer configuration for v1/v2 API (legacy format with combined import/export).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "BgpPeerConfig")]
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
     pub name: String,
@@ -104,7 +100,6 @@ pub struct BgpPeerConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "BgpPeerParameters")]
 pub struct BgpPeerParameters {
     pub hold_time: u64,
     pub idle_hold_time: u64,
@@ -158,7 +153,6 @@ pub struct ShaperSource {
 #[derive(
     Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
 )]
-#[schemars(rename = "FsmStateKind")]
 pub enum FsmStateKind {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
@@ -184,21 +178,18 @@ pub enum FsmStateKind {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[schemars(rename = "DynamicTimerInfo")]
 pub struct DynamicTimerInfo {
     pub configured: Duration,
     pub negotiated: Duration,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[schemars(rename = "PeerTimers")]
 pub struct PeerTimers {
     pub hold: DynamicTimerInfo,
     pub keepalive: DynamicTimerInfo,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[schemars(rename = "PeerInfo")]
 pub struct PeerInfo {
     pub state: FsmStateKind,
     pub asn: Option<u32>,
