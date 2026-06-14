@@ -107,9 +107,9 @@ struct Arg {
     sled_uuid: Option<Uuid>,
 
     /// Serve only the admin API. Skips the routing state machine
-    /// (discovery, exchange, route synchronization), allowing test fixtures
-    /// to obtain a real `ddmd` admin endpoint without the kernel-level
-    /// networking the state machine requires.
+    /// (discovery, exchange, route synchronization), allowing a real `ddmd`
+    /// admin endpoint without the kernel-level networking the state machine
+    /// requires.
     ///
     /// Analogous to `mgd --no-bgp-dispatcher`.
     #[arg(long, default_value_t = false, conflicts_with = "addr")]
@@ -163,6 +163,10 @@ async fn run() {
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
     let router_stats = Arc::new(RouterStats::default());
+    // Per-interface state machine contexts shared between the multicast sweep
+    // and the admin context, seeded from the running state machines.
+    //
+    // Under --api-only there are no state machines, so the set is empty.
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
     start_mcast_sweep(

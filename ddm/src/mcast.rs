@@ -112,6 +112,12 @@ const DPD_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// withdrawn group's DPD members are confirmed empty, so a group leaves the set
 /// exactly once its drain is complete. A re-import re-adds it on the next pass
 /// since the control plane writes to the DB before sending its trigger.
+///
+/// `peers` is the set of per-interface state machine contexts, fixed at
+/// startup. Peer identity lives behind interior mutability, so each pass
+/// resolves against whatever peers have been discovered when it reads.
+///
+/// Under `--api-only` there are no state machines, so the set is empty.
 pub fn run(
     db: Db,
     peers: Vec<SmContext>,

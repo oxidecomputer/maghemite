@@ -48,6 +48,11 @@ pub struct HandlerContext {
     pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
+    /// Per-interface state machine contexts shared with the multicast sweep,
+    /// seeded from the running state machines and read by the `/peers` view.
+    ///
+    /// Under the `--api-only` flag there are no state machines, so the set is
+    /// empty.
     pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
@@ -85,7 +90,7 @@ pub fn handler(
 
     let api = api_description().map_err(|e| e.to_string())?;
 
-    let server = dropshot::ServerBuilder::new(api, context, ds_log)
+    let builder = dropshot::ServerBuilder::new(api, context, ds_log)
         .config(config)
         .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
             dropshot::ClientSpecifiesVersionInHeader::new(
@@ -94,19 +99,24 @@ pub fn handler(
             ),
         )));
 
-    info!(log, "admin: listening on {}", sa);
+    // Start synchronously so the admin API is bound before this function
+    // returns, and log the bound address, which reflects the assigned port
+    // when 0 is requested.
+    let server = match builder.start() {
+        Ok(server) => server,
+        Err(e) => {
+            error!(log, "admin: server start error {e:?}");
+            return Ok(());
+        }
+    };
+
+    info!(log, "admin: listening on {}", server.local_addr());
 
     let log = log.clone();
     spawn(async move {
-        match server.start() {
-            Ok(server) => {
-                info!(log, "admin: server started");
-                match server.await {
-                    Ok(()) => info!(log, "admin: server exited"),
-                    Err(e) => error!(log, "admin: server error {:?}", e),
-                }
-            }
-            Err(e) => error!(log, "admin: server start error {:?}", e),
+        match server.await {
+            Ok(()) => info!(log, "admin: server exited"),
+            Err(e) => error!(log, "admin: server error {e:?}"),
         }
     });
 
@@ -474,11 +484,11 @@ pub fn api_description()
     ddm_admin_api_mod::api_description::<DdmAdminApiImpl>()
 }
 
-/// Snapshot the current peer table, keyed by interface index.
+/// Snapshot the current peers, keyed by interface index.
 ///
-/// Reads per-interface state machines first and then layers in any
-/// `--api-only` injected entries for interface indexes that are not
-/// represented by a running state machine.
+/// Reads the per-interface state machine contexts.
+///
+/// Under the `--api-only` flag there are no state machines, so the map is empty.
 pub(crate) fn do_get_peers(
     ctx: &Arc<Mutex<HandlerContext>>,
 ) -> HashMap<u32, PeerInfo> {

@@ -14,10 +14,9 @@
 //!
 //! [`Version`] and [`DiscoveryError`] are platform-agnostic and stay in this
 //! module so the state machine type definitions in [`crate::sm`] continue to
-//! compile when the routing runtime is gated out (e.g. Linux test fixtures
-//! running `ddmd` with `--api-only`). The runtime helpers that drive
-//! the protocol over UDPv6 sockets live in the [`runtime`] submodule and
-//! are illumos-only.
+//! compile when the routing runtime is gated out (e.g. a non-illumos `ddmd`
+//! running with `--api-only`). The runtime helpers that drive the protocol
+//! over UDPv6 sockets live in the [`runtime`] submodule and are illumos-only.
 //!
 //! ## Protocol
 //!
