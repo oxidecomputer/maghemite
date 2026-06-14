@@ -2161,7 +2161,7 @@ pub(crate) mod helpers {
         // XXX: remove this when PeerConfig no longer requires a SocketAddr
         let placeholder_host = std::net::SocketAddrV6::new(
             std::net::Ipv6Addr::UNSPECIFIED,
-            0,
+            BGP_PORT,
             0,
             0,
         );
