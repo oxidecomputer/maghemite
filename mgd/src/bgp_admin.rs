@@ -1268,6 +1268,9 @@ async fn do_bgp_apply(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.log.clone();
 
+    // Validate originate prefixes before processing
+    validate_prefixes(&rq.originate)?;
+
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")
     );
@@ -1517,9 +1520,6 @@ async fn do_bgp_apply(
             )?;
         }
     }
-
-    // Validate originate prefixes before processing
-    validate_prefixes(&rq.originate)?;
 
     get_router!(ctx, rq.asn)?
         .set_origin4(rq.originate.clone().into_iter().collect())
