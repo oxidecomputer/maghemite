@@ -2,3 +2,9 @@
 name = "client-common"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+oxnet.workspace = true
+
+[dev-dependencies]
+omicron-common.workspace = true

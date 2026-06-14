@@ -95,7 +95,7 @@ dropshot-api-manager = "0.7.2"
 dropshot-api-manager-types = "0.7.2"
 expectorate = "1.2.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
-tokio = { version = "1.49", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0.102"
 hyper = "1.9.0"
@@ -130,6 +130,7 @@ oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oxnet = { version = "0.1.6", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 uuid = { version = "1.21", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
