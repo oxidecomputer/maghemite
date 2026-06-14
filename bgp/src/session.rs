@@ -6057,7 +6057,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Collect the prefixes this router is originating.
         let originated4 = if pc.ipv4_unicast.negotiated() {
-            match self.db.get_origin4() {
+            match self.db.get_origin4(self.asn) {
                 Ok(value) => value,
                 Err(e) => {
                     //TODO possible death loop. Should we just panic here?
@@ -6076,7 +6076,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         let originated6 = if pc.ipv6_unicast.negotiated() {
-            match self.db.get_origin6() {
+            match self.db.get_origin6(self.asn) {
                 Ok(value) => value,
                 Err(e) => {
                     //TODO possible death loop. Should we just panic here?
@@ -6165,7 +6165,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         sa: &ShaperApplication,
     ) -> anyhow::Result<()> {
         // Get originated IPv4 routes
-        let originated4 = match self.db.get_origin4() {
+        let originated4 = match self.db.get_origin4(self.asn) {
             Ok(originated) => originated,
             Err(e) => {
                 anyhow::bail!("failed to get originated IPv4 from db: {e}");
@@ -6181,7 +6181,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Get originated IPv6 routes
-        let originated6 = match self.db.get_origin6() {
+        let originated6 = match self.db.get_origin6(self.asn) {
             Ok(originated) => originated,
             Err(e) => {
                 anyhow::bail!("failed to get originated IPv6 from db: {e}");
@@ -6284,7 +6284,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 AdminEvent::ExportPolicyChanged(previous) => {
                     match previous {
                         ImportExportPolicy::V4(previous4) => {
-                            let originated = match self.db.get_origin4() {
+                            let originated = match self.db.get_origin4(self.asn)
+                            {
                                 Ok(value) => value,
                                 Err(e) => {
                                     session_log!(
@@ -6387,7 +6388,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             FsmState::Established(pc)
                         }
                         ImportExportPolicy::V6(previous6) => {
-                            let originated = match self.db.get_origin6() {
+                            let originated = match self.db.get_origin6(self.asn)
+                            {
                                 Ok(value) => value,
                                 Err(e) => {
                                     session_log!(
@@ -8332,7 +8334,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let originated = match self.db.get_origin4() {
+        let originated = match self.db.get_origin4(self.asn) {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
@@ -8365,7 +8367,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let originated = match self.db.get_origin6() {
+        let originated = match self.db.get_origin6(self.asn) {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
@@ -8422,7 +8424,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
-        let originated4 = match self.db.get_origin4() {
+        let originated4 = match self.db.get_origin4(self.asn) {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
@@ -8562,7 +8564,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
-                    let originated6 = match self.db.get_origin6() {
+                    let originated6 = match self.db.get_origin6(self.asn) {
                         Ok(value) => value,
                         Err(e) => {
                             session_log!(
@@ -8662,7 +8664,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .remove_bgp_prefixes(&mp_withdrawn4, &self.peer_id());
                 }
                 MpUnreachNlri::Ipv6Unicast(unreach6) => {
-                    let originated6 = match self.db.get_origin6() {
+                    let originated6 = match self.db.get_origin6(self.asn) {
                         Ok(value) => value,
                         Err(e) => {
                             session_log!(
