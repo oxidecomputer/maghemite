@@ -49,6 +49,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    num::NonZeroU16,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1018,7 +1019,7 @@ pub struct NeighborInfo {
     pub name: Arc<Mutex<String>>,
     pub peer_group: String,
     pub peer: PeerId,
-    pub port: u16,
+    pub port: NonZeroU16,
 }
 
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
@@ -1746,7 +1747,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 let mgr = self.unnumbered_manager.as_ref()?;
                 match mgr.get_neighbor_by_interface(iface) {
                     Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port))
+                        Some(neighbor.to_socket_addr(self.neighbor.port.get()))
                     }
                     Ok(None) => None, // No neighbor discovered yet - expected
                     Err(e) => {
@@ -1763,7 +1764,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             PeerId::Ip(ip) => {
                 // Numbered: construct from NeighborInfo
-                Some(SocketAddr::new(*ip, self.neighbor.port))
+                Some(SocketAddr::new(*ip, self.neighbor.port.get()))
             }
         }
     }
@@ -1791,7 +1792,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 match mgr.get_neighbor_by_interface(iface) {
                     Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port))
+                        Some(neighbor.to_socket_addr(self.neighbor.port.get()))
                     }
                     Ok(None) => {
                         session_log_lite!(
@@ -1814,7 +1815,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
             }
-            PeerId::Ip(ip) => Some(SocketAddr::new(*ip, self.neighbor.port)),
+            PeerId::Ip(ip) => {
+                Some(SocketAddr::new(*ip, self.neighbor.port.get()))
+            }
         }
     }
 
@@ -8836,12 +8839,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         *lock!(self.neighbor.name) = cfg.name;
         let mut reset_needed = false;
 
-        // Note: We don't validate that cfg.host matches self.neighbor.peer here.
+        // We don't validate that cfg.peer matches self.neighbor.peer here.
         // Session identity is enforced by the lookup mechanism - you can only
-        // update a session you found via its PeerId (IP for numbered, interface
-        // for unnumbered). The cfg.host field is a placeholder for unnumbered
-        // sessions anyway.
-        // XXX: consider re-adding this when PeerConfig uses PeerId
+        // update a session you found via its PeerId.
 
         if cfg.keepalive >= cfg.hold_time {
             return Err(Error::KeepaliveLargerThanHoldTime);
@@ -9217,7 +9217,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_ip,
                     remote_ip,
                     local_tcp_port: 0u16,
-                    remote_tcp_port: self.neighbor.port,
+                    remote_tcp_port: self.neighbor.port.get(),
                     received_capabilities: vec![],
                     timers,
                     counters,

@@ -2,20 +2,23 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::BGP_PORT;
 use mg_api_types::bgp::config::{
     BgpPeerParameters, Neighbor, UnnumberedNeighbor,
 };
+use mg_api_types::bgp::peer::PeerId;
 use mg_api_types_versions::v1;
 use rdb::Asn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::{SocketAddr, SocketAddrV6};
+use std::num::NonZeroU16;
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerConfig {
     pub name: String,
     pub group: String,
-    pub host: SocketAddr,
+    pub id: PeerId,
+    pub port: NonZeroU16,
     pub hold_time: u64,
     pub idle_hold_time: u64,
     pub delay_open: u64,
@@ -77,7 +80,8 @@ impl From<Neighbor> for PeerConfig {
         Self {
             name,
             group,
-            host: *host,
+            id: PeerId::Ip(host.ip()),
+            port: NonZeroU16::new(host.port()).unwrap_or(BGP_PORT),
             hold_time,
             idle_hold_time,
             delay_open,
@@ -119,7 +123,8 @@ impl From<v1::bgp::config::Neighbor> for PeerConfig {
         Self {
             name,
             group,
-            host,
+            id: PeerId::Ip(host.ip()),
+            port: NonZeroU16::new(host.port()).unwrap_or(BGP_PORT),
             hold_time,
             idle_hold_time,
             delay_open,
@@ -131,17 +136,15 @@ impl From<v1::bgp::config::Neighbor> for PeerConfig {
 }
 
 impl PeerConfig {
-    /// Construct a `PeerConfig` from an `UnnumberedNeighbor` (uses the supplied
-    /// IPv6 link-local socket address as the connection target).
-    pub fn from_unnumbered_neighbor(
-        n: &UnnumberedNeighbor,
-        addr: SocketAddrV6,
-    ) -> Self {
+    /// Construct a `PeerConfig` from an `UnnumberedNeighbor`. The peer is
+    /// identified by its interface; the connection target is resolved via NDP
+    /// at connect time, and the port is always the well-known BGP port.
+    pub fn from_unnumbered_neighbor(n: &UnnumberedNeighbor) -> Self {
         let UnnumberedNeighbor {
             asn: _,
             name,
             group,
-            interface: _,
+            interface,
             act_as_a_default_ipv6_router: _,
             parameters,
         } = n.clone();
@@ -171,8 +174,9 @@ impl PeerConfig {
         } = parameters;
         Self {
             name,
-            host: addr.into(),
             group,
+            id: PeerId::Interface(interface),
+            port: BGP_PORT,
             hold_time,
             idle_hold_time,
             delay_open,

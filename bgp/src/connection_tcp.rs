@@ -172,7 +172,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     let runner = lock!(sessions)
                         .get(&key)
                         .cloned()
-                        .ok_or(Error::UnknownPeer(ip))?;
+                        .ok_or_else(|| Error::UnknownPeer(key.clone()))?;
 
                     let config = lock!(runner.session);
                     return BgpConnectionTcp::with_conn(

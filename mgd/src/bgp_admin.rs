@@ -84,7 +84,7 @@ impl BgpContext {
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
-        let unnumbered_manager = UnnumberedManagerNdp::new(router.clone(), log);
+        let unnumbered_manager = UnnumberedManagerNdp::new(log);
         Self {
             router,
             sessions,
@@ -1967,6 +1967,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
@@ -1978,6 +1979,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )?;
             true
         };
@@ -2056,6 +2058,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
@@ -2067,6 +2070,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )?;
             true
         };
@@ -2162,32 +2166,26 @@ pub(crate) mod helpers {
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
 
-        // XXX: remove this when PeerConfig no longer requires a SocketAddr
-        let placeholder_host =
-            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT.get(), 0, 0);
-
         let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
-                rq.interface.clone(),
-                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
+            match get_router!(&ctx, rq.asn)?.ensure_session(
+                PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
                 event_rx,
                 info,
-                ctx.bgp.unnumbered_manager.clone(),
+                Some(ctx.bgp.unnumbered_manager.clone()),
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
             }
         } else {
-            get_router!(&ctx, rq.asn)?.new_unnumbered_session(
-                rq.interface.clone(),
-                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
+            get_router!(&ctx, rq.asn)?.new_session(
+                PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
                 event_rx,
                 info,
-                ctx.bgp.unnumbered_manager.clone(),
+                Some(ctx.bgp.unnumbered_manager.clone()),
             )?;
             true
         };
@@ -2379,13 +2377,9 @@ pub(crate) mod helpers {
             "op" => format!("{op:?}")
         );
 
-        let session = ctx
-            .bgp
-            .unnumbered_manager
-            .get_neighbor_session(asn, interface)?
-            .ok_or(Error::NotFound(
-                "session for unnumbered neighbor not found".into(),
-            ))?;
+        let session = get_router!(ctx, asn)?.get_session(interface).ok_or(
+            Error::NotFound("session for unnumbered neighbor not found".into()),
+        )?;
 
         reset_session(&session, op)?;
         Ok(HttpResponseUpdatedNoContent())

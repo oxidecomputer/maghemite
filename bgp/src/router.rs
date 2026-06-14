@@ -305,6 +305,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ensure_session(
         self: &Arc<Self>,
         peer: PeerConfig,
@@ -312,53 +313,28 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let sessions = lock!(self.sessions);
-        let key = PeerId::Ip(peer.host.ip());
-        if sessions.contains_key(&key) {
+        if sessions.contains_key(&peer.id) {
             drop(sessions);
             Ok(EnsureSessionResult::Updated(
                 self.update_session(peer, info)?,
             ))
         } else {
             Ok(EnsureSessionResult::New(self.new_session_locked(
-                sessions, key, peer, bind_addr, event_tx, event_rx, info, None,
-            )?))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn ensure_unnumbered_session(
-        self: &Arc<Self>,
-        interface: String,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
-        event_tx: Sender<FsmEvent<Cnx>>,
-        event_rx: Receiver<FsmEvent<Cnx>>,
-        info: SessionInfo,
-        unnumbered_manager: Arc<dyn UnnumberedManager>,
-    ) -> Result<EnsureSessionResult<Cnx>, Error> {
-        let sessions = lock!(self.sessions);
-        let key = PeerId::Interface(interface.clone());
-        if sessions.contains_key(&key) {
-            drop(sessions);
-            Ok(EnsureSessionResult::Updated(
-                self.update_unnumbered_session(&interface, peer, info)?,
-            ))
-        } else {
-            Ok(EnsureSessionResult::New(self.new_session_locked(
                 sessions,
-                key,
                 peer,
                 bind_addr,
                 event_tx,
                 event_rx,
                 info,
-                Some(unnumbered_manager),
+                unnumbered_manager,
             )?))
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_session(
         self: &Arc<Self>,
         peer: PeerConfig,
@@ -366,43 +342,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let sessions = lock!(self.sessions);
-        let key = PeerId::Ip(peer.host.ip());
-        if sessions.contains_key(&key) {
-            Err(Error::PeerExists)
-        } else {
-            self.new_session_locked(
-                sessions, key, peer, bind_addr, event_tx, event_rx, info, None,
-            )
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_unnumbered_session(
-        self: &Arc<Self>,
-        interface: String,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
-        event_tx: Sender<FsmEvent<Cnx>>,
-        event_rx: Receiver<FsmEvent<Cnx>>,
-        info: SessionInfo,
-        unnumbered_manager: Arc<dyn UnnumberedManager>,
-    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let sessions = lock!(self.sessions);
-        let key = PeerId::Interface(interface);
-        if sessions.contains_key(&key) {
+        if sessions.contains_key(&peer.id) {
             Err(Error::PeerExists)
         } else {
             self.new_session_locked(
                 sessions,
-                key,
                 peer,
                 bind_addr,
                 event_tx,
                 event_rx,
                 info,
-                Some(unnumbered_manager),
+                unnumbered_manager,
             )
         }
     }
@@ -411,7 +364,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     fn new_session_locked(
         self: &Arc<Self>,
         mut sessions: MutexGuard<SessionMap<Cnx>>,
-        peer_id: PeerId,
         peer: PeerConfig,
         bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
@@ -434,8 +386,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let neighbor = NeighborInfo {
             name: Arc::new(Mutex::new(peer.name.clone())),
             peer_group: peer.group.clone(),
-            peer: peer_id,
-            port: peer.host.port(),
+            peer: peer.id.clone(),
+            port: peer.port,
         };
 
         let runner = Arc::new(SessionRunner::new(
@@ -460,33 +412,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         peer: PeerConfig,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        // Use PeerId::Ip for numbered sessions
-        let key = PeerId::Ip(peer.host.ip());
+        let key = peer.id.clone();
         let session = match lock!(self.sessions).get(&key) {
-            None => return Err(Error::UnknownPeer(peer.host.ip())),
-            Some(s) => s.clone(),
-        };
-
-        session.update_session_parameters(peer, info)?;
-
-        Ok(session)
-    }
-
-    pub fn update_unnumbered_session(
-        self: &Arc<Self>,
-        interface: &str,
-        peer: PeerConfig,
-        info: SessionInfo,
-    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        // Use PeerId::Interface for unnumbered sessions
-        let key = PeerId::Interface(interface.to_string());
-        let session = match lock!(self.sessions).get(&key) {
-            None => {
-                return Err(Error::InternalCommunication(format!(
-                    "unnumbered session not found for interface: {}",
-                    interface
-                )));
-            }
+            None => return Err(Error::UnknownPeer(key)),
             Some(s) => s.clone(),
         };
 
