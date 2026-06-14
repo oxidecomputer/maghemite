@@ -336,7 +336,10 @@ pub fn api_description() -> Result<
     Ok(api)
 }
 
-#[endpoint { method = PUT, path = "/v2/push" }]
+#[endpoint {
+    method = PUT,
+    path = "/v2/push",
+}]
 async fn push_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<v2::Update>,
@@ -346,7 +349,10 @@ async fn push_handler_v2(
     push_handler_common(ctx, update).await
 }
 
-#[endpoint { method = PUT, path = "/v3/push" }]
+#[endpoint {
+    method = PUT,
+    path = "/v3/push",
+}]
 async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<v3::Update>,
@@ -371,7 +377,10 @@ async fn push_handler_common(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = GET, path = "/v2/pull" }]
+#[endpoint {
+    method = GET,
+    path = "/v2/pull",
+}]
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
@@ -444,7 +453,10 @@ async fn pull_handler_v2(
     }))
 }
 
-#[endpoint { method = GET, path = "/v3/pull" }]
+#[endpoint {
+    method = GET,
+    path = "/v3/pull",
+}]
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {

@@ -24,7 +24,6 @@ use mg_admin_client::{
 use mg_api_types::bgp::config::{Origin4, Router};
 use mg_api_types::bgp::history::Origin6;
 use mg_api_types::bgp::session::FsmStateKind;
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rib::BestpathFanoutRequest;
 use mg_api_types::static_routes::{
@@ -353,8 +352,8 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
     );
 
     // dpd should have the specific prefixes, each with two ECMP targets.
-    let cr_v4: Prefix4 = CR_V4_PREFIX.parse().expect("parse cr v4 prefix");
-    let cr_v6: Prefix6 = CR_V6_PREFIX.parse().expect("parse cr v6 prefix");
+    let cr_v4: Ipv4Net = CR_V4_PREFIX.parse().expect("parse cr v4 prefix");
+    let cr_v6: Ipv6Net = CR_V6_PREFIX.parse().expect("parse cr v6 prefix");
     wait_for_eq!(
         dpd_v4_targets(&dpd, &cr_v4).await.len(),
         2,
@@ -606,9 +605,9 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     .await
     .context("mgd: set bestpath fanout")?;
 
-    let prefix_v4: Prefix4 =
+    let prefix_v4: Ipv4Net =
         TEST_PREFIX_V4.parse().expect("parse v4 test prefix");
-    let prefix_v6: Prefix6 =
+    let prefix_v6: Ipv6Net =
         TEST_PREFIX_V6.parse().expect("parse v6 test prefix");
 
     info!(ad.log, "installing static v4 route {TEST_PREFIX_V4}");
@@ -823,8 +822,8 @@ async fn expect_bfd(
 /// cr2 as dpd targets.
 async fn expect_route(
     dpd: &DpdClient,
-    prefix_v4: &Prefix4,
-    prefix_v6: &Prefix6,
+    prefix_v4: &Ipv4Net,
+    prefix_v6: &Ipv6Net,
     cr1_in: bool,
     cr2_in: bool,
     phase: &str,
@@ -916,7 +915,7 @@ async fn mgd_selected_paths(
 /// All dpd target addresses for the given v4 prefix. Targets may be v4
 /// (static routes) or v6 (BGP-unnumbered uses v6 link-local next-hops for
 /// v4 prefixes), so the return type is `IpAddr`.
-async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Prefix4) -> Vec<IpAddr> {
+async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Ipv4Net) -> Vec<IpAddr> {
     let items = match dpd.route_ipv4_list(None, None).await {
         Ok(r) => r.into_inner().items,
         Err(_) => return Vec::new(),
@@ -936,7 +935,7 @@ async fn dpd_v4_targets(dpd: &DpdClient, prefix: &Prefix4) -> Vec<IpAddr> {
     out
 }
 
-async fn dpd_v6_targets(dpd: &DpdClient, prefix: &Prefix6) -> Vec<IpAddr> {
+async fn dpd_v6_targets(dpd: &DpdClient, prefix: &Ipv6Net) -> Vec<IpAddr> {
     let items = match dpd.route_ipv6_list(None, None).await {
         Ok(r) => r.into_inner().items,
         Err(_) => return Vec::new(),

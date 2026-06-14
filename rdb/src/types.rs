@@ -19,7 +19,7 @@ use mg_api_types::bgp::peer::PeerId;
 #[cfg(test)]
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::path::Path;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
 // Marker types for compile-time address family discrimination.
 //
@@ -84,7 +84,7 @@ impl From<StaticRouteKey> for Path {
     Debug,
 )]
 pub struct StaticRouteKey {
-    pub prefix: Prefix,
+    pub prefix: IpNet,
     pub nexthop: IpAddr,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
@@ -105,7 +105,7 @@ impl Display for StaticRouteKey {
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Route4Key {
-    pub prefix: Prefix4,
+    pub prefix: Ipv4Net,
     pub nexthop: Ipv4Addr,
 }
 
@@ -123,7 +123,7 @@ impl FromStr for Route4Key {
             s.split_once('/').ok_or("malformed route key".to_string())?;
 
         Ok(Self {
-            prefix: prefix.parse()?,
+            prefix: prefix.parse().map_err(|e| format!("{e}"))?,
             nexthop: nexthop
                 .parse()
                 .map_err(|_| "malformed ip addr".to_string())?,
@@ -156,7 +156,7 @@ impl Route4MetricKey {
 
 pub struct Policy4Key {
     pub peer: String,
-    pub prefix: Prefix4,
+    pub prefix: Ipv4Net,
     pub tag: String,
 }
 
@@ -178,10 +178,10 @@ pub trait PrefixDbKey: Sized {
     fn from_db_key(v: &[u8]) -> Result<Self, Error>;
 }
 
-impl PrefixDbKey for Prefix4 {
+impl PrefixDbKey for Ipv4Net {
     fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.value.octets().into();
-        buf.push(self.length);
+        let mut buf: Vec<u8> = self.addr().octets().into();
+        buf.push(self.width());
         buf
     }
 
@@ -192,18 +192,18 @@ impl PrefixDbKey for Prefix4 {
                 v.len()
             )))
         } else {
-            Ok(Prefix4 {
-                value: Ipv4Addr::new(v[0], v[1], v[2], v[3]),
-                length: v[4],
-            })
+            Ok(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(v[0], v[1], v[2], v[3]),
+                v[4],
+            ))
         }
     }
 }
 
-impl PrefixDbKey for Prefix6 {
+impl PrefixDbKey for Ipv6Net {
     fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.value.octets().into();
-        buf.push(self.length);
+        let mut buf: Vec<u8> = self.addr().octets().into();
+        buf.push(self.width());
         buf
     }
 
@@ -217,50 +217,7 @@ impl PrefixDbKey for Prefix6 {
             let octets: [u8; 16] = v[0..16].try_into().map_err(|_| {
                 Error::DbKey("failed to convert to IPv6 octets".to_string())
             })?;
-            Ok(Prefix6 {
-                value: Ipv6Addr::from(octets),
-                length: v[16],
-            })
-        }
-    }
-}
-
-/// Extension trait to add `contains` method for checking if a prefix contains
-/// an IP address. The base [`Prefix`] type is defined in rdb-types, but this
-/// method is specific to RDB's RPF (Reverse Path Forwarding) needs for
-/// multicast routing.
-pub trait PrefixContains {
-    /// Check if this prefix contains the given IP address.
-    ///
-    /// Performs LPM matching to determine if the address falls
-    /// within this prefix. Returns `Some(prefix_length)` if the address is
-    /// contained, `None` otherwise.
-    fn contains(&self, addr: IpAddr) -> Option<u8>;
-}
-
-impl PrefixContains for Prefix {
-    fn contains(&self, addr: IpAddr) -> Option<u8> {
-        match (self, addr) {
-            (Prefix::V4(prefix), IpAddr::V4(ipv4)) => {
-                let mask = prefix.mask();
-                if (u32::from(prefix.value) & mask) == (u32::from(ipv4) & mask)
-                {
-                    Some(prefix.length)
-                } else {
-                    None
-                }
-            }
-            (Prefix::V6(prefix), IpAddr::V6(ipv6)) => {
-                let mask = prefix.mask();
-                if (u128::from(prefix.value) & mask)
-                    == (u128::from(ipv6) & mask)
-                {
-                    Some(prefix.length)
-                } else {
-                    None
-                }
-            }
-            _ => None, // IPv4 prefix with IPv6 address or vice versa
+            Ok(Ipv6Net::new_unchecked(Ipv6Addr::from(octets), v[16]))
         }
     }
 }
@@ -333,27 +290,27 @@ pub struct Policy {
 
 #[derive(Clone, Default, Debug)]
 pub struct PrefixChangeNotification {
-    pub changed: BTreeSet<Prefix>,
+    pub changed: BTreeSet<IpNet>,
 }
 
-impl From<Prefix> for PrefixChangeNotification {
-    fn from(value: Prefix) -> Self {
+impl From<IpNet> for PrefixChangeNotification {
+    fn from(value: IpNet) -> Self {
         Self {
             changed: BTreeSet::from([value]),
         }
     }
 }
 
-impl From<Prefix4> for PrefixChangeNotification {
-    fn from(value: Prefix4) -> Self {
+impl From<Ipv4Net> for PrefixChangeNotification {
+    fn from(value: Ipv4Net) -> Self {
         Self {
             changed: BTreeSet::from([value.into()]),
         }
     }
 }
 
-impl From<Prefix6> for PrefixChangeNotification {
-    fn from(value: Prefix6) -> Self {
+impl From<Ipv6Net> for PrefixChangeNotification {
+    fn from(value: Ipv6Net) -> Self {
         Self {
             changed: BTreeSet::from([value.into()]),
         }
@@ -879,9 +836,10 @@ mod test {
 
     #[test]
     fn prefix_no_cross_family_within() {
-        let v4 = Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8));
-        let v6 = Prefix::V6(Prefix6::new(Ipv6Addr::LOCALHOST, 128));
-        assert!(!v4.within(&v6));
-        assert!(!v6.within(&v4));
+        let v4 =
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 8));
+        let v6 = IpNet::V6(Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128));
+        assert!(!v4.is_subnet_of(&v6));
+        assert!(!v6.is_subnet_of(&v4));
     }
 }

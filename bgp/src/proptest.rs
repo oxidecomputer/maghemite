@@ -19,7 +19,7 @@ use crate::messages::{
     path_attribute_flags, update_message_from_wire, update_message_nexthop,
     update_message_to_wire,
 };
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use oxnet::{Ipv4Net, Ipv6Net};
 use proptest::prelude::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -28,26 +28,30 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 // =============================================================================
 
 /// Strategy for generating valid IPv4 prefixes
-fn ipv4_prefix_strategy() -> impl Strategy<Value = Prefix4> {
+fn ipv4_prefix_strategy() -> impl Strategy<Value = Ipv4Net> {
     (any::<u32>(), 0u8..=32u8).prop_map(|(addr_bits, length)| {
-        Prefix4::new(Ipv4Addr::from(addr_bits), length)
+        // Normalize: mask out host bits so wire round-trips are identity
+        let net = Ipv4Net::new_unchecked(Ipv4Addr::from(addr_bits), length);
+        Ipv4Net::new_unchecked(net.prefix(), length)
     })
 }
 
 /// Strategy for generating valid IPv6 prefixes
-fn ipv6_prefix_strategy() -> impl Strategy<Value = Prefix6> {
+fn ipv6_prefix_strategy() -> impl Strategy<Value = Ipv6Net> {
     (any::<u128>(), 0u8..=128u8).prop_map(|(addr_bits, length)| {
-        Prefix6::new(Ipv6Addr::from(addr_bits), length)
+        // Normalize: mask out host bits so wire round-trips are identity
+        let net = Ipv6Net::new_unchecked(Ipv6Addr::from(addr_bits), length);
+        Ipv6Net::new_unchecked(net.prefix(), length)
     })
 }
 
 /// Strategy for generating a vector of IPv4 prefixes (limited size for perf)
-fn ipv4_prefixes_strategy() -> impl Strategy<Value = Vec<Prefix4>> {
+fn ipv4_prefixes_strategy() -> impl Strategy<Value = Vec<Ipv4Net>> {
     prop::collection::vec(ipv4_prefix_strategy(), 0..5)
 }
 
 /// Strategy for generating a vector of IPv6 prefixes (limited size for perf)
-fn ipv6_prefixes_strategy() -> impl Strategy<Value = Vec<Prefix6>> {
+fn ipv6_prefixes_strategy() -> impl Strategy<Value = Vec<Ipv6Net>> {
     prop::collection::vec(ipv6_prefix_strategy(), 0..5)
 }
 
@@ -269,7 +273,7 @@ proptest! {
     #[test]
     fn prop_ipv4_wire_format_roundtrip(prefix in ipv4_prefix_strategy()) {
         let wire_bytes = prefix.to_wire();
-        let (remaining, decoded) = Prefix4::from_wire(&wire_bytes)
+        let (remaining, decoded) = Ipv4Net::from_wire(&wire_bytes)
             .expect("should decode from wire");
 
         prop_assert_eq!(decoded, prefix, "Decoded prefix should match original");
@@ -280,7 +284,7 @@ proptest! {
     #[test]
     fn prop_ipv6_wire_format_roundtrip(prefix in ipv6_prefix_strategy()) {
         let wire_bytes = prefix.to_wire();
-        let (remaining, decoded) = Prefix6::from_wire(&wire_bytes)
+        let (remaining, decoded) = Ipv6Net::from_wire(&wire_bytes)
             .expect("should decode from wire");
 
         prop_assert_eq!(decoded, prefix, "Decoded prefix should match original");
@@ -731,7 +735,7 @@ proptest! {
         // Extract the effective NLRI from both (traditional uses nlri field,
         // MP-BGP uses MP_REACH_NLRI attribute)
         let traditional_effective_nlri = traditional_decoded.nlri.clone();
-        let mp_bgp_effective_nlri: Vec<Prefix4> = mp_bgp_decoded
+        let mp_bgp_effective_nlri: Vec<Ipv4Net> = mp_bgp_decoded
             .path_attributes
             .iter()
             .find_map(|a| match &a.value {
@@ -744,7 +748,7 @@ proptest! {
 
         // Extract the effective withdrawn from both
         let traditional_effective_withdrawn = traditional_decoded.withdrawn.clone();
-        let mp_bgp_effective_withdrawn: Vec<Prefix4> = mp_bgp_decoded
+        let mp_bgp_effective_withdrawn: Vec<Ipv4Net> = mp_bgp_decoded
             .path_attributes
             .iter()
             .find_map(|a| match &a.value {

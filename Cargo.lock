@@ -1382,6 +1382,7 @@ dependencies = [
  "ddm-protocol",
  "dpd-client",
  "dropshot",
+ "expectorate",
  "hostname 0.4.2",
  "http-body-util",
  "hyper",
@@ -3780,6 +3781,7 @@ dependencies = [
  "client-common",
  "colored",
  "mg-api-types-versions",
+ "oxnet",
  "progenitor 0.14.0",
  "reqwest 0.13.4",
  "schemars 0.8.22",
@@ -3815,6 +3817,7 @@ dependencies = [
  "dropshot",
  "dropshot-api-manager-types",
  "mg-api-types-versions",
+ "oxnet",
 ]
 
 [[package]]
@@ -3943,6 +3946,7 @@ dependencies = [
  "colored",
  "mg-admin-client 0.1.0",
  "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "natord",
  "oxide-tokio-rt",
@@ -3981,6 +3985,7 @@ dependencies = [
  "oxide-tokio-rt",
  "oximeter",
  "oximeter-producer",
+ "oxnet",
  "proptest",
  "rand 0.10.1",
  "rdb",
@@ -5998,6 +6003,7 @@ dependencies = [
  "client-common",
  "itertools 0.14.0",
  "mg-api-types",
+ "mg-api-types-versions",
  "mg-common",
  "ndp",
  "oxnet",

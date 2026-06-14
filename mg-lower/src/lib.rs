@@ -15,8 +15,8 @@ use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use dendrite::link_is_up;
 use log::mgl_log;
-use mg_api_types::rdb::prefix::Prefix;
 use mg_common::stats::MgLowerStats as Stats;
+use oxnet::IpNet;
 use platform::{Ddm, Dpd, SwitchZone};
 use rdb::Rib;
 use rdb::{DEFAULT_ROUTE_PRIORITY, Db, PrefixChangeNotification};
@@ -201,7 +201,7 @@ fn handle_change(
 pub(crate) fn sync_prefix(
     tep: Ipv6Addr,
     rib_loc: &Rib,
-    prefix: &Prefix,
+    prefix: &IpNet,
     dpd: &impl Dpd,
     ddm: &impl Ddm,
     sw: &impl SwitchZone,
@@ -217,7 +217,7 @@ pub(crate) fn sync_prefix(
         .block_on(async { ddm.get_originated_tunnel_endpoints().await })?
         .into_inner()
         .into_iter()
-        .filter(|x| x.overlay_prefix == prefix)
+        .filter(|x| x.overlay_prefix == *prefix)
         .collect::<HashSet<_>>();
 
     // The best routes in the RIB

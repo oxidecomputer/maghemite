@@ -5,7 +5,8 @@
 //! Shared validation functions for API request handlers.
 
 use dropshot::HttpError;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use mg_common::IpNetExt;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
 /// Validate that all IPv4 prefixes have host bits unset and are valid for RIB.
 ///
@@ -15,9 +16,9 @@ use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 /// - Is a multicast address (224.0.0.0/4)
 ///
 /// Provides helpful error messages indicating the correct normalized format.
-pub fn validate_prefixes_v4(prefixes: &[Prefix4]) -> Result<(), HttpError> {
+pub fn validate_prefixes_v4(prefixes: &[Ipv4Net]) -> Result<(), HttpError> {
     for prefix in prefixes {
-        if !prefix.host_bits_are_unset() {
+        if !prefix.is_network_address() {
             return Err(HttpError::for_bad_request(
                 Some("InvalidPrefix".to_string()),
                 format!(
@@ -48,9 +49,9 @@ pub fn validate_prefixes_v4(prefixes: &[Prefix4]) -> Result<(), HttpError> {
 /// - Is a link-local unicast address (fe80::/10)
 ///
 /// Provides helpful error messages indicating the correct normalized format.
-pub fn validate_prefixes_v6(prefixes: &[Prefix6]) -> Result<(), HttpError> {
+pub fn validate_prefixes_v6(prefixes: &[Ipv6Net]) -> Result<(), HttpError> {
     for prefix in prefixes {
-        if !prefix.host_bits_are_unset() {
+        if !prefix.is_network_address() {
             return Err(HttpError::for_bad_request(
                 Some("InvalidPrefix".to_string()),
                 format!(
@@ -79,14 +80,14 @@ pub fn validate_prefixes_v6(prefixes: &[Prefix6]) -> Result<(), HttpError> {
 /// unset and be valid for RIB.
 ///
 /// Returns an HTTP 400 Bad Request error if any prefix fails validation.
-pub fn validate_prefixes(prefixes: &[Prefix]) -> Result<(), HttpError> {
+pub fn validate_prefixes(prefixes: &[IpNet]) -> Result<(), HttpError> {
     // Separate prefixes by address family
     let (p4, p6) = prefixes.iter().copied().fold(
         (Vec::new(), Vec::new()),
         |(mut p4, mut p6), p| {
             match p {
-                Prefix::V4(prefix4) => p4.push(prefix4),
-                Prefix::V6(prefix6) => p6.push(prefix6),
+                IpNet::V4(prefix4) => p4.push(prefix4),
+                IpNet::V6(prefix6) => p6.push(prefix6),
             };
             (p4, p6)
         },
@@ -107,18 +108,16 @@ mod tests {
     #[test]
     fn test_validate_prefixes_v4_accepts_normalized() {
         let prefixes = vec![
-            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24),
-            Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24),
+            Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 0, 0), 16),
         ];
         assert!(validate_prefixes_v4(&prefixes).is_ok());
     }
 
     #[test]
     fn test_validate_prefixes_v4_rejects_unnormalized() {
-        let prefixes = vec![Prefix4 {
-            value: Ipv4Addr::new(10, 0, 0, 5),
-            length: 24,
-        }];
+        let prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 5), 24)];
         let result = validate_prefixes_v4(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -130,18 +129,24 @@ mod tests {
     #[test]
     fn test_validate_prefixes_v6_accepts_normalized() {
         let prefixes = vec![
-            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 64),
-            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0), 48),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                64,
+            ),
+            Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
+                48,
+            ),
         ];
         assert!(validate_prefixes_v6(&prefixes).is_ok());
     }
 
     #[test]
     fn test_validate_prefixes_v6_rejects_unnormalized() {
-        let prefixes = vec![Prefix6 {
-            value: Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
-            length: 64,
-        }];
+        let prefixes = vec![Ipv6Net::new_unchecked(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+            64,
+        )];
         let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -152,19 +157,20 @@ mod tests {
 
     #[test]
     fn test_validate_prefixes_v4_empty_list() {
-        let prefixes: Vec<Prefix4> = vec![];
+        let prefixes: Vec<Ipv4Net> = vec![];
         assert!(validate_prefixes_v4(&prefixes).is_ok());
     }
 
     #[test]
     fn test_validate_prefixes_v6_empty_list() {
-        let prefixes: Vec<Prefix6> = vec![];
+        let prefixes: Vec<Ipv6Net> = vec![];
         assert!(validate_prefixes_v6(&prefixes).is_ok());
     }
 
     #[test]
     fn test_validate_prefixes_v4_rejects_loopback() {
-        let prefixes = vec![Prefix4::new(Ipv4Addr::new(127, 0, 0, 0), 8)];
+        let prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(127, 0, 0, 0), 8)];
         let result = validate_prefixes_v4(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -174,7 +180,8 @@ mod tests {
 
     #[test]
     fn test_validate_prefixes_v4_rejects_multicast() {
-        let prefixes = vec![Prefix4::new(Ipv4Addr::new(224, 0, 0, 0), 4)];
+        let prefixes =
+            vec![Ipv4Net::new_unchecked(Ipv4Addr::new(224, 0, 0, 0), 4)];
         let result = validate_prefixes_v4(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -184,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_validate_prefixes_v6_rejects_loopback() {
-        let prefixes = vec![Prefix6::new(Ipv6Addr::LOCALHOST, 128)];
+        let prefixes = vec![Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)];
         let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -194,8 +201,10 @@ mod tests {
 
     #[test]
     fn test_validate_prefixes_v6_rejects_multicast() {
-        let prefixes =
-            vec![Prefix6::new(Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8)];
+        let prefixes = vec![Ipv6Net::new_unchecked(
+            Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0),
+            8,
+        )];
         let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -205,8 +214,10 @@ mod tests {
 
     #[test]
     fn test_validate_prefixes_v6_rejects_link_local() {
-        let prefixes =
-            vec![Prefix6::new(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10)];
+        let prefixes = vec![Ipv6Net::new_unchecked(
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0),
+            10,
+        )];
         let result = validate_prefixes_v6(&prefixes);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -216,19 +227,22 @@ mod tests {
 
     #[test]
     fn test_validate_prefixes_empty_list() {
-        let prefixes: Vec<Prefix> = vec![];
+        let prefixes: Vec<IpNet> = vec![];
         assert!(validate_prefixes(&prefixes).is_ok());
     }
 
     #[test]
     fn test_validate_prefixes_mixed_accepts_normalized() {
         let prefixes = vec![
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
-            Prefix::V6(Prefix6::new(
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V6(Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
                 64,
             )),
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16)),
+            IpNet::V4(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(192, 168, 0, 0),
+                16,
+            )),
         ];
         assert!(validate_prefixes(&prefixes).is_ok());
     }
@@ -236,11 +250,11 @@ mod tests {
     #[test]
     fn test_validate_prefixes_rejects_unnormalized_v4() {
         let prefixes = vec![
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
-            Prefix::V4(Prefix4 {
-                value: Ipv4Addr::new(192, 168, 1, 5),
-                length: 24,
-            }),
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V4(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(192, 168, 1, 5),
+                24,
+            )),
         ];
         let result = validate_prefixes(&prefixes);
         assert!(result.is_err());
@@ -252,14 +266,14 @@ mod tests {
     #[test]
     fn test_validate_prefixes_rejects_unnormalized_v6() {
         let prefixes = vec![
-            Prefix::V6(Prefix6::new(
+            IpNet::V6(Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
                 64,
             )),
-            Prefix::V6(Prefix6 {
-                value: Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 1),
-                length: 64,
-            }),
+            IpNet::V6(Ipv6Net::new_unchecked(
+                Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 1),
+                64,
+            )),
         ];
         let result = validate_prefixes(&prefixes);
         assert!(result.is_err());
@@ -271,8 +285,8 @@ mod tests {
     #[test]
     fn test_validate_prefixes_rejects_invalid_for_rib_v4() {
         let prefixes = vec![
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(127, 0, 0, 0), 8)),
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(127, 0, 0, 0), 8)),
         ];
         let result = validate_prefixes(&prefixes);
         assert!(result.is_err());
@@ -284,11 +298,11 @@ mod tests {
     #[test]
     fn test_validate_prefixes_rejects_invalid_for_rib_v6() {
         let prefixes = vec![
-            Prefix::V6(Prefix6::new(
+            IpNet::V6(Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
                 64,
             )),
-            Prefix::V6(Prefix6::new(Ipv6Addr::LOCALHOST, 128)),
+            IpNet::V6(Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128)),
         ];
         let result = validate_prefixes(&prefixes);
         assert!(result.is_err());
@@ -300,8 +314,11 @@ mod tests {
     #[test]
     fn test_validate_prefixes_only_v4() {
         let prefixes = vec![
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
-            Prefix::V4(Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16)),
+            IpNet::V4(Ipv4Net::new_unchecked(Ipv4Addr::new(10, 0, 0, 0), 24)),
+            IpNet::V4(Ipv4Net::new_unchecked(
+                Ipv4Addr::new(192, 168, 0, 0),
+                16,
+            )),
         ];
         assert!(validate_prefixes(&prefixes).is_ok());
     }
@@ -309,11 +326,11 @@ mod tests {
     #[test]
     fn test_validate_prefixes_only_v6() {
         let prefixes = vec![
-            Prefix::V6(Prefix6::new(
+            IpNet::V6(Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
                 64,
             )),
-            Prefix::V6(Prefix6::new(
+            IpNet::V6(Ipv6Net::new_unchecked(
                 Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
                 48,
             )),
@@ -325,24 +342,16 @@ mod tests {
     use proptest::prelude::*;
 
     // Strategy for generating any IPv4 prefix (normalized or unnormalized)
-    fn any_ipv4_prefix_strategy() -> impl Strategy<Value = Prefix4> {
+    fn any_ipv4_prefix_strategy() -> impl Strategy<Value = Ipv4Net> {
         (any::<u32>(), 0u8..=32u8).prop_map(|(addr_bits, length)| {
-            // Don't use new() - we want to test both normalized and unnormalized
-            Prefix4 {
-                value: Ipv4Addr::from(addr_bits),
-                length,
-            }
+            Ipv4Net::new_unchecked(Ipv4Addr::from(addr_bits), length)
         })
     }
 
     // Strategy for generating any IPv6 prefix (normalized or unnormalized)
-    fn any_ipv6_prefix_strategy() -> impl Strategy<Value = Prefix6> {
+    fn any_ipv6_prefix_strategy() -> impl Strategy<Value = Ipv6Net> {
         (any::<u128>(), 0u8..=128u8).prop_map(|(addr_bits, length)| {
-            // Don't use new() - we want to test both normalized and unnormalized
-            Prefix6 {
-                value: Ipv6Addr::from(addr_bits),
-                length,
-            }
+            Ipv6Net::new_unchecked(Ipv6Addr::from(addr_bits), length)
         })
     }
 
@@ -371,7 +380,7 @@ mod tests {
         #[test]
         fn prop_validate_prefixes_v4_equivalence(prefix4 in any_ipv4_prefix_strategy()) {
             let result_v4 = validate_prefixes_v4(&[prefix4]);
-            let result_generic = validate_prefixes(&[Prefix::V4(prefix4)]);
+            let result_generic = validate_prefixes(&[IpNet::V4(prefix4)]);
 
             prop_assert!(
                 results_equivalent(result_v4, result_generic),
@@ -383,7 +392,7 @@ mod tests {
         #[test]
         fn prop_validate_prefixes_v6_equivalence(prefix6 in any_ipv6_prefix_strategy()) {
             let result_v6 = validate_prefixes_v6(&[prefix6]);
-            let result_generic = validate_prefixes(&[Prefix::V6(prefix6)]);
+            let result_generic = validate_prefixes(&[IpNet::V6(prefix6)]);
 
             prop_assert!(
                 results_equivalent(result_v6, result_generic),
@@ -397,7 +406,7 @@ mod tests {
             prefixes in prop::collection::vec(any_ipv4_prefix_strategy(), 0..10)
         ) {
             let result_v4 = validate_prefixes_v4(&prefixes);
-            let wrapped: Vec<Prefix> = prefixes.iter().map(|p| Prefix::V4(*p)).collect();
+            let wrapped: Vec<IpNet> = prefixes.iter().map(|p| IpNet::V4(*p)).collect();
             let result_generic = validate_prefixes(&wrapped);
 
             prop_assert!(
@@ -412,7 +421,7 @@ mod tests {
             prefixes in prop::collection::vec(any_ipv6_prefix_strategy(), 0..10)
         ) {
             let result_v6 = validate_prefixes_v6(&prefixes);
-            let wrapped: Vec<Prefix> = prefixes.iter().map(|p| Prefix::V6(*p)).collect();
+            let wrapped: Vec<IpNet> = prefixes.iter().map(|p| IpNet::V6(*p)).collect();
             let result_generic = validate_prefixes(&wrapped);
 
             prop_assert!(

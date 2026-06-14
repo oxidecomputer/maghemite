@@ -80,9 +80,8 @@ use mg_common::{lock, write_lock};
 
 use crate::bestpath::bestpaths;
 use crate::rib::{Rib4, Rib6};
-use crate::types::PrefixContains;
 use mg_api_types::rdb::path::Path;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
+use oxnet::{Ipv4Net, Ipv6Net};
 
 /// Default interval for periodic RPF revalidation sweeps.
 pub const DEFAULT_REVALIDATION_INTERVAL: Duration = Duration::from_secs(60);
@@ -93,17 +92,17 @@ pub const DEFAULT_REVALIDATION_INTERVAL: Duration = Duration::from_secs(60);
 /// request was rate-limited but multicast RPF revalidation should still
 /// proceed using the linear-scan fallback.
 ///
-/// The optional prefix ([`Prefix4`]/[`Prefix6`]) indicates which unicast route
+/// The optional prefix ([`Ipv4Net`]/[`Ipv6Net`]) indicates which unicast route
 /// changed, enabling targeted (S,G) revalidation. If `None`, a full sweep is
 /// performed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RebuildEvent {
     /// IPv4 unicast routing changed. If a prefix is provided, only (S,G)
     /// routes with sources matching that prefix need revalidation.
-    V4(Option<Prefix4>),
+    V4(Option<Ipv4Net>),
     /// IPv6 unicast routing changed. If a prefix is provided, only (S,G)
     /// routes with sources matching that prefix need revalidation.
-    V6(Option<Prefix6>),
+    V6(Option<Ipv6Net>),
 }
 
 impl RebuildEvent {
@@ -123,11 +122,11 @@ impl RebuildEvent {
     /// or if no specific prefix is provided (full sweep).
     pub(crate) fn matches_source(&self, source: IpAddr) -> bool {
         match (source, self) {
-            (src, RebuildEvent::V4(Some(prefix))) => {
-                Prefix::V4(*prefix).contains(src).is_some()
+            (IpAddr::V4(src), RebuildEvent::V4(Some(prefix))) => {
+                prefix.contains(src)
             }
-            (src, RebuildEvent::V6(Some(prefix))) => {
-                Prefix::V6(*prefix).contains(src).is_some()
+            (IpAddr::V6(src), RebuildEvent::V6(Some(prefix))) => {
+                prefix.contains(src)
             }
             // No specific prefix = full sweep for this AF
             (IpAddr::V4(_), RebuildEvent::V4(None)) => true,
@@ -258,7 +257,9 @@ impl RebuildJob {
             Self::V4 { rib, cache } => {
                 let snapshot = {
                     let r = lock!(rib);
-                    RpfTable::snapshot_rib(&r, |p| (p.value.octets(), p.length))
+                    RpfTable::snapshot_rib(&r, |p| {
+                        (p.addr().octets(), p.width())
+                    })
                 };
                 let mut table = poptrie::Ipv4RoutingTable::default();
                 for (addr, len, paths) in snapshot {
@@ -269,7 +270,9 @@ impl RebuildJob {
             Self::V6 { rib, cache } => {
                 let snapshot = {
                     let r = lock!(rib);
-                    RpfTable::snapshot_rib(&r, |p| (p.value.octets(), p.length))
+                    RpfTable::snapshot_rib(&r, |p| {
+                        (p.addr().octets(), p.width())
+                    })
                 };
                 let mut table = poptrie::Ipv6RoutingTable::default();
                 for (addr, len, paths) in snapshot {
@@ -478,7 +481,7 @@ impl RpfTable {
     /// The RIB snapshot is taken lazily in the background thread, reducing
     /// lock contention during RIB updates.
     ///
-    /// The `changed_prefix` ([`Prefix4`]) parameter enables targeted
+    /// The `changed_prefix` ([`Ipv4Net`]) parameter enables targeted
     /// revalidation: only (S,G) routes whose source falls within this prefix
     /// need RPF re-checking.
     ///
@@ -487,7 +490,7 @@ impl RpfTable {
     pub fn trigger_rebuild_v4(
         &self,
         rib4_loc: Arc<Mutex<Rib4>>,
-        changed_prefix: Option<Prefix4>,
+        changed_prefix: Option<Ipv4Net>,
     ) {
         if !self.check_rate_limit() {
             // Clear cache to force linear-scan fallback until next rebuild.
@@ -521,7 +524,7 @@ impl RpfTable {
     /// The RIB snapshot is taken lazily in the background thread, reducing
     /// lock contention during RIB updates.
     ///
-    /// The `changed_prefix` ([`Prefix6`]) parameter enables targeted
+    /// The `changed_prefix` ([`Ipv6Net`]) parameter enables targeted
     /// revalidation: only (S,G) routes whose source falls within this prefix
     /// need RPF re-checking.
     ///
@@ -530,7 +533,7 @@ impl RpfTable {
     pub fn trigger_rebuild_v6(
         &self,
         rib6_loc: Arc<Mutex<Rib6>>,
-        changed_prefix: Option<Prefix6>,
+        changed_prefix: Option<Ipv6Net>,
     ) {
         if !self.check_rate_limit() {
             // Clear cache to force linear-scan fallback until next rebuild.
@@ -609,13 +612,9 @@ impl RpfTable {
         let mut best_paths: Option<&BTreeSet<Path>> = None;
         let mut best_len = 0u8;
 
-        let source_bits = u32::from(source);
         for (prefix, paths) in rib.iter() {
-            let mask = prefix.mask();
-            if (u32::from(prefix.value) & mask) == (source_bits & mask)
-                && prefix.length > best_len
-            {
-                best_len = prefix.length;
+            if prefix.contains(source) && prefix.width() > best_len {
+                best_len = prefix.width();
                 best_paths = Some(paths);
             }
         }
@@ -638,13 +637,9 @@ impl RpfTable {
         let mut best_paths: Option<&BTreeSet<Path>> = None;
         let mut best_len = 0u8;
 
-        let source_bits = u128::from(source);
         for (prefix, paths) in rib.iter() {
-            let mask = prefix.mask();
-            if (u128::from(prefix.value) & mask) == (source_bits & mask)
-                && prefix.length > best_len
-            {
-                best_len = prefix.length;
+            if prefix.contains(source) && prefix.width() > best_len {
+                best_len = prefix.width();
                 best_paths = Some(paths);
             }
         }
@@ -744,7 +739,7 @@ mod tests {
     #[test]
     fn test_rpf_table_linear_scan() {
         let mut rib4_inner: Rib4 = BTreeMap::new();
-        let prefix: Prefix4 = "192.0.2.0/24".parse().unwrap();
+        let prefix: Ipv4Net = "192.0.2.0/24".parse().unwrap();
 
         let mut paths = BTreeSet::new();
         let path = Path {
@@ -775,7 +770,7 @@ mod tests {
     #[test]
     fn test_rpf_table_with_poptrie() {
         let mut rib4_inner: Rib4 = BTreeMap::new();
-        let prefix: Prefix4 = "192.0.2.0/24".parse().unwrap();
+        let prefix: Ipv4Net = "192.0.2.0/24".parse().unwrap();
 
         let mut paths = BTreeSet::new();
         let path = Path {
@@ -817,7 +812,7 @@ mod tests {
     fn test_rpf_table_shutdown_paths() {
         // Test that shutdown paths are filtered out
         let mut rib4_inner: Rib4 = BTreeMap::new();
-        let prefix: Prefix4 = "192.0.2.0/24".parse().unwrap();
+        let prefix: Ipv4Net = "192.0.2.0/24".parse().unwrap();
 
         let mut paths = BTreeSet::new();
         // Active path
@@ -875,7 +870,7 @@ mod tests {
     fn test_rpf_table_all_shutdown() {
         // Test that a prefix with ALL paths shutdown returns None
         let mut rib4_inner: Rib4 = BTreeMap::new();
-        let prefix: Prefix4 = "192.0.2.0/24".parse().unwrap();
+        let prefix: Ipv4Net = "192.0.2.0/24".parse().unwrap();
 
         let mut paths = BTreeSet::new();
         let shutdown_path = Path {
@@ -916,7 +911,7 @@ mod tests {
         // Test that bestpath selection prefers lower rib_priority
 
         let mut rib4_inner: Rib4 = BTreeMap::new();
-        let prefix: Prefix4 = "192.0.2.0/24".parse().unwrap();
+        let prefix: Ipv4Net = "192.0.2.0/24".parse().unwrap();
 
         // Static route (priority 1)
         let static_nexthop = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
@@ -975,7 +970,7 @@ mod tests {
     #[test]
     fn test_rpf_table_linear_scan_v6() {
         let mut rib6_inner: Rib6 = BTreeMap::new();
-        let prefix: Prefix6 = "2001:db8::/32".parse().unwrap();
+        let prefix: Ipv6Net = "2001:db8::/32".parse().unwrap();
 
         let mut paths = BTreeSet::new();
         let path = Path {
@@ -1007,7 +1002,7 @@ mod tests {
     #[test]
     fn test_rpf_table_with_poptrie_v6() {
         let mut rib6_inner: Rib6 = BTreeMap::new();
-        let prefix: Prefix6 = "2001:db8::/32".parse().unwrap();
+        let prefix: Ipv6Net = "2001:db8::/32".parse().unwrap();
 
         let mut paths = BTreeSet::new();
         let path = Path {
@@ -1052,7 +1047,7 @@ mod tests {
         let mut rib4_inner: Rib4 = BTreeMap::new();
 
         // Less specific: 192.0.2.0/24 -> nexthop1
-        let prefix_24: Prefix4 = "192.0.2.0/24".parse().unwrap();
+        let prefix_24: Ipv4Net = "192.0.2.0/24".parse().unwrap();
         let nexthop1 = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
         let mut paths1 = BTreeSet::new();
         paths1.insert(Path {
@@ -1066,7 +1061,7 @@ mod tests {
         rib4_inner.insert(prefix_24, paths1);
 
         // More specific: 192.0.2.128/25 -> nexthop2
-        let prefix_25: Prefix4 = "192.0.2.128/25".parse().unwrap();
+        let prefix_25: Ipv4Net = "192.0.2.128/25".parse().unwrap();
         let nexthop2 = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2));
         let mut paths2 = BTreeSet::new();
         paths2.insert(Path {
@@ -1121,7 +1116,7 @@ mod tests {
     fn test_rpf_ecmp_v6() {
         // Test IPv6 ECMP: lookup returns one of the equal-priority paths
         let mut rib6_inner: Rib6 = BTreeMap::new();
-        let prefix: Prefix6 = "2001:db8::/32".parse().unwrap();
+        let prefix: Ipv6Net = "2001:db8::/32".parse().unwrap();
 
         let nexthop1 = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
         let nexthop2 = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 2));
@@ -1171,7 +1166,7 @@ mod tests {
         // This verifies both linear scan and poptrie paths return the correct
         // nexthop.
         let mut rib6_inner: Rib6 = BTreeMap::new();
-        let prefix: Prefix6 = "2001:db8:1::/48".parse().unwrap();
+        let prefix: Ipv6Net = "2001:db8:1::/48".parse().unwrap();
 
         let nexthop = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
         let path = Path {
@@ -1226,7 +1221,7 @@ mod tests {
         let mut rib6_inner: Rib6 = BTreeMap::new();
 
         // Less specific: 2001:db8::/32 -> NEXTHOP1
-        let prefix_32: Prefix6 = "2001:db8::/32".parse().unwrap();
+        let prefix_32: Ipv6Net = "2001:db8::/32".parse().unwrap();
         let mut paths1 = BTreeSet::new();
         paths1.insert(Path {
             nexthop: NEXTHOP1,
@@ -1239,7 +1234,7 @@ mod tests {
         rib6_inner.insert(prefix_32, paths1);
 
         // More specific: 2001:db8:1::/48 -> NEXTHOP2
-        let prefix_48: Prefix6 = "2001:db8:1::/48".parse().unwrap();
+        let prefix_48: Ipv6Net = "2001:db8:1::/48".parse().unwrap();
         let mut paths2 = BTreeSet::new();
         paths2.insert(Path {
             nexthop: NEXTHOP2,
