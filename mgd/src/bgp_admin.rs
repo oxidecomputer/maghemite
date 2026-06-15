@@ -27,7 +27,8 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api_types::bgp::config::{
-    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetOp,
+    ApplyRequest, AsnSelector, BgpPeerParameters, CheckerSource,
+    Ipv4UnicastConfig, JitterRange, Md5AuthString, Neighbor, NeighborResetOp,
     NeighborResetRequest, NeighborSelector, Origin4, PeerInfo, ShaperSource,
     UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
@@ -49,7 +50,7 @@ use mg_api_types::ndp::{
 };
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5, v8};
+use mg_api_types_versions::{v1, v2, v4, v5, v8, v11};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
@@ -208,10 +209,9 @@ pub async fn read_neighbors_v1(
         .into_iter()
         .filter(|x| x.asn == rq.asn)
         .map(|x| {
-            v8::bgp::config::Neighbor::from(Neighbor::from_rdb_neighbor_info(
-                rq.asn, &x,
-            ))
-            .into()
+            let latest = Neighbor::from_rdb_neighbor_info(rq.asn, &x);
+            let v11: v11::bgp::config::Neighbor = latest.into();
+            v8::bgp::config::Neighbor::from(v11).into()
         })
         .collect();
 
@@ -244,10 +244,10 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result: v1::bgp::config::Neighbor = v8::bgp::config::Neighbor::from(
-        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info),
-    )
-    .into();
+    let latest = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let v11: v11::bgp::config::Neighbor = latest.into();
+    let result: v1::bgp::config::Neighbor =
+        v8::bgp::config::Neighbor::from(v11).into();
     Ok(HttpResponseOk(result))
 }
 
@@ -1946,6 +1946,18 @@ pub(crate) mod helpers {
 
         let (event_tx, event_rx) = channel();
 
+        let md5_auth_key = rq
+            .parameters
+            .md5_auth_key
+            .clone()
+            .map(Md5AuthString::new)
+            .transpose()
+            .map_err(|e| {
+                Error::InvalidRequest(format!(
+                    "invalid MD5 authentication key: {e}"
+                ))
+            })?;
+
         // V1 API is IPv4-only; extract only IPv4 policies
         let allow_import4 = v4::bgp::policy::ImportExportPolicy4::from(
             rq.parameters.allow_import.clone(),
@@ -1954,7 +1966,38 @@ pub(crate) mod helpers {
             rq.parameters.allow_export.clone(),
         );
 
-        let info = SessionInfo::from(&rq.parameters);
+        let latest_parameters = BgpPeerParameters {
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
+            passive: rq.parameters.passive,
+            remote_asn: rq.parameters.remote_asn,
+            min_ttl: rq.parameters.min_ttl,
+            md5_auth_key: md5_auth_key.clone(),
+            multi_exit_discriminator: rq.parameters.multi_exit_discriminator,
+            communities: rq.parameters.communities.clone(),
+            local_pref: rq.parameters.local_pref,
+            enforce_first_as: rq.parameters.enforce_first_as,
+            vlan_id: rq.parameters.vlan_id,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: ImportExportPolicy4::from(allow_import4.clone()),
+                export_policy: ImportExportPolicy4::from(allow_export4.clone()),
+            }),
+            ipv6_unicast: None,
+            deterministic_collision_resolution: false,
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            src_addr: None,
+            src_port: None,
+        };
+        let info = SessionInfo::from(&latest_parameters);
 
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
@@ -1994,7 +2037,7 @@ pub(crate) mod helpers {
                     resolution: rq.parameters.resolution,
                     remote_asn: rq.parameters.remote_asn,
                     min_ttl: rq.parameters.min_ttl,
-                    md5_auth_key: rq.parameters.md5_auth_key,
+                    md5_auth_key,
                     multi_exit_discriminator: rq
                         .parameters
                         .multi_exit_discriminator,
@@ -2761,7 +2804,10 @@ mod tests {
 
         do_bgp_apply(
             &ctx,
-            v8::bgp::config::ApplyRequest::from(req.clone()).into(),
+            mg_api_types::bgp::config::ApplyRequest::try_from(
+                v8::bgp::config::ApplyRequest::from(req.clone()),
+            )
+            .expect("valid v8 apply request"),
         )
         .await
         .expect("bgp apply request");
@@ -2775,7 +2821,10 @@ mod tests {
 
         do_bgp_apply(
             &ctx,
-            v8::bgp::config::ApplyRequest::from(req.clone()).into(),
+            mg_api_types::bgp::config::ApplyRequest::try_from(
+                v8::bgp::config::ApplyRequest::from(req.clone()),
+            )
+            .expect("valid v8 apply request"),
         )
         .await
         .expect("bgp apply request");

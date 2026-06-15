@@ -9,6 +9,7 @@
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
 use crate::types::StaticRouteKey;
+use mg_api_types::bgp::config::Md5AuthString;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
 use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types_versions::v4::bgp::policy::{
@@ -187,7 +188,9 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                         passive: false,
                         remote_asn: Some(65001),
                         min_ttl: Some(1),
-                        md5_auth_key: Some("password".to_string()),
+                        md5_auth_key: Some(
+                            Md5AuthString::new("password".to_string()).unwrap(),
+                        ),
                         multi_exit_discriminator: Some(100),
                         communities: vec![],
                         local_pref: Some(100),

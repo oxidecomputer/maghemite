@@ -10,6 +10,7 @@ use crate::{
     session::{FsmEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::bgp::config::Md5AuthString;
 use slog::Logger;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -62,7 +63,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     fn apply_policy(
         conn: &Cnx,
         min_ttl: Option<u8>,
-        md5_key: Option<String>,
+        md5_key: Option<Md5AuthString>,
     ) -> Result<(), Error>;
 
     /// `SocketAddr` the listener is receiving connections on

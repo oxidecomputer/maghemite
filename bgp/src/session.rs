@@ -25,6 +25,7 @@ use crate::{
     router::Router,
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::bgp::config::Md5AuthString;
 use mg_api_types::bgp::config::{
     BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
     JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
@@ -37,7 +38,6 @@ pub(crate) use mg_api_types::bgp::session::{
 pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_api_types_versions::{v1, v4};
 use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
@@ -803,7 +803,7 @@ pub struct SessionInfo {
     /// Minimum acceptable TTL value for incomming BGP packets.
     pub min_ttl: Option<u8>,
     /// Md5 peer authentication key
-    pub md5_auth_key: Option<String>,
+    pub md5_auth_key: Option<Md5AuthString>,
     /// Multi-exit discriminator. This an optional attribute that is intended to
     /// be used on external eBGP sessions to discriminate among multiple exit or
     /// entry points to the same neighboring AS. The value of this attribute is
@@ -943,71 +943,6 @@ impl From<&BgpPeerParameters> for SessionInfo {
             deterministic_collision_resolution,
             ipv4_unicast,
             ipv6_unicast,
-        }
-    }
-}
-
-impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
-    fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
-        // v1 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v1 contract has
-        // been violated upstream.
-        let v1::bgp::config::BgpPeerParameters {
-            hold_time,
-            idle_hold_time,
-            delay_open,
-            connect_retry,
-            keepalive,
-            resolution,
-            passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities,
-            local_pref,
-            enforce_first_as,
-            allow_import,
-            allow_export,
-            vlan_id,
-        } = value.clone();
-
-        SessionInfo {
-            passive_tcp_establishment: passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities: communities.into_iter().collect(),
-            local_pref,
-            enforce_first_as,
-            vlan_id,
-            remote_id: None,
-            bind_addr: None,
-            connect_retry_time: Duration::from_secs(connect_retry),
-            keepalive_time: Duration::from_secs(keepalive),
-            hold_time: Duration::from_secs(hold_time),
-            idle_hold_time: Duration::from_secs(idle_hold_time),
-            delay_open_time: Duration::from_secs(delay_open),
-            resolution: Duration::from_millis(resolution),
-            idle_hold_jitter: None,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            deterministic_collision_resolution: false,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: ImportExportPolicy4::from(
-                    v4::bgp::policy::ImportExportPolicy4::from(allow_import),
-                ),
-                export_policy: ImportExportPolicy4::from(
-                    v4::bgp::policy::ImportExportPolicy4::from(allow_export),
-                ),
-            }),
-            ipv6_unicast: None,
         }
     }
 }

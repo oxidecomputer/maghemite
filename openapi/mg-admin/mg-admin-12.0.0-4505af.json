@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "11.0.0"
+    "version": "12.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -2279,7 +2279,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -3471,6 +3475,9 @@
           "min"
         ]
       },
+      "Md5AuthString": {
+        "type": "string"
+      },
       "Message": {
         "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
         "oneOf": [
@@ -4069,7 +4076,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -5468,7 +5479,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -5643,7 +5658,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
