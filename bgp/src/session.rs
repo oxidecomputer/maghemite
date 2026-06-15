@@ -23,7 +23,7 @@ use crate::{
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
     router::Router,
-    unnumbered::UnnumberedManager,
+    unnumbered::{UnnumberedError, UnnumberedManager},
 };
 use mg_api_types::bgp::config::{
     BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
@@ -272,6 +272,18 @@ fn derive_nexthop_interface(
         }
         _ => None,
     }
+}
+
+/// Why an outbound connection target could not be resolved for an attempt.
+/// These are all retryable, per-attempt conditions.
+#[derive(Debug, thiserror::Error)]
+enum ResolveTargetError {
+    #[error("no unnumbered manager configured")]
+    NoUnnumberedManager,
+    #[error("no NDP neighbor discovered yet")]
+    NoNeighbor,
+    #[error(transparent)]
+    Unnumbered(#[from] UnnumberedError),
 }
 
 pub fn v4_over_v6_nexthop(
@@ -1769,54 +1781,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    /// Resolve peer address for outbound connection attempts.
+    /// Resolve the outbound connection target for this attempt.
     ///
-    /// For numbered peers, returns the configured address.
-    /// For unnumbered peers, verifies interface is active and queries NDP neighbor.
-    /// Returns None if:
-    /// - Unnumbered peer has no UnnumberedManager configured
-    /// - Interface is not active on the system
-    /// - No NDP neighbor has been discovered
-    fn try_resolve_connect_addr(&self) -> Option<SocketAddr> {
+    /// For numbered peers this is the configured address. For unnumbered peers
+    /// it queries NDP for the neighbor on the peer's interface.
+    fn try_resolve_connect_addr(
+        &self,
+    ) -> Result<SocketAddr, ResolveTargetError> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {
-                let mgr = self.unnumbered_manager.as_ref()?;
-                if !mgr.interface_is_active(iface) {
-                    session_log_lite!(
-                        self,
-                        debug,
-                        "interface not active, skipping connection";
-                        "interface" => iface
-                    );
-                    return None;
-                }
-                match mgr.get_neighbor_by_interface(iface) {
-                    Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port.get()))
-                    }
-                    Ok(None) => {
-                        session_log_lite!(
-                            self,
-                            debug,
-                            "no NDP neighbor discovered yet";
-                            "interface" => iface
-                        );
-                        None
-                    }
-                    Err(e) => {
-                        session_log_lite!(
-                            self,
-                            warn,
-                            "failed to query neighbor for interface";
-                            "interface" => iface,
-                            "error" => e.to_string()
-                        );
-                        None
-                    }
-                }
+                let mgr = self
+                    .unnumbered_manager
+                    .as_ref()
+                    .ok_or(ResolveTargetError::NoUnnumberedManager)?;
+                let neighbor = mgr
+                    .get_neighbor_by_interface(iface)?
+                    .ok_or(ResolveTargetError::NoNeighbor)?;
+                Ok(neighbor.to_socket_addr(self.neighbor.port.get()))
             }
             PeerId::Ip(ip) => {
-                Some(SocketAddr::new(*ip, self.neighbor.port.get()))
+                Ok(SocketAddr::new(*ip, self.neighbor.port.get()))
             }
         }
     }
@@ -1919,16 +1903,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // release lock before calling connect
         }
 
-        // Resolve peer address. For unnumbered peers, this verifies interface
-        // is active and queries NDP for the neighbor address.
-        let Some(peer_addr) = self.try_resolve_connect_addr() else {
-            session_log_lite!(
-                self,
-                debug,
-                "cannot resolve peer address, skipping connection attempt";
-                "peer" => format!("{:?}", self.neighbor.peer)
-            );
-            return;
+        // Resolve the peer address. For unnumbered peers this queries NDP for
+        // the neighbor on the peer's interface.
+        let peer_addr = match self.try_resolve_connect_addr() {
+            Ok(peer_addr) => peer_addr,
+            Err(e) => {
+                session_log_lite!(
+                    self,
+                    debug,
+                    "skipping connection attempt: {e}";
+                    "peer" => format!("{:?}", self.neighbor.peer),
+                    "reason" => e.to_string()
+                );
+                return;
+            }
         };
 
         let handle = match Cnx::Connector::connect(

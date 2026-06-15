@@ -30,6 +30,7 @@ use std::{
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    num::NonZeroU32,
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -315,6 +316,22 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     "peer" => format!("{peer}"),
                     "timeout" => timeout.as_millis()
                 );
+
+                // Bind the socket to the destination's interface for scoped
+                // (link-local / unnumbered) peers.
+                if let SocketAddr::V6(v6) = peer
+                    && let Some(idx) = NonZeroU32::new(v6.scope_id())
+                    && let Err(e) = s.bind_device_by_index_v6(Some(idx))
+                {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to bind device index {idx} for {peer}: {e}";
+                        "direction" => ConnectionDirection::Outbound,
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
 
                 // Bind to source address/port if specified
                 if let Some(src) = config.bind_addr {
