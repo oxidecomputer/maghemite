@@ -1945,7 +1945,7 @@ fn unnumbered_peering_helper(
         let peer_config1 = PeerConfig {
             name: format!("peer_{}", iface),
             group: String::new(),
-            id: PeerId::Ip(peer1_addr.ip()),
+            id: PeerId::Interface(iface.clone()),
             port: NonZeroU16::new(peer1_addr.port()).unwrap_or(BGP_PORT),
             hold_time: 6,
             idle_hold_time: 0,
@@ -1998,7 +1998,7 @@ fn unnumbered_peering_helper(
         let peer_config2 = PeerConfig {
             name: format!("peer_{}", iface),
             group: String::new(),
-            id: PeerId::Ip(peer2_addr.ip()),
+            id: PeerId::Interface(iface.clone()),
             port: NonZeroU16::new(peer2_addr.port()).unwrap_or(BGP_PORT),
             hold_time: 6,
             idle_hold_time: 0,
@@ -2705,7 +2705,7 @@ fn unnumbered_pair(
     let peer_config1 = PeerConfig {
         name: format!("peer_{}", interface_name),
         group: String::new(),
-        id: PeerId::Ip((r2_addr).ip()),
+        id: PeerId::Interface(interface_name.to_string()),
         port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -2737,7 +2737,7 @@ fn unnumbered_pair(
     let peer_config2 = PeerConfig {
         name: format!("peer_{}", interface_name),
         group: String::new(),
-        id: PeerId::Ip((r1_addr).ip()),
+        id: PeerId::Interface(interface_name.to_string()),
         port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -2982,7 +2982,7 @@ fn unnumbered_three_router_chain(
     let peer_config1 = PeerConfig {
         name: format!("r1_to_r2_{}", r1_r2_interface),
         group: String::new(),
-        id: PeerId::Ip((r2_eth0_addr).ip()),
+        id: PeerId::Interface(r1_r2_interface.to_string()),
         port: NonZeroU16::new((r2_eth0_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -3013,7 +3013,7 @@ fn unnumbered_three_router_chain(
     let peer_config2_r1 = PeerConfig {
         name: format!("r2_to_r1_{}", r1_r2_interface),
         group: String::new(),
-        id: PeerId::Ip((r1_addr).ip()),
+        id: PeerId::Interface(r1_r2_interface.to_string()),
         port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -3044,7 +3044,7 @@ fn unnumbered_three_router_chain(
     let peer_config2_r3 = PeerConfig {
         name: format!("r2_to_r3_{}", r2_r3_interface),
         group: String::new(),
-        id: PeerId::Ip((r3_addr).ip()),
+        id: PeerId::Interface(r2_r3_interface.to_string()),
         port: NonZeroU16::new((r3_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -3074,7 +3074,7 @@ fn unnumbered_three_router_chain(
     let peer_config3 = PeerConfig {
         name: format!("r3_to_r2_{}", r2_r3_interface),
         group: String::new(),
-        id: PeerId::Ip((r2_eth1_addr).ip()),
+        id: PeerId::Interface(r2_r3_interface.to_string()),
         port: NonZeroU16::new((r2_eth1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -3930,7 +3930,7 @@ fn test_unnumbered_interface_lifecycle() {
     let peer_config1 = PeerConfig {
         name: "peer_eth0".to_string(),
         group: String::new(),
-        id: PeerId::Ip((r2_addr).ip()),
+        id: PeerId::Interface("eth0".to_string()),
         port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
@@ -3966,7 +3966,7 @@ fn test_unnumbered_interface_lifecycle() {
     let peer_config2 = PeerConfig {
         name: "peer_eth0".to_string(),
         group: String::new(),
-        id: PeerId::Ip((r1_addr).ip()),
+        id: PeerId::Interface("eth0".to_string()),
         port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
