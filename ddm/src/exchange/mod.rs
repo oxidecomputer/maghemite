@@ -15,11 +15,11 @@
 //! model of a ddm router is defined in the state machine implementation in
 //! [`crate::sm`].
 //!
-//! The wire types ([`Update`], [`UnderlayUpdate`], [`TunnelUpdate`], and
-//! their versioned counterparts) are platform-agnostic and stay in this
-//! module. The runtime helpers that drive the HTTP exchange protocol and
-//! program forwarding state live in the [`runtime`] submodule and are
-//! illumos-only, since they call into [`crate::sys`] to install routes.
+//! The wire types (`Update`, `UnderlayUpdate`, `TunnelUpdate`,
+//! `MulticastUpdate`, and their versioned counterparts) live in the
+//! [`ddm_protocol`] crate. The runtime helpers that drive the HTTP exchange
+//! protocol and program forwarding state live in the [`runtime`] submodule and
+//! are illumos-only, since they call into [`crate::sys`] to install routes.
 
 use thiserror::Error;
 
@@ -28,8 +28,8 @@ mod runtime;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::{
-    announce_tunnel, announce_underlay, do_pull, handler, pull,
-    withdraw_tunnel, withdraw_underlay,
+    announce_multicast, announce_tunnel, announce_underlay, do_pull_v4,
+    handler, pull, withdraw_multicast, withdraw_tunnel, withdraw_underlay,
 };
 
 #[derive(Error, Debug)]

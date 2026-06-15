@@ -10,7 +10,7 @@
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
@@ -44,11 +44,12 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
+    Multicast(HashSet<MulticastOrigin>),
 }
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(ddm_protocol::v3::Update),
+    Push(Arc<ddm_protocol::v4::Update>),
 }
 
 #[derive(Debug)]
@@ -251,6 +252,11 @@ pub struct SmContext {
     pub hostname: String,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
+    /// Notifies the [`crate::mcast`] sweep that an underlay group's imported
+    /// membership changed, by sending the group's address. The sweep wakes early
+    /// to reconcile the group's DPD members, so the control plane never touches
+    /// DPD directly.
+    pub mcast_notify: Sender<Ipv6Addr>,
     pub log: Logger,
 }
 

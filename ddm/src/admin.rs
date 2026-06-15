@@ -7,9 +7,9 @@ use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::db::{MulticastRoute, PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
@@ -48,6 +48,11 @@ pub struct HandlerContext {
     pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
+    /// Per-interface state machine contexts shared with the multicast sweep,
+    /// seeded from the running state machines and read by the `/peers` view.
+    ///
+    /// Under the `--api-only` flag there are no state machines, so the set is
+    /// empty.
     pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
@@ -85,7 +90,7 @@ pub fn handler(
 
     let api = api_description().map_err(|e| e.to_string())?;
 
-    let server = dropshot::ServerBuilder::new(api, context, ds_log)
+    let builder = dropshot::ServerBuilder::new(api, context, ds_log)
         .config(config)
         .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
             dropshot::ClientSpecifiesVersionInHeader::new(
@@ -94,19 +99,24 @@ pub fn handler(
             ),
         )));
 
-    info!(log, "admin: listening on {}", sa);
+    // Start synchronously so the admin API is bound before this function
+    // returns, and log the bound address, which reflects the assigned port
+    // when 0 is requested.
+    let server = match builder.start() {
+        Ok(server) => server,
+        Err(e) => {
+            error!(log, "admin: server start error {e:?}");
+            return Ok(());
+        }
+    };
+
+    info!(log, "admin: listening on {}", server.local_addr());
 
     let log = log.clone();
     spawn(async move {
-        match server.start() {
-            Ok(server) => {
-                info!(log, "admin: server started");
-                match server.await {
-                    Ok(()) => info!(log, "admin: server exited"),
-                    Err(e) => error!(log, "admin: server error {:?}", e),
-                }
-            }
-            Err(e) => error!(log, "admin: server start error {:?}", e),
+        match server.await {
+            Ok(()) => info!(log, "admin: server exited"),
+            Err(e) => error!(log, "admin: server error {e:?}"),
         }
     });
 
@@ -121,27 +131,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
-        let ctx = lock!(ctx.context());
-        let mut result = HashMap::new();
-        for sm in &ctx.peers {
-            // Compute status first so peer_status() never runs while we hold
-            // any of the InterfaceState mutexes below.
-            let status = sm.iface.peer_status();
-            let if_index = *lock!(sm.iface.if_index);
-            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
-                continue;
-            };
-            result.insert(
-                if_index,
-                PeerInfo {
-                    status,
-                    addr: peer.addr,
-                    host: peer.hostname,
-                    kind: peer.kind,
-                },
-            );
-        }
-        Ok(HttpResponseOk(result))
+        Ok(HttpResponseOk(do_get_peers(ctx.context())))
     }
 
     async fn expire_peer(
@@ -361,6 +351,71 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseUpdatedNoContent())
     }
 
+    async fn get_originated_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastOrigin>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let originated = ctx
+            .db
+            .originated_mcast()
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        Ok(HttpResponseOk(originated))
+    }
+
+    async fn get_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<MulticastRoute>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let imported = ctx.db.imported_mcast();
+        Ok(HttpResponseOk(imported))
+    }
+
+    async fn advertise_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let groups = request.into_inner();
+        slog::info!(ctx.log, "advertise multicast groups: {groups:#?}");
+        ctx.db
+            .originate_mcast(&groups)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+        for e in &ctx.event_channels {
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Multicast(
+                groups.clone(),
+            ))))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn withdraw_multicast_groups(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<MulticastOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let groups = request.into_inner();
+        slog::info!(ctx.log, "withdraw multicast groups: {groups:#?}");
+        ctx.db
+            .withdraw_mcast(&groups)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+        for e in &ctx.event_channels {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Multicast(
+                groups.clone(),
+            ))))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
     async fn sync(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -427,4 +482,36 @@ pub fn api_description()
 -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, ApiDescriptionBuildErrors>
 {
     ddm_admin_api_mod::api_description::<DdmAdminApiImpl>()
+}
+
+/// Snapshot the current peers, keyed by interface index.
+///
+/// Reads the per-interface state machine contexts.
+///
+/// Under the `--api-only` flag there are no state machines, so the map is empty.
+pub(crate) fn do_get_peers(
+    ctx: &Arc<Mutex<HandlerContext>>,
+) -> HashMap<u32, PeerInfo> {
+    let ctx = lock!(ctx);
+    ctx.peers
+        .iter()
+        .filter_map(|sm| {
+            // Compute status first so peer_status() never runs while we hold
+            // any of the InterfaceState mutexes below.
+            let status = sm.iface.peer_status();
+            let peer = lock!(sm.iface.peer_identity).clone()?;
+            let if_index = *lock!(sm.iface.if_index);
+            let if_name = lock!(sm.iface.if_name).clone();
+            Some((
+                if_index,
+                PeerInfo {
+                    status,
+                    addr: peer.addr,
+                    host: peer.hostname,
+                    kind: peer.kind,
+                    if_name: (!if_name.is_empty()).then_some(if_name),
+                },
+            ))
+        })
+        .collect()
 }

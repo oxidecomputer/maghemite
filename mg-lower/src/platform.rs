@@ -1,4 +1,4 @@
-//! This crate contains traits that decouple mg-lower from the underlying
+//! This module contains traits that decouple mg-lower from the underlying
 //! platform. This is useful for testing mg-lower while not having to
 //! have a running dpd, ddmd, or switch zone.
 //!
@@ -8,7 +8,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use ddm_admin_client::types::Error as DdmError;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin};
 use dpd_client::types::{Error as DpdError, *};
 // Use the crate-specific re-exports of progenitor_client types to avoid
 // version conflicts: dpd_client re-exports from progenitor-client 0.11 (via
@@ -217,6 +217,46 @@ pub trait Ddm {
         ddm_admin_client::ResponseValue<()>,
         ddm_admin_client::Error<DdmError>,
     >;
+
+    /// Get multicast group subscriptions originated by this router.
+    ///
+    /// Each `MulticastOrigin` pairs an overlay group address with its
+    /// underlay mapping (ff04::/64) and optional source for (S,G) routes.
+    ///
+    /// Method names follow the DDM admin API convention
+    /// (`originated_multicast_groups`, not `originated_multicast_origins`).
+    async fn get_originated_multicast_groups(
+        &self,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
+        ddm_admin_client::Error<DdmError>,
+    >;
+
+    /// Advertise multicast group subscriptions to DDM peers.
+    ///
+    /// Each entry is a `MulticastOrigin` pairing an overlay group
+    /// with its ff04::/64 underlay mapping.
+    #[allow(clippy::ptr_arg)]
+    async fn advertise_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    >;
+
+    /// Withdraw multicast group subscriptions from DDM peers.
+    ///
+    /// Each entry is a `MulticastOrigin` pairing an overlay group
+    /// with its ff04::/64 underlay mapping.
+    #[allow(clippy::ptr_arg)]
+    async fn withdraw_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    >;
 }
 
 /// This trait wraps the methods that have expectations about switch zone
@@ -231,6 +271,7 @@ pub trait SwitchZone {
 
 /// Production dpd trait that simply passes through calls to a dpd client.
 #[cfg(target_os = "illumos")]
+#[derive(Clone)]
 pub struct ProductionDpd {
     pub client: DpdClient,
 }
@@ -353,6 +394,7 @@ impl Dpd for ProductionDpd {
 
 /// Production ddm trait that simply passes through calls to a ddm client.
 #[cfg(target_os = "illumos")]
+#[derive(Clone)]
 pub struct ProductionDdm {
     pub client: DdmClient,
 }
@@ -406,6 +448,35 @@ impl Ddm for ProductionDdm {
     > {
         self.client.withdraw_tunnel_endpoints(body).await
     }
+
+    async fn get_originated_multicast_groups(
+        &self,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.get_originated_multicast_groups().await
+    }
+
+    async fn advertise_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.advertise_multicast_groups(body).await
+    }
+
+    async fn withdraw_multicast_groups<'a>(
+        &'a self,
+        body: &'a Vec<MulticastOrigin>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.withdraw_multicast_groups(body).await
+    }
 }
 
 /// Production switch zone that uses libnet for route lookups (illumos only).
@@ -431,6 +502,7 @@ pub(crate) mod test {
     use crate::MG_LOWER_TAG;
 
     use super::*;
+    use mg_common::lock;
     use std::sync::Mutex;
     use std::{collections::HashMap, net::IpAddr};
 
@@ -485,7 +557,7 @@ pub(crate) mod test {
             link_id: &LinkId,
         ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>>
         {
-            let links = self.links.lock().unwrap();
+            let links = lock!(self.links);
             let link = links
                 .iter()
                 .find(|x| &x.port_id == port_id && &x.link_id == link_id);
@@ -503,10 +575,7 @@ pub(crate) mod test {
             dpd_client::ResponseValue<Vec<Route>>,
             DpdClientError<DpdError>,
         > {
-            let result = self
-                .v4_routes
-                .lock()
-                .unwrap()
+            let result = lock!(self.v4_routes)
                 .get(cidr)
                 .cloned()
                 .unwrap_or(Vec::default());
@@ -520,10 +589,7 @@ pub(crate) mod test {
             dpd_client::ResponseValue<Vec<Ipv6Route>>,
             DpdClientError<DpdError>,
         > {
-            let result = self
-                .v6_routes
-                .lock()
-                .unwrap()
+            let result = lock!(self.v6_routes)
                 .get(cidr)
                 .cloned()
                 .unwrap_or(Vec::default());
@@ -535,7 +601,7 @@ pub(crate) mod test {
             addr: &Ipv6Entry,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            self.loopback.lock().unwrap().replace(addr.clone());
+            lock!(self.loopback).replace(addr.clone());
             Ok(dpd_response_ok!(()))
         }
 
@@ -546,7 +612,7 @@ pub(crate) mod test {
             dpd_client::ResponseValue<Vec<Link>>,
             DpdClientError<DpdError>,
         > {
-            let links = self.links.lock().unwrap();
+            let links = lock!(self.links);
             let result = links
                 .iter()
                 .filter(|x| match filter {
@@ -613,7 +679,7 @@ pub(crate) mod test {
                 RouteTarget::V4(v4) => Route::V4(v4.clone()),
                 RouteTarget::V6(v6) => Route::V6(v6.clone()),
             };
-            let mut routes = self.v4_routes.lock().unwrap();
+            let mut routes = lock!(self.v4_routes);
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
                     targets.push(route);
@@ -630,7 +696,7 @@ pub(crate) mod test {
             body: &'a Ipv6RouteUpdate,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut routes = self.v6_routes.lock().unwrap();
+            let mut routes = lock!(self.v6_routes);
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
                     targets.push(body.target.clone());
@@ -650,7 +716,7 @@ pub(crate) mod test {
             tgt_ip: &'a IpAddr,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut routes = self.v4_routes.lock().unwrap();
+            let mut routes = lock!(self.v4_routes);
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| match (x, tgt_ip) {
                     (Route::V4(x), IpAddr::V4(ip)) => {
@@ -678,7 +744,7 @@ pub(crate) mod test {
             tgt_ip: &'a std::net::Ipv6Addr,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut routes = self.v6_routes.lock().unwrap();
+            let mut routes = lock!(self.v6_routes);
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| {
                     !(x.tgt_ip == *tgt_ip
@@ -700,6 +766,7 @@ pub(crate) mod test {
     pub(crate) struct TestDdm {
         pub(crate) tunnel_originated: Mutex<Vec<TunnelOrigin>>,
         pub(crate) originated: Mutex<Vec<oxnet::Ipv6Net>>,
+        pub(crate) multicast_originated: Mutex<Vec<MulticastOrigin>>,
     }
 
     impl Default for TestDdm {
@@ -707,6 +774,7 @@ pub(crate) mod test {
             Self {
                 tunnel_originated: Mutex::new(Vec::default()),
                 originated: Mutex::new(Vec::default()),
+                multicast_originated: Mutex::new(Vec::default()),
             }
         }
     }
@@ -718,9 +786,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<TunnelOrigin>>,
             ddm_admin_client::Error<DdmError>,
         > {
-            Ok(ddm_response_ok!(
-                self.tunnel_originated.lock().unwrap().clone()
-            ))
+            Ok(ddm_response_ok!(lock!(self.tunnel_originated).clone()))
         }
 
         async fn get_originated(
@@ -729,7 +795,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
             ddm_admin_client::Error<DdmError>,
         > {
-            Ok(ddm_response_ok!(self.originated.lock().unwrap().clone()))
+            Ok(ddm_response_ok!(lock!(self.originated).clone()))
         }
 
         async fn advertise_prefixes<'a>(
@@ -739,7 +805,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.originated.lock().unwrap().extend(body);
+            lock!(self.originated).extend(body);
             Ok(ddm_response_ok!(()))
         }
 
@@ -750,7 +816,7 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.tunnel_originated.lock().unwrap().extend(body.clone());
+            lock!(self.tunnel_originated).extend(body.clone());
             Ok(ddm_response_ok!(()))
         }
 
@@ -761,10 +827,38 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
-            self.tunnel_originated
-                .lock()
-                .unwrap()
-                .retain(|x| !body.contains(x));
+            lock!(self.tunnel_originated).retain(|x| !body.contains(x));
+            Ok(ddm_response_ok!(()))
+        }
+
+        async fn get_originated_multicast_groups(
+            &self,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            Ok(ddm_response_ok!(lock!(self.multicast_originated).clone()))
+        }
+
+        async fn advertise_multicast_groups<'a>(
+            &'a self,
+            body: &'a Vec<MulticastOrigin>,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<()>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            lock!(self.multicast_originated).extend(body.clone());
+            Ok(ddm_response_ok!(()))
+        }
+
+        async fn withdraw_multicast_groups<'a>(
+            &'a self,
+            body: &'a Vec<MulticastOrigin>,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<()>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            lock!(self.multicast_originated).retain(|x| !body.contains(x));
             Ok(ddm_response_ok!(()))
         }
     }

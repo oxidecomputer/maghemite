@@ -20,8 +20,8 @@ pub struct Update {
 
 impl Update {
     /// Build an `Update` whose underlay/tunnel halves carry the announcements
-    /// from `pr`. Used by [`pull`] to project a pull response back into the
-    /// update event stream.
+    /// from the [`PullResponse`] `pr`. Used by [`pull`] to project a pull
+    /// response back into the update event stream.
     pub fn announce(pr: PullResponse) -> Self {
         Self {
             underlay: pr.underlay.map(UnderlayUpdate::announce),

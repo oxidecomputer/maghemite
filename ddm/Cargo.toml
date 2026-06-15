@@ -5,6 +5,7 @@ edition = "2024"
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+tempfile = "3"
 expectorate.workspace = true
 
 [dependencies]
@@ -17,6 +18,7 @@ thiserror.workspace = true
 dropshot.workspace = true
 schemars.workspace = true
 tokio.workspace = true
+futures.workspace = true
 anyhow.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -25,6 +27,7 @@ serde_json.workspace = true
 sled.workspace = true
 mg-common.workspace = true
 ddm-api-types.workspace = true
+ddm-api-types-versions.workspace = true
 ddm-protocol.workspace = true
 chrono.workspace = true
 omicron-common.workspace = true
@@ -41,7 +44,8 @@ libnet = { workspace = true, optional = true }
 dpd-client = { workspace = true, optional = true }
 opte-ioctl = { workspace = true, optional = true }
 oxide-vpc = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [features]
 default = ["backend"]
-backend = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc"]
+backend = ["dep:libnet", "dep:dpd-client", "dep:opte-ioctl", "dep:oxide-vpc", "dep:reqwest"]
