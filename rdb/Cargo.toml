@@ -25,6 +25,7 @@ ndp.workspace = true
 [dev-dependencies]
 mg-api-types = { workspace = true, features = ["clap", "proptest"] }
 proptest.workspace = true
+mg-api-types-versions.workspace = true
 
 [features]
 clap = ["dep:clap"]

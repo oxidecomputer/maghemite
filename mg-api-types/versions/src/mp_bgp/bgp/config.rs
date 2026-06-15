@@ -123,7 +123,6 @@ pub struct Ipv6UnicastConfig {
 
 /// BGP peer parameters for v4-v6 API (lacks src_addr/src_port).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "BgpPeerParameters")]
 pub struct BgpPeerParameters {
     pub hold_time: u64,
     pub idle_hold_time: u64,
@@ -149,7 +148,6 @@ pub struct BgpPeerParameters {
 
 /// BGP peer config for v4-v6 API (lacks src_addr/src_port).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "BgpPeerConfig")]
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
     pub name: String,
@@ -159,7 +157,6 @@ pub struct BgpPeerConfig {
 
 /// Neighbor configuration for v4-v6 API (lacks src_addr/src_port).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "Neighbor")]
 pub struct Neighbor {
     pub asn: u32,
     pub name: String,
@@ -171,7 +168,6 @@ pub struct Neighbor {
 
 /// Unnumbered BGP peer config for v4-v6 API (lacks src_addr/src_port).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-#[schemars(rename = "UnnumberedBgpPeerConfig")]
 pub struct UnnumberedBgpPeerConfig {
     pub interface: String,
     pub name: String,
@@ -182,7 +178,6 @@ pub struct UnnumberedBgpPeerConfig {
 
 /// Apply request for v4-v6 API (lacks src_addr/src_port in peer configs).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-#[schemars(rename = "ApplyRequest")]
 pub struct ApplyRequest {
     pub asn: u32,
     pub originate: Vec<Prefix>,

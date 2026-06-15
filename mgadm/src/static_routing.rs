@@ -9,7 +9,6 @@ use clap::{Args, Subcommand};
 use client_common::println_nopipe;
 use mg_admin_client::{Client, types};
 use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
 use oxnet::{Ipv4Net, Ipv6Net};
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -57,10 +56,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = mg_api_types::static_routes::AddStaticRoute4Request {
                 routes: mg_api_types::static_routes::StaticRoute4List {
                     list: vec![mg_api_types::static_routes::StaticRoute4 {
-                        prefix: Prefix4::new(
-                            route.destination.addr(),
-                            route.destination.width(),
-                        ),
+                        prefix: route.destination,
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -73,10 +69,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = mg_api_types::static_routes::DeleteStaticRoute4Request {
                 routes: mg_api_types::static_routes::StaticRoute4List {
                     list: vec![mg_api_types::static_routes::StaticRoute4 {
-                        prefix: Prefix4::new(
-                            route.destination.addr(),
-                            route.destination.width(),
-                        ),
+                        prefix: route.destination,
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -93,10 +86,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = mg_api_types::static_routes::AddStaticRoute6Request {
                 routes: mg_api_types::static_routes::StaticRoute6List {
                     list: vec![mg_api_types::static_routes::StaticRoute6 {
-                        prefix: Prefix6 {
-                            value: route.destination.addr(),
-                            length: route.destination.width(),
-                        },
+                        prefix: route.destination,
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -109,10 +99,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = mg_api_types::static_routes::DeleteStaticRoute6Request {
                 routes: mg_api_types::static_routes::StaticRoute6List {
                     list: vec![mg_api_types::static_routes::StaticRoute6 {
-                        prefix: Prefix6 {
-                            value: route.destination.addr(),
-                            length: route.destination.width(),
-                        },
+                        prefix: route.destination,
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -171,20 +158,17 @@ mod tests {
         };
 
         let api_route4 = mg_api_types::static_routes::StaticRoute4 {
-            prefix: Prefix4::new(
-                route4.destination.addr(),
-                route4.destination.width(),
-            ),
+            prefix: route4.destination,
             nexthop: route4.nexthop,
             vlan_id: route4.vlan_id,
             rib_priority: route4.rib_priority,
         };
 
         assert_eq!(
-            api_route4.prefix.value,
+            api_route4.prefix.addr(),
             Ipv4Addr::from_str("192.168.0.0").unwrap()
         );
-        assert_eq!(api_route4.prefix.length, 16);
+        assert_eq!(api_route4.prefix.width(), 16);
         assert_eq!(api_route4.nexthop, route4.nexthop);
         assert_eq!(api_route4.vlan_id, route4.vlan_id);
         assert_eq!(api_route4.rib_priority, route4.rib_priority);
@@ -198,10 +182,7 @@ mod tests {
         };
 
         let api_route4_v6nh = mg_api_types::static_routes::StaticRoute4 {
-            prefix: Prefix4::new(
-                route4_v6nh.destination.addr(),
-                route4_v6nh.destination.width(),
-            ),
+            prefix: route4_v6nh.destination,
             nexthop: route4_v6nh.nexthop,
             vlan_id: route4_v6nh.vlan_id,
             rib_priority: route4_v6nh.rib_priority,
@@ -217,20 +198,17 @@ mod tests {
         };
 
         let api_route6 = mg_api_types::static_routes::StaticRoute6 {
-            prefix: Prefix6::new(
-                route6.destination.addr(),
-                route6.destination.width(),
-            ),
+            prefix: route6.destination,
             nexthop: route6.nexthop,
             vlan_id: route6.vlan_id,
             rib_priority: route6.rib_priority,
         };
 
         assert_eq!(
-            api_route6.prefix.value,
+            api_route6.prefix.addr(),
             Ipv6Addr::from_str("fd00::").unwrap()
         );
-        assert_eq!(api_route6.prefix.length, 8);
+        assert_eq!(api_route6.prefix.width(), 8);
         assert_eq!(api_route6.nexthop, route6.nexthop);
         assert_eq!(api_route6.vlan_id, route6.vlan_id);
         assert_eq!(api_route6.rib_priority, route6.rib_priority);

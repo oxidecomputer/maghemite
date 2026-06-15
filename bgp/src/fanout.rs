@@ -7,7 +7,7 @@ use crate::session::{
     AdminEvent, FsmEvent, PeerId, RouteUpdate, RouteUpdate4, RouteUpdate6,
 };
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
-use mg_api_types::rdb::prefix::{Prefix4, Prefix6};
+use oxnet::{Ipv4Net, Ipv6Net};
 use rdb::types::{Ipv4Marker, Ipv6Marker};
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -23,8 +23,8 @@ pub type Fanout6<Cnx> = Fanout<Cnx, Ipv6Marker>;
 /// Fanout for distributing routes to peers for a specific address family.
 ///
 /// The type parameter `Af` ensures compile-time safety:
-/// - Fanout4 (Fanout<_, Ipv4Marker>) only accepts Prefix4
-/// - Fanout6 (Fanout<_, Ipv6Marker>) only accepts Prefix6
+/// - Fanout4 (Fanout<_, Ipv4Marker>) only accepts Ipv4Net
+/// - Fanout6 (Fanout<_, Ipv6Marker>) only accepts Ipv6Net
 pub struct Fanout<Cnx: BgpConnection, Af> {
     /// Indexed by peer identifier (IP address or interface name)
     egress: BTreeMap<PeerId, Egress<Cnx>>,
@@ -50,7 +50,7 @@ pub struct Egress<Cnx: BgpConnection> {
 // IPv4-specific implementation
 impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
     /// Announce and/or withdraw IPv4 routes to all peers.
-    pub fn send_all(&self, nlri: Vec<Prefix4>, withdrawn: Vec<Prefix4>) {
+    pub fn send_all(&self, nlri: Vec<Ipv4Net>, withdrawn: Vec<Ipv4Net>) {
         for egress in self.egress.values() {
             if !nlri.is_empty() {
                 let announce =
@@ -69,8 +69,8 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
     pub fn send_except(
         &self,
         origin: &PeerId,
-        nlri: Vec<Prefix4>,
-        withdrawn: Vec<Prefix4>,
+        nlri: Vec<Ipv4Net>,
+        withdrawn: Vec<Ipv4Net>,
     ) {
         for (peer_id, egress) in &self.egress {
             if peer_id == origin {
@@ -93,7 +93,7 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
 // IPv6-specific implementation
 impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
     /// Announce and/or withdraw IPv6 routes to all peers.
-    pub fn send_all(&self, nlri: Vec<Prefix6>, withdrawn: Vec<Prefix6>) {
+    pub fn send_all(&self, nlri: Vec<Ipv6Net>, withdrawn: Vec<Ipv6Net>) {
         for egress in self.egress.values() {
             if !nlri.is_empty() {
                 let announce =
@@ -112,8 +112,8 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
     pub fn send_except(
         &self,
         origin: &PeerId,
-        nlri: Vec<Prefix6>,
-        withdrawn: Vec<Prefix6>,
+        nlri: Vec<Ipv6Net>,
+        withdrawn: Vec<Ipv6Net>,
     ) {
         for (peer_id, egress) in &self.egress {
             if peer_id == origin {

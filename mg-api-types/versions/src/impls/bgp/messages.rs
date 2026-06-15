@@ -63,8 +63,8 @@ use crate::latest::bgp::messages::Safi;
 use crate::latest::bgp::messages::UpdateErrorSubcode;
 use crate::latest::bgp::messages::UpdateMessage;
 use crate::latest::bgp::messages::path_attribute_flags;
-use crate::latest::rdb::prefix::Prefix4;
-use crate::latest::rdb::prefix::Prefix6;
+use oxnet::Ipv4Net;
+use oxnet::Ipv6Net;
 
 /// According to RFC 4271 §4.1 the header marker is all ones.
 const MARKER: [u8; 16] = [0xFFu8; 16];
@@ -636,7 +636,7 @@ impl MpReachNlri {
     }
 
     /// Create an IPv4 Unicast MP_REACH_NLRI.
-    pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix4>) -> Self {
+    pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<Ipv4Net>) -> Self {
         Self::Ipv4Unicast(MpReachIpv4Unicast {
             nexthop,
             reserved: 0, // Always send 0 per RFC 4760
@@ -645,7 +645,7 @@ impl MpReachNlri {
     }
 
     /// Create an IPv6 Unicast MP_REACH_NLRI.
-    pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix6>) -> Self {
+    pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<Ipv6Net>) -> Self {
         Self::Ipv6Unicast(MpReachIpv6Unicast {
             nexthop,
             reserved: 0,
@@ -700,12 +700,12 @@ impl MpUnreachNlri {
     }
 
     /// Create an IPv4 Unicast MP_UNREACH_NLRI.
-    pub fn ipv4_unicast(withdrawn: Vec<Prefix4>) -> Self {
+    pub fn ipv4_unicast(withdrawn: Vec<Ipv4Net>) -> Self {
         Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })
     }
 
     /// Create an IPv6 Unicast MP_UNREACH_NLRI.
-    pub fn ipv6_unicast(withdrawn: Vec<Prefix6>) -> Self {
+    pub fn ipv6_unicast(withdrawn: Vec<Ipv6Net>) -> Self {
         Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
     }
 }

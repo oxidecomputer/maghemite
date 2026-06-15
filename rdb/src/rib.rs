@@ -9,16 +9,16 @@
 //! [`RibExt::into_latest_api_rib`] method converts to it.
 
 use mg_api_types::rdb::path::Path;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::ProtocolFilter;
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Runtime IPv4+IPv6 routing-information-base shape.
-pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
+pub type Rib = BTreeMap<IpNet, BTreeSet<Path>>;
 /// Runtime IPv4-only RIB.
-pub type Rib4 = BTreeMap<Prefix4, BTreeSet<Path>>;
+pub type Rib4 = BTreeMap<Ipv4Net, BTreeSet<Path>>;
 /// Runtime IPv6-only RIB.
-pub type Rib6 = BTreeMap<Prefix6, BTreeSet<Path>>;
+pub type Rib6 = BTreeMap<Ipv6Net, BTreeSet<Path>>;
 
 /// Extension methods on [`Rib`] that don't fit on the underlying `BTreeMap`.
 ///

@@ -8,8 +8,8 @@ build_excludes := if os() == "illumos" {
 test_excludes := build_excludes + " --exclude mg-tests"
 
 # Build the workspace.
-build:
-    cargo build --workspace {{ build_excludes }}
+build *ARGS:
+    cargo build --workspace {{ build_excludes }} {{ ARGS }}
 
 # Run cargo test for the workspace.
 test:
