@@ -247,3 +247,6 @@ impl From<State> for BfdPeerState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

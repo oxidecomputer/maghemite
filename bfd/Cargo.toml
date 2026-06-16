@@ -21,3 +21,5 @@ thiserror.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 anyhow.workspace = true
+proptest.workspace = true
+test-strategy.workspace = true

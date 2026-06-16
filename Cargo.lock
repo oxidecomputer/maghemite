@@ -331,6 +331,7 @@ dependencies = [
  "mg-common",
  "num_enum 0.7.6",
  "pretty_assertions",
+ "proptest",
  "rand 0.10.1",
  "rdb",
  "schemars 0.8.22",
@@ -338,6 +339,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-bunyan",
+ "test-strategy",
  "thiserror 2.0.18",
 ]
 
