@@ -145,7 +145,7 @@ impl Session {
 }
 
 /// Information about a BFD peer.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct PeerInfo {
     /// The interval at which the peer would _like_ to receive BFD control
     /// packets.

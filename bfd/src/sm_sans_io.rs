@@ -96,6 +96,14 @@ impl StateMachine {
             return None;
         }
 
+        // RFC 5880 §6.8.3: a Required Min RX Interval of zero means the remote
+        // does not want us to send any periodic control packets. Without this
+        // guard the `last_unsolicited_send + 0` below is always in the past and
+        // we'd transmit as fast as we're polled.
+        if self.remote.required_min_rx.is_zero() {
+            return None;
+        }
+
         // If we've never sent a packet, we should start!
         let Some(last_unsolicited_send) = self.last_unsolicited_send else {
             return Some(now);
@@ -214,8 +222,10 @@ impl StateMachine {
         // `self.local.detection_multiplier`? The old state machine didn't, but
         // this means we always send the default value instead of our config.
         let mut pkt = packet::Control {
-            desired_min_tx: self.local.desired_min_tx.as_micros() as u32,
-            required_min_rx: self.local.required_min_rx.as_micros() as u32,
+            // The wire fields are u32 microseconds. Saturate rather than let
+            // the cast silently wrap for intervals above ~71.6 minutes.
+            desired_min_tx: micros_u32(self.local.desired_min_tx),
+            required_min_rx: micros_u32(self.local.required_min_rx),
             my_discriminator: self.local.discriminator,
             your_discriminator: self.remote.discriminator,
             ..Default::default()
@@ -223,6 +233,12 @@ impl StateMachine {
         pkt.set_state(self.state.into());
         pkt
     }
+}
+
+/// Convert a duration to microseconds as a `u32` wire field, saturating
+/// instead of wrapping for durations beyond `u32::MAX` microseconds.
+fn micros_u32(d: Duration) -> u32 {
+    u32::try_from(d.as_micros()).unwrap_or(u32::MAX)
 }
 
 fn next_recv_deadline(local: &PeerInfo, last_recv: Instant) -> Instant {

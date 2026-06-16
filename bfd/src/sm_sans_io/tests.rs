@@ -374,6 +374,142 @@ fn total_partition_drives_both_down() {
     assert_eq!(sim.b.state(), BfdPeerState::Down);
 }
 
+// Generator for truly arbitrary `PeerInfo` values, including both 0 and
+// unreasonably large integer values.
+fn any_peer_info() -> impl Strategy<Value = PeerInfo> {
+    (
+        // Intervals up to ~2.7h in micros — wide enough to cross the u32-micros
+        // wire boundary (~71.6 min) but not so wide that `Instant + dur`
+        // arithmetic itself overflows on a 64-bit monotonic clock.
+        0u64..10_000_000_000,
+        0u64..10_000_000_000,
+        any::<u32>(),
+        any::<bool>(),
+        any::<u8>(), // detection_multiplier — deliberately includes 0
+    )
+        .prop_map(|(tx, rx, disc, demand, mult)| PeerInfo {
+            desired_min_tx: Duration::from_micros(tx),
+            required_min_rx: Duration::from_micros(rx),
+            discriminator: disc,
+            demand_mode: demand,
+            detection_multiplier: mult,
+        })
+}
+
+#[proptest]
+fn arbitrary_local_config_never_panics(
+    #[strategy(any_peer_info())] local: PeerInfo,
+    #[strategy(prop::collection::vec(any::<Op>(), 0..128))] ops: Vec<Op>,
+) {
+    let now = Instant::now();
+    let mut sm = StateMachine::start(local, now);
+    let mut t = now;
+    for op in &ops {
+        match op {
+            Op::RecvPacket {
+                peer_state,
+                poll,
+                demand,
+            } => {
+                let mut pkt = packet_with(*peer_state);
+                if *poll {
+                    pkt.set_poll();
+                }
+                if *demand {
+                    pkt.set_demand();
+                }
+                sm.packet_received(pkt, t);
+            }
+            Op::AdvanceClock { micros } => {
+                t += Duration::from_micros(*micros);
+            }
+            Op::CheckDeadline => {
+                sm.check_recv_deadline_expired(t);
+            }
+            Op::TakePacket => {
+                let _ = sm.packet_to_send(t);
+            }
+        }
+    }
+}
+
+#[test]
+fn remote_required_min_rx_zero_stops_periodic_sends() {
+    // RFC 5880 §6.8.3: a remote advertising Required Min RX = 0 is telling us
+    // to stop sending periodic control packets.
+    let now = Instant::now();
+    let mut sm = StateMachine::start(local_info(), now);
+
+    let mut pkt = packet_with(BfdPeerState::Up);
+    pkt.required_min_rx = 0;
+    sm.packet_received(pkt, now);
+
+    let later = now + Duration::from_secs(3600);
+    assert!(
+        sm.packet_to_send(later).is_none(),
+        "must not send periodic packets when the remote advertises rx == 0",
+    );
+}
+
+#[test]
+fn zero_detection_multiplier_cannot_hold_up() {
+    let now = Instant::now();
+    let mut local = local_info();
+    local.detection_multiplier = 0;
+    let mut sm = StateMachine::start(local, now);
+
+    // We can reach Up...
+    sm.packet_received(packet_with(BfdPeerState::Init), now);
+    assert_eq!(sm.state(), BfdPeerState::Up);
+
+    // ...but the recv deadline is `last_recv + rx * 0 == last_recv`, so it is
+    // already expired at the same instant and the session collapses.
+    assert!(matches!(
+        sm.check_recv_deadline_expired(now),
+        CheckRecvDeadlineResult::Expired { .. },
+    ));
+    assert_eq!(sm.state(), BfdPeerState::Down);
+}
+
+#[test]
+fn large_local_tx_interval_saturates_on_wire() {
+    let now = Instant::now();
+    let mut local = local_info();
+    // 5000s == 5e9 micros, which exceeds u32::MAX micros (~4295s).
+    local.desired_min_tx = Duration::from_secs(5000);
+    let mut sm = StateMachine::start(local, now);
+
+    let pkt = sm.packet_to_send(now).expect("initial send");
+    // The interval must saturate at u32::MAX micros, not wrap around to a
+    // tiny (and dangerously fast) interval.
+    assert_eq!(
+        pkt.desired_min_tx,
+        u32::MAX,
+        "oversized tx interval should saturate, not wrap",
+    );
+}
+
+// This test documents some questionable state machine behavior that I believe
+// is consistent with the RFC: any time we receive a packet with `poll` set, we
+// MUST send a response (per RFC 5880 §6.8.7), so if our state machine receives
+// 1000 poll requests and its driver isn't dequeuing packets to send, we should
+// enqueue 1000 poll responses. (In practice a driver should be dequeuing
+// packets immediately after handling incoming packets, so this shouldn't come
+// up.)
+#[test]
+fn poll_flood_grows_response_queue_unboundedly() {
+    let now = Instant::now();
+    let mut sm = StateMachine::start(local_info(), now);
+    for _ in 0..1000 {
+        let mut pkt = packet_with(BfdPeerState::Up);
+        pkt.set_poll();
+        sm.packet_received(pkt, now);
+    }
+    // Every received poll queues another response with no upper bound: a
+    // remote flooding polls makes this queue grow without limit.
+    assert_eq!(sm.poll_responses.len(), 1000);
+}
+
 #[proptest]
 fn bounded_consecutive_loss_keeps_session_up(
     // Independent, bounded-loss schedules for each direction. Because no run
