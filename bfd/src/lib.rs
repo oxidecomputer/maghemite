@@ -19,7 +19,6 @@ pub mod bidi;
 pub mod log;
 pub mod packet;
 mod sm;
-mod sm_sans_io;
 mod util;
 
 pub const COMPONENT_BFD: &str = "bfd";

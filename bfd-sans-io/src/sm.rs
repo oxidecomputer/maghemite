@@ -4,8 +4,8 @@
 
 #![allow(dead_code)] // TODO remove once this module is used
 
-use crate::PeerInfo;
-use crate::packet;
+use bfd::PeerInfo;
+use bfd::packet;
 use mg_api_types::bfd::BfdPeerState;
 use std::collections::VecDeque;
 use std::time::Duration;

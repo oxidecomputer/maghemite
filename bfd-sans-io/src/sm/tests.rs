@@ -530,3 +530,4 @@ fn bounded_consecutive_loss_keeps_session_up(
         );
     }
 }
+

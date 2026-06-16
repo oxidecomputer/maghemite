@@ -331,7 +331,6 @@ dependencies = [
  "mg-common",
  "num_enum 0.7.6",
  "pretty_assertions",
- "proptest",
  "rand 0.10.1",
  "rdb",
  "schemars 0.8.22",
@@ -339,6 +338,16 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-bunyan",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "bfd-sans-io"
+version = "0.1.0"
+dependencies = [
+ "bfd",
+ "mg-api-types",
+ "proptest",
  "test-strategy",
  "thiserror 2.0.18",
 ]
