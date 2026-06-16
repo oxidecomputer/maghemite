@@ -112,10 +112,12 @@ impl Dispatcher {
 
         // We do: there must be a listener here.
         let Some(listener) = self.listeners.get(&local_addr) else {
-            panic!(
+            debug_assert!(
+                false,
                 "Dispatcher hash maps out of sync: \
                  peer {peer} should have a listener at {local_addr}"
             );
+            return None;
         };
 
         match listener.remove_peer(peer) {
