@@ -17,6 +17,12 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+/// The per-listener table mapping a peer IP to the channel on which packets
+/// from that peer should be delivered. Shared between a [`Listener`] and the
+/// task reading from its socket.
+type SharedSessions =
+    Arc<RwLock<HashMap<IpAddr, mpsc::Sender<packet::Control>>>>;
+
 pub(crate) enum ListenerRemovePeerResult {
     RemovedButOtherPeersRemain,
     RemovedNowEmpty,
@@ -39,13 +45,23 @@ pub(crate) struct Dispatcher {
 
     // local address -> listener task
     listeners: HashMap<SocketAddr, Listener>,
+
+    // How we bind listening sockets and spawn their receive tasks. Production
+    // uses `TokioUdpBinder`; tests inject a fake so the dispatcher's bookkeeping
+    // can be exercised without binding real sockets.
+    backend: Arc<dyn ListenerBackend>,
 }
 
 impl Dispatcher {
     pub(crate) fn new() -> Self {
+        Self::with_backend(Arc::new(TokioUdpBinder))
+    }
+
+    fn with_backend(backend: Arc<dyn ListenerBackend>) -> Self {
         Self {
             peer_to_listen_addr: HashMap::default(),
             listeners: HashMap::default(),
+            backend,
         }
     }
 
@@ -81,8 +97,13 @@ impl Dispatcher {
                 entry.get().insert_peer(peer, tx)?;
             }
             hash_map::Entry::Vacant(entry) => {
-                let listener =
-                    Listener::new(listen_addr, peer, tx, log.clone())?;
+                let listener = Listener::new(
+                    &*self.backend,
+                    listen_addr,
+                    peer,
+                    tx,
+                    log.clone(),
+                )?;
                 entry.insert(listener);
             }
         }
@@ -153,7 +174,7 @@ struct Listener {
     /// Map shared with the inner listening task that contains the peers we're
     /// listening for and the channel on which we should send any incoming
     /// packets from that peer.
-    sessions: Arc<RwLock<HashMap<IpAddr, mpsc::Sender<packet::Control>>>>,
+    sessions: SharedSessions,
     listen_task: Option<JoinHandle<()>>,
 }
 
@@ -167,36 +188,17 @@ impl Drop for Listener {
 
 impl Listener {
     fn new(
+        backend: &dyn ListenerBackend,
         listen_addr: SocketAddr,
         peer: IpAddr,
         tx: mpsc::Sender<packet::Control>,
         log: Logger,
     ) -> Result<Self, AddPeerError> {
-        // This is pretty spicy: we're using std's `UdpSocket` so we can
-        // _synchronously_ bind, even though this function is ultimately called
-        // from an async context. The arguments for this are:
-        //
-        // 1. Binding a UDP socket doesn't involve any network traffic, so
-        //    shouldn't block for long
-        // 2. Reworking this to allow async binding is pretty involved; we'd
-        //    need to either use an async Mutex (lots of footguns there) or move
-        //    to an actor task pattern to manage the listeners.
-        let socket = std::net::UdpSocket::bind(listen_addr).map_err(|err| {
-            AddPeerError::Bind {
-                addr: listen_addr,
-                err,
-            }
-        })?;
-        socket
-            .set_nonblocking(true)
-            .map_err(AddPeerError::SetSocketNonBlocking)?;
-        let socket =
-            UdpSocket::from_std(socket).map_err(AddPeerError::StdToTokio)?;
+        let sessions: SharedSessions =
+            Arc::new(RwLock::new(HashMap::from_iter([(peer, tx)])));
 
-        let sessions = Arc::new(RwLock::new(HashMap::from_iter([(peer, tx)])));
-
-        let listen_task = ListenerTask::new(socket, Arc::clone(&sessions), log);
-        let listen_task = Some(tokio::spawn(listen_task.run()));
+        let listen_task =
+            backend.spawn(listen_addr, Arc::clone(&sessions), log)?;
 
         Ok(Self {
             sessions,
@@ -242,18 +244,71 @@ impl Listener {
     }
 }
 
+/// Abstraction over binding a listening socket and spawning the task that reads
+/// from it.
+///
+/// Production uses [`TokioUdpBinder`]; tests inject a fake so `Dispatcher`'s
+/// bookkeeping can be exercised without touching the network.
+trait ListenerBackend: Send + Sync + 'static {
+    /// Bind a socket at `listen_addr` and spawn a task that reads packets and
+    /// dispatches them to the per-peer channels in `sessions`.
+    ///
+    /// Returns the spawned task's handle, or `None` for test fakes that don't
+    /// bind a real socket. A `Listener` holding `None` is shut down/dropped as
+    /// a no-op.
+    fn spawn(
+        &self,
+        listen_addr: SocketAddr,
+        sessions: SharedSessions,
+        log: Logger,
+    ) -> Result<Option<JoinHandle<()>>, AddPeerError>;
+}
+
+/// Production [`ListenerBackend`]: binds a real UDP socket and spawns a
+/// [`ListenerTask`] to read from it.
+struct TokioUdpBinder;
+
+impl ListenerBackend for TokioUdpBinder {
+    fn spawn(
+        &self,
+        listen_addr: SocketAddr,
+        sessions: SharedSessions,
+        log: Logger,
+    ) -> Result<Option<JoinHandle<()>>, AddPeerError> {
+        // This is pretty spicy: we're using std's `UdpSocket` so we can
+        // _synchronously_ bind, even though this function is ultimately called
+        // from an async context. The arguments for this are:
+        //
+        // 1. Binding a UDP socket doesn't involve any network traffic, so
+        //    shouldn't block for long
+        // 2. Reworking this to allow async binding is pretty involved; we'd
+        //    need to either use an async Mutex (lots of footguns there) or move
+        //    to an actor task pattern to manage the listeners.
+        let socket = std::net::UdpSocket::bind(listen_addr).map_err(|err| {
+            AddPeerError::Bind {
+                addr: listen_addr,
+                err,
+            }
+        })?;
+        socket
+            .set_nonblocking(true)
+            .map_err(AddPeerError::SetSocketNonBlocking)?;
+        let socket =
+            UdpSocket::from_std(socket).map_err(AddPeerError::StdToTokio)?;
+
+        let listen_task = ListenerTask::new(socket, sessions, log);
+        Ok(Some(tokio::spawn(listen_task.run())))
+    }
+}
+
 struct ListenerTask {
     socket: UdpSocket,
-    sessions: Arc<RwLock<HashMap<IpAddr, mpsc::Sender<packet::Control>>>>,
+    sessions: SharedSessions,
     log: Logger,
 }
 
 impl ListenerTask {
-    fn new(
-        socket: UdpSocket,
-        sessions: Arc<RwLock<HashMap<IpAddr, mpsc::Sender<packet::Control>>>>,
-        log: Logger,
-    ) -> Self {
+    fn new(socket: UdpSocket, sessions: SharedSessions, log: Logger) -> Self {
         Self {
             socket,
             sessions,
@@ -333,5 +388,7 @@ impl ListenerTask {
     }
 }
 
+#[cfg(test)]
+mod proptests;
 #[cfg(test)]
 mod tests;
