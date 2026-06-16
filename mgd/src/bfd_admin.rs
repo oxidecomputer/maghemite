@@ -21,7 +21,7 @@ use std::{
     net::{IpAddr, SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender},
     },
     thread::{Builder, JoinHandle, sleep},
@@ -36,14 +36,23 @@ pub struct BfdContext {
     /// The underlying deamon being run.
     pub(crate) daemon: Arc<Mutex<Daemon>>,
     dispatcher: Arc<Mutex<Dispatcher>>,
+    src_port: Arc<AtomicU16>,
 }
 
 impl BfdContext {
+    const BFD_SINGLEHOP_SOURCE_PORT_BEGIN: u16 = 49152;
+
     pub fn new(log: Logger) -> Self {
         Self {
             daemon: Arc::new(Mutex::new(Daemon::new(log.clone()))),
             dispatcher: Arc::new(Mutex::new(Dispatcher::new(log))),
+            src_port: Arc::new(AtomicU16::default()),
         }
+    }
+
+    pub fn next_source_port(&self) -> u16 {
+        let offset = self.src_port.fetch_add(1, Ordering::Relaxed) % u16::MAX;
+        Self::BFD_SINGLEHOP_SOURCE_PORT_BEGIN + offset
     }
 }
 
@@ -114,9 +123,7 @@ pub(crate) fn add_peer(
 
     let (src_port, dst_port) = match rq.mode {
         SessionMode::SingleHop => {
-            let offset: u16 =
-                (daemon.sessions.len() % usize::from(u16::MAX)) as u16;
-            (BFD_SINGLEHOP_SOURCE_PORT_BEGIN + offset, BFD_SINGLEHOP_PORT)
+            (ctx.bfd.next_source_port(), BFD_SINGLEHOP_PORT)
         }
         SessionMode::MultiHop => (0, BFD_MULTIHOP_PORT),
     };
@@ -206,7 +213,6 @@ pub(crate) async fn remove_bfd_peer(
 const BFD_MULTIHOP_PORT: u16 = 4784;
 /// Port to be used for BFD single per RFC 5881.
 const BFD_SINGLEHOP_PORT: u16 = 3784;
-const BFD_SINGLEHOP_SOURCE_PORT_BEGIN: u16 = 49152;
 
 /// Create a bidirectional channel linking a peer session to an underlying BFD
 /// session over UDP.
