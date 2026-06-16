@@ -2643,7 +2643,7 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
-    use bgp::router::SessionMap;
+    use bgp::{policy::PolicySource, router::SessionMap};
     use client_common::println_nopipe;
     use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
@@ -2651,16 +2651,25 @@ mod tests {
     };
     use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
     use mg_common::stats::MgLowerStats;
+    use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use rdb::test::get_test_db;
-    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-    use std::net::Ipv6Addr;
     use std::{
         collections::HashMap,
         env::temp_dir,
         fs::{create_dir_all, remove_dir_all},
-        net::SocketAddr,
+        net::{Ipv4Addr, Ipv6Addr, SocketAddr},
         sync::{Arc, Mutex},
     };
+
+    const POLICY_SOURCE: &str = r#"
+fn open(message, asn, addr) {
+    CheckerResult::Accept
+}
+
+fn update(message, asn, addr) {
+    CheckerResult::Accept
+}
+"#;
 
     /// Build a fresh handler context backed by an isolated on-disk test db.
     fn test_ctx(name: &str) -> Arc<HandlerContext> {
@@ -2766,6 +2775,10 @@ mod tests {
         }
     }
 
+    fn empty_req(asn: u32) -> ApplyRequest {
+        apply_req(asn, HashMap::default(), HashMap::default())
+    }
+
     /// Apply request carrying both a numbered and an unnumbered peer under
     /// `asn`, so a single test exercises both code paths at once.
     fn mixed_req(asn: u32, hold_time: u64) -> ApplyRequest {
@@ -2780,6 +2793,72 @@ mod tests {
                 vec![unnumbered("tfportqsfp1_0", "u0", hold_time)],
             )]),
         )
+    }
+
+    fn assert_neighbor_counts(
+        ctx: &Arc<HandlerContext>,
+        numbered: usize,
+        unnumbered: usize,
+    ) {
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
+            numbered,
+            "numbered neighbor count",
+        );
+        assert_eq!(
+            ctx.db
+                .get_unnumbered_bgp_neighbors()
+                .expect("get unnumbered neighbors")
+                .len(),
+            unnumbered,
+            "unnumbered neighbor count",
+        );
+    }
+
+    fn assert_single_neighbor_state(
+        ctx: &Arc<HandlerContext>,
+        asn: u32,
+        hold_time: u64,
+    ) {
+        let num = ctx.db.get_bgp_neighbors().expect("get bgp neighbors");
+        let unum = ctx
+            .db
+            .get_unnumbered_bgp_neighbors()
+            .expect("get unnumbered neighbors");
+
+        assert_eq!(num.len(), 1, "expected exactly one numbered neighbor");
+        assert_eq!(num[0].asn, asn, "numbered peer should be under {asn}");
+        assert_eq!(num[0].parameters.hold_time, hold_time);
+
+        assert_eq!(unum.len(), 1, "expected exactly one unnumbered neighbor");
+        assert_eq!(unum[0].asn, asn, "unnumbered peer should be under {asn}");
+        assert_eq!(unum[0].parameters.hold_time, hold_time);
+    }
+
+    fn create_origin4_for_router(
+        ctx: &Arc<HandlerContext>,
+        asn: u32,
+        prefix: Ipv4Net,
+    ) {
+        let routers = ctx.bgp.router.lock().unwrap();
+        routers
+            .get(&asn)
+            .expect("router should exist")
+            .create_origin4(vec![IpNet::V4(prefix)])
+            .expect("create origin4");
+    }
+
+    fn create_origin6_for_router(
+        ctx: &Arc<HandlerContext>,
+        asn: u32,
+        prefix: Ipv6Net,
+    ) {
+        let routers = ctx.bgp.router.lock().unwrap();
+        routers
+            .get(&asn)
+            .expect("router should exist")
+            .create_origin6(vec![IpNet::V6(prefix)])
+            .expect("create origin6");
     }
 
     #[tokio::test]
@@ -2830,38 +2909,12 @@ mod tests {
         do_bgp_apply(&ctx, mixed_req(123, 6))
             .await
             .expect("apply asn 123");
-
-        let num = ctx.db.get_bgp_neighbors().expect("get bgp neighbors");
-        let unum = ctx
-            .db
-            .get_unnumbered_bgp_neighbors()
-            .expect("get unnumbered neighbors");
-        assert_eq!(num.len(), 1);
-        assert_eq!(num[0].asn, 123);
-        assert_eq!(num[0].parameters.hold_time, 6);
-        assert_eq!(unum.len(), 1);
-        assert_eq!(unum[0].asn, 123);
-        assert_eq!(unum[0].parameters.hold_time, 6);
+        assert_single_neighbor_state(&ctx, 123, 6);
 
         do_bgp_apply(&ctx, mixed_req(456, 10))
             .await
             .expect("apply asn 456");
-
-        // Both peers must have moved to ASN 456, not stayed on ASN 123.
-        let num = ctx.db.get_bgp_neighbors().expect("get bgp neighbors");
-        let unum = ctx
-            .db
-            .get_unnumbered_bgp_neighbors()
-            .expect("get unnumbered neighbors");
-        assert_eq!(num.len(), 1, "expected exactly one numbered neighbor");
-        assert_eq!(num[0].asn, 456, "numbered peer should re-home under 456");
-        assert_eq!(num[0].parameters.hold_time, 10);
-        assert_eq!(unum.len(), 1, "expected exactly one unnumbered neighbor");
-        assert_eq!(
-            unum[0].asn, 456,
-            "unnumbered peer should re-home under 456"
-        );
-        assert_eq!(unum[0].parameters.hold_time, 10);
+        assert_single_neighbor_state(&ctx, 456, 10);
 
         // The now-empty old router should be gone, leaving only ASN 456.
         let routers = ctx.bgp.router.lock().unwrap();
@@ -2891,80 +2944,122 @@ mod tests {
         do_bgp_apply(&ctx, mixed_req(123, 6))
             .await
             .expect("apply with peers");
-        assert_eq!(
-            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
-            1,
-        );
-        assert_eq!(
-            ctx.db
-                .get_unnumbered_bgp_neighbors()
-                .expect("get unnumbered neighbors")
-                .len(),
-            1,
-        );
+        assert_neighbor_counts(&ctx, 1, 1);
 
         // Re-apply ASN 123 with no peers at all.
-        do_bgp_apply(
-            &ctx,
-            apply_req(123, HashMap::default(), HashMap::default()),
-        )
-        .await
-        .expect("apply empty");
-        assert_eq!(
-            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
-            0,
-            "empty apply should drain previously-configured numbered peers",
-        );
-        assert_eq!(
-            ctx.db
-                .get_unnumbered_bgp_neighbors()
-                .expect("get unnumbered neighbors")
-                .len(),
-            0,
-            "empty apply should drain previously-configured unnumbered peers",
-        );
+        do_bgp_apply(&ctx, empty_req(123))
+            .await
+            .expect("apply empty");
+        assert_neighbor_counts(&ctx, 0, 0);
     }
 
-    /// Regression test for https://github.com/oxidecomputer/maghemite/issues/772
+    /// Regression tests for https://github.com/oxidecomputer/maghemite/issues/772
+    /// and https://github.com/oxidecomputer/maghemite/issues/783
     ///
-    /// Deleting a router must not leave its neighbors orphaned in the database,
-    /// for either numbered or unnumbered neighbors (the unnumbered case being
-    /// the one originally reported in the issue).
+    /// Deleting a router must remove all router-owned state: the in-memory
+    /// router (and therefore its loaded policy), numbered and unnumbered
+    /// neighbors, and originated prefixes for both address families. Otherwise
+    /// stale state can survive deletion, including stale origin rows that make a
+    /// later origin creation fail with "origin already exists".
     #[tokio::test]
-    async fn delete_router_removes_neighbors() {
-        let ctx = test_ctx("delete_router_removes_neighbors");
+    async fn delete_router_removes_router_state() {
+        let ctx = test_ctx("delete_router_removes_router_state");
+        let first_prefix4 =
+            Ipv4Net::new_unchecked(Ipv4Addr::new(1, 2, 3, 4), 31);
+        let first_prefix6 = Ipv6Net::new_unchecked(Ipv6Addr::LOCALHOST, 128);
+        let second_prefix4 =
+            Ipv4Net::new_unchecked(Ipv4Addr::new(5, 6, 7, 8), 31);
+        let second_prefix6 = Ipv6Net::new_unchecked(
+            "2001:db8::".parse::<Ipv6Addr>().unwrap(),
+            64,
+        );
 
         do_bgp_apply(&ctx, mixed_req(123, 6))
             .await
             .expect("apply with peers");
+        assert_neighbor_counts(&ctx, 1, 1);
+        create_origin4_for_router(&ctx, 123, first_prefix4);
+        create_origin6_for_router(&ctx, 123, first_prefix6);
+        super::helpers::load_policy(
+            &ctx,
+            123,
+            PolicySource::Checker(POLICY_SOURCE.to_string()),
+            false,
+        )
+        .await
+        .expect("load checker");
+        super::helpers::load_policy(
+            &ctx,
+            123,
+            PolicySource::Shaper(POLICY_SOURCE.to_string()),
+            false,
+        )
+        .await
+        .expect("load shaper");
+
         assert_eq!(
-            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
-            1,
+            ctx.db.get_origin4(123_u32.into()).expect("get origin4"),
+            vec![first_prefix4],
         );
         assert_eq!(
-            ctx.db
-                .get_unnumbered_bgp_neighbors()
-                .expect("get unnumbered neighbors")
-                .len(),
-            1,
+            ctx.db.get_origin6(123_u32.into()).expect("get origin6"),
+            vec![first_prefix6],
         );
+        {
+            let routers = ctx.bgp.router.lock().unwrap();
+            let router = routers.get(&123).expect("router should exist");
+            assert!(router.policy.checker_source().is_some());
+            assert!(router.policy.shaper_source().is_some());
+        }
 
         do_delete_router(&ctx, 123).await.expect("delete router");
 
         assert!(ctx.db.get_bgp_routers().expect("get routers").is_empty());
         assert!(!ctx.bgp.router.lock().unwrap().contains_key(&123));
+        assert_neighbor_counts(&ctx, 0, 0);
+        assert!(
+            ctx.db
+                .get_origin4(123_u32.into())
+                .expect("get deleted origin4")
+                .is_empty(),
+            "router deletion should clear stale origin4 prefixes",
+        );
+        assert!(
+            ctx.db
+                .get_origin6(123_u32.into())
+                .expect("get deleted origin6")
+                .is_empty(),
+            "router deletion should clear stale origin6 prefixes",
+        );
+
+        // A newly-created router should not inherit deleted policy, and origin
+        // creation for another router should not conflict with stale origin rows.
+        do_bgp_apply(&ctx, empty_req(123))
+            .await
+            .expect("recreate asn 123");
+        {
+            let routers = ctx.bgp.router.lock().unwrap();
+            let router = routers.get(&123).expect("router should exist");
+            assert!(router.policy.checker_source().is_none());
+            assert!(router.policy.shaper_source().is_none());
+        }
+
+        do_bgp_apply(&ctx, empty_req(456))
+            .await
+            .expect("apply asn 456");
+        create_origin4_for_router(&ctx, 456, second_prefix4);
+        create_origin6_for_router(&ctx, 456, second_prefix6);
         assert_eq!(
-            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
-            0,
-            "deleting a router must not orphan its numbered neighbors",
+            ctx.db
+                .get_origin4(456_u32.into())
+                .expect("get asn 456 origin4"),
+            vec![second_prefix4],
         );
         assert_eq!(
             ctx.db
-                .get_unnumbered_bgp_neighbors()
-                .expect("get unnumbered neighbors")
-                .len(),
-            0,
-            "deleting a router must not orphan its unnumbered neighbors",
+                .get_origin6(456_u32.into())
+                .expect("get asn 456 origin6"),
+            vec![second_prefix6],
         );
     }
 }
