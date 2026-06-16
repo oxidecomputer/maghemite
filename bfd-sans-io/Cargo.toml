@@ -6,7 +6,10 @@ edition = "2024"
 [dependencies]
 bfd.workspace = true
 mg-api-types.workspace = true
+slog.workspace = true
+slog-error-chain.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

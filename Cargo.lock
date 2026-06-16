@@ -348,8 +348,11 @@ dependencies = [
  "bfd",
  "mg-api-types",
  "proptest",
+ "slog",
+ "slog-error-chain",
  "test-strategy",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -87,6 +87,7 @@ slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"
 slog-bunyan = "2.5"
+slog-error-chain = { git = "https://github.com/oxidecomputer/slog-error-chain", branch = "main" }
 socket2 = { version = "0.6", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.228", features = ["derive"] }
