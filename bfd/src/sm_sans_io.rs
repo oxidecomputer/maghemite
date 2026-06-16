@@ -111,8 +111,13 @@ impl StateMachine {
             return Some(now);
         };
 
-        // TODO-correctness Should this consider local.desired_min_tx and/or add
-        // jitter? See RFC 5880 §6.8.7
+        // TODO-correctness Several issues with this, I think, per RFC 5880:
+        //
+        // * §6.8.3: MUST set `DesiredMinTxInterval` to at least 1sec if the
+        //   session state is not `Up`
+        // * §6.8.7: MUST take larger of `DesiredMinTxInterval` and
+        //   `RemoteMinRxInterval`
+        // * §6.8.7: MUST apply per-packet jitter of 0-25%
         Some(last_unsolicited_send + self.remote.required_min_rx)
     }
 
@@ -244,8 +249,16 @@ fn micros_u32(d: Duration) -> u32 {
 }
 
 fn next_recv_deadline(local: &PeerInfo, last_recv: Instant) -> Instant {
-    // TODO-correctness Should this be using the remote desired_min_tx and
-    // detection_multiplier instead of our local one? Check RFC 5880 §6.8.4
+    // TODO-correctness Similar issues here as the next send timer per RFC 5880
+    // §6.8.4:
+    //
+    // * in async mode, calculation should be max(local min rx, remote min tx) *
+    //   remote detection multiplier
+    // * in demand mode calculation should be max(local min tx, remote min rx) *
+    //   local detection multiplier
+    //
+    // I don't think we support demand mode? But that means this calculation is
+    // wrong for async (wrong multiplier, isn't considering remote min tx)?
     last_recv
         + local.required_min_rx * u32::from(local.detection_multiplier.get())
 }
