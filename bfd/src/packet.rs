@@ -3,8 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::BfdPeerState;
-use anyhow::{Result, anyhow};
-use std::fmt::{Display, Formatter};
+use anyhow::{Context, Result, anyhow};
+use std::{
+    fmt::{Display, Formatter},
+    num::NonZeroU8,
+};
 
 // Control packet flags.
 const POLL: u8 = 1 << 5;
@@ -117,7 +120,7 @@ pub struct Control {
     /// Detection time multiplier. The negotiated transmit interval, multiplied
     /// by this value, provides the Detection Time for the receiving system in
     /// Asynchronous mode.
-    pub detect_mult: u8,
+    pub detect_mult: NonZeroU8,
 
     /// Length of the BFD Control packet, in bytes.
     pub length: u8,
@@ -161,7 +164,7 @@ impl Default for Control {
             // default state machine state is down
             flags: BfdPeerState::Down.wire_format(),
             // default to detection threshold multipler of 3
-            detect_mult: 3,
+            detect_mult: NonZeroU8::new(3).expect("3 is not 0"),
             // 24 is sans auth, if using auth recompute
             length: 24,
             my_discriminator: 0,
@@ -210,7 +213,8 @@ impl Control {
         Ok(Self {
             vers_diag: d[0],
             flags: d[1],
-            detect_mult: d[2],
+            detect_mult: NonZeroU8::new(d[2])
+                .context("control packet has detect mult of 0")?,
             length: d[3],
             my_discriminator: u32::from_be_bytes([d[4], d[5], d[6], d[7]]),
             your_discriminator: u32::from_be_bytes([d[8], d[9], d[10], d[11]]),
@@ -225,8 +229,12 @@ impl Control {
 
     /// Serialize a `Control` as vector of bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut v =
-            vec![self.vers_diag, self.flags, self.detect_mult, self.length];
+        let mut v = vec![
+            self.vers_diag,
+            self.flags,
+            self.detect_mult.get(),
+            self.length,
+        ];
         v.extend_from_slice(&self.my_discriminator.to_be_bytes());
         v.extend_from_slice(&self.your_discriminator.to_be_bytes());
         v.extend_from_slice(&self.desired_min_tx.to_be_bytes());

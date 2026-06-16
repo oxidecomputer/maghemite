@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#![allow(dead_code)] // TODO remove once this module is used
+
 use crate::PeerInfo;
 use crate::packet;
 use mg_api_types::bfd::BfdPeerState;
@@ -244,7 +246,8 @@ fn micros_u32(d: Duration) -> u32 {
 fn next_recv_deadline(local: &PeerInfo, last_recv: Instant) -> Instant {
     // TODO-correctness Should this be using the remote desired_min_tx and
     // detection_multiplier instead of our local one? Check RFC 5880 §6.8.4
-    last_recv + local.required_min_rx * u32::from(local.detection_multiplier)
+    last_recv
+        + local.required_min_rx * u32::from(local.detection_multiplier.get())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

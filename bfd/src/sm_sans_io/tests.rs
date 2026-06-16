@@ -4,10 +4,11 @@
 
 use super::*;
 use proptest::prelude::*;
+use std::num::NonZeroU8;
 use test_strategy::Arbitrary;
 use test_strategy::proptest;
 
-const DETECT_MULT: u8 = 3;
+const DETECT_MULT: NonZeroU8 = NonZeroU8::new(3).unwrap();
 const MIN_TX_RX: Duration = Duration::from_millis(50);
 
 /// A fixed local config used by most tests.
@@ -341,7 +342,7 @@ impl Sim {
 /// gap sizes in `0..DETECT_MULT` and emitting that many drops before each
 /// delivered packet, so no run of losses can reach the detection threshold.
 fn bounded_loss_schedule() -> impl Strategy<Value = Vec<bool>> {
-    prop::collection::vec(0u8..DETECT_MULT, 1..40).prop_map(|gaps| {
+    prop::collection::vec(0u8..DETECT_MULT.get(), 1..40).prop_map(|gaps| {
         let mut schedule = Vec::new();
         for gap in gaps {
             schedule.extend(std::iter::repeat_n(false, usize::from(gap)));
@@ -385,7 +386,7 @@ fn any_peer_info() -> impl Strategy<Value = PeerInfo> {
         0u64..10_000_000_000,
         any::<u32>(),
         any::<bool>(),
-        any::<u8>(), // detection_multiplier — deliberately includes 0
+        any::<NonZeroU8>(),
     )
         .prop_map(|(tx, rx, disc, demand, mult)| PeerInfo {
             desired_min_tx: Duration::from_micros(tx),
@@ -449,26 +450,6 @@ fn remote_required_min_rx_zero_stops_periodic_sends() {
         sm.packet_to_send(later).is_none(),
         "must not send periodic packets when the remote advertises rx == 0",
     );
-}
-
-#[test]
-fn zero_detection_multiplier_cannot_hold_up() {
-    let now = Instant::now();
-    let mut local = local_info();
-    local.detection_multiplier = 0;
-    let mut sm = StateMachine::start(local, now);
-
-    // We can reach Up...
-    sm.packet_received(packet_with(BfdPeerState::Init), now);
-    assert_eq!(sm.state(), BfdPeerState::Up);
-
-    // ...but the recv deadline is `last_recv + rx * 0 == last_recv`, so it is
-    // already expired at the same instant and the session collapses.
-    assert!(matches!(
-        sm.check_recv_deadline_expired(now),
-        CheckRecvDeadlineResult::Expired { .. },
-    ));
-    assert_eq!(sm.state(), BfdPeerState::Down);
 }
 
 #[test]
