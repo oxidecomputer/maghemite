@@ -65,6 +65,13 @@ impl Dispatcher {
         }
     }
 
+    pub(crate) fn listen_addr_for_peer(
+        &self,
+        peer: &IpAddr,
+    ) -> Option<SocketAddr> {
+        self.peer_to_listen_addr.get(peer).copied()
+    }
+
     /// Ensure we're listening on a socket at `listen_addr` for incoming packets
     /// from `peer`.
     ///

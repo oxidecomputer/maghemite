@@ -194,7 +194,7 @@ impl Default for PeerInfo {
 
 impl PeerInfo {
     /// Initialize a peer info object with a random discriminator.
-    fn with_random_discriminator(
+    pub fn with_random_discriminator(
         required_min_rx: Duration,
         detection_multiplier: NonZeroU8,
     ) -> Self {

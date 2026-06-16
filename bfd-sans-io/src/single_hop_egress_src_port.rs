@@ -5,8 +5,8 @@
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
-const BFD_SINGLEHOP_SOURCE_PORT_BEGIN: u16 = 49152;
-const OFFSET_RANGE: u16 = (u16::MAX - BFD_SINGLEHOP_SOURCE_PORT_BEGIN) + 1;
+const OFFSET_RANGE: u16 =
+    (u16::MAX - SingleHopEgressSrcPort::SOURCE_PORT_BEGIN) + 1;
 
 /// Helper for choosing a source port for egress sockets in single-hop BFD.
 ///
@@ -21,6 +21,8 @@ pub(crate) struct SingleHopEgressSrcPort {
 }
 
 impl SingleHopEgressSrcPort {
+    pub(crate) const SOURCE_PORT_BEGIN: u16 = 49152;
+
     pub(crate) fn new() -> Self {
         Self {
             next_offset: AtomicU16::new(0),
@@ -30,7 +32,7 @@ impl SingleHopEgressSrcPort {
     pub(crate) fn next(&self) -> u16 {
         let offset =
             self.next_offset.fetch_add(1, Ordering::Relaxed) % OFFSET_RANGE;
-        BFD_SINGLEHOP_SOURCE_PORT_BEGIN + offset
+        Self::SOURCE_PORT_BEGIN + offset
     }
 }
 
@@ -41,7 +43,7 @@ mod tests {
 
     #[test]
     fn initial_port_choices_are_from_start_of_range() {
-        let expected = (BFD_SINGLEHOP_SOURCE_PORT_BEGIN..)
+        let expected = (SingleHopEgressSrcPort::SOURCE_PORT_BEGIN..)
             .take(10)
             .collect::<Vec<_>>();
 
@@ -59,7 +61,7 @@ mod tests {
         let close_to_end = 65530;
 
         let expected = (close_to_end..=u16::MAX)
-            .chain(BFD_SINGLEHOP_SOURCE_PORT_BEGIN..)
+            .chain(SingleHopEgressSrcPort::SOURCE_PORT_BEGIN..)
             .take(10)
             .collect::<Vec<_>>();
 
@@ -67,7 +69,7 @@ mod tests {
 
         // Artificially bump the internal offset so we skip to the end.
         src_port.next_offset.fetch_add(
-            close_to_end - BFD_SINGLEHOP_SOURCE_PORT_BEGIN,
+            close_to_end - SingleHopEgressSrcPort::SOURCE_PORT_BEGIN,
             Ordering::Relaxed,
         );
 
@@ -89,7 +91,7 @@ mod tests {
 
         let port = src_port.next();
         assert!(
-            port >= BFD_SINGLEHOP_SOURCE_PORT_BEGIN,
+            port >= SingleHopEgressSrcPort::SOURCE_PORT_BEGIN,
             "invalid port: {port}"
         );
     }
