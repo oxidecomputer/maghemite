@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
+/// Result of processing an incoming packet from our peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketReceivedResult {
     DownToInit,
@@ -22,6 +23,11 @@ pub enum PacketReceivedResult {
     UnknownPeerState,
 }
 
+/// Return value of [`StateMachine::check_recv_deadline_expired()`].
+///
+/// If [`CheckRecvDeadlineResult::Expired`] is returned, the state machine
+/// transitioned to the down state (unless it was already down, which is visible
+/// via the inner `was_already_down` value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckRecvDeadlineResult {
     Expired { was_already_down: bool },
@@ -63,6 +69,10 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
+    /// Start the state machine.
+    ///
+    /// `now` must be the current time; it's used to calculate the initial recv
+    /// timeout.
     pub fn start(local_peer_info: PeerInfo, now: Instant) -> Self {
         let recv_deadline = next_recv_deadline(&local_peer_info, now);
         Self {
@@ -75,10 +85,15 @@ impl StateMachine {
         }
     }
 
+    /// Current session state.
     pub fn state(&self) -> BfdPeerState {
         self.state.into()
     }
 
+    /// Get the next deadline; this will be the sooner of the recv deadline
+    /// timeout and when [`Self::packet_to_send()`] could have a packet to send.
+    ///
+    /// If we currently have a pending packet to send, returns `now`.
     pub fn next_deadline(&self, now: Instant) -> Instant {
         if let Some(next_send_at) = self.next_send_at(now) {
             Instant::min(self.recv_deadline, next_send_at)
@@ -121,6 +136,11 @@ impl StateMachine {
         Some(last_unsolicited_send + self.remote.required_min_rx)
     }
 
+    /// Get the next packet to send.
+    ///
+    /// If this method returns `Some(_)`, the state machine discards this packet
+    /// under the assumption that the caller is responsible for sending it (or
+    /// enqueueing it to be sent).
     pub fn packet_to_send(&mut self, now: Instant) -> Option<packet::Control> {
         // Do we need to respond to a poll?
         if let Some(packet) = self.poll_responses.pop_front() {
@@ -138,6 +158,8 @@ impl StateMachine {
         }
     }
 
+    /// Check whether the deadline for receiving packets from our peer has
+    /// passed.
     pub fn check_recv_deadline_expired(
         &mut self,
         now: Instant,
@@ -156,6 +178,7 @@ impl StateMachine {
         }
     }
 
+    /// Handle an incoming packet from our peer.
     pub fn packet_received(
         &mut self,
         packet: packet::Control,
