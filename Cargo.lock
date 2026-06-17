@@ -342,7 +342,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bfd-sans-io"
+name = "bfd-async"
 version = "0.1.0"
 dependencies = [
  "bfd",
