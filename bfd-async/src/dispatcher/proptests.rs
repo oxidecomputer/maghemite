@@ -175,7 +175,7 @@ fn run(ops: Vec<Op>, fail_addrs: HashSet<SocketAddr>) {
     for op in ops {
         match op {
             Op::Ensure { addr, peer } => {
-                let got = dispatcher.ensure(addr, peer, &log);
+                let got = dispatcher.ensure(addr, peer, Arc::default(), &log);
                 match model.ensure(addr, peer, &fail_addrs) {
                     EnsureOutcome::Ok => {
                         rxs.push(got.expect("ensure should have succeeded"));

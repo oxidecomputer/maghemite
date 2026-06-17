@@ -77,6 +77,7 @@ impl Session {
     pub(crate) fn new(
         db: rdb::Db,
         rq: AddPeerRequest,
+        counters: Arc<SessionCounters>,
         egress_src_port: Arc<SingleHopEgressSrcPort>,
         listener_rx: mpsc::Receiver<packet::Control>,
         log: &Logger,
@@ -94,7 +95,6 @@ impl Session {
             detection_threshold,
         );
         let sm = StateMachine::start(local_peer_info, Instant::now());
-        let counters = Arc::new(SessionCounters::default());
         let (state_tx, state_rx) = watch::channel(sm.state());
 
         let log = log.new(slog::o!(

@@ -8,6 +8,7 @@ use crate::ListenerShutdownHandle;
 use crate::Session;
 use crate::dispatcher::Dispatcher;
 use crate::single_hop_egress_src_port::SingleHopEgressSrcPort;
+use bfd::SessionCounters;
 use slog::Logger;
 use slog::warn;
 use std::collections::HashMap;
@@ -59,18 +60,25 @@ impl Daemon {
                 Err(AddPeerError::PeerExists(peer))
             }
             hash_map::Entry::Vacant(entry) => {
+                let counters = Arc::new(SessionCounters::default());
+
                 // If `ensure` fails, we can immediately bail out. If it
                 // succeeds, we've now modified state inside the dispatcher;
                 // it's critical that `Session::new()` is infallible; if that
                 // changes in the future, we need to be very careful to ensure
                 // that we undo the dispatcher state change if we can't
                 // successfully create the associated `Session`.
-                let listener_rx =
-                    self.dispatcher.ensure(rq.listen_addr, peer, &self.log)?;
+                let listener_rx = self.dispatcher.ensure(
+                    rq.listen_addr,
+                    peer,
+                    Arc::clone(&counters),
+                    &self.log,
+                )?;
 
                 let session = Session::new(
                     db,
                     rq,
+                    counters,
                     Arc::clone(&self.egress_src_port),
                     listener_rx,
                     &self.log,

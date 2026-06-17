@@ -8,6 +8,7 @@
 use super::Dispatcher;
 use super::ListenerBackend;
 use super::ListenerTask;
+use bfd::SessionCounters;
 use bfd::packet::Control;
 use slog::Discard;
 use slog::Logger;
@@ -127,7 +128,9 @@ async fn delivers_packet_from_registered_peer() {
     let backend = Arc::new(TestBackend::default());
     let mut dispatcher = Dispatcher::with_backend(backend.as_backend());
 
-    let mut rx = dispatcher.ensure(LISTEN_ADDR, PEER_ADDR, &log).unwrap();
+    let mut rx = dispatcher
+        .ensure(LISTEN_ADDR, PEER_ADDR, Arc::default(), &log)
+        .unwrap();
 
     let pkt = packet(0xABCD);
     client()
@@ -153,7 +156,9 @@ async fn drops_packet_from_unregistered_peer() {
     // sends from, so the listener sees a mismatched source IP.
     let peer: IpAddr = "192.0.2.1".parse().unwrap();
 
-    let mut rx = dispatcher.ensure(LISTEN_ADDR, peer, &log).unwrap();
+    let mut rx = dispatcher
+        .ensure(LISTEN_ADDR, peer, Arc::default(), &log)
+        .unwrap();
 
     client()
         .await
@@ -170,8 +175,11 @@ async fn drops_packet_from_unregistered_peer() {
 async fn drops_malformed_packet_but_task_survives() {
     let log = test_logger();
     let backend = Arc::new(TestBackend::default());
+    let counters = Arc::new(SessionCounters::default());
     let mut dispatcher = Dispatcher::with_backend(backend.as_backend());
-    let mut rx = dispatcher.ensure(LISTEN_ADDR, PEER_ADDR, &log).unwrap();
+    let mut rx = dispatcher
+        .ensure(LISTEN_ADDR, PEER_ADDR, Arc::clone(&counters), &log)
+        .unwrap();
 
     let addr = backend.expect_bound_address();
     let c = client().await;
@@ -186,6 +194,10 @@ async fn drops_malformed_packet_but_task_survives() {
         .expect("timed out")
         .expect("channel closed");
     assert_eq!(got.my_discriminator, 0x1234);
+
+    // We should also have bumped the counter for the malformed packet.
+    let nerror = counters.unexpected_message.load(Ordering::Relaxed);
+    assert_eq!(nerror, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -193,7 +205,10 @@ async fn bounded_channel_drops_excess_packets() {
     let log = test_logger();
     let backend = Arc::new(TestBackend::default());
     let mut dispatcher = Dispatcher::with_backend(backend.as_backend());
-    let mut rx = dispatcher.ensure(LISTEN_ADDR, PEER_ADDR, &log).unwrap();
+    let counters = Arc::new(SessionCounters::default());
+    let mut rx = dispatcher
+        .ensure(LISTEN_ADDR, PEER_ADDR, Arc::clone(&counters), &log)
+        .unwrap();
     let addr = backend.expect_bound_address();
 
     let c = client().await;
@@ -215,6 +230,10 @@ async fn bounded_channel_drops_excess_packets() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
+    // We should have records of dropped packets.
+    let nerror = counters.message_receive_error.load(Ordering::Relaxed);
+    assert!(nerror > 0, "no errors recorded");
+
     // The channel buffers at most its capacity (8); the rest is dropped. (UDP
     // itself may also drop, so we only assert the upper bound and liveness.)
     let mut count = 0;
@@ -234,7 +253,9 @@ async fn shutdown_waits_for_task_to_be_dropped() {
     let log = test_logger();
     let backend = Arc::new(TestBackend::default());
     let mut dispatcher = Dispatcher::with_backend(backend.as_backend());
-    let _rx = dispatcher.ensure(LISTEN_ADDR, PEER_ADDR, &log).unwrap();
+    let _rx = dispatcher
+        .ensure(LISTEN_ADDR, PEER_ADDR, Arc::default(), &log)
+        .unwrap();
 
     let handle = dispatcher
         .remove(PEER_ADDR)
@@ -251,7 +272,9 @@ async fn rx_closed_after_last_peer_removed() {
     let log = test_logger();
     let backend = Arc::new(TestBackend::default());
     let mut dispatcher = Dispatcher::with_backend(backend.as_backend());
-    let mut rx = dispatcher.ensure(LISTEN_ADDR, PEER_ADDR, &log).unwrap();
+    let mut rx = dispatcher
+        .ensure(LISTEN_ADDR, PEER_ADDR, Arc::default(), &log)
+        .unwrap();
 
     let handle = dispatcher.remove(PEER_ADDR).expect("handle");
     handle.shutdown().await;

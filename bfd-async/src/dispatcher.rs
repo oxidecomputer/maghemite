@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::AddPeerError;
+use bfd::SessionCounters;
 use bfd::packet;
 use slog::Logger;
 use slog::warn;
@@ -13,15 +14,21 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::Ordering;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+#[derive(Clone)]
+struct SessionHandle {
+    tx: mpsc::Sender<packet::Control>,
+    counters: Arc<SessionCounters>,
+}
+
 /// The per-listener table mapping a peer IP to the channel on which packets
 /// from that peer should be delivered. Shared between a [`Listener`] and the
 /// task reading from its socket.
-type SharedSessions =
-    Arc<RwLock<HashMap<IpAddr, mpsc::Sender<packet::Control>>>>;
+type SharedSessions = Arc<RwLock<HashMap<IpAddr, SessionHandle>>>;
 
 pub(crate) enum ListenerRemovePeerResult {
     RemovedButOtherPeersRemain,
@@ -83,6 +90,7 @@ impl Dispatcher {
         &mut self,
         listen_addr: SocketAddr,
         peer: IpAddr,
+        counters: Arc<SessionCounters>,
         log: &Logger,
     ) -> Result<mpsc::Receiver<packet::Control>, AddPeerError> {
         if self.peer_to_listen_addr.contains_key(&peer) {
@@ -98,17 +106,18 @@ impl Dispatcher {
         // if we start receiving packets faster than the egress task can process
         // them, we'll drop packets.
         let (tx, rx) = mpsc::channel(8);
+        let session = SessionHandle { tx, counters };
 
         match self.listeners.entry(listen_addr) {
             hash_map::Entry::Occupied(entry) => {
-                entry.get().insert_peer(peer, tx)?;
+                entry.get().insert_peer(peer, session)?;
             }
             hash_map::Entry::Vacant(entry) => {
                 let listener = Listener::new(
                     &*self.backend,
                     listen_addr,
                     peer,
-                    tx,
+                    session,
                     log.clone(),
                 )?;
                 entry.insert(listener);
@@ -198,11 +207,11 @@ impl Listener {
         backend: &dyn ListenerBackend,
         listen_addr: SocketAddr,
         peer: IpAddr,
-        tx: mpsc::Sender<packet::Control>,
+        session: SessionHandle,
         log: Logger,
     ) -> Result<Self, AddPeerError> {
         let sessions: SharedSessions =
-            Arc::new(RwLock::new(HashMap::from_iter([(peer, tx)])));
+            Arc::new(RwLock::new(HashMap::from_iter([(peer, session)])));
 
         let listen_task =
             backend.spawn(listen_addr, Arc::clone(&sessions), log)?;
@@ -238,13 +247,13 @@ impl Listener {
     fn insert_peer(
         &self,
         peer: IpAddr,
-        tx: mpsc::Sender<packet::Control>,
+        session: SessionHandle,
     ) -> Result<(), AddPeerError> {
         let mut sessions = self.sessions.write().unwrap();
         match sessions.entry(peer) {
             hash_map::Entry::Occupied(_) => Err(AddPeerError::PeerExists(peer)),
             hash_map::Entry::Vacant(entry) => {
-                entry.insert(tx);
+                entry.insert(session);
                 Ok(())
             }
         }
@@ -342,7 +351,7 @@ impl ListenerTask {
             };
 
             // Do we expect traffic from this peer address?
-            let Some(tx) =
+            let Some(session) =
                 self.sessions.read().unwrap().get(&peer.ip()).cloned()
             else {
                 warn!(
@@ -357,6 +366,10 @@ impl ListenerTask {
             let pkt = match packet::Control::from_bytes(buf) {
                 Ok(pkt) => pkt,
                 Err(err) => {
+                    session
+                        .counters
+                        .unexpected_message
+                        .fetch_add(1, Ordering::Relaxed);
                     warn!(
                         self.log, "error parsing control packet";
                         "local" => ?self.socket.local_addr(),
@@ -374,9 +387,13 @@ impl ListenerTask {
             // discard packets if we can't keep up so we can continue to receive
             // new incoming packets. Once the channel frees up space we'll be
             // able to send again.
-            match tx.try_send(pkt) {
+            match session.tx.try_send(pkt) {
                 Ok(()) => (),
                 Err(mpsc::error::TrySendError::Full(_)) => {
+                    session
+                        .counters
+                        .message_receive_error
+                        .fetch_add(1, Ordering::Relaxed);
                     warn!(
                         self.log, "udp ingress channel full; dropping packet";
                         "local" => ?self.socket.local_addr(),
@@ -384,6 +401,10 @@ impl ListenerTask {
                     );
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
+                    session
+                        .counters
+                        .message_receive_error
+                        .fetch_add(1, Ordering::Relaxed);
                     warn!(
                         self.log, "udp ingress channel closed";
                         "local" => ?self.socket.local_addr(),
