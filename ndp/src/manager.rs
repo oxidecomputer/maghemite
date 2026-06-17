@@ -430,3 +430,60 @@ pub struct InterfaceAdvertisementInfo {
     /// Thread state for rx/tx loops (None if interface not active)
     pub thread_state: Option<InterfaceThreadState>,
 }
+
+#[cfg(test)]
+mod test {
+    use crate::packet::{Icmp6RouterAdvertisement, Icmp6RouterSolicitation};
+
+    #[test]
+    fn router_solicitation_with_link_layer_addr() {
+        // Attempt to parse a anICMPv6 router solicitation with a link-layer
+        // address as a router advertisement. This should produce an error. It
+        // should not successfully parse, and it should not panic.
+        //
+        //     0                   1                   2                   3
+        //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |     Code      |          Checksum             |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                            Reserved                           |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |    Length     |    Link-Layer Address ...
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        //           .... Link-Layer address                               |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        let data: [u8; 16] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 1, 0xab, 0xbb, // Link layer addr
+            0xcc, 0xdd, 0xee, 0xff,
+        ];
+
+        if Icmp6RouterAdvertisement::from_wire(&data).is_ok() {
+            panic!("expected error")
+        }
+        Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+
+    #[test]
+    fn minimum_router_solicitation() {
+        // Attempt to parse a minimal ICMPv6 router solicitation as a
+        // router advertisement. This should produce an error. It should not
+        // successfully parse, and it should not panic.
+        //
+        //     0                   1                   2                   3
+        //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |     Code      |          Checksum             |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                            Reserved                           |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        let data: [u8; 8] = [133, 0, 11, 22, 0, 0, 0, 0];
+        if Icmp6RouterAdvertisement::from_wire(&data).is_ok() {
+            panic!("expected error")
+        }
+        Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+}
