@@ -36,8 +36,7 @@ fn test_logger() -> Logger {
 /// counters, and join handle.
 fn spawn_egress(
     remote: SocketAddr,
-    mode: SessionMode,
-    egress_src_port: Arc<SingleHopEgressSrcPort>,
+    mode: EgressMode,
 ) -> (
     mpsc::Sender<Vec<u8>>,
     Arc<SessionCounters>,
@@ -50,7 +49,6 @@ fn spawn_egress(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         remote,
         mode,
-        egress_src_port,
         Arc::clone(&counters),
         test_logger(),
     );
@@ -63,11 +61,7 @@ async fn forwards_bytes_to_peer() {
     let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let peer_addr = peer.local_addr().unwrap();
 
-    let (tx, counters, _handle) = spawn_egress(
-        peer_addr,
-        SessionMode::MultiHop,
-        Arc::new(SingleHopEgressSrcPort::new()),
-    );
+    let (tx, counters, _handle) = spawn_egress(peer_addr, EgressMode::MultiHop);
 
     tx.send(b"hello bfd".to_vec()).await.unwrap();
 
@@ -96,13 +90,11 @@ async fn singlehop_mode_binds_ports_in_expected_range() {
     let egress_src_port = Arc::new(SingleHopEgressSrcPort::new());
     let (tx1, counters1, _handle) = spawn_egress(
         peer1_addr,
-        SessionMode::SingleHop,
-        Arc::clone(&egress_src_port),
+        EgressMode::SingleHop(Arc::clone(&egress_src_port)),
     );
     let (tx2, counters2, _handle) = spawn_egress(
         peer2_addr,
-        SessionMode::SingleHop,
-        Arc::clone(&egress_src_port),
+        EgressMode::SingleHop(Arc::clone(&egress_src_port)),
     );
 
     // Helper function to detect the src port bound by an egress task.
@@ -174,11 +166,8 @@ async fn singlehop_mode_binds_ports_in_expected_range() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn exits_when_channel_closed() {
-    let (tx, _counters, handle) = spawn_egress(
-        "127.0.0.1:1".parse().unwrap(),
-        SessionMode::MultiHop,
-        Arc::new(SingleHopEgressSrcPort::new()),
-    );
+    let (tx, _counters, handle) =
+        spawn_egress("127.0.0.1:1".parse().unwrap(), EgressMode::MultiHop);
     drop(tx);
     timeout(Duration::from_secs(5), handle)
         .await

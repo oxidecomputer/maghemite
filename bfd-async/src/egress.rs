@@ -31,7 +31,6 @@
 use crate::single_hop_egress_src_port::SingleHopEgressSrcPort;
 use bfd::DEFAULT_BFD_TTL;
 use bfd::SessionCounters;
-use mg_api_types::bfd::SessionMode;
 use slog::Logger;
 use slog::warn;
 use slog_error_chain::InlineErrorChain;
@@ -74,13 +73,19 @@ enum BindEgressSocketError {
     StdToTokio(#[source] io::Error),
 }
 
+// Multihop sessions can use a source port of 0, but singlehop sessions must use
+// a port in a specified range (supplied by `SingleHopEgressSrcPort`).
+pub(crate) enum EgressMode {
+    SingleHop(Arc<SingleHopEgressSrcPort>),
+    MultiHop,
+}
+
 pub(crate) struct EgressTask {
     egress_rx: mpsc::Receiver<Vec<u8>>,
     socket: Option<UdpSocket>,
     local_ip: IpAddr,
     remote_addr: SocketAddr,
-    mode: SessionMode,
-    egress_src_port: Arc<SingleHopEgressSrcPort>,
+    mode: EgressMode,
     counters: Arc<SessionCounters>,
     log: Logger,
 }
@@ -90,8 +95,7 @@ impl EgressTask {
         egress_rx: mpsc::Receiver<Vec<u8>>,
         local_ip: IpAddr,
         remote_addr: SocketAddr,
-        mode: SessionMode,
-        egress_src_port: Arc<SingleHopEgressSrcPort>,
+        mode: EgressMode,
         counters: Arc<SessionCounters>,
         log: Logger,
     ) -> Self {
@@ -101,7 +105,6 @@ impl EgressTask {
             local_ip,
             remote_addr,
             mode,
-            egress_src_port,
             counters,
             log,
         }
@@ -165,16 +168,16 @@ impl EgressTask {
     }
 
     async fn try_bind_socket(&self) -> Option<UdpSocket> {
-        let result = match self.mode {
-            SessionMode::SingleHop => {
+        let result = match &self.mode {
+            EgressMode::SingleHop(egress_src_port) => {
                 try_bind_singlehop_with_max_src_port_tries(
                     self.local_ip,
-                    &self.egress_src_port,
+                    egress_src_port,
                     MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT,
                 )
                 .await
             }
-            SessionMode::MultiHop => {
+            EgressMode::MultiHop => {
                 bind_egress_socket(SocketAddr::new(self.local_ip, 0)).await
             }
         };

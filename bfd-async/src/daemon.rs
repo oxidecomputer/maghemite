@@ -87,7 +87,7 @@ impl Daemon {
                     db,
                     rq,
                     counters,
-                    Arc::clone(&self.egress_src_port),
+                    &self.egress_src_port,
                     listener_rx,
                     &self.log,
                 );
