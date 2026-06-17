@@ -3974,7 +3974,7 @@ name = "mgd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd",
+ "bfd-async",
  "bgp",
  "chrono",
  "clap",
@@ -3999,6 +3999,7 @@ dependencies = [
  "rand 0.10.1",
  "rdb",
  "slog",
+ "slog-error-chain",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "socket2",
  "tempfile",
