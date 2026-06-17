@@ -27,8 +27,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api_types::bgp::config::{
-    ApplyRequest, AsnSelector, BgpPeerParameters, CheckerSource,
-    Ipv4UnicastConfig, JitterRange, Md5AuthString, Neighbor, NeighborResetOp,
+    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetOp,
     NeighborResetRequest, NeighborSelector, Origin4, PeerInfo, ShaperSource,
     UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
@@ -50,7 +49,7 @@ use mg_api_types::ndp::{
 };
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5, v8, v11};
+use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
@@ -192,74 +191,6 @@ pub async fn delete_router(
 }
 
 // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-pub async fn read_neighbors_v1(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::config::AsnSelector>,
-) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-
-    let nbrs = ctx
-        .db
-        .get_bgp_neighbors()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-
-    let result = nbrs
-        .into_iter()
-        .filter(|x| x.asn == rq.asn)
-        .map(|x| {
-            let latest = Neighbor::from_rdb_neighbor_info(rq.asn, &x);
-            let v11: v11::bgp::config::Neighbor = latest.into();
-            v8::bgp::config::Neighbor::from(v11).into()
-        })
-        .collect();
-
-    Ok(HttpResponseOk(result))
-}
-
-pub async fn create_neighbor_v1(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v1::bgp::config::Neighbor>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    helpers::add_neighbor_v1(ctx.clone(), rq, false)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn read_neighbor_v1(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v1::bgp::config::NeighborSelector>,
-) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
-    let rq = request.into_inner();
-    let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
-        HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
-    })?;
-    let neighbor_info = db_neighbors
-        .iter()
-        .find(|n| n.host.ip() == rq.addr)
-        .ok_or(HttpError::for_not_found(
-            None,
-            format!("neighbor {} not found in db", rq.addr),
-        ))?;
-
-    let latest = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
-    let v11: v11::bgp::config::Neighbor = latest.into();
-    let result: v1::bgp::config::Neighbor =
-        v8::bgp::config::Neighbor::from(v11).into();
-    Ok(HttpResponseOk(result))
-}
-
-pub async fn update_neighbor_v1(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<v1::bgp::config::Neighbor>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    helpers::add_neighbor_v1(ctx.clone(), rq, true)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
 
 // Supports per-AF operations
 pub async fn clear_neighbor(
@@ -1934,142 +1865,6 @@ pub(crate) mod helpers {
         Ok(HttpResponseDeleted())
     }
 
-    pub(crate) fn add_neighbor_v1(
-        ctx: Arc<HandlerContext>,
-        rq: v1::bgp::config::Neighbor,
-        ensure: bool,
-    ) -> Result<(), Error> {
-        let log = &ctx.log;
-        bgp_log!(log, info, "add neighbor {}", rq.host.ip();
-            "params" => format!("{rq:#?}")
-        );
-
-        let (event_tx, event_rx) = channel();
-
-        let md5_auth_key = rq
-            .parameters
-            .md5_auth_key
-            .clone()
-            .map(Md5AuthString::new)
-            .transpose()
-            .map_err(|e| {
-                Error::InvalidRequest(format!(
-                    "invalid MD5 authentication key: {e}"
-                ))
-            })?;
-
-        // V1 API is IPv4-only; extract only IPv4 policies
-        let allow_import4 = v4::bgp::policy::ImportExportPolicy4::from(
-            rq.parameters.allow_import.clone(),
-        );
-        let allow_export4 = v4::bgp::policy::ImportExportPolicy4::from(
-            rq.parameters.allow_export.clone(),
-        );
-
-        let latest_parameters = BgpPeerParameters {
-            hold_time: rq.parameters.hold_time,
-            idle_hold_time: rq.parameters.idle_hold_time,
-            delay_open: rq.parameters.delay_open,
-            connect_retry: rq.parameters.connect_retry,
-            keepalive: rq.parameters.keepalive,
-            resolution: rq.parameters.resolution,
-            passive: rq.parameters.passive,
-            remote_asn: rq.parameters.remote_asn,
-            min_ttl: rq.parameters.min_ttl,
-            md5_auth_key: md5_auth_key.clone(),
-            multi_exit_discriminator: rq.parameters.multi_exit_discriminator,
-            communities: rq.parameters.communities.clone(),
-            local_pref: rq.parameters.local_pref,
-            enforce_first_as: rq.parameters.enforce_first_as,
-            vlan_id: rq.parameters.vlan_id,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: ImportExportPolicy4::from(allow_import4.clone()),
-                export_policy: ImportExportPolicy4::from(allow_export4.clone()),
-            }),
-            ipv6_unicast: None,
-            deterministic_collision_resolution: false,
-            idle_hold_jitter: None,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            src_addr: None,
-            src_port: None,
-        };
-        let info = SessionInfo::from(&latest_parameters);
-
-        let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_session(
-                rq.clone().into(),
-                None,
-                event_tx.clone(),
-                event_rx,
-                info,
-            )? {
-                EnsureSessionResult::New(_) => true,
-                EnsureSessionResult::Updated(_) => false,
-            }
-        } else {
-            get_router!(&ctx, rq.asn)?.new_session(
-                rq.clone().into(),
-                None,
-                event_tx.clone(),
-                event_rx,
-                info,
-            )?;
-            true
-        };
-
-        ctx.db.add_bgp_neighbor(
-            mg_api_types::rdb::neighbor::BgpNeighborInfo {
-                asn: rq.asn,
-                name: rq.name.clone(),
-                group: rq.group.clone(),
-                host: rq.host,
-                parameters: BgpNeighborParameters {
-                    hold_time: rq.parameters.hold_time,
-                    idle_hold_time: rq.parameters.idle_hold_time,
-                    delay_open: rq.parameters.delay_open,
-                    passive: rq.parameters.passive,
-                    connect_retry: rq.parameters.connect_retry,
-                    keepalive: rq.parameters.keepalive,
-                    resolution: rq.parameters.resolution,
-                    remote_asn: rq.parameters.remote_asn,
-                    min_ttl: rq.parameters.min_ttl,
-                    md5_auth_key,
-                    multi_exit_discriminator: rq
-                        .parameters
-                        .multi_exit_discriminator,
-                    communities: rq.parameters.communities,
-                    local_pref: rq.parameters.local_pref,
-                    enforce_first_as: rq.parameters.enforce_first_as,
-                    allow_import4,
-                    allow_export4,
-                    vlan_id: rq.parameters.vlan_id,
-
-                    // V1 API is IPv4-only and doesn't support nexthop override
-                    ipv4_enabled: true,
-                    ipv6_enabled: false,
-                    allow_import6:
-                        v4::bgp::policy::ImportExportPolicy6::NoFiltering,
-                    allow_export6:
-                        v4::bgp::policy::ImportExportPolicy6::NoFiltering,
-                    nexthop4: None,
-                    nexthop6: None,
-                    src_addr: None,
-                    src_port: None,
-                },
-            },
-        )?;
-
-        if start_session {
-            start_bgp_session(&event_tx)?;
-        }
-
-        Ok(())
-    }
-
     pub(crate) fn add_neighbor(
         ctx: Arc<HandlerContext>,
         rq: Neighbor,
@@ -2689,10 +2484,10 @@ mod tests {
     };
     use bgp::router::SessionMap;
     use client_common::println_nopipe;
-    use mg_api_types_versions::v1::bgp::config::{
+    use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
     };
-    use mg_api_types_versions::{v1, v8};
+    use mg_api_types_versions::v11::bgp::config::Ipv4UnicastConfig;
     use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
@@ -2740,56 +2535,24 @@ mod tests {
         peers.insert(
             String::from("qsfp0"),
             vec![BgpPeerConfig {
-                host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179),
+                host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179)
+                    .into(),
                 name: String::from("bob"),
                 parameters: BgpPeerParameters {
-                    hold_time: 3,
-                    idle_hold_time: 1,
-                    delay_open: 1,
-                    connect_retry: 1,
-                    keepalive: 1,
-                    resolution: 1,
-                    passive: false,
-                    remote_asn: None,
-                    min_ttl: None,
-                    md5_auth_key: None,
-                    multi_exit_discriminator: None,
-                    communities: Vec::default(),
-                    local_pref: None,
-                    enforce_first_as: false,
-                    allow_import:
-                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
-                    allow_export:
-                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
-                    vlan_id: None,
+                    ipv4_unicast: Some(Ipv4UnicastConfig::default()),
+                    ..Default::default()
                 },
             }],
         );
         peers.insert(
             String::from("qsfp1"),
             vec![BgpPeerConfig {
-                host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179),
+                host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179)
+                    .into(),
                 name: String::from("alice"),
                 parameters: BgpPeerParameters {
-                    hold_time: 3,
-                    idle_hold_time: 1,
-                    delay_open: 1,
-                    connect_retry: 1,
-                    keepalive: 1,
-                    resolution: 1,
-                    passive: false,
-                    remote_asn: None,
-                    min_ttl: None,
-                    md5_auth_key: None,
-                    multi_exit_discriminator: None,
-                    communities: Vec::default(),
-                    local_pref: None,
-                    enforce_first_as: false,
-                    allow_import:
-                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
-                    allow_export:
-                        v1::bgp::policy::ImportExportPolicy::NoFiltering,
-                    vlan_id: None,
+                    ipv4_unicast: Some(Ipv4UnicastConfig::default()),
+                    ..Default::default()
                 },
             }],
         );
@@ -2800,17 +2563,12 @@ mod tests {
             checker: None,
             shaper: None,
             peers,
+            unnumbered_peers: HashMap::default(),
         };
 
-        do_bgp_apply(
-            &ctx,
-            mg_api_types::bgp::config::ApplyRequest::try_from(
-                v8::bgp::config::ApplyRequest::from(req.clone()),
-            )
-            .expect("valid v8 apply request"),
-        )
-        .await
-        .expect("bgp apply request");
+        do_bgp_apply(&ctx, req.clone())
+            .await
+            .expect("bgp apply request");
 
         assert_eq!(
             ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
@@ -2819,15 +2577,9 @@ mod tests {
 
         req.peers.remove("qsfp0");
 
-        do_bgp_apply(
-            &ctx,
-            mg_api_types::bgp::config::ApplyRequest::try_from(
-                v8::bgp::config::ApplyRequest::from(req.clone()),
-            )
-            .expect("valid v8 apply request"),
-        )
-        .await
-        .expect("bgp apply request");
+        do_bgp_apply(&ctx, req.clone())
+            .await
+            .expect("bgp apply request");
 
         assert_eq!(
             ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),

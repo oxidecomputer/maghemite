@@ -23,6 +23,37 @@ use std::net::IpAddr;
 // Bindings prefixed with `_:` are intentionally dropped — that decision
 // is documented at the destructure site.
 
+impl Default for latest::bgp::config::BgpPeerParameters {
+    /// Default timers with no address family enabled: callers must set
+    /// `ipv4_unicast`/`ipv6_unicast` to pass `validate_address_families`.
+    fn default() -> Self {
+        Self {
+            hold_time: 6,
+            idle_hold_time: 0,
+            delay_open: 0,
+            connect_retry: 5,
+            keepalive: 2,
+            resolution: 100,
+            passive: false,
+            remote_asn: None,
+            min_ttl: None,
+            md5_auth_key: None,
+            multi_exit_discriminator: None,
+            communities: Vec::new(),
+            local_pref: None,
+            enforce_first_as: false,
+            vlan_id: None,
+            ipv4_unicast: None,
+            ipv6_unicast: None,
+            deterministic_collision_resolution: false,
+            idle_hold_jitter: None,
+            connect_retry_jitter: None,
+            src_addr: None,
+            src_port: None,
+        }
+    }
+}
+
 impl std::fmt::Display for latest::bgp::config::NeighborResetRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

@@ -421,18 +421,9 @@ pub trait MgAdminApi {
     }
 
     // V1/V2 API - legacy Neighbor type with combined import/export policies.
-    //
-    // These four endpoints (create/read/read-all/update) are required methods
-    // rather than provided defaults because there is no `From<v1::Neighbor>
-    // for v4::Neighbor` (or vice-versa) that the trait can call: the v1
-    // `Neighbor` carries a single `allow_import`/`allow_export` policy pair
-    // (IPv4 implicit), whereas v4+ carries per-AF policies plus enable
-    // flags. Constructing a v4 shape from v1 input requires the rdb-backed
-    // defaults that only `Self::Context` can supply (see
-    // `bgp_admin::helpers::add_neighbor_v1`); constructing v1 from v4
-    // requires merging per-AF policies, which loses information when both
-    // AFs are enabled. `delete_neighbor_v1` and `clear_neighbor_v1` can be
-    // provided because their inputs project cleanly into v5/v4 shapes.
+    // v1 is IPv4-implicit, so both directions are total and these endpoints
+    // hop a single version to the v4 handlers via the `v1 <-> v4` `Neighbor`
+    // conversions.
 
     #[endpoint {
         method = PUT,
@@ -443,7 +434,9 @@ pub trait MgAdminApi {
     async fn create_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::create_neighbor_v4(rqctx, request.map(Into::into)).await
+    }
 
     #[endpoint {
         method = GET,
@@ -454,7 +447,11 @@ pub trait MgAdminApi {
     async fn read_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
-    ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
+        Self::read_neighbor_v4(rqctx, request)
+            .await
+            .map(|r| r.map(Into::into))
+    }
 
     #[endpoint {
         method = GET,
@@ -465,7 +462,11 @@ pub trait MgAdminApi {
     async fn read_neighbors_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError> {
+        Self::read_neighbors_v4(rqctx, request)
+            .await
+            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+    }
 
     #[endpoint {
         method = POST,
@@ -476,7 +477,9 @@ pub trait MgAdminApi {
     async fn update_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::update_neighbor_v4(rqctx, request.map(Into::into)).await
+    }
 
     #[endpoint {
         method = DELETE,
@@ -1285,7 +1288,7 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::bgp_apply_v8(rqctx, request.map(Into::into)).await
+        Self::bgp_apply_v4(rqctx, request.map(Into::into)).await
     }
 
     #[endpoint {
