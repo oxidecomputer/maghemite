@@ -26,9 +26,17 @@ pub struct Daemon {
 
 impl Daemon {
     pub fn new(log: Logger) -> Self {
+        Self::with_dispatcher(Dispatcher::new(), log)
+    }
+
+    // Non-public method to allow construction with a custom dispatcher.
+    //
+    // This is used by tests when they want to use a `Dispatcher` with a custom
+    // backend (e.g., so we can use nonstandard listening ports in tests).
+    pub(crate) fn with_dispatcher(dispatcher: Dispatcher, log: Logger) -> Self {
         Self {
             sessions: HashMap::new(),
-            dispatcher: Dispatcher::new(),
+            dispatcher,
             egress_src_port: Arc::new(SingleHopEgressSrcPort::new()),
             log,
         }

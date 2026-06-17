@@ -229,8 +229,8 @@ impl DriverTask {
         tokio::select! {
             // Prefer servicing an already-queued incoming packet over acting on
             // the deadline: if the deadline is a recv timeout, an available
-            // packet should reset it; if it's a transmit deadline, we'll still
-            // send on the next iteration.
+            // packet should reset it; if it's a transmit deadline, our caller
+            // is going to flush any outgoing packets anyway.
             biased;
 
             maybe_pkt = self.listener_rx.recv() => match maybe_pkt {
