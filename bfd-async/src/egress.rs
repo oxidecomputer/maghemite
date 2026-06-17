@@ -162,6 +162,11 @@ impl EgressTask {
                     InlineErrorChain::new(&err),
                 );
                 // Drop the socket so the next packet triggers a fresh bind.
+                //
+                // TODO-correctness Should we _always_ drop and rebind on a send
+                // failure, or should we be matching on particular kinds of
+                // errors? Always rebinding is consistent with the prior (sync)
+                // implementation.
                 self.socket = None;
             }
         }
