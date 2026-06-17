@@ -2,8 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#![allow(dead_code)] // TODO remove once this module is used
-
 use bfd::PeerInfo;
 use bfd::packet;
 use mg_api_types::bfd::BfdPeerState;
@@ -282,8 +280,19 @@ fn next_recv_deadline(local: &PeerInfo, last_recv: Instant) -> Instant {
     //
     // I don't think we support demand mode? But that means this calculation is
     // wrong for async (wrong multiplier, isn't considering remote min tx)?
+    let recv_timeout = local
+        .required_min_rx
+        .saturating_mul(u32::from(local.detection_multiplier.get()));
+
+    // TODO-correctness What should we do on "overflows an Instant"? That should
+    // be _very_ impossible given any reasonable values for `last_recv` (which
+    // are always from `Instant::now()` and `recv_timeout`, but someone passing
+    // a truly absurdly large `required_min_rx` could maybe cause problems? For
+    // now, we'll fall back to a hardcoded, large recv deadline if this addition
+    // overflows, but the actual value we pick is a total WAG.
     last_recv
-        + local.required_min_rx * u32::from(local.detection_multiplier.get())
+        .checked_add(recv_timeout)
+        .unwrap_or_else(|| last_recv + Duration::from_secs(60))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
