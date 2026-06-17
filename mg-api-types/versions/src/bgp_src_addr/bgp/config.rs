@@ -510,4 +510,3 @@ impl From<v5::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
         }
     }
 }
-
