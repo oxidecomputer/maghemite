@@ -34,6 +34,8 @@ use bfd::packet;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
 use slog::Logger;
+use slog::info;
+use slog::trace;
 use slog::warn;
 use std::net::SocketAddr;
 use std::num::NonZeroU8;
@@ -207,6 +209,10 @@ impl DriverTask {
             }
 
             if self.sm.state() != state_before {
+                info!(
+                    self.log, "transition -> {:?}", self.sm.state();
+                    "prev" => ?state_before,
+                );
                 self.on_transition();
             }
             self.flush_outgoing_packets();
@@ -294,6 +300,10 @@ impl DriverTask {
     }
 
     fn count_incoming(&self, pkt: &packet::Control) {
+        trace!(
+            self.log, "recv msg: {pkt:?}";
+            "state" => ?self.sm.state(),
+        );
         self.counters
             .control_packets_received
             .fetch_add(1, Ordering::Relaxed);
