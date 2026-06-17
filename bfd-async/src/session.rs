@@ -24,8 +24,8 @@
 
 use crate::AddPeerRequest;
 use crate::egress::EgressTask;
-use crate::rib::RibTask;
 use crate::egress_src_port_iter::EgressSrcPortIter;
+use crate::rib::RibTask;
 use crate::sm::CheckRecvDeadlineResult;
 use crate::sm::StateMachine;
 use bfd::PeerInfo;

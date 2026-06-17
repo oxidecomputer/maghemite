@@ -5,8 +5,7 @@
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
-const OFFSET_RANGE: u16 =
-    (u16::MAX - EgressSrcPortIter::SOURCE_PORT_BEGIN) + 1;
+const OFFSET_RANGE: u16 = (u16::MAX - EgressSrcPortIter::SOURCE_PORT_BEGIN) + 1;
 
 /// Helper for choosing a source port for egress sockets in BFD.
 ///
