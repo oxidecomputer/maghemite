@@ -460,9 +460,8 @@ mod test {
             0xcc, 0xdd, 0xee, 0xff,
         ];
 
-        if Icmp6RouterAdvertisement::from_wire(&data).is_ok() {
-            panic!("expected error")
-        }
+        Icmp6RouterAdvertisement::from_wire(&data)
+            .expect_err("RS should not parse as RA");
         Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
     }
 
@@ -481,9 +480,38 @@ mod test {
         // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
         let data: [u8; 8] = [133, 0, 11, 22, 0, 0, 0, 0];
-        if Icmp6RouterAdvertisement::from_wire(&data).is_ok() {
-            panic!("expected error")
-        }
+        Icmp6RouterAdvertisement::from_wire(&data)
+            .expect_err("RS should not parse as RA");
         Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+
+    #[test]
+    fn minimum_router_advertisement() {
+        // Attempt to parse a minimal ICMPv6 router advertisement as a
+        // router solicitation. This should produce an error. It should not
+        // successfully parse, and it should not panic.
+        //
+        //     0                   1                   2                   3
+        //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |     Code      |          Checksum             |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // | Cur Hop Limit |M|O|  Reserved |       Router Lifetime         |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                         Reachable Time                        |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                          Retrans Timer                        |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        let data: [u8; 16] = [
+            134, 0, 11, 22, // type, code, checksum
+            255, 0, 0, 30, // hop limit, flags, lifetime
+            0, 0, 0, 0, // reachable time
+            0, 0, 0, 0, // retrans timer
+        ];
+        Icmp6RouterSolicitation::from_wire(&data)
+            .expect_err("RA should not parse as RS");
+        Icmp6RouterAdvertisement::from_wire(&data)
+            .expect("parsed advertisement");
     }
 }
