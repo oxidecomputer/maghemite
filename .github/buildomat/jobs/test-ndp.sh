@@ -15,7 +15,4 @@ set -e
 
 source .github/buildomat/test-common.sh
 
-pushd rdb
 cargo nextest run -p ndp
-cp ./*.log /work/
-popd

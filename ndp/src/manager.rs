@@ -437,7 +437,7 @@ mod test {
 
     #[test]
     fn router_solicitation_with_link_layer_addr() {
-        // Attempt to parse a anICMPv6 router solicitation with a link-layer
+        // Attempt to parse an ICMPv6 router solicitation with a link-layer
         // address as a router advertisement. This should produce an error. It
         // should not successfully parse, and it should not panic.
         //
