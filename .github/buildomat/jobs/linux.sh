@@ -2,7 +2,7 @@
 #:
 #: name = "linux"
 #: variety = "basic"
-#: target = "ubuntu-24.04"
+#: target = "ubuntu-22.04"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/debug/*",

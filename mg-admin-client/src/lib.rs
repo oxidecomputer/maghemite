@@ -16,11 +16,12 @@ progenitor::generate_api!(
         slog::trace!(log, "client response"; "result" => ?result);
     }),
     derives = [schemars::JsonSchema],
+    crates = {
+        "oxnet" = "0.1.6",
+        "std" = "1.0.0",
+    },
     replace = {
         // Routing-database shapes.
-        Prefix4 = mg_api_types_versions::latest::rdb::prefix::Prefix4,
-        Prefix6 = mg_api_types_versions::latest::rdb::prefix::Prefix6,
-        Prefix = mg_api_types_versions::latest::rdb::prefix::Prefix,
         AddressFamily = mg_api_types_versions::latest::rdb::rib::AddressFamily,
         ProtocolFilter = mg_api_types_versions::latest::rdb::rib::ProtocolFilter,
 
@@ -68,13 +69,13 @@ progenitor::generate_api!(
         StaticRoute6List = mg_api_types_versions::latest::static_routes::StaticRoute6List,
 
         Duration = std::time::Duration,
-    }
+   }
 );
 
 use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;
-use mg_api_types_versions::latest::rdb::prefix::Prefix;
 use mg_api_types_versions::latest::rdb::rib::{AddressFamily, ProtocolFilter};
+use oxnet::IpNet;
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
@@ -85,7 +86,7 @@ pub fn print_rib(
     address_family: Option<AddressFamily>,
     protocol_filter: Option<ProtocolFilter>,
 ) {
-    type CliRib = BTreeMap<Prefix, Vec<Path>>;
+    type CliRib = BTreeMap<IpNet, Vec<Path>>;
 
     // Always split into 4 collections
     let mut v4_static = CliRib::new();
@@ -95,7 +96,7 @@ pub fn print_rib(
 
     // Parse and categorize all routes
     for (prefix, paths) in rib.0.into_iter() {
-        let pfx: Prefix = match prefix.parse() {
+        let pfx: IpNet = match prefix.parse() {
             Ok(p) => p,
             Err(e) => {
                 eprintln_nopipe!("failed to parse prefix [{prefix}]: {e}");
@@ -107,7 +108,7 @@ pub fn print_rib(
             paths.into_iter().partition(|p| p.bgp.is_some());
 
         match pfx {
-            Prefix::V4(_) => {
+            IpNet::V4(_) => {
                 if !static_paths.is_empty() {
                     v4_static.insert(pfx, static_paths);
                 }
@@ -115,7 +116,7 @@ pub fn print_rib(
                     v4_bgp.insert(pfx, bgp_paths);
                 }
             }
-            Prefix::V6(_) => {
+            IpNet::V6(_) => {
                 if !static_paths.is_empty() {
                     v6_static.insert(pfx, static_paths);
                 }
@@ -149,7 +150,7 @@ pub fn print_rib(
     }
 }
 
-fn print_static_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
+fn print_static_routes(routes: &BTreeMap<IpNet, Vec<Path>>, title: &str) {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
@@ -182,7 +183,7 @@ fn print_static_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
     tw.flush().unwrap();
 }
 
-fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
+fn print_bgp_routes(routes: &BTreeMap<IpNet, Vec<Path>>, title: &str) {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,

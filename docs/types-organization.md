@@ -323,9 +323,8 @@ Prior-version endpoints come in two flavors:
 progenitor::generate_api!(
     spec = "../openapi/mg-admin/mg-admin-latest.json",
     replace = {
-        Prefix4 = mg_api_types_versions::latest::rdb::prefix::Prefix4,
-        Neighbor = mg_api_types_versions::latest::bgp::config::Neighbor,
-        // ...
+        AddressFamily = mg_api_types_versions::latest::rdb::rib::AddressFamily,
+        ProtocolFilter = mg_api_types_versions::latest::rdb::rib::ProtocolFilter,
     },
 );
 ```
@@ -346,8 +345,8 @@ place the type is defined.
 
 For the *facade* path business logic uses, strip
 `mg_api_types_versions::latest::` from the front:
-`mg_api_types_versions::latest::rdb::prefix::Prefix` is reached as
-`mg_api_types::rdb::prefix::Prefix`.
+`mg_api_types_versions::latest::rdb::rib::AddressFamily` is reached as
+`mg_api_types::rdb::rib::AddressFamily`.
 
 ## Walkthrough: adding a new published type to the latest version
 

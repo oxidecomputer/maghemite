@@ -24,10 +24,10 @@ use mg_api_types::bgp::config::{
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use mg_api_types::common::headers::Dscp;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4};
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
+use oxnet::IpNet;
 use rdb::Asn;
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use std::num::NonZeroU8;
@@ -720,7 +720,7 @@ fn basic_update_helper<
                 .create_origin4(vec![cidr!("1.2.3.0/24")])
                 .expect("originate IPv4");
 
-            let prefix_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
+            let prefix_rdb = IpNet::V4(cidr!("1.2.3.0/24"));
             wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
 
             // Verify initial nexthop if one was configured and test override change
@@ -783,7 +783,7 @@ fn basic_update_helper<
                 .create_origin6(vec![cidr!("3fff:db8::/32")])
                 .expect("originate IPv6");
 
-            let prefix_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
+            let prefix_rdb = IpNet::V6(cidr!("3fff:db8::/32"));
             wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
 
             // Verify initial nexthop if one was configured and test override change
@@ -850,8 +850,8 @@ fn basic_update_helper<
                 .create_origin6(vec![cidr!("3fff:db8::/32")])
                 .expect("originate IPv6");
 
-            let prefix4_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
-            let prefix6_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
+            let prefix4_rdb = IpNet::V4(cidr!("1.2.3.0/24"));
+            let prefix6_rdb = IpNet::V6(cidr!("3fff:db8::/32"));
 
             wait_for!(!r2.router.db.get_prefix_paths(&prefix4_rdb).is_empty());
             wait_for!(!r2.router.db.get_prefix_paths(&prefix6_rdb).is_empty());
@@ -1550,13 +1550,13 @@ fn test_import_export_policy_filtering() {
     let prefix_c = ip!("10.3.0.0/24"); // Will pass export but filtered by import
 
     // Build export policy for r1: allow prefix_a and prefix_c, deny prefix_b
-    let export_allow: BTreeSet<Prefix4> =
+    let export_allow: BTreeSet<oxnet::Ipv4Net> =
         [cidr!("10.1.0.0/24"), cidr!("10.3.0.0/24")]
             .into_iter()
             .collect();
 
     // Build import policy for r2: allow prefix_a and prefix_b, deny prefix_c
-    let import_allow: BTreeSet<Prefix4> =
+    let import_allow: BTreeSet<oxnet::Ipv4Net> =
         [cidr!("10.1.0.0/24"), cidr!("10.2.0.0/24")]
             .into_iter()
             .collect();
@@ -1657,9 +1657,9 @@ fn test_import_export_policy_filtering() {
 
     // Wait for routes to propagate - r2 should only see prefix_a
     // (prefix_b filtered by export, prefix_c filtered by import)
-    let prefix_a_rdb = Prefix::V4(cidr!("10.1.0.0/24"));
-    let prefix_b_rdb = Prefix::V4(cidr!("10.2.0.0/24"));
-    let prefix_c_rdb = Prefix::V4(cidr!("10.3.0.0/24"));
+    let prefix_a_rdb = IpNet::V4(cidr!("10.1.0.0/24"));
+    let prefix_b_rdb = IpNet::V4(cidr!("10.2.0.0/24"));
+    let prefix_c_rdb = IpNet::V4(cidr!("10.3.0.0/24"));
 
     wait_for!(
         !r2.router.db.get_prefix_paths(&prefix_a_rdb).is_empty(),
@@ -2564,7 +2564,7 @@ fn test_same_linklocal_multiple_interfaces() {
         .create_origin4(vec![cidr!("10.2.0.0/24")])
         .expect("originate route on R2");
 
-    let prefix = Prefix::V4(cidr!("10.2.0.0/24"));
+    let prefix = IpNet::V4(cidr!("10.2.0.0/24"));
     wait_for!(
         router1.db.get_prefix_paths(&prefix).len() == 2,
         "R1 should have 2 paths for 10.2.0.0/24 (one per interface)"
@@ -3740,8 +3740,8 @@ fn test_three_router_chain_unnumbered() {
         .expect("originate IPv4 route on R3");
 
     // Step 8b: Verify R2 receives both routes
-    let r1_prefix = Prefix::V4(cidr!("10.1.0.0/24"));
-    let r3_prefix = Prefix::V4(cidr!("10.3.0.0/24"));
+    let r1_prefix = IpNet::V4(cidr!("10.1.0.0/24"));
+    let r3_prefix = IpNet::V4(cidr!("10.3.0.0/24"));
 
     wait_for!(
         !r2.router.db.get_prefix_paths(&r1_prefix).is_empty(),
@@ -3856,7 +3856,7 @@ fn test_unnumbered_dualstack_route_exchange() {
         .expect("originate IPv4 route on R1");
 
     // Step 2: Verify R2 receives IPv4 route with link-local nexthop
-    let ipv4_prefix = Prefix::V4(cidr!("10.1.0.0/24"));
+    let ipv4_prefix = IpNet::V4(cidr!("10.1.0.0/24"));
     wait_for!(
         !r2.router.db.get_prefix_paths(&ipv4_prefix).is_empty(),
         "R2 should receive IPv4 route from R1"
@@ -3875,7 +3875,7 @@ fn test_unnumbered_dualstack_route_exchange() {
         .expect("originate IPv6 route on R1");
 
     // Step 4: Verify R2 receives IPv6 route with link-local nexthop
-    let ipv6_prefix = Prefix::V6(cidr!("2001:db8:1::/48"));
+    let ipv6_prefix = IpNet::V6(cidr!("2001:db8:1::/48"));
     wait_for!(
         !r2.router.db.get_prefix_paths(&ipv6_prefix).is_empty(),
         "R2 should receive IPv6 route from R1"
@@ -3897,7 +3897,7 @@ fn test_unnumbered_dualstack_route_exchange() {
         .expect("originate IPv6 route on R2");
 
     // Step 6: Verify R1 receives both routes with R2's link-local nexthop
-    let r2_ipv4_prefix = Prefix::V4(cidr!("10.2.0.0/24"));
+    let r2_ipv4_prefix = IpNet::V4(cidr!("10.2.0.0/24"));
     wait_for!(
         !r1.router.db.get_prefix_paths(&r2_ipv4_prefix).is_empty(),
         "R1 should receive IPv4 route from R2"
@@ -3914,7 +3914,7 @@ fn test_unnumbered_dualstack_route_exchange() {
         "R2's IPv4 route nexthop should be R2's link-local address"
     );
 
-    let r2_ipv6_prefix = Prefix::V6(cidr!("2001:db8:2::/48"));
+    let r2_ipv6_prefix = IpNet::V6(cidr!("2001:db8:2::/48"));
     wait_for!(
         !r1.router.db.get_prefix_paths(&r2_ipv6_prefix).is_empty(),
         "R1 should receive IPv6 route from R2"

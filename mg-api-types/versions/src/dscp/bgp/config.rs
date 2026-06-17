@@ -3,21 +3,21 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::net::SocketAddr;
 use std::num::NonZeroU8;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use oxnet::IpNet;
+use oxnet::SocketAddrJson;
+
 use crate::v1;
-use crate::v1::rdb::prefix::Prefix;
-use crate::v4::bgp::config::Ipv4UnicastConfig;
-use crate::v4::bgp::config::Ipv6UnicastConfig;
 use crate::v4::bgp::config::JitterRange;
-use crate::v8;
-use crate::v11::common::headers::Dscp;
+use crate::v11;
+use crate::v11::bgp::config::Ipv4UnicastConfig;
+use crate::v11::bgp::config::Ipv6UnicastConfig;
+use crate::v12::common::headers::Dscp;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerParameters {
@@ -55,7 +55,7 @@ pub struct BgpPeerParameters {
     pub connect_retry_jitter: Option<JitterRange>,
     /// Source IP address to bind when establishing outbound TCP connections.
     /// None means the system selects the source address.
-    pub src_addr: Option<IpAddr>,
+    pub src_addr: Option<std::net::IpAddr>,
     /// Source TCP port to bind when establishing outbound TCP connections.
     /// None means the system selects the source port.
     pub src_port: Option<u16>,
@@ -66,7 +66,7 @@ pub struct BgpPeerParameters {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerConfig {
-    pub host: SocketAddr,
+    pub host: SocketAddrJson,
     pub name: String,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
@@ -87,7 +87,7 @@ pub struct Neighbor {
     pub asn: u32,
     pub name: String,
     pub group: String,
-    pub host: SocketAddr,
+    pub host: SocketAddrJson,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
@@ -109,7 +109,7 @@ pub struct ApplyRequest {
     /// ASN to apply changes to.
     pub asn: u32,
     /// Complete set of prefixes to originate.
-    pub originate: Vec<Prefix>,
+    pub originate: Vec<IpNet>,
     /// Checker rhai code to apply to ingress open and update messages.
     pub checker: Option<v1::bgp::config::CheckerSource>,
     /// Checker rhai code to apply to egress open and update messages.
@@ -121,14 +121,15 @@ pub struct ApplyRequest {
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
-// ----- v8 (bgp_src_addr, frozen) <-> v11 BgpPeerParameters -----
+// ----- v11 (prefix_to_oxnet) <-> v12 (dscp) conversions -----
+//
+// v12 differs from v11 only by adding the `dscp` field and narrowing
+// `min_ttl` to `NonZeroU8`. All other fields share their v11 types, so
+// conversions are field-wise copies aside from those two.
 
-impl From<v8::bgp::config::BgpPeerParameters> for BgpPeerParameters {
-    fn from(p: v8::bgp::config::BgpPeerParameters) -> Self {
-        // v8 is frozen; if this destructure stops compiling the v8
-        // contract has been violated upstream — fix that, don't teach
-        // this conversion to handle a new field.
-        let v8::bgp::config::BgpPeerParameters {
+impl From<v11::bgp::config::BgpPeerParameters> for BgpPeerParameters {
+    fn from(p: v11::bgp::config::BgpPeerParameters) -> Self {
+        let v11::bgp::config::BgpPeerParameters {
             hold_time,
             idle_hold_time,
             delay_open,
@@ -180,218 +181,7 @@ impl From<v8::bgp::config::BgpPeerParameters> for BgpPeerParameters {
     }
 }
 
-impl From<BgpPeerConfig> for v8::bgp::config::BgpPeerConfig {
-    fn from(cfg: BgpPeerConfig) -> Self {
-        let BgpPeerConfig {
-            host,
-            name,
-            parameters,
-        } = cfg;
-        Self {
-            host,
-            name,
-            parameters: v8::bgp::config::BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<v8::bgp::config::BgpPeerConfig> for BgpPeerConfig {
-    fn from(cfg: v8::bgp::config::BgpPeerConfig) -> Self {
-        // v8 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v8 contract has
-        // been violated upstream.
-        let v8::bgp::config::BgpPeerConfig {
-            host,
-            name,
-            parameters,
-        } = cfg;
-        Self {
-            host,
-            name,
-            parameters: BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<UnnumberedBgpPeerConfig>
-    for v8::bgp::config::UnnumberedBgpPeerConfig
-{
-    fn from(cfg: UnnumberedBgpPeerConfig) -> Self {
-        let UnnumberedBgpPeerConfig {
-            interface,
-            name,
-            router_lifetime,
-            parameters,
-        } = cfg;
-        Self {
-            interface,
-            name,
-            router_lifetime,
-            parameters: v8::bgp::config::BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<v8::bgp::config::UnnumberedBgpPeerConfig>
-    for UnnumberedBgpPeerConfig
-{
-    fn from(cfg: v8::bgp::config::UnnumberedBgpPeerConfig) -> Self {
-        // v8 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v8 contract has
-        // been violated upstream.
-        let v8::bgp::config::UnnumberedBgpPeerConfig {
-            interface,
-            name,
-            router_lifetime,
-            parameters,
-        } = cfg;
-        Self {
-            interface,
-            name,
-            router_lifetime,
-            parameters: BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<Neighbor> for v8::bgp::config::Neighbor {
-    fn from(n: Neighbor) -> Self {
-        let Neighbor {
-            asn,
-            name,
-            group,
-            host,
-            parameters,
-        } = n;
-        Self {
-            asn,
-            name,
-            group,
-            host,
-            parameters: v8::bgp::config::BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<v8::bgp::config::Neighbor> for Neighbor {
-    fn from(n: v8::bgp::config::Neighbor) -> Self {
-        // v8 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v8 contract has
-        // been violated upstream.
-        let v8::bgp::config::Neighbor {
-            asn,
-            name,
-            group,
-            host,
-            parameters,
-        } = n;
-        Self {
-            asn,
-            name,
-            group,
-            host,
-            parameters: BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<v8::bgp::config::ApplyRequest> for ApplyRequest {
-    fn from(req: v8::bgp::config::ApplyRequest) -> Self {
-        // v8 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v8 contract has
-        // been violated upstream.
-        let v8::bgp::config::ApplyRequest {
-            asn,
-            originate,
-            checker,
-            shaper,
-            peers,
-            unnumbered_peers,
-        } = req;
-        Self {
-            asn,
-            originate,
-            checker,
-            shaper,
-            peers: peers
-                .into_iter()
-                .map(|(k, v)| {
-                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
-                })
-                .collect(),
-            unnumbered_peers: unnumbered_peers
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        v.into_iter()
-                            .map(UnnumberedBgpPeerConfig::from)
-                            .collect(),
-                    )
-                })
-                .collect(),
-        }
-    }
-}
-
-// ----- v8 (bgp_src_addr, frozen) <-> v11 UnnumberedNeighbor -----
-
-impl From<UnnumberedNeighbor> for v8::bgp::config::UnnumberedNeighbor {
-    fn from(n: UnnumberedNeighbor) -> Self {
-        let UnnumberedNeighbor {
-            asn,
-            name,
-            group,
-            interface,
-            act_as_a_default_ipv6_router,
-            parameters,
-        } = n;
-        Self {
-            asn,
-            name,
-            group,
-            interface,
-            act_as_a_default_ipv6_router,
-            parameters: v8::bgp::config::BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<v8::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
-    fn from(n: v8::bgp::config::UnnumberedNeighbor) -> Self {
-        // v8 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v8 contract has
-        // been violated upstream.
-        let v8::bgp::config::UnnumberedNeighbor {
-            asn,
-            name,
-            group,
-            interface,
-            act_as_a_default_ipv6_router,
-            parameters,
-        } = n;
-        Self {
-            asn,
-            name,
-            group,
-            interface,
-            act_as_a_default_ipv6_router,
-            parameters: BgpPeerParameters::from(parameters),
-        }
-    }
-}
-
-impl From<BgpPeerParameters> for v8::bgp::config::BgpPeerParameters {
+impl From<BgpPeerParameters> for v11::bgp::config::BgpPeerParameters {
     fn from(p: BgpPeerParameters) -> Self {
         let BgpPeerParameters {
             hold_time,
@@ -441,6 +231,190 @@ impl From<BgpPeerParameters> for v8::bgp::config::BgpPeerParameters {
             connect_retry_jitter,
             src_addr,
             src_port,
+        }
+    }
+}
+
+impl From<v11::bgp::config::BgpPeerConfig> for BgpPeerConfig {
+    fn from(cfg: v11::bgp::config::BgpPeerConfig) -> Self {
+        let v11::bgp::config::BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
+        Self {
+            host,
+            name,
+            parameters: BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<BgpPeerConfig> for v11::bgp::config::BgpPeerConfig {
+    fn from(cfg: BgpPeerConfig) -> Self {
+        let BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
+        Self {
+            host,
+            name,
+            parameters: v11::bgp::config::BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<v11::bgp::config::UnnumberedBgpPeerConfig>
+    for UnnumberedBgpPeerConfig
+{
+    fn from(cfg: v11::bgp::config::UnnumberedBgpPeerConfig) -> Self {
+        let v11::bgp::config::UnnumberedBgpPeerConfig {
+            interface,
+            name,
+            router_lifetime,
+            parameters,
+        } = cfg;
+        Self {
+            interface,
+            name,
+            router_lifetime,
+            parameters: BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<UnnumberedBgpPeerConfig>
+    for v11::bgp::config::UnnumberedBgpPeerConfig
+{
+    fn from(cfg: UnnumberedBgpPeerConfig) -> Self {
+        let UnnumberedBgpPeerConfig {
+            interface,
+            name,
+            router_lifetime,
+            parameters,
+        } = cfg;
+        Self {
+            interface,
+            name,
+            router_lifetime,
+            parameters: v11::bgp::config::BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<v11::bgp::config::Neighbor> for Neighbor {
+    fn from(n: v11::bgp::config::Neighbor) -> Self {
+        let v11::bgp::config::Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<Neighbor> for v11::bgp::config::Neighbor {
+    fn from(n: Neighbor) -> Self {
+        let Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: v11::bgp::config::BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<v11::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
+    fn from(n: v11::bgp::config::UnnumberedNeighbor) -> Self {
+        let v11::bgp::config::UnnumberedNeighbor {
+            asn,
+            name,
+            group,
+            interface,
+            act_as_a_default_ipv6_router,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            interface,
+            act_as_a_default_ipv6_router,
+            parameters: BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<UnnumberedNeighbor> for v11::bgp::config::UnnumberedNeighbor {
+    fn from(n: UnnumberedNeighbor) -> Self {
+        let UnnumberedNeighbor {
+            asn,
+            name,
+            group,
+            interface,
+            act_as_a_default_ipv6_router,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            interface,
+            act_as_a_default_ipv6_router,
+            parameters: v11::bgp::config::BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<v11::bgp::config::ApplyRequest> for ApplyRequest {
+    fn from(req: v11::bgp::config::ApplyRequest) -> Self {
+        let v11::bgp::config::ApplyRequest {
+            asn,
+            originate,
+            checker,
+            shaper,
+            peers,
+            unnumbered_peers,
+        } = req;
+        Self {
+            asn,
+            originate,
+            checker,
+            shaper,
+            peers: peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: unnumbered_peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfig::from)
+                            .collect(),
+                    )
+                })
+                .collect(),
         }
     }
 }

@@ -38,9 +38,9 @@ pub(crate) use mg_api_types::bgp::session::{
 use mg_api_types::common::headers::Dscp;
 pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
-use mg_api_types::rdb::prefix::{Prefix, Prefix4, Prefix6};
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_common::{lock, read_lock, write_lock};
+use mg_common::{IpNetExt, lock, read_lock, write_lock};
+use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db};
 use schemars::JsonSchema;
@@ -380,15 +380,15 @@ pub fn fsm_state_kind_of<Cnx: BgpConnection>(
 /// IPv4 route update
 #[derive(Clone, Debug)]
 pub enum RouteUpdate4 {
-    Announce(Vec<Prefix4>),
-    Withdraw(Vec<Prefix4>),
+    Announce(Vec<Ipv4Net>),
+    Withdraw(Vec<Ipv4Net>),
 }
 
 /// IPv6 route update
 #[derive(Clone, Debug)]
 pub enum RouteUpdate6 {
-    Announce(Vec<Prefix6>),
-    Withdraw(Vec<Prefix6>),
+    Announce(Vec<Ipv6Net>),
+    Withdraw(Vec<Ipv6Net>),
 }
 
 /// Route update for a specific address family.
@@ -6316,7 +6316,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             // Determine which routes to announce/withdraw based on policy change
                             let session = lock!(self.session);
-                            let originated_before: BTreeSet<Prefix4> =
+                            let originated_before: BTreeSet<Ipv4Net> =
                                 match previous4 {
                                     ImportExportPolicy4::NoFiltering => {
                                         originated.iter().cloned().collect()
@@ -6330,7 +6330,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     }
                                 };
 
-                            let originated_after: BTreeSet<Prefix4> =
+                            let originated_after: BTreeSet<Ipv4Net> =
                                 match session
                                     .ipv4_unicast
                                     .as_ref()
@@ -6350,12 +6350,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 };
                             drop(session);
 
-                            let to_withdraw: Vec<Prefix4> = originated_before
+                            let to_withdraw: Vec<Ipv4Net> = originated_before
                                 .difference(&originated_after)
                                 .cloned()
                                 .collect();
 
-                            let to_announce: Vec<Prefix4> = originated_after
+                            let to_announce: Vec<Ipv4Net> = originated_after
                                 .difference(&originated_before)
                                 .cloned()
                                 .collect();
@@ -6419,7 +6419,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             // Determine which routes to announce/withdraw based on policy change
                             let session = lock!(self.session);
-                            let originated_before: BTreeSet<Prefix6> =
+                            let originated_before: BTreeSet<Ipv6Net> =
                                 match previous6 {
                                     ImportExportPolicy6::NoFiltering => {
                                         originated.iter().cloned().collect()
@@ -6433,7 +6433,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     }
                                 };
 
-                            let originated_after: BTreeSet<Prefix6> =
+                            let originated_after: BTreeSet<Ipv6Net> =
                                 match session
                                     .ipv6_unicast
                                     .as_ref()
@@ -6453,12 +6453,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 };
                             drop(session);
 
-                            let to_withdraw: Vec<Prefix6> = originated_before
+                            let to_withdraw: Vec<Ipv6Net> = originated_before
                                 .difference(&originated_after)
                                 .cloned()
                                 .collect();
 
-                            let to_announce: Vec<Prefix6> = originated_after
+                            let to_announce: Vec<Ipv6Net> = originated_after
                                 .difference(&originated_before)
                                 .cloned()
                                 .collect();
@@ -8483,27 +8483,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        let withdrawn: Vec<Prefix> = update
+        let withdrawn: Vec<IpNet> = update
             .withdrawn
             .iter()
             .filter(|p| !originated4.contains(p) && p.valid_for_rib())
             .copied()
-            .map(Prefix::V4)
+            .map(IpNet::V4)
             .collect();
 
         self.db.remove_bgp_prefixes(&withdrawn, &self.peer_id());
 
         if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
-            let nlri: Vec<Prefix> = update
+            let nlri: Vec<IpNet> = update
                 .nlri
                 .iter()
                 .filter(|p| {
                     !originated4.contains(p)
                         && p.valid_for_rib()
-                        && !self.prefix_via_self(Prefix::V4(**p), nexthop)
+                        && !self.prefix_via_self(IpNet::V4(**p), nexthop)
                 })
                 .copied()
-                .map(Prefix::V4)
+                .map(IpNet::V4)
                 .collect();
 
             if !nlri.is_empty() {
@@ -8564,19 +8564,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                     };
 
-                    let mp_nlri4: Vec<Prefix> = reach4
+                    let mp_nlri4: Vec<IpNet> = reach4
                         .nlri
                         .iter()
                         .filter(|p| {
                             !originated4.contains(p)
                                 && p.valid_for_rib()
-                                && !self.prefix_via_self(
-                                    Prefix::V4(**p),
-                                    mp_nexthop,
-                                )
+                                && !self
+                                    .prefix_via_self(IpNet::V4(**p), mp_nexthop)
                         })
                         .copied()
-                        .map(Prefix::V4)
+                        .map(IpNet::V4)
                         .collect();
 
                     if !mp_nlri4.is_empty() {
@@ -8648,17 +8646,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                     };
 
-                    let nlri6: Vec<Prefix> = reach6
+                    let nlri6: Vec<IpNet> = reach6
                         .nlri
                         .iter()
                         .filter(|p| {
                             !originated6.contains(p)
                                 && p.valid_for_rib()
                                 && !self
-                                    .prefix_via_self(Prefix::V6(**p), nexthop6)
+                                    .prefix_via_self(IpNet::V6(**p), nexthop6)
                         })
                         .copied()
-                        .map(Prefix::V6)
+                        .map(IpNet::V6)
                         .collect();
 
                     if !nlri6.is_empty() {
@@ -8697,14 +8695,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Some(unreach) = update.mp_unreach() {
             match unreach {
                 MpUnreachNlri::Ipv4Unicast(unreach4) => {
-                    let mp_withdrawn4: Vec<Prefix> = unreach4
+                    let mp_withdrawn4: Vec<IpNet> = unreach4
                         .withdrawn
                         .iter()
                         .filter(|p| {
                             !originated4.contains(p) && p.valid_for_rib()
                         })
                         .copied()
-                        .map(Prefix::V4)
+                        .map(IpNet::V4)
                         .collect();
 
                     self.db
@@ -8725,14 +8723,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                     };
 
-                    let withdrawn6: Vec<Prefix> = unreach6
+                    let withdrawn6: Vec<IpNet> = unreach6
                         .withdrawn
                         .iter()
                         .filter(|p| {
                             !originated6.contains(p) && p.valid_for_rib()
                         })
                         .copied()
-                        .map(Prefix::V6)
+                        .map(IpNet::V6)
                         .collect();
 
                     self.db.remove_bgp_prefixes(&withdrawn6, &self.peer_id());
@@ -8795,13 +8793,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Do not accept routes advertised with themselves as the next-hop.
     /// e.g.
     /// Do not allow 2001::1/32 with a nexthop of 2001::1
-    fn prefix_via_self(&self, prefix: Prefix, nexthop: IpAddr) -> bool {
+    fn prefix_via_self(&self, prefix: IpNet, nexthop: IpAddr) -> bool {
         match (prefix, nexthop) {
-            (Prefix::V4(p4), IpAddr::V4(ip4)) => {
-                p4.length == Prefix4::HOST_MASK && p4.value == ip4
+            (IpNet::V4(p4), IpAddr::V4(ip4)) => {
+                p4.width() == IPV4_NET_WIDTH_MAX && p4.addr() == ip4
             }
-            (Prefix::V6(p6), IpAddr::V6(ip6)) => {
-                p6.length == Prefix6::HOST_MASK && p6.value == ip6
+            (IpNet::V6(p6), IpAddr::V6(ip6)) => {
+                p6.width() == IPV6_NET_WIDTH_MAX && p6.addr() == ip6
             }
             _ => false,
         }
@@ -9301,10 +9299,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 }
 
-// V1 message-history shapes live in `v1::bgp::session`. Cross-version
-// `From` conversions live alongside the latest definition in
-// `mg_api_types_versions::v4::bgp::session`.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9484,35 +9478,27 @@ mod tests {
 
     #[test]
     fn route_update_is_announcement_and_withdrawal() {
-        let v4_announce =
-            RouteUpdate::V4(RouteUpdate4::Announce(vec![Prefix4::new(
-                ip!("10.0.0.0"),
-                8,
-            )]));
+        let v4_announce = RouteUpdate::V4(RouteUpdate4::Announce(vec![
+            Ipv4Net::new_unchecked(ip!("10.0.0.0"), 8),
+        ]));
         assert!(v4_announce.is_announcement());
         assert!(!v4_announce.is_withdrawal());
 
-        let v4_withdraw =
-            RouteUpdate::V4(RouteUpdate4::Withdraw(vec![Prefix4::new(
-                ip!("10.0.0.0"),
-                8,
-            )]));
+        let v4_withdraw = RouteUpdate::V4(RouteUpdate4::Withdraw(vec![
+            Ipv4Net::new_unchecked(ip!("10.0.0.0"), 8),
+        ]));
         assert!(!v4_withdraw.is_announcement());
         assert!(v4_withdraw.is_withdrawal());
 
-        let v6_announce =
-            RouteUpdate::V6(RouteUpdate6::Announce(vec![Prefix6::new(
-                ip!("2001:db8::"),
-                32,
-            )]));
+        let v6_announce = RouteUpdate::V6(RouteUpdate6::Announce(vec![
+            Ipv6Net::new_unchecked(ip!("2001:db8::"), 32),
+        ]));
         assert!(v6_announce.is_announcement());
         assert!(!v6_announce.is_withdrawal());
 
-        let v6_withdraw =
-            RouteUpdate::V6(RouteUpdate6::Withdraw(vec![Prefix6::new(
-                ip!("2001:db8::"),
-                32,
-            )]));
+        let v6_withdraw = RouteUpdate::V6(RouteUpdate6::Withdraw(vec![
+            Ipv6Net::new_unchecked(ip!("2001:db8::"), 32),
+        ]));
         assert!(!v6_withdraw.is_announcement());
         assert!(v6_withdraw.is_withdrawal());
     }

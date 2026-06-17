@@ -22,7 +22,7 @@ use std::{
     net::{IpAddr, SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender},
     },
     thread::{Builder, JoinHandle, sleep},
@@ -37,6 +37,7 @@ pub struct BfdContext {
     /// The underlying deamon being run.
     pub(crate) daemon: Arc<Mutex<Daemon>>,
     dispatcher: Arc<Mutex<Dispatcher>>,
+    src_port: Arc<BfdSourcePorts>,
 }
 
 impl BfdContext {
@@ -44,7 +45,42 @@ impl BfdContext {
         Self {
             daemon: Arc::new(Mutex::new(Daemon::new(log.clone()))),
             dispatcher: Arc::new(Mutex::new(Dispatcher::new(log))),
+            src_port: Arc::new(BfdSourcePorts::new()),
         }
+    }
+}
+
+/// Generator of Source Ports for BFD connections.
+#[derive(Default)]
+pub struct BfdSourcePorts {
+    source: AtomicU16,
+}
+
+impl BfdSourcePorts {
+    const BFD_SOURCE_PORT_BEGIN: u16 = 49152;
+    /// Number of source ports available above the base, i.e. the size of the
+    /// ephemeral range [BFD_SOURCE_PORT_BEGIN, u16::MAX].
+    const WINDOW: u16 = u16::MAX - Self::BFD_SOURCE_PORT_BEGIN + 1;
+
+    pub fn new() -> Self {
+        Self {
+            source: AtomicU16::default(),
+        }
+    }
+
+    pub fn next(&self) -> u16 {
+        // Wrap the counter explicitly at WINDOW rather than relying on the
+        // u16 to wrap at 2^16. Otherwise the result would only be evenly
+        // distributed when WINDOW divides 2^16, coupling correctness to the
+        // value of the base port. Keeping the stored value in [0, WINDOW)
+        // makes the offset correct for any base port.
+        let offset = self
+            .source
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                Some((cur + 1) % Self::WINDOW)
+            })
+            .expect("closure never returns None");
+        Self::BFD_SOURCE_PORT_BEGIN + offset
     }
 }
 
@@ -114,16 +150,13 @@ pub(crate) fn add_peer(
         ));
     }
 
-    let (src_port, dst_port) = match rq.mode {
-        SessionMode::SingleHop => {
-            let offset: u16 =
-                (daemon.sessions.len() % usize::from(u16::MAX)) as u16;
-            (BFD_SINGLEHOP_SOURCE_PORT_BEGIN + offset, BFD_SINGLEHOP_PORT)
-        }
-        SessionMode::MultiHop => (0, BFD_MULTIHOP_PORT),
+    let dst_port = match rq.mode {
+        SessionMode::SingleHop => BFD_SINGLEHOP_PORT,
+        SessionMode::MultiHop => BFD_MULTIHOP_PORT,
     };
 
     let log = ctx.log.clone();
+    let src_port = ctx.bfd.src_port.clone();
 
     let dscp = rq.dscp.unwrap_or(Dscp::CS6);
 
@@ -140,7 +173,6 @@ pub(crate) fn add_peer(
         bfd_log!(log, error, "udp channel error: {e}";
             "params" => format!("{rq:?}"),
             "peer" => format!("{}", rq.peer),
-            "src_port" => src_port,
             "dst_port" => dst_port,
             "error" => format!("{e}")
         );
@@ -212,7 +244,6 @@ pub(crate) async fn remove_bfd_peer(
 const BFD_MULTIHOP_PORT: u16 = 4784;
 /// Port to be used for BFD single per RFC 5881.
 const BFD_SINGLEHOP_PORT: u16 = 3784;
-const BFD_SINGLEHOP_SOURCE_PORT_BEGIN: u16 = 49152;
 
 /// Create a bidirectional channel linking a peer session to an underlying BFD
 /// session over UDP.
@@ -220,7 +251,7 @@ pub(crate) fn channel(
     dispatcher: Arc<Mutex<Dispatcher>>,
     listen: IpAddr,
     peer: IpAddr,
-    src_port: u16,
+    src_port: Arc<BfdSourcePorts>,
     dst_port: u16,
     dscp: Dscp,
     log: Logger,
@@ -302,7 +333,7 @@ fn egress(
     rx: Receiver<(IpAddr, packet::Control)>,
     local: IpAddr,
     peer: IpAddr,
-    src_port: u16,
+    src_port: Arc<BfdSourcePorts>,
     dst_port: u16,
     dscp: Dscp,
     log: Logger,
@@ -313,7 +344,6 @@ fn egress(
         move || {
             let log = log.new(slog::o!(
                 "local" => format!("{local}"),
-                "src_port" => src_port,
                 "dst_port" => dst_port,
             ));
             'egress: loop {
@@ -321,9 +351,11 @@ fn egress(
                     break;
                 }
 
-                let sk = match egress_socket(local, src_port, dscp) {
+                let sp = src_port.next();
+                let sk = match egress_socket(local, sp, dscp) {
                     Err(e) => {
                         bfd_log!(log, error, "failed to bind egress socket: {e}";
+                            "src_port" => sp,
                             "error" => format!("{e}")
                         );
                         // Explicit sleep call here to prevent spin-lock in case
@@ -566,5 +598,21 @@ mod test {
             .expect("failed to create v6 egress socket");
         let sock = Socket::from(sk);
         assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);
+    }
+
+    #[test]
+    fn source_ports_sweep_ephemeral_window() {
+        // The nth call must yield exactly `BFD_SOURCE_PORT_BEGIN + n % WINDOW`:
+        // it starts at the base, advances contiguously through the whole
+        // ephemeral range, and wraps back to the base after WINDOW calls.
+        // Walking past two full windows exercises the wrap boundary.
+        let ports = BfdSourcePorts::new();
+        for n in 0..(u32::from(BfdSourcePorts::WINDOW) * 2 + 1) {
+            let offset = (n % u32::from(BfdSourcePorts::WINDOW)) as u16;
+            assert_eq!(
+                ports.next(),
+                BfdSourcePorts::BFD_SOURCE_PORT_BEGIN + offset
+            );
+        }
     }
 }

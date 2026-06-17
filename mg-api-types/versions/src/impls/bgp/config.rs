@@ -75,7 +75,7 @@ impl latest::bgp::config::Neighbor {
         Self {
             asn,
             name,
-            host,
+            host: host.into(),
             group,
             parameters: latest_params_from_rdb(parameters),
         }
@@ -219,14 +219,14 @@ fn latest_params_from_rdb(
         ipv4_unicast: ipv4_unicast_config_new(
             ipv4_enabled,
             nexthop4,
-            allow_import4,
-            allow_export4,
+            allow_import4.into(),
+            allow_export4.into(),
         ),
         ipv6_unicast: ipv6_unicast_config_new(
             ipv6_enabled,
             nexthop6,
-            allow_import6,
-            allow_export6,
+            allow_import6.into(),
+            allow_export6.into(),
         ),
         vlan_id,
         connect_retry_jitter: Some(JitterRange {

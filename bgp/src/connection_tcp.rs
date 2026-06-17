@@ -295,6 +295,17 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 }
 
+                if let Err(e) = apply_socket_options(&s, &config, peer) {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply socket options for {peer}: {e}";
+                        "direction" => ConnectionDirection::Outbound,
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+
                 // Establish the connection (THIS IS THE BLOCKING CALL)
                 let sa: socket2::SockAddr = peer.into();
                 let new_conn: TcpStream = match s.connect_timeout(&sa, timeout) {
@@ -515,6 +526,7 @@ impl BgpConnectionTcp {
         config: &SessionInfo,
     ) -> Result<Self, Error> {
         conn.set_nodelay(true)?;
+        apply_socket_options(&conn, config, peer)?;
 
         let id = ConnectionId::new(source, peer);
 
@@ -1262,6 +1274,15 @@ fn traffic_class_v6(sock: &SockRef, tos: u32) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+fn apply_socket_options(
+    sock: &(impl AsFd + AsRawFd),
+    config: &SessionInfo,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    apply_ttl(sock, config.min_ttl, peer)?;
+    apply_dscp(sock, config.dscp, peer)
 }
 
 fn apply_md5_policy(

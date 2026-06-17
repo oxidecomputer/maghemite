@@ -5,7 +5,7 @@
 use crate::v4;
 use crate::v4::bgp::policy::ImportExportPolicy4;
 use crate::v4::bgp::policy::ImportExportPolicy6;
-use crate::v11::common::headers::Dscp;
+use crate::v12::common::headers::Dscp;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -101,7 +101,7 @@ fn default_dscp() -> Dscp {
     Dscp::CS6
 }
 
-// ----- v4 (mp_bgp, frozen) <-> v11 conversions -----
+// ----- v4 (mp_bgp, frozen) <-> v12 conversions -----
 
 impl From<v4::rdb::neighbor::BgpNeighborParameters> for BgpNeighborParameters {
     fn from(p: v4::rdb::neighbor::BgpNeighborParameters) -> Self {

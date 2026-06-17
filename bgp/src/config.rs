@@ -78,7 +78,7 @@ impl From<Neighbor> for PeerConfig {
         Self {
             name,
             group,
-            host,
+            host: *host,
             hold_time,
             idle_hold_time,
             delay_open,
