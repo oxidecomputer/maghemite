@@ -23,10 +23,9 @@
 //! update will run to completion.
 
 use crate::AddPeerRequest;
-use crate::egress::EgressMode;
 use crate::egress::EgressTask;
 use crate::rib::RibTask;
-use crate::single_hop_egress_src_port::SingleHopEgressSrcPort;
+use crate::egress_src_port_iter::EgressSrcPortIter;
 use crate::sm::CheckRecvDeadlineResult;
 use crate::sm::StateMachine;
 use bfd::PeerInfo;
@@ -79,7 +78,7 @@ impl Session {
         db: rdb::Db,
         rq: AddPeerRequest,
         counters: Arc<SessionCounters>,
-        egress_src_port: &Arc<SingleHopEgressSrcPort>,
+        src_port_iter: Arc<EgressSrcPortIter>,
         listener_rx: mpsc::Receiver<packet::Control>,
         log: &Logger,
     ) -> Self {
@@ -112,18 +111,12 @@ impl Session {
         );
 
         let (egress_tx, egress_rx) = mpsc::channel(EGRESS_CHANNEL_DEPTH);
-        let egress_mode = match mode {
-            SessionMode::SingleHop => {
-                EgressMode::SingleHop(Arc::clone(egress_src_port))
-            }
-            SessionMode::MultiHop => EgressMode::MultiHop,
-        };
         let egress_task = tokio::spawn(
             EgressTask::new(
                 egress_rx,
                 listen_addr.ip(),
                 remote_addr,
-                egress_mode,
+                src_port_iter,
                 Arc::clone(&counters),
                 log.clone(),
             )

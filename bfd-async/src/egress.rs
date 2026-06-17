@@ -9,13 +9,13 @@
 //! channel.
 //!
 //! This task manages the complexity of the socket lifetime, which may be
-//! nontrivial in some cases: single-hop BFD sessions are required by the RFC to
-//! use a src port in a particular 16,384-long range, so we have to attempt to
-//! bind a socket with a specific port instead of binding to port 0. We have no
-//! control over which ports in that range are actually free, so we limit
-//! ourselves to trying at most `MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT` binds
-//! (each with a different source port) any time we try to bind a socket. We
-//! attempt a bind:
+//! nontrivial in some cases: BFD sessions are required by the RFC to use a src
+//! port in a particular 16,384-long range for control packets, so we have to
+//! attempt to bind a socket with a specific port instead of binding to port 0.
+//! We have no control over which ports in that range are actually free, so we
+//! limit ourselves to trying at most `MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT`
+//! binds (each with a different source port) any time we try to bind a socket.
+//! We attempt a bind:
 //!
 //! 1. On startup.
 //! 2. Any time we get a packet to send from the driver and we don't already
@@ -28,7 +28,7 @@
 //! * If we fail a `send_to()`, we close our current socket and will rebind on
 //!   the next packet from the driver.
 
-use crate::single_hop_egress_src_port::SingleHopEgressSrcPort;
+use crate::egress_src_port_iter::EgressSrcPortIter;
 use bfd::DEFAULT_BFD_TTL;
 use bfd::SessionCounters;
 use slog::Logger;
@@ -47,7 +47,7 @@ use tokio::sync::mpsc;
 /// How many successive source ports we'll try in a single bind attempt before
 /// giving up (and dropping the current outgoing packet).
 const MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT: NonZeroUsize =
-    NonZeroUsize::new(16).unwrap();
+    NonZeroUsize::new(64).unwrap();
 
 #[derive(Debug, thiserror::Error)]
 enum BindEgressSocketError {
@@ -55,10 +55,10 @@ enum BindEgressSocketError {
     Bind(#[source] io::Error),
 
     #[error(
-        "failed to find free src port for single-hop egress socket: \
+        "failed to find free src port for egress socket: \
          tried {first_port_tried}..={last_port_tried}"
     )]
-    SingleHopNoSrcPort {
+    SrcPortsInUse {
         first_port_tried: u16,
         last_port_tried: u16,
     },
@@ -73,19 +73,12 @@ enum BindEgressSocketError {
     StdToTokio(#[source] io::Error),
 }
 
-// Multihop sessions can use a source port of 0, but singlehop sessions must use
-// a port in a specified range (supplied by `SingleHopEgressSrcPort`).
-pub(crate) enum EgressMode {
-    SingleHop(Arc<SingleHopEgressSrcPort>),
-    MultiHop,
-}
-
 pub(crate) struct EgressTask {
     egress_rx: mpsc::Receiver<Vec<u8>>,
     socket: Option<UdpSocket>,
     local_ip: IpAddr,
     remote_addr: SocketAddr,
-    mode: EgressMode,
+    src_port_iter: Arc<EgressSrcPortIter>,
     counters: Arc<SessionCounters>,
     log: Logger,
 }
@@ -95,7 +88,7 @@ impl EgressTask {
         egress_rx: mpsc::Receiver<Vec<u8>>,
         local_ip: IpAddr,
         remote_addr: SocketAddr,
-        mode: EgressMode,
+        src_port_iter: Arc<EgressSrcPortIter>,
         counters: Arc<SessionCounters>,
         log: Logger,
     ) -> Self {
@@ -104,7 +97,7 @@ impl EgressTask {
             socket: None,
             local_ip,
             remote_addr,
-            mode,
+            src_port_iter,
             counters,
             log,
         }
@@ -173,21 +166,13 @@ impl EgressTask {
     }
 
     async fn try_bind_socket(&self) -> Option<UdpSocket> {
-        let result = match &self.mode {
-            EgressMode::SingleHop(egress_src_port) => {
-                try_bind_singlehop_with_max_src_port_tries(
-                    self.local_ip,
-                    egress_src_port,
-                    MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT,
-                )
-                .await
-            }
-            EgressMode::MultiHop => {
-                bind_egress_socket(SocketAddr::new(self.local_ip, 0)).await
-            }
-        };
-
-        match result {
+        match try_bind_with_max_src_port_tries(
+            self.local_ip,
+            &self.src_port_iter,
+            MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT,
+        )
+        .await
+        {
             Ok(socket) => Some(socket),
             Err(err) => {
                 warn!(
@@ -201,15 +186,15 @@ impl EgressTask {
     }
 }
 
-async fn try_bind_singlehop_with_max_src_port_tries(
+async fn try_bind_with_max_src_port_tries(
     local_ip: IpAddr,
-    src_port: &SingleHopEgressSrcPort,
+    src_port_iter: &EgressSrcPortIter,
     max_ports_to_try: NonZeroUsize,
 ) -> Result<UdpSocket, BindEgressSocketError> {
     let mut first_port_tried = None;
     let mut last_port_tried = None;
     for _ in 0..max_ports_to_try.get() {
-        let src_port = src_port.next();
+        let src_port = src_port_iter.next();
 
         // Keep track of what ports we tried exclusively for the error we return
         // if we fail to find a free port.
@@ -230,7 +215,7 @@ async fn try_bind_singlehop_with_max_src_port_tries(
         }
     }
 
-    Err(BindEgressSocketError::SingleHopNoSrcPort {
+    Err(BindEgressSocketError::SrcPortsInUse {
         // We know these must be `Some(_)` becaues `max_ports_to_try` is a
         // `NonZeroUsize`, so we must have iterated at least once in the for
         // loop above, and the first iteration sets both these values.

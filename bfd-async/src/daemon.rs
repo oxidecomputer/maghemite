@@ -7,7 +7,7 @@ use crate::AddPeerRequest;
 use crate::ListenerShutdownHandle;
 use crate::Session;
 use crate::dispatcher::Dispatcher;
-use crate::single_hop_egress_src_port::SingleHopEgressSrcPort;
+use crate::egress_src_port_iter::EgressSrcPortIter;
 use bfd::SessionCounters;
 use slog::Logger;
 use slog::warn;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub struct Daemon {
     dispatcher: Dispatcher,
     sessions: HashMap<IpAddr, Session>,
-    egress_src_port: Arc<SingleHopEgressSrcPort>,
+    egress_src_port: Arc<EgressSrcPortIter>,
     log: Logger,
 }
 
@@ -37,7 +37,7 @@ impl Daemon {
         Self {
             sessions: HashMap::new(),
             dispatcher,
-            egress_src_port: Arc::new(SingleHopEgressSrcPort::new()),
+            egress_src_port: Arc::new(EgressSrcPortIter::new()),
             log,
         }
     }
@@ -87,7 +87,7 @@ impl Daemon {
                     db,
                     rq,
                     counters,
-                    &self.egress_src_port,
+                    Arc::clone(&self.egress_src_port),
                     listener_rx,
                     &self.log,
                 );

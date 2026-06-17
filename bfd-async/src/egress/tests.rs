@@ -36,7 +36,7 @@ fn test_logger() -> Logger {
 /// counters, and join handle.
 fn spawn_egress(
     remote: SocketAddr,
-    mode: EgressMode,
+    src_port_iter: Arc<EgressSrcPortIter>,
 ) -> (
     mpsc::Sender<Vec<u8>>,
     Arc<SessionCounters>,
@@ -48,7 +48,7 @@ fn spawn_egress(
         rx,
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         remote,
-        mode,
+        src_port_iter,
         Arc::clone(&counters),
         test_logger(),
     );
@@ -57,25 +57,7 @@ fn spawn_egress(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn forwards_bytes_to_peer() {
-    let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let peer_addr = peer.local_addr().unwrap();
-
-    let (tx, counters, _handle) = spawn_egress(peer_addr, EgressMode::MultiHop);
-
-    tx.send(b"hello bfd".to_vec()).await.unwrap();
-
-    let mut buf = [0u8; 64];
-    let (n, _src) = timeout(Duration::from_secs(5), peer.recv_from(&mut buf))
-        .await
-        .expect("timed out waiting for egress datagram")
-        .unwrap();
-    assert_eq!(&buf[..n], b"hello bfd");
-    assert_eq!(counters.control_packets_sent.load(Ordering::Relaxed), 1);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn singlehop_mode_binds_ports_in_expected_range() {
+async fn binds_ports_in_expected_range() {
     // Bind two peers, then spawn two egress tasks. Send a message to each so
     // our peer can detect the port on which the egress tasks were bound; both
     // should be in the range [49152, ..]. We generally expect to get exactly
@@ -87,22 +69,18 @@ async fn singlehop_mode_binds_ports_in_expected_range() {
     let peer1_addr = peer1.local_addr().unwrap();
     let peer2_addr = peer2.local_addr().unwrap();
 
-    let egress_src_port = Arc::new(SingleHopEgressSrcPort::new());
-    let (tx1, counters1, _handle) = spawn_egress(
-        peer1_addr,
-        EgressMode::SingleHop(Arc::clone(&egress_src_port)),
-    );
-    let (tx2, counters2, _handle) = spawn_egress(
-        peer2_addr,
-        EgressMode::SingleHop(Arc::clone(&egress_src_port)),
-    );
+    let egress_src_port = Arc::new(EgressSrcPortIter::new());
+    let (tx1, counters1, _handle) =
+        spawn_egress(peer1_addr, Arc::clone(&egress_src_port));
+    let (tx2, counters2, _handle) =
+        spawn_egress(peer2_addr, Arc::clone(&egress_src_port));
 
     // Helper function to detect the src port bound by an egress task.
     //
     // This is to reduce test flakiness on a system where many of the ports at
-    // the beginning of the valid singlehop egress range (starting at 49152) are
-    // already in use by other processes, and we may need to search multiple
-    // times through the space to find a free port.
+    // the beginning of the valid egress range (starting at 49152) are already
+    // in use by other processes, and we may need to search multiple times
+    // through the space to find a free port.
     async fn detect_egress_src_port(
         tx: mpsc::Sender<Vec<u8>>,
         counters: Arc<SessionCounters>,
@@ -155,19 +133,19 @@ async fn singlehop_mode_binds_ports_in_expected_range() {
 
     assert_ne!(srcport1, srcport2);
     assert!(
-        srcport1 >= SingleHopEgressSrcPort::SOURCE_PORT_BEGIN,
-        "unexpected singlehop src port {srcport1}"
+        srcport1 >= EgressSrcPortIter::SOURCE_PORT_BEGIN,
+        "unexpected src port {srcport1}"
     );
     assert!(
-        srcport2 >= SingleHopEgressSrcPort::SOURCE_PORT_BEGIN,
-        "unexpected singlehop src port {srcport2}"
+        srcport2 >= EgressSrcPortIter::SOURCE_PORT_BEGIN,
+        "unexpected src port {srcport2}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn exits_when_channel_closed() {
     let (tx, _counters, handle) =
-        spawn_egress("127.0.0.1:1".parse().unwrap(), EgressMode::MultiHop);
+        spawn_egress("127.0.0.1:1".parse().unwrap(), Arc::default());
     drop(tx);
     timeout(Duration::from_secs(5), handle)
         .await
