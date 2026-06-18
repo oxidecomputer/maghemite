@@ -5,11 +5,38 @@ use libfalcon::{Runner, node, unit::gb};
 
 use crate::{eos::EosNode, frr::FrrNode, mgd::MgdNode};
 
+pub struct MgdDuo {
+    pub d: Runner,
+    pub ox1: MgdNode,
+    pub ox2: MgdNode,
+}
+
 pub struct Trio {
     pub d: Runner,
     pub ox: MgdNode,
     pub cr1: FrrNode,
     pub cr2: EosNode,
+}
+
+pub fn mgd_duo(name: &str) -> Result<MgdDuo> {
+    let mut d = Runner::new(name);
+
+    node!(d, ox1, "helios-3.0", 4, gb(4));
+    node!(d, ox2, "helios-3.0", 4, gb(4));
+
+    d.link(ox1, ox2);
+
+    d.default_ext_link(ox1)?;
+    d.default_ext_link(ox2)?;
+
+    d.mount("cargo-bay", "/opt/cargo-bay", ox1)?;
+    d.mount("cargo-bay", "/opt/cargo-bay", ox2)?;
+
+    Ok(MgdDuo {
+        d,
+        ox1: MgdNode(ox1),
+        ox2: MgdNode(ox2),
+    })
 }
 
 pub fn trio(name: &str) -> Result<Trio> {

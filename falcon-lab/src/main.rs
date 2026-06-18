@@ -2,7 +2,8 @@
 
 use crate::dendrite::NpuvmCommits;
 use crate::test::{
-    cleanup_bfd_static_test, cleanup_unnumbered_test, run_trio_bfd_static_test,
+    cleanup_bfd_static_test, cleanup_mgd_unnumbered_test,
+    cleanup_unnumbered_test, run_mgd_unnumbered_test, run_trio_bfd_static_test,
     run_trio_unnumbered_test,
 };
 use clap::{Parser, Subcommand};
@@ -64,6 +65,7 @@ struct Serial {
 
 #[derive(Debug, Subcommand)]
 enum TestCommand {
+    MgdUnnumbered,
     TrioUnnumbered,
     TrioBfdStaticRouting,
 }
@@ -82,6 +84,9 @@ async fn run() -> anyhow::Result<()> {
                 sidecar_lite: cmd.sidecar_lite_commit,
             };
             match cmd.command {
+                TestCommand::MgdUnnumbered => {
+                    run_mgd_unnumbered_test(cmd.no_cleanup).await?
+                }
                 TestCommand::TrioUnnumbered => {
                     run_trio_unnumbered_test(cmd.no_cleanup, commits).await?
                 }
@@ -91,6 +96,7 @@ async fn run() -> anyhow::Result<()> {
             }
         }
         Command::Cleanup(cmd) => match cmd.command {
+            TestCommand::MgdUnnumbered => cleanup_mgd_unnumbered_test().await?,
             TestCommand::TrioUnnumbered => cleanup_unnumbered_test().await?,
             TestCommand::TrioBfdStaticRouting => {
                 cleanup_bfd_static_test().await?

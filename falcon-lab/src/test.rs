@@ -8,7 +8,7 @@ use crate::{
     eos::EosNode,
     frr::FrrNode,
     mgd::{MgdNode, wait_for_mgd},
-    topo::{Trio, trio},
+    topo::{MgdDuo, Trio, mgd_duo, trio},
     wait_for_eq,
 };
 use anyhow::{Context, Result};
@@ -39,8 +39,15 @@ use std::{
 };
 
 const TRIO_UNNUMBERED_TOPO_NAME: &str = "mgtriou";
+const MGD_UNNUMBERED_TOPO_NAME: &str = "mgduou";
 const TRIO_BFD_STATIC_TOPO_NAME: &str = "mgtriobfd";
 const OP_TIMEOUT: Duration = Duration::from_secs(10);
+
+// The mgd-duo topology creates the direct test link before each node's
+// management link, so the peer-facing viona interface is vioif0 and the DHCP
+// management interface is vioif1.
+const MGD_DUO_PEER_LINK: &str = "vioif0";
+const MGD_DUO_MGMT_ADDR: &str = "vioif1/dhcp";
 
 // BFD-static test addressing. `OX_*` addresses are configured on the helios
 // side of each softnpu link; `CR*` addresses are configured on the peer.
@@ -84,6 +91,17 @@ struct BootedTrio {
     topo_name: String,
 }
 
+/// Output of `boot_mgd_duo`: two Helios nodes with mgd admin clients ready for
+/// test-specific configuration.
+struct BootedMgdDuo {
+    ad: Arc<Runner>,
+    ox1: MgdNode,
+    ox2: MgdNode,
+    mgd1: MgdClient,
+    mgd2: MgdClient,
+    topo_name: String,
+}
+
 /// Run a test body against a booted topology and dump diagnostics from every
 /// VM if it fails. The body consumes the `BootedTrio`, so cache the bits
 /// `collect_diagnostics` needs before handing it off.
@@ -103,6 +121,69 @@ where
         collect_diagnostics(&ad, ox, cr1, cr2, &topo_name).await;
     }
     result
+}
+
+/// Run a test body against a booted mgd-duo topology and dump diagnostics from
+/// both Helios nodes if it fails.
+async fn run_mgd_duo_with_diagnostics<F, Fut>(
+    bt: BootedMgdDuo,
+    body: F,
+) -> Result<()>
+where
+    F: FnOnce(BootedMgdDuo) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let ad = bt.ad.clone();
+    let ox1 = bt.ox1;
+    let ox2 = bt.ox2;
+    let topo_name = bt.topo_name.clone();
+    let result = body(bt).await;
+    if let Err(e) = &result {
+        warn!(ad.log, "{topo_name} failed: {e:#}");
+        collect_mgd_duo_diagnostics(&ad, ox1, ox2, &topo_name).await;
+    }
+    result
+}
+
+/// Launch two Helios nodes with a direct link between them and obtain mgd
+/// admin clients over their management links.
+async fn boot_mgd_duo(
+    topo_name: &str,
+    persistent: bool,
+) -> Result<BootedMgdDuo> {
+    let MgdDuo { mut d, ox1, ox2 } = mgd_duo(topo_name)?;
+    d.persistent = persistent;
+    d.launch().await.context("launch failed")?;
+    let ad = Arc::new(d);
+
+    let result = async {
+        let ox1_illumos = ox1.illumos();
+        let ox2_illumos = ox2.illumos();
+        let (mgmt1, mgmt2) = tokio::try_join!(
+            ox1_illumos.dhcp(&ad, MGD_DUO_MGMT_ADDR),
+            ox2_illumos.dhcp(&ad, MGD_DUO_MGMT_ADDR),
+        )?;
+        let mgd1 = ox1.client(&ad, mgmt1).await?;
+        let mgd2 = ox2.client(&ad, mgmt2).await?;
+
+        Ok((mgd1, mgd2))
+    }
+    .await;
+
+    match result {
+        Ok((mgd1, mgd2)) => Ok(BootedMgdDuo {
+            ad,
+            ox1,
+            ox2,
+            mgd1,
+            mgd2,
+            topo_name: topo_name.to_string(),
+        }),
+        Err(e) => {
+            collect_mgd_duo_diagnostics(&ad, ox1, ox2, topo_name).await;
+            Err(e)
+        }
+    }
 }
 
 /// Launch the trio topology and complete the work shared by every trio-based
@@ -199,9 +280,123 @@ where
 }
 
 pub async fn cleanup_unnumbered_test() -> Result<()> {
-    // dropping this with out persistent set will destroy
-    // the topo
-    let _topo = trio(TRIO_UNNUMBERED_TOPO_NAME)?;
+    cleanup_topology(TRIO_UNNUMBERED_TOPO_NAME, |name| trio(name).map(drop))
+}
+
+pub async fn cleanup_mgd_unnumbered_test() -> Result<()> {
+    cleanup_topology(MGD_UNNUMBERED_TOPO_NAME, |name| mgd_duo(name).map(drop))
+}
+
+fn cleanup_topology(
+    topo_name: &str,
+    cleanup: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    cleanup(topo_name)
+}
+
+pub async fn run_mgd_unnumbered_test(persistent: bool) -> Result<()> {
+    let bt = boot_mgd_duo(MGD_UNNUMBERED_TOPO_NAME, persistent).await?;
+
+    run_mgd_duo_with_diagnostics(bt, mgd_unnumbered_body).await
+}
+
+async fn mgd_unnumbered_body(bt: BootedMgdDuo) -> Result<()> {
+    let BootedMgdDuo {
+        ad,
+        ox1,
+        ox2,
+        mgd1,
+        mgd2,
+        ..
+    } = bt;
+
+    for ox in [ox1, ox2] {
+        let addr = format!("{MGD_DUO_PEER_LINK}/ll");
+        ox.illumos()
+            .addrconf(&ad, &addr)
+            .await
+            .context(format!("create {addr}"))?;
+    }
+
+    tokio::try_join!(ox1.run_mgd(&ad), ox2.run_mgd(&ad))?;
+    tokio::try_join!(
+        wait_for_mgd(&mgd1, OP_TIMEOUT, &ad.log),
+        wait_for_mgd(&mgd2, OP_TIMEOUT, &ad.log),
+    )?;
+
+    const OX1_ASN: u32 = 33;
+    const OX2_ASN: u32 = 44;
+
+    info!(ad.log, "adding BGP routers to both mgd nodes");
+    let ox1_router = Router {
+        asn: OX1_ASN,
+        graceful_shutdown: false,
+        id: 33,
+        listen: "[::]:179".to_owned(),
+    };
+    let ox2_router = Router {
+        asn: OX2_ASN,
+        graceful_shutdown: false,
+        id: 44,
+        listen: "[::]:179".to_owned(),
+    };
+    tokio::try_join!(
+        mgd1.create_router(&ox1_router),
+        mgd2.create_router(&ox2_router),
+    )
+    .context("mgd: create routers")?;
+
+    info!(ad.log, "adding unnumbered BGP neighbors to both mgd nodes");
+    let ox1_neighbor = basic_unnumbered_neighbor(
+        "ox2",
+        "mgd-duo",
+        MGD_DUO_PEER_LINK,
+        OX1_ASN,
+        0,
+    );
+    let ox2_neighbor = basic_unnumbered_neighbor(
+        "ox1",
+        "mgd-duo",
+        MGD_DUO_PEER_LINK,
+        OX2_ASN,
+        0,
+    );
+    tokio::try_join!(
+        mgd1.create_unnumbered_neighbor(&ox1_neighbor),
+        mgd2.create_unnumbered_neighbor(&ox2_neighbor),
+    )
+    .context("mgd: create unnumbered neighbors")?;
+
+    wait_for_eq!(
+        mgd1.get_neighbors(OX1_ASN)
+            .await
+            .map(|x| x.into_inner().len())
+            .unwrap_or(0),
+        1,
+        "mgd1 neighbor count"
+    );
+    wait_for_eq!(
+        mgd2.get_neighbors(OX2_ASN)
+            .await
+            .map(|x| x.into_inner().len())
+            .unwrap_or(0),
+        1,
+        "mgd2 neighbor count"
+    );
+
+    wait_for_eq!(
+        neighbor_fsm_state(&mgd1, OX1_ASN, "ox2").await,
+        Some(FsmStateKind::Established),
+        "mgd1 bgp ox2 established"
+    );
+    wait_for_eq!(
+        neighbor_fsm_state(&mgd2, OX2_ASN, "ox1").await,
+        Some(FsmStateKind::Established),
+        "mgd2 bgp ox1 established"
+    );
+
+    info!(ad.log, "mgd-to-mgd bgp unnumbered test passed 🎉");
+
     Ok(())
 }
 
@@ -428,6 +623,21 @@ async fn collect_diagnostics(
     cr2.collect_diagnostics(d, topo_name).await;
 }
 
+/// Snapshot logs and live state from both Helios mgd peers in the mgd-duo
+/// topology.
+async fn collect_mgd_duo_diagnostics(
+    d: &Runner,
+    ox1: MgdNode,
+    ox2: MgdNode,
+    topo_name: &str,
+) {
+    warn!(d.log, "collecting diagnostics for {topo_name}");
+    for ox in [ox1, ox2] {
+        ox.illumos().collect_diagnostics(d, topo_name).await;
+        ox.collect_diagnostics(d, topo_name).await;
+    }
+}
+
 async fn frr_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
     const BASE_CONFIG: &str = "
         configure
@@ -495,9 +705,7 @@ async fn eos_setup(r: EosNode, d: Arc<Runner>) -> Result<()> {
 }
 
 pub async fn cleanup_bfd_static_test() -> Result<()> {
-    // dropping this without persistent set will destroy the topo
-    let _topo = trio(TRIO_BFD_STATIC_TOPO_NAME)?;
-    Ok(())
+    cleanup_topology(TRIO_BFD_STATIC_TOPO_NAME, |name| trio(name).map(drop))
 }
 
 pub async fn run_trio_bfd_static_test(
