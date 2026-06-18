@@ -31,12 +31,22 @@
 
 mod impls;
 pub mod latest;
+
+/// Proptest `Arbitrary` impls and strategy helpers for the latest versions
+/// of types. Re-exported through `mg_api_types::<domain>` so test code can
+/// reach them without depending on this crate directly.
+#[cfg(feature = "proptest")]
+pub mod proptest {
+    pub use crate::impls::mrib;
+}
 #[path = "initial/mod.rs"]
 pub mod v1;
 #[path = "v4_over_v6_static_routes/mod.rs"]
 pub mod v10;
 #[path = "prefix_to_oxnet/mod.rs"]
 pub mod v11;
+#[path = "multicast_support/mod.rs"]
+pub mod v12;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

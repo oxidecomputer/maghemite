@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 use crate::unnumbered_manager::{AddNeighborError, ResolveNeighborError};
 use dropshot::{ClientErrorStatusCode, HttpError};
 
@@ -35,7 +37,15 @@ pub enum Error {
 impl From<Error> for HttpError {
     fn from(value: Error) -> Self {
         match value {
-            Error::Db(_) => Self::for_internal_error(value.to_string()),
+            Error::Db(ref db_err) => match db_err {
+                rdb::error::Error::Validation(msg) => {
+                    Self::for_bad_request(None, msg.clone())
+                }
+                rdb::error::Error::NotFound(msg) => {
+                    Self::for_not_found(None, msg.clone())
+                }
+                _ => Self::for_internal_error(value.to_string()),
+            },
             Error::Conflict(_) => Self::for_client_error_with_status(
                 Some(value.to_string()),
                 ClientErrorStatusCode::CONFLICT,

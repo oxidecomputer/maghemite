@@ -2,9 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Functional code for the latest versions of types.
+pub use mg_api_types_versions::latest::mrib::*;
 
-pub(crate) mod bgp;
 #[cfg(feature = "proptest")]
-pub mod mrib;
-pub(crate) mod rdb;
+pub use mg_api_types_versions::proptest::mrib::*;

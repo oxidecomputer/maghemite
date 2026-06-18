@@ -180,6 +180,10 @@ pub mod ndp {
     pub use crate::v5::ndp::NdpThreadState;
 }
 
+pub mod mrib {
+    pub use crate::v12::mrib::*;
+}
+
 pub mod rib {
     pub use crate::v1::rib::BestpathFanoutRequest;
     pub use crate::v1::rib::BestpathFanoutResponse;
