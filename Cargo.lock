@@ -3295,7 +3295,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "ispf"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ispf#f78443a98397f7818b1e7a487dbb7d5cad625496"
+source = "git+https://github.com/oxidecomputer/ispf#2e04bbfe8547b95e92f0dcdd85e08efb974eda0a"
 dependencies = [
  "serde",
 ]
