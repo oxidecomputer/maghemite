@@ -12,6 +12,8 @@ use slog::info;
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+const CEOS_CONTAINER: &str = "ceos";
+
 #[derive(Copy, Clone)]
 pub struct EosNode(pub NodeRef);
 
@@ -31,7 +33,9 @@ impl EosNode {
             let status = d
                 .exec(
                     self.0,
-                    "docker inspect ceos --format '{{.State.Status}}'",
+                    &format!(
+                        "docker inspect {CEOS_CONTAINER} --format '{{{{.State.Status}}}}'"
+                    ),
                 )
                 .await?;
 
@@ -54,7 +58,10 @@ impl EosNode {
         );
 
         let response = d
-            .exec(self.0, &format!("docker exec ceos Cli -c '{script}'"))
+            .exec(
+                self.0,
+                &format!("docker exec {CEOS_CONTAINER} Cli -c '{script}'"),
+            )
             .await?;
 
         Ok(response)
@@ -88,19 +95,25 @@ impl EosNode {
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {name}-cli: {e}"),
         }
+        self.linux().collect_diagnostics(d, topo, &name).await;
+        self.linux()
+            .collect_container_diagnostics(d, topo, &name, CEOS_CONTAINER)
+            .await;
     }
 
     /// Freeze the ceos container. BFD packets stop being processed without
     /// tearing down running-config, so `unpause` restores the session.
     pub async fn pause(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: pausing ceos", self.name(d));
-        d.exec(self.0, "docker pause ceos").await?;
+        info!(d.log, "{}: pausing {CEOS_CONTAINER}", self.name(d));
+        d.exec(self.0, &format!("docker pause {CEOS_CONTAINER}"))
+            .await?;
         Ok(())
     }
 
     pub async fn unpause(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: unpausing ceos", self.name(d));
-        d.exec(self.0, "docker unpause ceos").await?;
+        info!(d.log, "{}: unpausing {CEOS_CONTAINER}", self.name(d));
+        d.exec(self.0, &format!("docker unpause {CEOS_CONTAINER}"))
+            .await?;
         Ok(())
     }
 

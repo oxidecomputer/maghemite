@@ -54,6 +54,14 @@ mkdir -p cargo-bay
 mv mgd cargo-bay/
 mv ddmd cargo-bay/
 
+# Juniper/cRPD images require a runtime license. Fetch it on the CI runner,
+# which has catacomb access, and pass it to the guest by file via cargo-bay.
+# The license contents must never be printed or committed.
+curl -sSfL --retry 10 --retry-all-errors \
+	-o cargo-bay/falcon-juniper-license.key \
+	http://catacomb.eng.oxide.computer:12346/falcon/jl
+chmod 0600 cargo-bay/falcon-juniper-license.key
+
 export EXT_INTERFACE=${EXT_INTERFACE:-igb0}
 
 first=$(bmat address ls -f extra -Ho first)
@@ -66,7 +74,7 @@ RUST_LOG=debug pfexec ./falcon-lab run \
 	mgd-unnumbered
 
 RUST_LOG=debug pfexec ./falcon-lab run \
-	trio-unnumbered
+	quartet-unnumbered
 
 RUST_LOG=debug pfexec ./falcon-lab run \
-	trio-bfd-static-routing
+	quartet-bfd-static-routing

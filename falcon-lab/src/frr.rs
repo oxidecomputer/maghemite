@@ -101,23 +101,7 @@ impl FrrNode {
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {name}-vtysh: {e}"),
         }
-        // Plain `ip` snapshots (not a vtysh command, so issued directly).
-        for (suffix, cmd) in [
-            ("ip-link", "ip -d -s link show"),
-            ("ip-addr", "ip -d -s addr show"),
-            ("ip-neigh", "ip -d -s neigh show"),
-            ("ip-nexthop", "ip -d -s nexthop show"),
-            ("ip-route", "ip -d -s route show table all"),
-        ] {
-            crate::diagnostics::capture(
-                d,
-                self.0,
-                topo,
-                &format!("{name}-{suffix}"),
-                cmd,
-            )
-            .await;
-        }
+        self.linux().collect_diagnostics(d, topo, &name).await;
     }
 
     /// Execute a vtysh command and return the output.
