@@ -70,11 +70,15 @@ gw=$(bmat address ls -f extra -Ho gateway)
 server=$(ipadm show-addr "${EXT_INTERFACE}"/dhcp -po ADDR | sed 's#/.*##g')
 pfexec ./dhcp-server "${first}" "${last}" "${gw}" "${server}" &> /work/dhcp-server.log &
 
-RUST_LOG=debug pfexec ./falcon-lab run \
-	mgd-unnumbered
+run_test() {
+	local test=$1
+	local status=0
 
-RUST_LOG=debug pfexec ./falcon-lab run \
-	quartet-unnumbered
+	RUST_LOG=debug pfexec ./falcon-lab run "${test}" || status=$?
+	pfexec ./falcon-lab cleanup "${test}" || true
+	return "${status}"
+}
 
-RUST_LOG=debug pfexec ./falcon-lab run \
-	quartet-bfd-static-routing
+run_test mgd-unnumbered
+run_test quartet-unnumbered
+run_test quartet-bfd-static-routing

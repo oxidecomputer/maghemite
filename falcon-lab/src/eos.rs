@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::linux::LinuxNode;
+use crate::{diagnostics::ProtocolDiagnostics, linux::LinuxNode};
 use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
@@ -71,21 +71,31 @@ impl EosNode {
         LinuxNode(self.0)
     }
 
-    /// Capture BGP / BFD / routing state via the Arista CLI.
-    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+    /// Capture protocol-specific state via the Arista CLI.
+    pub async fn collect_diagnostics(
+        &self,
+        d: &Runner,
+        topo: &str,
+        protocols: ProtocolDiagnostics,
+    ) {
         let name = self.name(d);
-        // `Cli -c` takes a single newline-separated script.
-        const SCRIPT: &str = "enable
-            show running-config
-            show ip interface brief
-            show ip bgp summary
-            show ip bgp
-            show ipv6 bgp
-            show ip route
-            show ipv6 route
-            show bfd peers
-        ";
-        match self.shell(d, SCRIPT).await {
+        // `Cli -c` takes a single newline-separated script. Linux diagnostics
+        // below collect host/container interfaces and routes for every test,
+        // so keep this focused on the protocol under test.
+        let script = if protocols.bgp() {
+            "enable
+                show running-config
+                show ip bgp summary
+                show ip bgp
+                show ipv6 bgp
+            "
+        } else {
+            "enable
+                show running-config
+                show bfd peers
+            "
+        };
+        match self.shell(d, script).await {
             Ok(out) => crate::diagnostics::write_artifact(
                 d,
                 topo,

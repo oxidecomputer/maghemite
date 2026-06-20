@@ -5,9 +5,10 @@
 use crate::{
     bgp::basic_unnumbered_neighbor,
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
+    diagnostics::ProtocolDiagnostics,
     eos::EosNode,
     frr::FrrNode,
-    juniper::JuniperNode,
+    juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
     topo::{MgdDuo, Quartet, mgd_duo, quartet},
     wait_for_eq,
@@ -101,6 +102,7 @@ struct BootedQuartet {
     #[allow(dead_code)]
     mgmt_addr: IpAddr,
     topo_name: String,
+    protocols: ProtocolDiagnostics,
 }
 
 #[derive(Copy, Clone)]
@@ -151,12 +153,14 @@ where
     let cr2 = bt.cr2;
     let cr3 = bt.cr3;
     let topo_name = bt.topo_name.clone();
+    let protocols = bt.protocols;
     let result = body(bt).await;
     if let Err(e) = &result {
         warn!(ad.log, "{topo_name} failed: {e:#}");
         restore_quartet_before_diagnostics(&ad, cr1, cr2, cr3).await;
         if diag_on_fail {
-            collect_diagnostics(&ad, ox, cr1, cr2, cr3, &topo_name).await;
+            collect_diagnostics(&ad, ox, cr1, cr2, cr3, &topo_name, protocols)
+                .await;
         }
     }
     result
@@ -272,6 +276,7 @@ async fn boot_quartet<F>(
     persistent: bool,
     diag_on_fail: bool,
     commits: NpuvmCommits,
+    protocols: ProtocolDiagnostics,
     spawn_peer_setups: F,
 ) -> Result<BootedQuartet>
 where
@@ -290,6 +295,7 @@ where
         cr3,
     } = quartet(topo_name)?;
     d.persistent = persistent;
+    clear_staged_routing_configs().context("clear stale Junos config")?;
     info!(d.log, "{topo_name}: launching quartet topology");
     timeout(LAUNCH_TIMEOUT, d.launch())
         .await
@@ -316,6 +322,7 @@ where
             dpd,
             mgmt_addr,
             topo_name: topo_name.to_string(),
+            protocols,
         }),
         Err(e) => {
             warn!(ad.log, "{topo_name} boot failed: {e:#}");
@@ -378,6 +385,7 @@ where
 }
 
 pub async fn cleanup_quartet_unnumbered_test() -> Result<()> {
+    clear_staged_routing_configs().context("clear stale Junos config")?;
     cleanup_topology(QUARTET_UNNUMBERED_TOPO_NAME, |name| {
         quartet(name).map(drop)
     })
@@ -515,6 +523,7 @@ pub async fn run_quartet_unnumbered_test(
         persistent,
         diag_on_fail,
         commits,
+        ProtocolDiagnostics::Bgp,
         |cr1, cr2, cr3, ad| {
             let mut js = tokio::task::JoinSet::new();
             let cr1_ad = ad.clone();
@@ -772,6 +781,7 @@ async fn collect_diagnostics(
     cr2: EosNode,
     cr3: JuniperNode,
     topo_name: &str,
+    protocols: ProtocolDiagnostics,
 ) {
     warn!(d.log, "collecting diagnostics for {topo_name}");
     // ox VM: illumos network state, plus each daemon's log via its lens.
@@ -780,9 +790,9 @@ async fn collect_diagnostics(
     ox.ddm().collect_diagnostics(d, topo_name).await;
     ox.collect_diagnostics(d, topo_name).await;
     // Peer routers.
-    cr1.collect_diagnostics(d, topo_name).await;
-    cr2.collect_diagnostics(d, topo_name).await;
-    cr3.collect_diagnostics(d, topo_name).await;
+    cr1.collect_diagnostics(d, topo_name, protocols).await;
+    cr2.collect_diagnostics(d, topo_name, protocols).await;
+    cr3.collect_diagnostics(d, topo_name, protocols).await;
 }
 
 /// Boot/setup failures happen before the topology is fully configured, so avoid
@@ -963,6 +973,7 @@ async fn juniper_setup(r: JuniperNode, d: Arc<Runner>) -> Result<()> {
 }
 
 pub async fn cleanup_quartet_bfd_static_test() -> Result<()> {
+    clear_staged_routing_configs().context("clear stale Junos config")?;
     cleanup_topology(QUARTET_BFD_STATIC_TOPO_NAME, |name| {
         quartet(name).map(drop)
     })
@@ -978,6 +989,7 @@ pub async fn run_quartet_bfd_static_test(
         persistent,
         diag_on_fail,
         commits,
+        ProtocolDiagnostics::Bfd,
         |cr1, cr2, cr3, ad| {
             let mut js = tokio::task::JoinSet::new();
             let cr1_ad = ad.clone();

@@ -1,6 +1,6 @@
 //! Juniper cRPD machinery.
 
-use crate::linux::LinuxNode;
+use crate::{diagnostics::ProtocolDiagnostics, linux::LinuxNode};
 use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
@@ -13,9 +13,41 @@ use std::path::{Path, PathBuf};
 const CRPD_CONTAINER: &str = "crpd1";
 const CARGO_BAY: &str = "cargo-bay";
 const LICENSE_PATH: &str = "falcon-juniper-license.key";
+const CONFIG_SUFFIX: &str = "-junos.set";
 
 #[derive(Copy, Clone)]
 pub struct JuniperNode(pub NodeRef);
+
+/// Remove non-secret Junos topology configs from previous runs.
+///
+/// The Junos image's guest-side apply service starts during boot and consumes
+/// the first `/opt/cargo-bay/*-junos.set` it sees. CI runs multiple Junos
+/// topologies against one cargo-bay, so stale config must be removed before a
+/// new Junos VM can boot and observe it.
+pub fn clear_staged_routing_configs() -> Result<()> {
+    let dir = Path::new(CARGO_BAY);
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in
+        fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("read {} entry", dir.display()))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with(CONFIG_SUFFIX) {
+            fs::remove_file(&path)
+                .with_context(|| format!("remove stale {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
 
 impl JuniperNode {
     pub fn name(&self, d: &Runner) -> String {
@@ -86,7 +118,7 @@ impl JuniperNode {
         let dir = Path::new(CARGO_BAY);
         fs::create_dir_all(dir)
             .with_context(|| format!("create {}", dir.display()))?;
-        let path = dir.join(format!("{node_name}-junos.set"));
+        let path = dir.join(format!("{node_name}{CONFIG_SUFFIX}"));
         let routing_config = routing_config
             .lines()
             .map(str::trim)
@@ -163,9 +195,14 @@ impl JuniperNode {
     /// directly or Junos/container logs here: the committed configuration
     /// contains the license key, and logs may include secret-bearing
     /// configuration activity.
-    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+    pub async fn collect_diagnostics(
+        &self,
+        d: &Runner,
+        topo: &str,
+        protocols: ProtocolDiagnostics,
+    ) {
         let name = self.name(d);
-        const COMMANDS: [(&str, &str); 6] = [
+        let mut commands = vec![
             ("docker-ps", "docker ps -a"),
             ("docker-inspect", "docker inspect crpd1"),
             (
@@ -181,12 +218,26 @@ impl JuniperNode {
                 "show-interfaces-terse",
                 "docker exec crpd1 cli -c 'show interfaces terse | no-more'",
             ),
-            (
-                "show-bgp-summary",
-                "docker exec crpd1 cli -c 'show bgp summary | no-more'",
-            ),
         ];
-        for (suffix, command) in COMMANDS {
+        if protocols.bgp() {
+            commands.extend([
+                (
+                    "show-bgp-summary",
+                    "docker exec crpd1 cli -c 'show bgp summary | no-more'",
+                ),
+                (
+                    "show-bgp-neighbors-auto-discovered",
+                    "docker exec crpd1 cli -c 'show bgp neighbors auto-discovered | no-more'",
+                ),
+            ]);
+        }
+        if protocols.bfd() {
+            commands.push((
+                "show-bfd-session-detail",
+                "docker exec crpd1 cli -c 'show bfd session detail | no-more'",
+            ));
+        }
+        for (suffix, command) in commands {
             crate::diagnostics::capture(
                 d,
                 self.0,

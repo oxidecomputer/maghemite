@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::linux::LinuxNode;
+use crate::{diagnostics::ProtocolDiagnostics, linux::LinuxNode};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
@@ -79,19 +79,28 @@ impl FrrNode {
             .any(|p| p.peer == peer && p.status.eq_ignore_ascii_case("up")))
     }
 
-    /// Capture BGP / BFD / routing state via vtysh, plus linux network state
-    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+    /// Capture protocol-specific FRR state via vtysh, plus Linux network state.
+    pub async fn collect_diagnostics(
+        &self,
+        d: &Runner,
+        topo: &str,
+        protocols: ProtocolDiagnostics,
+    ) {
         let name = self.name(d);
-        const VTYSH: &str = "
-            show running-config
-            show ip bgp summary
-            show ip bgp
-            show ipv6 bgp
-            show ip route
-            show ipv6 route
-            show bfd peers
-        ";
-        match self.shell(d, VTYSH).await {
+        let commands = if protocols.bgp() {
+            "
+                show running-config
+                show ip bgp summary
+                show ip bgp
+                show ipv6 bgp
+            "
+        } else {
+            "
+                show running-config
+                show bfd peers
+            "
+        };
+        match self.shell(d, commands).await {
             Ok(out) => crate::diagnostics::write_artifact(
                 d,
                 topo,

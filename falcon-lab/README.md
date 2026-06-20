@@ -19,6 +19,12 @@ Before running Junos topologies, `cargo-bay/` must contain:
 Junos CLI input file: it starts with `configure`, contains `set ...` commands,
 and ends with `commit`.
 
+Junos topology config is per-run state. `falcon-lab` removes stale
+`cargo-bay/*-junos.set` files before launching a quartet topology so the
+guest-side apply service cannot consume configuration left behind by an earlier
+topology. Do not put persistent hand-written Junos config in files matching
+that pattern.
+
 ## Junos license source and connectivity assumptions
 
 CI fetches the Juniper license from:
