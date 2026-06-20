@@ -1,18 +1,11 @@
 #!/bin/bash
 #:
-#: name = "build-interop"
+#: name = "build-dhcp-server"
 #: variety = "basic"
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
 #: skip_clone = true
-#:
-#: enable = false
-#:
-#: access_repos = [
-#:   "oxidecomputer/testbed",
-#: ]
 #: output_rules = [
-#:   "=/work/testbed.tar.gz",
 #:   "=/work/dhcp-server",
 #: ]
 
@@ -36,38 +29,6 @@ fi
 
 cargo --version
 rustc --version
-
-banner 'clone'
-mkdir -p "${WORK}/ci"
-git clone https://github.com/oxidecomputer/testbed "${WORK}/ci/testbed"
-
-banner 'build'
-cd "${WORK}/ci/testbed"
-cargo build \
-    -p interop-lab \
-    -p wrangler
-cargo build --tests
-
-banner 'prep'
-
-mkdir -p out
-cp target/debug/{interop,wrangler} out/
-# grab just the file ending in the hash, not the file ending in ".d"
-TEST=$(find target/debug/deps -maxdepth 1 -type f -name 'baseline-*' -exec ls -t {} + | grep -v -E '.*\.d$' | head -1)
-mv "${TEST}" 'out/baseline'
-
-banner 'archive'
-
-cd "${WORK}/ci"
-cat <<EOF > exclude-file.txt
-testbed/.git
-testbed/a4x2
-testbed/archive
-testbed/target
-EOF
-tar cvzXf exclude-file.txt \
-    "${WORK}/testbed.tar.gz" \
-    testbed
 
 banner 'dhcp-server'
 
