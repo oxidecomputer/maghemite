@@ -69,7 +69,7 @@
       }
     },
     "MulticastOrigin": {
-      "description": "Wire form of a multicast group origin.\n\nThe validated counterpart (`ddm_api_types::net::MulticastOrigin`) carries an `UnderlayMulticastIpv6` and a `Vni`. As a frozen wire type this form stays primitive, a plain `Ipv6Addr` for the underlay group and a plain `u32` for the VNI. Validation happens when converting into the rich type at the exchange boundary.",
+      "description": "Wire form of a multicast group origin.\n\nThe validated counterpart (`ddm_api_types::net::MulticastOrigin`) carries an `UnderlayMulticastIpv6` and a `Vni`. As a frozen wire type this form stays unvalidated, a plain `Ipv6Addr` for the underlay group and a plain `u32` for the VNI. Validation happens when converting into that counterpart at the exchange boundary.",
       "type": "object",
       "required": [
         "overlay_group",

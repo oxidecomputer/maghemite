@@ -385,12 +385,12 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
         for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Multicast(
-                groups.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            e.send(Event::Admin(AdminEvent::AnnounceMulticast(groups.clone())))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -403,17 +403,22 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
         let groups = request.into_inner();
         slog::info!(ctx.log, "withdraw multicast groups: {groups:#?}");
+        // The modification is applied before any event is enqueued, and each
+        // state machine revalidates reachability when it processes the
+        // event. An import racing this request cannot be withdrawn against
+        // stale state, since the revalidation reads post-modification database
+        // state. The modification is idempotent, so a client retry is safe.
         ctx.db
             .withdraw_mcast(&groups)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
         for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Multicast(
-                groups.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            e.send(Event::Admin(AdminEvent::WithdrawMulticast(groups.clone())))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         Ok(HttpResponseUpdatedNoContent())

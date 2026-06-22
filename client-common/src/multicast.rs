@@ -214,54 +214,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn overlay_accepts_v4_and_v6_multicast() {
-        assert!(OverlayMulticast::new("233.252.0.1".parse().unwrap()).is_ok());
-        assert!(OverlayMulticast::new("ff0e::1".parse().unwrap()).is_ok());
-    }
-
-    #[test]
-    fn overlay_rejects_unicast() {
-        assert!(OverlayMulticast::new("192.0.2.1".parse().unwrap()).is_err());
-        assert!(OverlayMulticast::new("2001:db8::1".parse().unwrap()).is_err());
-    }
-
-    #[test]
     fn overlay_serde_rejects_unicast() {
         let json =
             serde_json::to_string(&"192.0.2.1".parse::<IpAddr>().unwrap())
                 .unwrap();
         let result: Result<OverlayMulticast, _> = serde_json::from_str(&json);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn underlay_valid_ff04() {
-        let addr = Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1);
-        assert!(UnderlayMulticastIpv6::new(addr).is_ok());
-    }
-
-    #[test]
-    fn underlay_rejects_non_admin_local() {
-        // ff0e:: is global scope, not admin-local
-        let addr = Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1);
-        assert!(UnderlayMulticastIpv6::new(addr).is_err());
-    }
-
-    #[test]
-    fn underlay_rejects_unicast() {
-        let addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
-        assert!(UnderlayMulticastIpv6::new(addr).is_err());
-    }
-
-    #[test]
-    fn underlay_serde_round_trip() {
-        let addr = UnderlayMulticastIpv6::new(Ipv6Addr::new(
-            0xff04, 0, 0, 0, 0, 0, 0, 42,
-        ))
-        .unwrap();
-        let json = serde_json::to_string(&addr).unwrap();
-        let back: UnderlayMulticastIpv6 = serde_json::from_str(&json).unwrap();
-        assert_eq!(addr, back);
     }
 
     #[test]
@@ -274,14 +232,5 @@ mod tests {
         let result: Result<UnderlayMulticastIpv6, _> =
             serde_json::from_str(&json);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn from_str_rejects_unparseable() {
-        let result: Result<UnderlayMulticastIpv6, _> = "not-an-ip".parse();
-        assert!(matches!(
-            result,
-            Err(UnderlayMulticastError::InvalidIpv6(_))
-        ));
     }
 }

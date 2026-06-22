@@ -29,7 +29,7 @@ const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
 const SOLICIT: u8 = 1;
 const ADVERTISE: u8 = 1 << 1;
-// Advertises V4 multicast capability without raising the discovery version
+// Advertises DDMv4 (multicast) capability without raising the discovery version
 // byte past what old peers accept (the byte stays at the V2 floor). Following
 // RFC 5492, peers ignore capability bits they do not understand, so this is
 // backward compatible.
@@ -352,7 +352,8 @@ fn handle_solicitation(
     }
 }
 
-/// Outcome of negotiating the session version from a peer's advertisement.
+/// The outcome of negotiating the session version from a peer's advertisement.
+#[derive(Debug, PartialEq)]
 enum NegotiatedVersion {
     /// A usable version was negotiated directly from the advertised byte and
     /// capability flags.
@@ -365,15 +366,18 @@ enum NegotiatedVersion {
 /// Negotiate the session version from a peer's advertised version byte and
 /// capability flags.
 ///
-/// The version byte is a backward-compatible floor (V2) that all deployed
-/// peers accept. Capability rides flags rather than the byte: MCAST_CAPABLE
-/// signals V4, so a peer at the floor that sets it negotiates V4 while older
-/// peers that ignore the flag still session at the floor. A conforming peer
-/// never advertises a byte above the known maximum.
+/// The version byte is a backward-compatible floor ([`Version::V2`]) that all
+/// deployed peers accept. Capability rides flags rather than the byte:
+/// [`MCAST_CAPABLE`] signals [`Version::V4`], so a peer at the floor that sets
+/// it negotiates V4 while older peers that ignore the flag still session at
+/// the floor. A conforming peer never advertises a byte above the known
+/// maximum.
 ///
 /// A byte outside the known range is therefore a malformed or incompatible
 /// peer, not a capability hint, so it is rejected rather than capped. See
-/// RFC 5492 for the capability-negotiation model.
+/// [RFC 5492] for the capability-negotiation model.
+///
+/// [RFC 5492]: https://www.rfc-editor.org/rfc/rfc5492
 fn negotiate_version(version: u8, flags: u8) -> NegotiatedVersion {
     let base = match version {
         2 => Version::V2,
@@ -443,9 +447,9 @@ fn handle_advertisement(
                 stats.peer_address_changes.fetch_add(1, Ordering::Relaxed);
             }
             nbr.last_seen = Instant::now();
-            let changed = nbr.version != version;
+            let version_changed = nbr.version != version;
             nbr.version = version;
-            changed
+            version_changed
         }
         None => {
             inf!(
@@ -544,50 +548,39 @@ fn advertise(
 mod tests {
     use super::*;
 
-    // Without the capability flag the negotiated version follows the byte: the
-    // V2 floor and the in-range bytes map straight through.
+    // Pins the negotiation contract.
+    //
+    // Without the capability flag the byte is the floor and maps straight
+    // through, MCAST_CAPABLE raises any accepted byte to V4, and out-of-range
+    // bytes are rejected even with the flag set so a malformed advertisement
+    // cannot replace a valid neighbor.
     #[test]
-    fn floor_and_in_range_without_flag() {
-        assert!(matches!(
-            negotiate_version(2, 0),
-            NegotiatedVersion::Use(Version::V2)
-        ));
-        assert!(matches!(
-            negotiate_version(3, 0),
-            NegotiatedVersion::Use(Version::V3)
-        ));
-        assert!(matches!(
-            negotiate_version(4, 0),
-            NegotiatedVersion::Use(Version::V4)
-        ));
-    }
+    fn negotiate_version_contract() {
+        use NegotiatedVersion::{Rejected, Use};
 
-    // The MCAST_CAPABLE flag raises any accepted byte to V4.
-    #[test]
-    fn capability_flag_raises_to_v4() {
-        for version in [2u8, 3, 4] {
-            assert!(matches!(
-                negotiate_version(version, MCAST_CAPABLE),
-                NegotiatedVersion::Use(Version::V4)
-            ));
-        }
-    }
+        let cases = [
+            // Byte alone is the floor.
+            (2u8, 0u8, Use(Version::V2)),
+            (3, 0, Use(Version::V3)),
+            (4, 0, Use(Version::V4)),
+            // Capability flag raises any accepted byte to V4.
+            (2, MCAST_CAPABLE, Use(Version::V4)),
+            (3, MCAST_CAPABLE, Use(Version::V4)),
+            (4, MCAST_CAPABLE, Use(Version::V4)),
+            // Out-of-range bytes are rejected, flag or not.
+            (0, 0, Rejected),
+            (1, 0, Rejected),
+            (1, MCAST_CAPABLE, Rejected),
+            (5, 0, Rejected),
+            (255, MCAST_CAPABLE, Rejected),
+        ];
 
-    // Bytes outside the known range are rejected even with the capability flag
-    // set, so a malformed advertisement cannot replace a valid neighbor.
-    #[test]
-    fn out_of_range_rejected() {
-        for (version, flags) in [
-            (0u8, 0u8),
-            (1, 0),
-            (1, MCAST_CAPABLE),
-            (5, 0),
-            (255, MCAST_CAPABLE),
-        ] {
-            assert!(matches!(
+        for (version, flags, expected) in cases {
+            assert_eq!(
                 negotiate_version(version, flags),
-                NegotiatedVersion::Rejected
-            ));
+                expected,
+                "negotiate_version({version}, {flags:#05b})"
+            );
         }
     }
 }

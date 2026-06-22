@@ -656,7 +656,10 @@ async fn run_trio_tests(
     // server routers learn it via DDM exchange.
     wait_for_eq!(multicast_originated_count(&t1).await?, 0);
 
-    let mcast_origin = MulticastOrigin {
+    // One origin per overlay address family: the overlay group is opaque to
+    // ddm (any multicast IpAddr), but both families must survive the
+    // advertise/exchange/withdraw round trip.
+    let mcast_origin_v4 = MulticastOrigin {
         overlay_group: "233.252.0.1".parse().unwrap(),
         underlay_group: UnderlayMulticastIpv6::new(
             "ff04::100".parse().unwrap(),
@@ -666,14 +669,27 @@ async fn run_trio_tests(
         source: None,
         metric: 0,
     };
+    let mcast_origin_v6 = MulticastOrigin {
+        overlay_group: "ff0e::1".parse().unwrap(),
+        underlay_group: UnderlayMulticastIpv6::new(
+            "ff04::101".parse().unwrap(),
+        )
+        .unwrap(),
+        vni: Vni::try_from(77u32).unwrap(),
+        source: None,
+        metric: 0,
+    };
 
-    t1.advertise_multicast_groups(&vec![mcast_origin.clone()])
-        .await?;
+    t1.advertise_multicast_groups(&vec![
+        mcast_origin_v4.clone(),
+        mcast_origin_v6.clone(),
+    ])
+    .await?;
 
-    wait_for_eq!(multicast_originated_count(&t1).await?, 1);
+    wait_for_eq!(multicast_originated_count(&t1).await?, 2);
     wait_for_eq!(multicast_group_count(&t1).await?, 0);
-    wait_for_eq!(multicast_group_count(&s1).await?, 1);
-    wait_for_eq!(multicast_group_count(&s2).await?, 1);
+    wait_for_eq!(multicast_group_count(&s1).await?, 2);
+    wait_for_eq!(multicast_group_count(&s2).await?, 2);
 
     println_nopipe!("multicast group advertise passed");
 
@@ -683,11 +699,12 @@ async fn run_trio_tests(
     zs1.stop_router()?;
     zs1.start_router(false)?;
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
-    wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 1);
+    wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 2);
 
     println_nopipe!("multicast router restart passed");
 
-    t1.withdraw_multicast_groups(&vec![mcast_origin]).await?;
+    t1.withdraw_multicast_groups(&vec![mcast_origin_v4, mcast_origin_v6])
+        .await?;
 
     wait_for_eq!(multicast_originated_count(&t1).await?, 0);
     wait_for_eq!(multicast_group_count(&t1).await?, 0);

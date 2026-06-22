@@ -164,7 +164,8 @@ async fn run() {
     // context holds the sender and signals a group's address when its imported
     // membership changes. The sweep started by start_mcast_sweep owns the
     // receiver and wakes early to reconcile the full tracked set.
-    let (notify_tx, notify_rx) = std::sync::mpsc::channel::<Ipv6Addr>();
+    let (notify_tx, notify_rx) =
+        tokio::sync::mpsc::channel::<Ipv6Addr>(ddm::MCAST_NOTIFY_CHANNEL_DEPTH);
 
     let (sms, event_channels) =
         start_state_machines(&arg, &db, &dpd, &hostname, &rt, &notify_tx, &log);
@@ -252,7 +253,7 @@ fn start_state_machines(
     dpd: &Option<DpdConfig>,
     hostname: &str,
     rt: &Arc<tokio::runtime::Handle>,
-    notify_tx: &std::sync::mpsc::Sender<Ipv6Addr>,
+    notify_tx: &tokio::sync::mpsc::Sender<Ipv6Addr>,
     log: &Logger,
 ) -> (
     Vec<StateMachine>,
@@ -330,7 +331,7 @@ fn start_state_machines(
     _dpd: &Option<DpdConfig>,
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
-    _notify_tx: &std::sync::mpsc::Sender<Ipv6Addr>,
+    _notify_tx: &tokio::sync::mpsc::Sender<Ipv6Addr>,
     _log: &Logger,
 ) -> (
     Vec<StateMachine>,
@@ -341,15 +342,16 @@ fn start_state_machines(
 
 /// Spawn the underlay multicast membership sweep, the multicast analog of the
 /// unicast import-to-DPD path `ddmd` already performs in-process. The sweep
-/// runs on a dedicated thread, reconciling every tracked group on each pass,
-/// woken early by a trigger and otherwise self-ticking on a periodic backstop.
+/// runs as a task on the daemon's runtime, reconciling every tracked group on
+/// each pass, woken early by a trigger and otherwise self-ticking on a fixed
+/// interval.
 ///
 /// Takes `notify_rx` by value so any path that does not start the sweep drops
 /// it, closing the channel and making the state machines' notify sends fail
 /// fast rather than accumulate as unread.
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 fn start_mcast_sweep(
-    notify_rx: std::sync::mpsc::Receiver<Ipv6Addr>,
+    notify_rx: tokio::sync::mpsc::Receiver<Ipv6Addr>,
     dpd: Option<DpdConfig>,
     db: Db,
     peers: Vec<SmContext>,
@@ -360,20 +362,20 @@ fn start_mcast_sweep(
         // No backend: returning drops notify_rx and closes the channel.
         return;
     };
-    let task_log = log.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("ddm-mcast-members".into())
-        .spawn(move || ddm::mcast::run(db, peers, dpd, rt, notify_rx, task_log))
-    {
-        error!(log, "failed to spawn multicast membership sweep: {e}");
+    // Under --api-only there are no state machines, so no peers or imports
+    // exist to derive membership from. A sweep would compute an empty
+    // desired set for every seeded group and drain its DPD members.
+    if peers.is_empty() {
+        return;
     }
+    rt.spawn(ddm::mcast::run(db, peers, dpd, notify_rx, log));
 }
 
 /// Non-illumos variant: underlay multicast replicates only on a switch, so the
 /// sweep never starts. Consuming `notify_rx` drops it, closing the channel.
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
 fn start_mcast_sweep(
-    _notify_rx: std::sync::mpsc::Receiver<Ipv6Addr>,
+    _notify_rx: tokio::sync::mpsc::Receiver<Ipv6Addr>,
     _dpd: Option<DpdConfig>,
     _db: Db,
     _peers: Vec<SmContext>,

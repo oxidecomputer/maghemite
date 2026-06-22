@@ -361,7 +361,7 @@ mod test {
             tunnel: None,
             multicast: Some(multicast_update()),
         };
-        // Down-convert to v3 for an older peer, then back. Multicast has no v3
+        // Downconvert to v3 for an older peer, then back. Multicast has no v3
         // representation, so the round trip drops it.
         let v3 = v3::Update::from(update);
         let back = Update::from(v3);
@@ -387,7 +387,7 @@ mod test {
     }
 
     // A v4 update carrying all three halves must keep its underlay and tunnel
-    // halves intact when down-converted for older peers, while the multicast
+    // halves intact when downconverted for older peers, while the multicast
     // half (which has no v3 or v2 wire form) is dropped.
     #[test]
     fn mixed_update_down_conversion_preserves_underlay_and_tunnel() {

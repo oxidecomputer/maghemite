@@ -3884,7 +3884,6 @@ dependencies = [
  "dpd-client",
  "libc",
  "libnet",
- "omicron-common",
  "oximeter",
  "oximeter-producer",
  "oxnet",

@@ -16,7 +16,7 @@
 //! module so the state machine type definitions in [`crate::sm`] continue to
 //! compile when the routing runtime is gated out (e.g. a non-illumos `ddmd`
 //! running with `--api-only`). The runtime helpers that drive the protocol
-//! over UDPv6 sockets live in the [`runtime`] submodule and are illumos-only.
+//! over UDPv6 sockets live in the `runtime` submodule and are illumos-only.
 //!
 //! ## Protocol
 //!
@@ -89,13 +89,13 @@
 //!
 //! The first byte indicates the version. The second byte is a flags bitfield.
 //! The first position `S` indicates a solicitation. The second position `A`
-//! indicates an advertisement. The third position `C` indicates V4 multicast
-//! capability, advertised independently of the version byte so old peers that
-//! ignore it still peer at the floor version. All other positions are reserved
-//! for future use. The third byte indicates the kind of router. Current values
-//! are 0 for a server router and 1 for a transit routers. The fourth byte is a
-//! hostname length followed directly by a hostname of up to 255 bytes in
-//! length.
+//! indicates an advertisement. The third position `C` indicates DDMv4
+//! (multicast) capability, advertised independently of the version byte so old
+//! peers that ignore it still peer at the floor version. All other positions
+//! are reserved for future use. The third byte indicates the kind of router.
+//! Current values are 0 for a server router and 1 for a transit routers. The
+//! fourth byte is a hostname length followed directly by a hostname of up to
+//! 255 bytes in length.
 
 use thiserror::Error;
 
@@ -105,7 +105,10 @@ mod runtime;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+// Ordering follows the ascending discriminants, so version-dependent
+// behavior can use range checks (`>= Version::V4`) that remain correct
+// as newer versions are added.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum Version {
     V2 = 2,

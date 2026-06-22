@@ -19,7 +19,7 @@
 //! and peer expiry send the group's address down a notify channel to wake the
 //! sweep early. Peer-link resolution does the same for any import that raced
 //! ahead of the link. Absent a trigger, the sweep self-ticks on
-//! [`RECONCILE_INTERVAL`], which is also the drift-repair backstop. The address
+//! `RECONCILE_INTERVAL`, which bounds how long drift persists. The address
 //! on a trigger is only a wake hint: the sweep always reconciles the full set,
 //! so a coalesced or missed trigger costs at most one interval of latency.
 //!
@@ -29,6 +29,8 @@
 //! imports are withdrawn stays in the sweep until its DPD member list is
 //! confirmed empty, then drops out, so a withdrawn group is emptied exactly
 //! once and the tracked set stays bounded to active and recently active groups.
+//! Discovering pre-existing DPD-only groups is deferred for a startup grace so
+//! a restart does not empty groups whose imports have not yet been re-learned.
 //!
 //! DPD's only member-write surface is a full-list replace, so every member edit
 //! is a read-modify-write. Groups reconcile concurrently within a pass, but the
@@ -66,23 +68,22 @@ use dpd_client::types::{
 };
 use dpd_client::{Client, ClientState};
 use futures::TryStreamExt;
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use mg_common::lock;
 use reqwest::StatusCode;
-use slog::{Logger, debug, error, warn};
+use slog::{Logger, debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv6Addr;
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 /// Interval between the sweep's periodic membership reconcile passes.
 ///
 /// A trigger wakes the sweep immediately, so this interval governs only the
-/// drift-repair backstop: how quickly drift and any change not delivered as a
+/// periodic resync: how quickly drift and any change not delivered as a
 /// trigger converge into DPD. It is kept coarse to bound idle DPD churn, since
 /// membership changes themselves arrive as triggers.
-const RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Per-request timeout for a single DPD member operation.
 ///
@@ -91,39 +92,57 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 /// expected DPD member operation latency so that it fires only on a genuine
 /// stall, and low enough that a group's sequential fetch-then-write pair
 /// (`2 * DPD_REQUEST_TIMEOUT`) stays under [`RECONCILE_INTERVAL`], so a single
-/// stalled group cannot extend a pass beyond one backstop interval. This
+/// stalled group cannot extend a pass beyond one reconcile interval. This
 /// stall-detection threshold is reasoned about independently of the
 /// convergence cadence set by [`RECONCILE_INTERVAL`]. A timed-out operation is
 /// logged distinctly and retried on the next pass.
 const DPD_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Sets how long after startup the sweep waits before discovering DPD-only
+/// groups.
+///
+/// A restart races the sweep against the exchange machinery: the first pass
+/// runs before peers have re-advertised their subscriptions. Seeding the
+/// tracked set from DPD immediately would make those groups look withdrawn and
+/// drain them, cutting live replication until the imports return. Two
+/// reconcile intervals cover peer discovery and the initial pulls. Imported
+/// groups are still reconciled immediately, and a group withdrawn after
+/// startup drains normally because it is already tracked.
+const STARTUP_SEED_GRACE: Duration = RECONCILE_INTERVAL.saturating_mul(2);
+
+/// Cap on concurrently reconciling groups within a single pass.
+///
+/// Bounds the in-flight DPD requests a pass can generate so a large tracked
+/// set cannot flood DPD with an unbounded burst of GETs and PUTs.
+const MAX_CONCURRENT_GROUP_RECONCILES: usize = 16;
+
 /// Run the multicast membership sweep.
 ///
-/// Loops forever on the calling thread, so callers run it in a dedicated thread.
+/// This loops forever, so callers spawn it as a dedicated task on the runtime.
 ///
-/// Tracks the set of active underlay groups and reconciles them on each pass.
-/// `notify_rx` is a wake hint only: a trigger wakes the sweep early, and absent
-/// a trigger it self-ticks on [`RECONCILE_INTERVAL`]. Every pass reconciles the
+/// We track the set of active underlay groups and reconcile them on each pass.
+/// `notify_rx` is a wake hint only. A trigger wakes the sweep early, and absent
+/// a trigger it self-ticks on `RECONCILE_INTERVAL`. Every pass reconciles the
 /// full tracked set, so the group address carried by a trigger is not consulted
 /// and a coalesced trigger costs at most one interval of latency.
 ///
 /// The tracked set is the union of every currently imported group and any group
 /// still being drained. `reconcile_group` returns `false` only once a
-/// withdrawn group's DPD members are confirmed empty, so a group leaves the set
-/// exactly once its drain is complete. A re-import re-adds it on the next pass
-/// since the control plane writes to the DB before sending its trigger.
+/// withdrawn group's DPD members are confirmed empty, so that a group leaves
+/// the set exactly once its drain is complete. A re-import re-adds it on the
+/// next pass since the control plane writes to the DB before sending its
+/// trigger.
 ///
 /// `peers` is the set of per-interface state machine contexts, fixed at
 /// startup. Peer identity lives behind interior mutability, so each pass
 /// resolves against whatever peers have been discovered when it reads.
 ///
 /// Under `--api-only` there are no state machines, so the set is empty.
-pub fn run(
+pub async fn run(
     db: Db,
     peers: Vec<SmContext>,
     dpd: DpdConfig,
-    rt: Arc<tokio::runtime::Handle>,
-    notify_rx: Receiver<Ipv6Addr>,
+    mut notify_rx: Receiver<Ipv6Addr>,
     log: Logger,
 ) {
     let client_state = ClientState {
@@ -133,14 +152,20 @@ pub fn run(
     // Build the inner HTTP client explicitly to bound each request at
     // DPD_REQUEST_TIMEOUT. The progenitor-generated dpd_client defaults to a
     // 15s connect and request timeout, which exceeds RECONCILE_INTERVAL. A
-    // single stalled GET could outlast the whole backstop interval, and a
+    // single stalled GET could outlast the whole reconcile interval, and a
     // sequential fetch-then-write pair could run three times it. Stepping down
     // to DPD_REQUEST_TIMEOUT keeps a stalled group's pair under one interval.
-    let http = reqwest::ClientBuilder::new()
+    let http = match reqwest::ClientBuilder::new()
         .connect_timeout(DPD_REQUEST_TIMEOUT)
         .timeout(DPD_REQUEST_TIMEOUT)
         .build()
-        .expect("failed to build DPD HTTP client");
+    {
+        Ok(http) => http,
+        Err(e) => {
+            error!(log, "failed to build DPD HTTP client, stopping sweep: {e}");
+            return;
+        }
+    };
     let client = Client::new_with_client(
         &format!("http://{}:{}", dpd.host, dpd.port),
         http,
@@ -155,67 +180,81 @@ pub fn run(
     // On a fresh start, the imported set and triggers only reference groups
     // with live subscriptions, so a group whose imports were withdrawn while
     // `ddmd` was down would never re-enter the sweep and its stale replication
-    // members would persist. Folding those groups in once lets the first pass
-    // drain any that no peer still imports, while groups still imported simply
-    // reconcile as usual.
-    let mut tracked: HashSet<Ipv6Addr> = rt
-        .block_on(client.member_group_ips(&log))
-        .into_iter()
-        .collect();
+    // members would persist. After a startup grace, folding those groups in
+    // lets a pass drain any that no peer still imports, while groups still
+    // imported simply reconcile as usual. A failed listing is retried after
+    // another reconcile interval, since ordinary passes cannot discover
+    // orphans.
+    let mut tracked: HashSet<Ipv6Addr> = HashSet::new();
+    let mut seeded = false;
+    let mut next_seed_attempt = Instant::now() + STARTUP_SEED_GRACE;
 
     loop {
+        if !seeded && Instant::now() >= next_seed_attempt {
+            match client.member_group_ips(&log).await {
+                Some(groups) => {
+                    tracked.extend(groups);
+                    seeded = true;
+                }
+                None => {
+                    next_seed_attempt = Instant::now() + RECONCILE_INTERVAL;
+                }
+            }
+        }
+
         // The imported set and resolved peer links are the same for every group
         // in a pass, so compute them once here rather than per group.
         let imported = db.imported_mcast();
         let peer_links = resolve_peer_links(&peers, &log);
 
-        tracked = rt.block_on(reconcile_pass(
-            tracked, imported, peer_links, &client, &log,
-        ));
+        tracked =
+            reconcile_pass(tracked, imported, peer_links, &client, &log).await;
 
-        // Wait for a trigger or the backstop interval, whichever comes first,
-        // then drain any burst since the next pass reconciles everything
-        // regardless.
-        match notify_rx.recv_timeout(RECONCILE_INTERVAL) {
-            Ok(_) => while notify_rx.try_recv().is_ok() {},
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {
-                // Unreachable while `ddmd` runs: `main()` owns the original
-                // `notify_tx` and parks for the daemon's lifetime, so the
-                // channel cannot close even if every per-peer sender clone is
-                // torn down. We stop the sweep rather than spin on a closed
-                // channel if that invariant ever changes.
-                error!(log, "multicast notify channel closed, stopping sweep");
-                break;
-            }
+        // Wait for a trigger or one idle reconcile interval, whichever comes
+        // first, then drain any burst since the next pass reconciles
+        // everything. A fresh sleep is sufficient because every trigger also
+        // runs a full pass, and avoids catch-up timer semantics after a slow
+        // pass. Both arms are cancel-safe leaf futures with no `.await` in
+        // their bodies, so the sweep cannot futurelock.
+        tokio::select! {
+            trigger = notify_rx.recv() => match trigger {
+                Some(_) => while notify_rx.try_recv().is_ok() {},
+                None => {
+                    // Unreachable while `ddmd` runs: `main()` owns the original
+                    // `notify_tx` and parks for the daemon's lifetime, so the
+                    // channel cannot close even if every per-peer sender clone
+                    // is torn down. We stop the sweep rather than spin on a
+                    // closed channel if that invariant ever changes.
+                    error!(log, "multicast notify channel closed, stopping sweep");
+                    break;
+                }
+            },
+            _ = tokio::time::sleep(RECONCILE_INTERVAL) => {}
         }
     }
 }
 
-/// Signal the multicast sweep to reconcile each distinct underlay group touched
-/// by `routes`.
+/// Signal the multicast sweep for each distinct underlay group in `routes`.
 ///
-/// The route iterator may repeat a group many times, one entry per next hop.
-/// The groups are deduplicated, so the sweep wakes once per affected group. The
-/// import and withdraw paths share this so both wake the sweep the same way.
+/// The route iterator may repeat a group for multiple next hops, so group
+/// addresses are deduplicated before notification.
 pub(crate) fn notify_affected_groups<'a>(
     routes: impl IntoIterator<Item = &'a MulticastRoute>,
     notify: &Sender<Ipv6Addr>,
 ) {
-    let affected: HashSet<Ipv6Addr> = routes
+    let groups = routes
         .into_iter()
         .map(|route| route.origin.underlay_group.ip())
         .collect();
-    notify_groups(affected, notify);
+    notify_groups(groups, notify);
 }
 
 /// Wake the multicast sweep once per group in `groups`.
 fn notify_groups(groups: HashSet<Ipv6Addr>, notify: &Sender<Ipv6Addr>) {
     for group in groups {
-        // Best-effort trigger to wake the multicast sweep. The sweep owns the
-        // receiver for the daemon's lifetime, so this send does not fail during
-        // normal operation.
-        let _ = notify.send(group);
+        // A full channel or closed receiver is harmless because triggers are
+        // wake hints and the periodic pass reconciles the full tracked set.
+        let _ = notify.try_send(group);
     }
 }
 
@@ -223,7 +262,7 @@ fn notify_groups(groups: HashSet<Ipv6Addr>, notify: &Sender<Ipv6Addr>) {
 /// link resolves.
 ///
 /// A multicast import already wakes the sweep, but a route imported before the
-/// peer link resolved cannot be programmed yet, so it waits out the backstop
+/// peer link resolved cannot be programmed yet, so it waits out the reconcile
 /// interval. Waking the peer's groups on resolution closes that window. The
 /// imported set is read, not consumed, so this is the non-destructive analog of
 /// the [`Db::remove_nexthop_routes`] removal on peer expiry.
@@ -240,15 +279,20 @@ pub(crate) fn notify_peer_groups(
 ///
 /// Folds every currently imported group into `tracked`, reconciles the whole
 /// set concurrently, and returns only the groups `reconcile_group` reports as
-/// still active. A withdrawn group lingers for exactly one pass to empty its DPD
-/// members, then drops out on the following pass. Re-importing a dropped group
-/// re-adds it here, since Omicron writes to the DB before triggering the sweep.
+/// still active. A withdrawn group lingers for exactly one pass to empty its
+/// DPD members, then drops out on the following pass. Re-importing a dropped
+/// group re-adds it here, since Omicron writes to the DB before triggering the
+/// sweep.
 ///
-/// The per-group futures run concurrently on this task rather than spawned, so a
-/// group whose DPD call stalls does not serialize the others behind it. The pass
-/// still returns only once its slowest group completes, but each request is
-/// bounded by [`DPD_REQUEST_TIMEOUT`], so a stall delays the pass by that bound
-/// at most rather than blocking it indefinitely.
+/// The per-group futures run concurrently on this task rather than being
+/// spawned, capped at [`MAX_CONCURRENT_GROUP_RECONCILES`] in flight, so a
+/// group whose DPD call stalls does not serialize the others behind it and a
+/// large tracked set cannot flood DPD.
+///
+/// The pass still returns only once its slowest group completes. Each request
+/// is bounded by [`DPD_REQUEST_TIMEOUT`], but stalled groups beyond the
+/// concurrency cap execute in waves, so a pass is bounded by one timeout per
+/// wave of stalled groups rather than one timeout overall.
 async fn reconcile_pass<C: GroupClient>(
     mut tracked: HashSet<Ipv6Addr>,
     imported: HashSet<MulticastRoute>,
@@ -264,17 +308,18 @@ async fn reconcile_pass<C: GroupClient>(
     // resolved links by reference.
     let imported = &imported;
     let peer_links = &peer_links;
-    let reconciled = join_all(tracked.into_iter().map(|group_ip| async move {
-        let keep =
-            reconcile_group(group_ip, imported, peer_links, client, log).await;
-        (group_ip, keep)
-    }))
-    .await;
-
-    reconciled
-        .into_iter()
-        .filter_map(|(group_ip, keep)| keep.then_some(group_ip))
+    stream::iter(tracked)
+        .map(|group_ip| async move {
+            (
+                group_ip,
+                reconcile_group(group_ip, imported, peer_links, client, log)
+                    .await,
+            )
+        })
+        .buffer_unordered(MAX_CONCURRENT_GROUP_RECONCILES)
+        .filter_map(|(group_ip, keep)| async move { keep.then_some(group_ip) })
         .collect()
+        .await
 }
 
 /// Whether a DPD client error is a request timeout.
@@ -287,26 +332,14 @@ fn is_timeout<E>(e: &dpd_client::Error<E>) -> bool {
 }
 
 /// Outcome of writing a group's member list to DPD.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum WriteOutcome {
     /// Members were written.
     Updated,
-    /// DPD no longer authorizes the write against the group's tag.
-    ///
-    /// The tag, owned by DPD, changed from the value read this pass. On an
-    /// active group a later pass reads the current tag and retries. On a
-    /// withdrawn group the group was reassigned, so `ddmd` abandons it rather
-    /// than retrying.
-    TagReassigned,
-    /// The group is absent from DPD.
-    Gone,
-    /// The write stalled past [`DPD_REQUEST_TIMEOUT`].
-    ///
-    /// Distinguished from [`WriteOutcome::Failed`] so a genuine stall is
-    /// surfaced separately, though both retry the group on the next pass.
-    TimedOut,
-    /// The write failed for an unexpected, non-timeout reason.
-    Failed,
+    /// The group disappeared or its tag changed after the preceding read.
+    Stale,
+    /// The write failed and should be retried on the next pass.
+    Retry,
 }
 
 /// Outcome of reading a group's state from DPD.
@@ -317,21 +350,11 @@ enum FetchOutcome {
     /// The group does not exist in DPD, either because Omicron has not created
     /// it yet or because it has been deleted.
     Absent,
-    /// The read stalled past [`DPD_REQUEST_TIMEOUT`].
-    ///
-    /// Distinguished from [`FetchOutcome::ReadFailed`] so a genuine stall is
-    /// surfaced separately, though both keep the group tracked for retry.
-    TimedOut,
-    /// The read failed transiently for a non-timeout reason, so the group's
-    /// state is unknown this pass.
-    ReadFailed,
+    /// The read failed, so the group's state is unknown this pass.
+    Retry,
 }
 
 /// DPD group operations the reconcile loop depends on.
-///
-/// Abstracted behind a trait so [`reconcile_group`]'s keep/drop logic can be
-/// exercised against a mock, without a live DPD endpoint. The production
-/// implementation is [`Client`].
 trait GroupClient {
     /// Read an underlay group's current members and authorization tag.
     async fn fetch_group(
@@ -349,20 +372,21 @@ trait GroupClient {
         members: Vec<MulticastGroupMember>,
     ) -> WriteOutcome;
 
-    /// Underlay groups that currently have members programmed in DPD.
+    /// Underlay groups that currently have members programmed in DPD, or
+    /// `None` if the listing failed.
     ///
-    /// Read once at startup to seed the sweep's tracked set. `ddmd` is the sole
-    /// writer of underlay members on this switch, so every group returned was
-    /// programmed by `ddmd` (or a prior incarnation) and is safe to fold-in. A
-    /// failure returns an empty set. Orphan recovery then waits for the next
-    /// `ddmd` restart whose listing succeeds, since the periodic sweep
-    /// reconciles only tracked and imported groups and never re-lists DPD.
-    async fn member_group_ips(&self, log: &Logger) -> Vec<Ipv6Addr>;
+    /// Read after the startup grace to seed the sweep's tracked set. `ddmd` is
+    /// the sole writer of underlay members on this switch, so every group
+    /// returned was programmed by `ddmd`, possibly before a restart, and is
+    /// safe to fold in. A failed listing is retried later, since ordinary
+    /// passes reconcile only tracked and imported groups and cannot otherwise
+    /// discover orphans.
+    async fn member_group_ips(&self, log: &Logger) -> Option<Vec<Ipv6Addr>>;
 }
 
 impl GroupClient for Client {
     /// Distinguishes a group that is genuinely absent (`FetchOutcome::Absent`)
-    /// from one whose state could not be read (`FetchOutcome::ReadFailed`), so a
+    /// from one whose state could not be read (`FetchOutcome::Retry`), so a
     /// withdrawn group is not dropped from the sweep on a transient read failure
     /// before its members are confirmed drained.
     async fn fetch_group(
@@ -387,6 +411,7 @@ impl GroupClient for Client {
                 );
                 FetchOutcome::Absent
             }
+
             // Surface a stalled read distinctly from other failures. The sweep
             // retries the group on its next pass regardless.
             Err(e) if is_timeout(&e) => {
@@ -395,17 +420,17 @@ impl GroupClient for Client {
                     "get of underlay group {group_ip} timed out after \
                      {DPD_REQUEST_TIMEOUT:?}, retrying next pass"
                 );
-                FetchOutcome::TimedOut
+                FetchOutcome::Retry
             }
             Err(e) => {
-                error!(log, "failed to get underlay group {group_ip}: {e}");
-                FetchOutcome::ReadFailed
+                warn!(log, "failed to get underlay group {group_ip}: {e}");
+                FetchOutcome::Retry
             }
         }
     }
 
     /// The expected races, a tag change (403) or a deleted group (404), are
-    /// returned as outcomes rather than logged, leaving the reaction to the
+    /// returned as outcomes rather than logged, leaving the handling to the
     /// caller.
     async fn write_members(
         &self,
@@ -423,42 +448,45 @@ impl GroupClient for Client {
                     "tag for underlay group {group_ip} is invalid, skipping \
                      update: {e}"
                 );
-                return WriteOutcome::Failed;
+                return WriteOutcome::Retry;
             }
         };
+
         let body = MulticastGroupUpdateUnderlayEntry { members };
         match self
             .multicast_group_update_underlay(&underlay_ip, &tag, &body)
             .await
         {
             Ok(_) => WriteOutcome::Updated,
-            Err(e) if e.status() == Some(StatusCode::FORBIDDEN) => {
-                WriteOutcome::TagReassigned
+            Err(e)
+                if matches!(
+                    e.status(),
+                    Some(StatusCode::FORBIDDEN | StatusCode::NOT_FOUND)
+                ) =>
+            {
+                WriteOutcome::Stale
             }
-            Err(e) if e.status() == Some(StatusCode::NOT_FOUND) => {
-                WriteOutcome::Gone
-            }
-            // Surface a stalled write distinctly from other failures. Treated as
-            // `WriteOutcome::Failed` so the sweep retries it on its next pass.
+            // Log a stalled write distinctly from other failures, while both
+            // share the same retry outcome.
             Err(e) if is_timeout(&e) => {
                 warn!(
                     log,
                     "update of underlay group {group_ip} members timed out \
                      after {DPD_REQUEST_TIMEOUT:?}, retrying next pass"
                 );
-                WriteOutcome::TimedOut
+                WriteOutcome::Retry
             }
             Err(e) => {
-                error!(
+                warn!(
                     log,
                     "failed to update underlay group {group_ip} members: {e}"
                 );
-                WriteOutcome::Failed
+                WriteOutcome::Retry
             }
         }
     }
 
-    async fn member_group_ips(&self, log: &Logger) -> Vec<Ipv6Addr> {
+    async fn member_group_ips(&self, log: &Logger) -> Option<Vec<Ipv6Addr>> {
         let groups: Vec<dpd_client::types::MulticastGroupResponse> = match self
             .multicast_groups_list_stream(None)
             .try_collect()
@@ -468,23 +496,26 @@ impl GroupClient for Client {
             Err(e) => {
                 warn!(
                     log,
-                    "could not list multicast groups to seed sweep, relying \
-                         on imports and the periodic backstop: {e}"
+                    "could not list multicast groups to seed sweep, retrying \
+                     later: {e}"
                 );
-                return Vec::new();
+                return None;
             }
         };
-        groups
-            .into_iter()
-            .filter_map(|group| match group {
-                dpd_client::types::MulticastGroupResponse::Underlay {
-                    group_ip,
-                    members,
-                    ..
-                } if !members.is_empty() => Some(*group_ip),
-                _ => None,
-            })
-            .collect()
+
+        Some(
+            groups
+                .into_iter()
+                .filter_map(|group| match group {
+                    dpd_client::types::MulticastGroupResponse::Underlay {
+                        group_ip,
+                        members,
+                        ..
+                    } if !members.is_empty() => Some(*group_ip),
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 }
 
@@ -497,6 +528,15 @@ impl GroupClient for Client {
 /// A peer omitted here is seen by `group_members` as an unresolved next hop, so
 /// a transient resolution failure neither drops a previously programmed member
 /// nor blocks a newly resolved one.
+///
+/// The map keys on the peer's link-local address alone, with no interface
+/// scope, since an imported route's `nexthop` carries no interface either.
+/// This relies on the rack deriving link-local addresses from EUI-64, which
+/// makes them unique across links rather than only within one ([RFC 4007],
+/// section 5). A duplicate address on distinct links would collapse to one
+/// entry, so a collision is logged as a warning.
+///
+/// [RFC 4007]: https://www.rfc-editor.org/rfc/rfc4007#section-5
 fn resolve_peer_links(
     peers: &[SmContext],
     log: &Logger,
@@ -515,9 +555,21 @@ fn resolve_peer_links(
             );
             continue;
         }
+
         match mg_common::tfport::port_link_from_ifname(&if_name) {
             Ok(port_link) => {
-                peer_links.insert(peer.addr, port_link);
+                if let Some(prev) =
+                    peer_links.insert(peer.addr, port_link.clone())
+                    && prev != port_link
+                {
+                    warn!(
+                        log,
+                        "peer link-local address {} resolves to multiple \
+                         switch links ({prev:?} and {port_link:?}), violating \
+                         EUI-64 uniqueness; keeping the latter",
+                        peer.addr
+                    );
+                }
             }
             Err(e) => warn!(
                 log,
@@ -577,7 +629,7 @@ fn group_members(
 /// desired set, so the periodic resync repairs member drift.
 ///
 /// Returns `true` to keep the group tracked, either while it still has imports
-/// (as the drift backstop) or whenever its DPD state could not be read this
+/// (so resync repairs drift) or whenever its DPD state could not be read this
 /// pass, and `false` only once the group has no imports and its DPD member list
 /// is confirmed empty, so it drops out of the sweep.
 async fn reconcile_group<C: GroupClient>(
@@ -605,7 +657,7 @@ async fn reconcile_group<C: GroupClient>(
         // members. A withdrawn group must not drop out here, or stale
         // replication would stay programmed until some later re-import tracked
         // it again.
-        FetchOutcome::TimedOut | FetchOutcome::ReadFailed => return true,
+        FetchOutcome::Retry => return true,
     };
 
     if !has_imports {
@@ -617,7 +669,7 @@ async fn reconcile_group<C: GroupClient>(
         return match client.write_members(log, group_ip, &tag, Vec::new()).await
         {
             WriteOutcome::Updated => {
-                debug!(
+                info!(
                     log,
                     "emptied withdrawn underlay group {group_ip} members"
                 );
@@ -625,9 +677,9 @@ async fn reconcile_group<C: GroupClient>(
             }
             // Already gone, or recreated under a tag that is no longer what
             // we've seen. Either way `ddmd` no longer programs this group.
-            WriteOutcome::Gone | WriteOutcome::TagReassigned => false,
+            WriteOutcome::Stale => false,
             // Retry the empty on the next pass.
-            WriteOutcome::TimedOut | WriteOutcome::Failed => true,
+            WriteOutcome::Retry => true,
         };
     }
 
@@ -636,6 +688,12 @@ async fn reconcile_group<C: GroupClient>(
     // resolution failure neither drops a previously programmed member nor
     // blocks adding a newly resolved one. With every next hop resolved, the
     // derived set replaces the current members.
+    //
+    // Fail open: preserve every current member, not only those of unresolved
+    // routes, since a member cannot be attributed to a next hop without
+    // resolving it. A stale member, even one unrelated to the unresolved next
+    // hop, persists until every next hop resolves. Extra replication is
+    // preferred over dropping a live member.
     let to_write = if has_unresolved {
         let merged = union_members(&members, &existing);
         if merged.len() > members.len() {
@@ -655,20 +713,12 @@ async fn reconcile_group<C: GroupClient>(
     if !members_eq(&existing, &to_write) {
         match client.write_members(log, group_ip, &tag, to_write).await {
             WriteOutcome::Updated => {
-                debug!(log, "updated underlay group {group_ip} members")
+                info!(log, "updated underlay group {group_ip} members")
             }
-            WriteOutcome::TagReassigned => warn!(
-                log,
-                "tag no longer authorizes underlay group {group_ip}, retrying \
-                 with a fresh read next pass"
-            ),
-            WriteOutcome::Gone
-            | WriteOutcome::Failed
-            | WriteOutcome::TimedOut => {}
+            WriteOutcome::Stale | WriteOutcome::Retry => {}
         }
     }
 
-    // Active group: keep it tracked so the backstop repairs any later drift.
     true
 }
 
@@ -679,15 +729,25 @@ fn union_members(
     base: &[MulticastGroupMember],
     extra: &[MulticastGroupMember],
 ) -> Vec<MulticastGroupMember> {
-    base.iter()
-        .chain(extra.iter().filter(|member| !base.contains(member)))
-        .cloned()
-        .collect()
+    let mut merged = base.to_vec();
+    for member in extra {
+        if !merged.contains(member) {
+            merged.push(member.clone());
+        }
+    }
+    merged
 }
 
-/// Compare two multicast member lists for set equality, ignoring order.
+/// Compare two multicast member lists for set equality, ignoring order and
+/// duplicates.
+///
+/// `ddmd` never writes duplicates, but the list read back from DPD is not
+/// trusted to be duplicate-free. A length check alone would be fooled by
+/// duplicates, e.g. `[A, A]` against `[A, B]`, skipping the write that would
+/// repair the drift, so containment is checked in both directions.
 fn members_eq(a: &[MulticastGroupMember], b: &[MulticastGroupMember]) -> bool {
-    a.len() == b.len() && a.iter().all(|member| b.contains(member))
+    a.iter().all(|member| b.contains(member))
+        && b.iter().all(|member| a.contains(member))
 }
 
 #[cfg(test)]
@@ -757,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_peers_on_same_link_collapse_to_one_member() {
+    fn same_link_peers_share_member() {
         let peer_a = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let peer_b = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 2);
         let group = underlay(1);
@@ -780,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_nexthop_yields_no_members_and_sets_flag() {
+    fn unresolved_nexthop_returns_empty_and_unresolved() {
         let peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let group = underlay(7);
 
@@ -795,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_resolution_yields_resolved_members_and_sets_flag() {
+    fn mixed_resolution_returns_members_and_unresolved() {
         let resolved = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let unresolved_peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 2);
         let group = underlay(3);
@@ -871,11 +931,14 @@ mod tests {
                 *self.fetch.lock().unwrap() =
                     FetchOutcome::Found(tag.to_string(), members);
             }
-            self.write_outcome.clone()
+            self.write_outcome
         }
 
-        async fn member_group_ips(&self, _log: &Logger) -> Vec<Ipv6Addr> {
-            self.member_groups.clone()
+        async fn member_group_ips(
+            &self,
+            _log: &Logger,
+        ) -> Option<Vec<Ipv6Addr>> {
+            Some(self.member_groups.clone())
         }
     }
 
@@ -916,11 +979,10 @@ mod tests {
     }
 
     /// Drives the sweep's cross-pass carry-over invariant: an active group is
-    /// tracked, a withdraw lingers one pass to empty its members then drops, and
-    /// a re-import re-adds and reprograms it. This exercises the tracked-set
-    /// state machine that the run loop builds on.
+    /// tracked, a withdraw takes one pass to empty its members and drop it, and
+    /// a re-import adds and reconciles it again.
     #[test]
-    fn pass_drains_withdrawn_group_then_drops_and_readds_on_reimport() {
+    fn group_drains_and_readds_across_passes() {
         let peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let group = underlay(1);
         let active = HashSet::from([route(peer, group)]);
@@ -934,20 +996,20 @@ mod tests {
             WriteOutcome::Updated,
         );
 
-        // Pass 1: imported and already in sync, so the group is tracked (no
-        // write occurrs).
+        // Pass 1: imported and already in sync, so the group is tracked without
+        // a write.
         let tracked = run_pass(HashSet::new(), &active, &peer_links, &mock);
         assert_eq!(tracked, HashSet::from([group]));
         assert!(mock.writes().is_empty());
 
-        // Pass 2: withdrawn ~ the group carries over from pass 1, its members
-        // are emptied, and then it drops out of the tracked set.
+        // Pass 2: the withdrawn group carries over from pass 1, its members are
+        // emptied, and then it drops out of the tracked set.
         let tracked = run_pass(tracked, &withdrawn, &peer_links, &mock);
         assert!(tracked.is_empty());
         assert_eq!(mock.writes(), vec![Vec::<MulticastGroupMember>::new()]);
 
-        // Pass 3: re-imported ~ the dropped group is re-added and reprogrammed,
-        // since DPD now holds no members for it.
+        // Pass 3: the dropped group is re-imported and reprogrammed, since DPD
+        // now holds no members for it.
         let tracked = run_pass(tracked, &active, &peer_links, &mock);
         assert_eq!(tracked, HashSet::from([group]));
         assert_eq!(mock.writes(), vec![Vec::new(), vec![member("rear0", 0)]]);
@@ -957,7 +1019,7 @@ mod tests {
     /// in the imported set or any trigger, so only the startup seed can
     /// re-initialize it.
     #[test]
-    fn startup_seeds_tracked_from_dpd_and_drains_orphans() {
+    fn startup_seed_drains_orphans() {
         let group = underlay(9);
         let mock = MockDpd::new(
             found(vec![member("rear0", 0)]),
@@ -970,6 +1032,7 @@ mod tests {
             .unwrap();
         let seeded: HashSet<Ipv6Addr> = rt
             .block_on(mock.member_group_ips(&log))
+            .unwrap()
             .into_iter()
             .collect();
         assert!(seeded.contains(&group));
@@ -1005,28 +1068,14 @@ mod tests {
     }
 
     #[test]
-    fn withdrawn_group_with_read_failure_stays_tracked() {
+    fn read_retry_keeps_withdrawn_group() {
         let group = underlay(1);
         let imported = HashSet::new();
         let peer_links = HashMap::new();
-        let mock =
-            MockDpd::new(FetchOutcome::ReadFailed, WriteOutcome::Updated);
+        let mock = MockDpd::new(FetchOutcome::Retry, WriteOutcome::Updated);
 
         // A withdrawn group must not drop out on a transient read failure, or
         // its stale replication would stay programmed until a later re-import.
-        assert!(reconcile(group, &imported, &peer_links, &mock));
-        assert!(mock.writes().is_empty());
-    }
-
-    #[test]
-    fn withdrawn_group_with_read_timeout_stays_tracked() {
-        let group = underlay(1);
-        let imported = HashSet::new();
-        let peer_links = HashMap::new();
-        let mock = MockDpd::new(FetchOutcome::TimedOut, WriteOutcome::Updated);
-
-        // A read stall is treated like any other transient read failure: the
-        // withdrawn group stays tracked so a later pass can drain it.
         assert!(reconcile(group, &imported, &peer_links, &mock));
         assert!(mock.writes().is_empty());
     }
@@ -1043,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn withdrawn_group_with_members_is_emptied_then_drops() {
+    fn withdrawn_group_drains_then_drops() {
         let group = underlay(1);
         let imported = HashSet::new();
         let peer_links = HashMap::new();
@@ -1057,48 +1106,27 @@ mod tests {
     }
 
     #[test]
-    fn withdrawn_group_with_empty_write_failure_stays_tracked() {
+    fn empty_write_retry_keeps_withdrawn_group() {
         let group = underlay(1);
         let imported = HashSet::new();
         let peer_links = HashMap::new();
         let mock =
-            MockDpd::new(found(vec![member("rear0", 0)]), WriteOutcome::Failed);
+            MockDpd::new(found(vec![member("rear0", 0)]), WriteOutcome::Retry);
 
         assert!(reconcile(group, &imported, &peer_links, &mock));
         assert_eq!(mock.writes(), vec![Vec::<MulticastGroupMember>::new()]);
     }
 
     #[test]
-    fn withdrawn_group_with_empty_write_timeout_stays_tracked() {
+    fn stale_empty_write_drops_withdrawn_group() {
         let group = underlay(1);
         let imported = HashSet::new();
         let peer_links = HashMap::new();
-        let mock = MockDpd::new(
-            found(vec![member("rear0", 0)]),
-            WriteOutcome::TimedOut,
-        );
+        let mock =
+            MockDpd::new(found(vec![member("rear0", 0)]), WriteOutcome::Stale);
 
-        // The empty write stalled, so the group stays tracked to retry the
-        // drain on the next pass.
-        assert!(reconcile(group, &imported, &peer_links, &mock));
-        assert_eq!(mock.writes(), vec![Vec::<MulticastGroupMember>::new()]);
-    }
-
-    #[test]
-    fn withdrawn_group_with_tag_reassigned_on_empty_drops() {
-        let group = underlay(1);
-        let imported = HashSet::new();
-        let peer_links = HashMap::new();
-        let mock = MockDpd::new(
-            found(vec![member("rear0", 0)]),
-            WriteOutcome::TagReassigned,
-        );
-
-        // The group was reassigned under a tag we no longer hold, so `ddmd`
-        // abandons it rather than retrying.
-        //
-        // This is distinct from the active-group case, where a reassigned tag
-        // stays tracked for a fresh read.
+        // The group disappeared or was reassigned after the read, so `ddmd`
+        // abandons the withdrawn group rather than retrying.
         assert!(!reconcile(group, &imported, &peer_links, &mock));
         assert_eq!(mock.writes(), vec![Vec::<MulticastGroupMember>::new()]);
     }
@@ -1131,7 +1159,7 @@ mod tests {
     }
 
     #[test]
-    fn active_group_with_unresolved_nexthop_preserves_existing_member() {
+    fn unresolved_active_group_preserves_members() {
         let peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let group = underlay(1);
         let imported = HashSet::from([route(peer, group)]);
@@ -1149,41 +1177,68 @@ mod tests {
         assert!(mock.writes().is_empty());
     }
 
+    /// Encodes the fail-open merge policy: while any next hop is unresolved,
+    /// a stale DPD member that no import accounts for, even one unrelated to
+    /// the unresolved next hop, persists rather than being dropped.
     #[test]
-    fn active_group_with_tag_reassigned_stays_tracked() {
+    fn unresolved_nexthop_retains_unrelated_stale_member() {
+        let resolved = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
+        let unresolved_peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 2);
+        let group = underlay(1);
+        let imported = HashSet::from([
+            route(resolved, group),
+            route(unresolved_peer, group),
+        ]);
+        let peer_links = HashMap::from([(resolved, rear("rear0", 0))]);
+
+        // DPD holds the resolved member plus a stale one ("rear1") that no
+        // current import accounts for.
+        let mock = MockDpd::new(
+            found(vec![member("rear0", 0), member("rear1", 0)]),
+            WriteOutcome::Updated,
+        );
+
+        // The stale member cannot be distinguished from one owned by the
+        // unresolved next hop, so the merge preserves it and no write occurs.
+        assert!(reconcile(group, &imported, &peer_links, &mock));
+        assert!(mock.writes().is_empty());
+    }
+
+    #[test]
+    fn stale_write_keeps_active_group() {
         let peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let group = underlay(1);
         let imported = HashSet::from([route(peer, group)]);
         let peer_links = HashMap::from([(peer, rear("rear0", 0))]);
-        let mock = MockDpd::new(found(Vec::new()), WriteOutcome::TagReassigned);
+        let mock = MockDpd::new(found(Vec::new()), WriteOutcome::Stale);
 
-        // The write was rejected because the tag changed, but the group is
-        // still active, so it stays tracked to retry with a fresh read next
-        // pass.
+        // The group changed after the read, but remains imported, so it stays
+        // tracked to retry with a fresh read next pass.
         assert!(reconcile(group, &imported, &peer_links, &mock));
         assert_eq!(mock.writes(), vec![vec![member("rear0", 0)]]);
     }
 
     #[test]
-    fn notify_collapses_routes_to_one_trigger_per_group() {
+    fn notify_deduplicates_groups() {
         let group_a = underlay(1);
         let group_b = underlay(2);
         let peer_a = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let peer_b = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 2);
 
-        // Two next hops on group_a and one on group_b. The sweep should wake
-        // once per distinct group, not once per route.
         let routes = [
             route(peer_a, group_a),
             route(peer_b, group_a),
             route(peer_a, group_b),
         ];
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, mut rx) =
+            tokio::sync::mpsc::channel(crate::MCAST_NOTIFY_CHANNEL_DEPTH);
         notify_affected_groups(routes.iter(), &tx);
-        drop(tx);
 
-        let signalled: Vec<Ipv6Addr> = rx.into_iter().collect();
+        let mut signalled = Vec::new();
+        while let Ok(group) = rx.try_recv() {
+            signalled.push(group);
+        }
         assert_eq!(signalled.len(), 2);
         assert_eq!(
             signalled.into_iter().collect::<HashSet<_>>(),

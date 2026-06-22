@@ -92,7 +92,7 @@ pub struct PeerInfo {
     pub if_name: Option<String>,
 }
 
-/// Down-convert v3 `PeerInfo` to v2 `PeerInfo` by dropping `if_name`.
+/// Downconvert v3 `PeerInfo` to v2 `PeerInfo` by dropping `if_name`.
 impl From<PeerInfo> for crate::v2::db::PeerInfo {
     fn from(p: PeerInfo) -> Self {
         Self {
@@ -120,7 +120,6 @@ mod tests {
 
     // The path is excluded from a route's identity, so two routes sharing an
     // origin and nexthop but carrying different paths are equal.
-    // `HashSet::replace` relies on this to refresh a stored route's path.
     #[test]
     fn route_identity_excludes_path() {
         let base = MulticastRoute {
