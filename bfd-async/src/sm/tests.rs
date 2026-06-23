@@ -58,13 +58,13 @@ fn transition_table_is_exhaustive_and_correct() {
     ];
 
     let now = Instant::now();
-    for &(start, peer_state, want_state) in cases {
+    for &(start, remote_peer_state, want_state) in cases {
         let mut sm = StateMachine::start(local_info(), now);
         sm.state = start;
-        sm.update_remote_peer_state(peer_state);
+        sm.update_peer_state(remote_peer_state);
         assert_eq!(
             sm.state, want_state,
-            "next state for ({start:?}, {peer_state:?})"
+            "next state for ({start:?}, {remote_peer_state:?})"
         );
     }
 }

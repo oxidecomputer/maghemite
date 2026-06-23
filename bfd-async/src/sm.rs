@@ -176,8 +176,8 @@ impl StateMachine {
         }
 
         match packet.state() {
-            packet::State::Peer(peer_state) => {
-                self.update_remote_peer_state(peer_state);
+            packet::State::Peer(remote_peer_state) => {
+                self.update_peer_state(remote_peer_state);
             }
             packet::State::Unknown(_) => {
                 // We don't know how to update the remote peer state, so we do
@@ -199,7 +199,7 @@ impl StateMachine {
         };
     }
 
-    fn update_remote_peer_state(&mut self, remote_peer_state: BfdPeerState) {
+    fn update_peer_state(&mut self, remote_peer_state: BfdPeerState) {
         self.state = match (self.state, remote_peer_state) {
             (State::Down, BfdPeerState::Down) => State::Init,
             (State::Down, BfdPeerState::Init) => State::Up,
