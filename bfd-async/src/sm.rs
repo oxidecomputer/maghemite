@@ -219,10 +219,8 @@ impl StateMachine {
     }
 
     fn make_packet_to_send(&self) -> packet::Control {
-        // TODO-correctness Should this set detect_mult to
-        // `self.local.detection_multiplier`? The old state machine didn't, but
-        // this means we always send the default value instead of our config.
         let mut pkt = packet::Control {
+            detect_mult: self.local.detection_multiplier,
             // The wire fields are u32 microseconds. Saturate rather than let
             // the cast silently wrap for intervals above ~71.6 minutes.
             desired_min_tx: micros_u32(self.local.desired_min_tx),
