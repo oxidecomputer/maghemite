@@ -40,30 +40,28 @@ fn packet_with(peer_state: BfdPeerState) -> packet::Control {
 #[test]
 fn transition_table_is_exhaustive_and_correct() {
     use BfdPeerState::*;
-    use PacketReceivedResult::*;
 
-    // (our state, received peer state) => (expected result, next state)
-    let cases: &[(State, BfdPeerState, PacketReceivedResult, State)] = &[
-        (State::Down, Down, DownToInit, State::Init),
-        (State::Down, Init, DownToUp, State::Up),
-        (State::Down, AdminDown, StateUnchanged, State::Down),
-        (State::Down, Up, StateUnchanged, State::Down),
-        (State::Init, AdminDown, InitToDown, State::Down),
-        (State::Init, Down, StateUnchanged, State::Init),
-        (State::Init, Init, InitToUp, State::Up),
-        (State::Init, Up, InitToUp, State::Up),
-        (State::Up, AdminDown, UpToDown, State::Down),
-        (State::Up, Down, UpToDown, State::Down),
-        (State::Up, Init, StateUnchanged, State::Up),
-        (State::Up, Up, StateUnchanged, State::Up),
+    // (our state, received peer state) => next state
+    let cases: &[(State, BfdPeerState, State)] = &[
+        (State::Down, Down, State::Init),
+        (State::Down, Init, State::Up),
+        (State::Down, AdminDown, State::Down),
+        (State::Down, Up, State::Down),
+        (State::Init, AdminDown, State::Down),
+        (State::Init, Down, State::Init),
+        (State::Init, Init, State::Up),
+        (State::Init, Up, State::Up),
+        (State::Up, AdminDown, State::Down),
+        (State::Up, Down, State::Down),
+        (State::Up, Init, State::Up),
+        (State::Up, Up, State::Up),
     ];
 
     let now = Instant::now();
-    for &(start, peer_state, want_result, want_state) in cases {
+    for &(start, peer_state, want_state) in cases {
         let mut sm = StateMachine::start(local_info(), now);
         sm.state = start;
-        let got = sm.update_remote_peer_state(peer_state);
-        assert_eq!(got, want_result, "result for ({start:?}, {peer_state:?})");
+        sm.update_remote_peer_state(peer_state);
         assert_eq!(
             sm.state, want_state,
             "next state for ({start:?}, {peer_state:?})"

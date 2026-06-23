@@ -9,18 +9,6 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
-/// Result of processing an incoming packet from our peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PacketReceivedResult {
-    DownToInit,
-    DownToUp,
-    InitToDown,
-    InitToUp,
-    UpToDown,
-    StateUnchanged,
-    UnknownPeerState,
-}
-
 /// Return value of [`StateMachine::check_recv_deadline_expired()`].
 ///
 /// If [`CheckRecvDeadlineResult::Expired`] is returned, the state machine
@@ -177,11 +165,7 @@ impl StateMachine {
     }
 
     /// Handle an incoming packet from our peer.
-    pub fn packet_received(
-        &mut self,
-        packet: packet::Control,
-        now: Instant,
-    ) -> PacketReceivedResult {
+    pub fn packet_received(&mut self, packet: packet::Control, now: Instant) {
         self.update_remote_peer_info(&packet);
         self.recv_deadline = next_recv_deadline(&self.local, now);
 
@@ -193,9 +177,13 @@ impl StateMachine {
 
         match packet.state() {
             packet::State::Peer(peer_state) => {
-                self.update_remote_peer_state(peer_state)
+                self.update_remote_peer_state(peer_state);
             }
-            packet::State::Unknown(_) => PacketReceivedResult::UnknownPeerState,
+            packet::State::Unknown(_) => {
+                // We don't know how to update the remote peer state, so we do
+                // nothing other than bump our "we received a packet" bits
+                // above.
+            }
         }
     }
 
@@ -211,38 +199,23 @@ impl StateMachine {
         };
     }
 
-    fn update_remote_peer_state(
-        &mut self,
-        peer_state: BfdPeerState,
-    ) -> PacketReceivedResult {
-        let transition = match (self.state, peer_state) {
-            (State::Down, BfdPeerState::Down) => {
-                Some((State::Init, PacketReceivedResult::DownToInit))
+    fn update_remote_peer_state(&mut self, remote_peer_state: BfdPeerState) {
+        self.state = match (self.state, remote_peer_state) {
+            (State::Down, BfdPeerState::Down) => State::Init,
+            (State::Down, BfdPeerState::Init) => State::Up,
+            (State::Down, BfdPeerState::AdminDown | BfdPeerState::Up) => {
+                State::Down
             }
-            (State::Down, BfdPeerState::Init) => {
-                Some((State::Up, PacketReceivedResult::DownToUp))
-            }
-            (State::Down, BfdPeerState::AdminDown | BfdPeerState::Up) => None,
 
-            (State::Init, BfdPeerState::AdminDown) => {
-                Some((State::Down, PacketReceivedResult::InitToDown))
-            }
-            (State::Init, BfdPeerState::Down) => None,
-            (State::Init, BfdPeerState::Init | BfdPeerState::Up) => {
-                Some((State::Up, PacketReceivedResult::InitToUp))
-            }
+            (State::Init, BfdPeerState::AdminDown) => State::Down,
+            (State::Init, BfdPeerState::Down) => State::Init,
+            (State::Init, BfdPeerState::Init | BfdPeerState::Up) => State::Up,
 
             (State::Up, BfdPeerState::AdminDown | BfdPeerState::Down) => {
-                Some((State::Down, PacketReceivedResult::UpToDown))
+                State::Down
             }
-            (State::Up, BfdPeerState::Init | BfdPeerState::Up) => None,
+            (State::Up, BfdPeerState::Init | BfdPeerState::Up) => State::Up,
         };
-        if let Some((our_next_state, result)) = transition {
-            self.state = our_next_state;
-            result
-        } else {
-            PacketReceivedResult::StateUnchanged
-        }
     }
 
     fn make_packet_to_send(&self) -> packet::Control {
