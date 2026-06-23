@@ -23,7 +23,6 @@ use crate::{
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
     router::Router,
-    unnumbered::UnnumberedManager,
 };
 use mg_api_types::bgp::config::{
     BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
@@ -56,6 +55,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use unnumbered::BgpUnnumbered;
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
@@ -1614,7 +1614,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     pub neighbor: NeighborInfo,
 
     /// Unnumbered neighbor manager for actively querying NDP state.
-    pub unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    pub unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
 
     /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
     /// included in message history.
@@ -1693,7 +1693,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
         router: Arc<Router<Cnx>>,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
@@ -1742,9 +1742,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     pub fn get_peer_socket_addr(&self) -> Option<SocketAddr> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {
-                // Unnumbered: query UnnumberedManager for NDP neighbor
+                // Unnumbered: query BgpUnnumbered for NDP neighbor
                 let mgr = self.unnumbered_manager.as_ref()?;
-                match mgr.get_neighbor_by_interface(iface) {
+                match mgr.get_discovered_ndp_neighbor(iface) {
                     Ok(Some(neighbor)) => {
                         Some(neighbor.to_socket_addr(self.neighbor.port))
                     }
@@ -1773,23 +1773,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// For numbered peers, returns the configured address.
     /// For unnumbered peers, verifies interface is active and queries NDP neighbor.
     /// Returns None if:
-    /// - Unnumbered peer has no UnnumberedManager configured
+    /// - Unnumbered peer has no BgpUnnumbered configured
     /// - Interface is not active on the system
     /// - No NDP neighbor has been discovered
     fn try_resolve_connect_addr(&self) -> Option<SocketAddr> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {
                 let mgr = self.unnumbered_manager.as_ref()?;
-                if !mgr.interface_is_active(iface) {
-                    session_log_lite!(
-                        self,
-                        debug,
-                        "interface not active, skipping connection";
-                        "interface" => iface
-                    );
-                    return None;
-                }
-                match mgr.get_neighbor_by_interface(iface) {
+                match mgr.get_discovered_ndp_neighbor(iface) {
                     Ok(Some(neighbor)) => {
                         Some(neighbor.to_socket_addr(self.neighbor.port))
                     }

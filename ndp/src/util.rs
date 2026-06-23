@@ -24,18 +24,18 @@ const ICMP6_RA_ULP_LEN: u32 = 16;
 const ICMP6_RS_ULP_LEN: u32 = 8;
 
 #[derive(Debug, Clone)]
-pub struct ReceivedAdvertisement {
+pub struct ReceivedRouterAdvertisement {
     /// When the peer was first discovered
     pub first_seen: Instant,
     /// When the most recent Router Advertisement was received
-    pub when: Instant,
-    pub adv: Icmp6RouterAdvertisement,
-    pub sender: Ipv6Addr,
+    pub last_seen: Instant,
+    pub advertisement: Icmp6RouterAdvertisement,
+    pub source: Ipv6Addr,
 }
 
-impl ReceivedAdvertisement {
+impl ReceivedRouterAdvertisement {
     pub fn expired(&self) -> bool {
-        self.when.elapsed() > self.adv.effective_reachable_time()
+        self.last_seen.elapsed() > self.advertisement.effective_reachable_time()
     }
 }
 

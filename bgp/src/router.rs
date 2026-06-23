@@ -16,7 +16,6 @@ use crate::{
     session::{
         AdminEvent, FsmEvent, NeighborInfo, PeerId, SessionInfo, SessionRunner,
     },
-    unnumbered::UnnumberedManager,
 };
 use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
 use mg_common::{lock, read_lock, write_lock};
@@ -34,6 +33,7 @@ use std::{
     },
     time::Duration,
 };
+use unnumbered::BgpUnnumbered;
 
 /// Internal newtype for `IdOrdItem` impl — not exposed outside this module.
 struct SessionHandle<Cnx: BgpConnection + 'static>(Arc<SessionRunner<Cnx>>);
@@ -336,7 +336,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
-        unnumbered_manager: Arc<dyn UnnumberedManager>,
+        unnumbered_manager: Arc<dyn BgpUnnumbered>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let sessions = lock!(self.sessions);
         let key = PeerId::Interface(interface.clone());
@@ -387,7 +387,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
-        unnumbered_manager: Arc<dyn UnnumberedManager>,
+        unnumbered_manager: Arc<dyn BgpUnnumbered>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let sessions = lock!(self.sessions);
         let key = PeerId::Interface(interface);
@@ -417,7 +417,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let mut session_info = info.clone();
         session_info.connect_retry_time =

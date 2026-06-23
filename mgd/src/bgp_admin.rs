@@ -3,9 +3,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
-use crate::unnumbered_manager::{
-    NdpPeerState, NdpThreadStateInternal, UnnumberedManagerNdp,
-};
 use crate::validation::{
     validate_prefixes, validate_prefixes_v4, validate_prefixes_v6,
 };
@@ -43,12 +40,12 @@ use mg_api_types::bgp::session::{
 use mg_api_types::bgp::session::{
     FsmEventRecord, FsmStateKind, MessageHistory,
 };
-use mg_api_types::ndp::{
-    NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
-    NdpPendingInterface, NdpThreadState,
-};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
+use mg_api_types::unnumbered::{
+    DiscoveredRouter, PendingUnnumberedInterface, RouterDiscoveryRuntimeState,
+    UnnumberedInterface, UnnumberedInterfaceSelector, UnnumberedManagerState,
+};
 use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
@@ -62,6 +59,7 @@ use std::sync::{
     mpsc::{Sender, channel},
 };
 use std::time::{Duration, Instant, SystemTime};
+use unnumbered::{DiscoveredRouterState, UnnumberedManager};
 
 const UNIT_BGP: &str = "bgp";
 const DEFAULT_BGP_LISTEN: SocketAddr =
@@ -71,7 +69,7 @@ const DEFAULT_BGP_LISTEN: SocketAddr =
 pub struct BgpContext {
     pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     pub(crate) sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
-    pub(crate) unnumbered_manager: Arc<UnnumberedManagerNdp>,
+    pub(crate) unnumbered_manager: Arc<UnnumberedManager>,
 }
 
 impl BgpContext {
@@ -80,7 +78,7 @@ impl BgpContext {
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
-        let unnumbered_manager = UnnumberedManagerNdp::new(router.clone(), log);
+        let unnumbered_manager = UnnumberedManager::new(log);
         Self {
             router,
             sessions,
@@ -501,8 +499,10 @@ fn instant_to_iso8601(when: Instant) -> String {
         .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Convert NdpPeerState to API type with timestamp formatting
-fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
+/// Convert discovered router state to API type with timestamp formatting
+fn convert_discovered_router_to_api(
+    state: &DiscoveredRouterState,
+) -> DiscoveredRouter {
     let elapsed_since_when = Instant::now().duration_since(state.when);
 
     // Format timestamps: first_seen for when peer was discovered,
@@ -527,7 +527,7 @@ fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
         Some(mg_common::format_duration_human(time_until))
     };
 
-    NdpPeer {
+    DiscoveredRouter {
         address: state.address,
         discovered_at,
         last_advertisement,
@@ -539,20 +539,19 @@ fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
     }
 }
 
-/// Convert internal thread state to API type
-fn convert_thread_state_to_api(
-    state: Option<&NdpThreadStateInternal>,
-) -> Option<NdpThreadState> {
-    state.map(|s| NdpThreadState {
-        tx_running: s.tx_running,
-        rx_running: s.rx_running,
-    })
+/// Convert router discovery runtime state to API type.
+fn convert_runtime_state_to_api(
+    state: &ndp::RouterDiscoveryRuntimeState,
+) -> RouterDiscoveryRuntimeState {
+    RouterDiscoveryRuntimeState {
+        tx_running: state.tx_running,
+        rx_running: state.rx_running,
+    }
 }
 
-pub async fn get_ndp_manager_state(
+pub async fn get_bgp_unnumbered_manager_state(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    _request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<NdpManagerState>, HttpError> {
+) -> Result<HttpResponseOk<UnnumberedManagerState>, HttpError> {
     let ctx = rqctx.context();
 
     // Get manager state from unnumbered manager
@@ -562,102 +561,63 @@ pub async fn get_ndp_manager_state(
     let pending_interfaces = manager_state
         .pending_interfaces
         .into_iter()
-        .map(|p| NdpPendingInterface {
+        .map(|p| PendingUnnumberedInterface {
             interface: p.interface,
             router_lifetime: p.router_lifetime,
         })
         .collect();
 
-    Ok(HttpResponseOk(NdpManagerState {
-        monitor_thread_running: manager_state.monitor_thread_running,
+    Ok(HttpResponseOk(UnnumberedManagerState {
+        monitor_running: manager_state.monitor_running,
         pending_interfaces,
         active_interfaces: manager_state.active_interfaces,
     }))
 }
 
-pub async fn get_ndp_interfaces(
+pub async fn get_bgp_unnumbered_interfaces(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
-    let rq = request.into_inner();
+) -> Result<HttpResponseOk<Vec<UnnumberedInterface>>, HttpError> {
     let ctx = rqctx.context();
 
-    // Get all unnumbered neighbors for this ASN
-    let unnumbered_neighbors = ctx
-        .db
-        .get_unnumbered_bgp_neighbors()
-        .map_err(|e| {
-            HttpError::for_internal_error(format!(
-                "failed to get unnumbered neighbors: {e}"
-            ))
-        })?
+    let interfaces = ctx
+        .bgp
+        .unnumbered_manager
+        .list_interfaces()
         .into_iter()
-        .filter(|n| n.asn == rq.asn)
-        .collect::<Vec<_>>();
+        .map(|ndp| {
+            let discovered_peer = ndp
+                .peer_state
+                .as_ref()
+                .map(convert_discovered_router_to_api);
+            let runtime_state =
+                convert_runtime_state_to_api(&ndp.runtime_state);
 
-    // Get NDP state for managed interfaces
-    let ndp_state = ctx.bgp.unnumbered_manager.list_ndp_interfaces();
-
-    // Build response by matching neighbors to NDP state
-    let mut result = Vec::new();
-    for neighbor in unnumbered_neighbors {
-        // Find NDP state for this interface
-        if let Some(ndp) = ndp_state
-            .iter()
-            .find(|info| info.interface == neighbor.interface)
-        {
-            let discovered_peer =
-                ndp.peer_state.as_ref().map(convert_ndp_peer_to_api);
-            let thread_state =
-                convert_thread_state_to_api(ndp.thread_state.as_ref());
-
-            result.push(NdpInterface {
-                interface: neighbor.interface.clone(),
+            UnnumberedInterface {
+                interface: ndp.interface,
                 local_address: ndp.local_address,
                 scope_id: ndp.scope_id,
-                router_lifetime: neighbor.router_lifetime,
+                router_lifetime: ndp.router_lifetime,
                 discovered_peer,
-                thread_state,
-            });
-        }
-    }
+                runtime_state,
+            }
+        })
+        .collect();
 
-    Ok(HttpResponseOk(result))
+    Ok(HttpResponseOk(interfaces))
 }
 
-pub async fn get_ndp_interface_detail(
+pub async fn get_bgp_unnumbered_interface_detail(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NdpInterfaceSelector>,
-) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
+    request: Query<UnnumberedInterfaceSelector>,
+) -> Result<HttpResponseOk<UnnumberedInterface>, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
-
-    // Verify this interface has an unnumbered neighbor configured for this ASN
-    let neighbor = ctx
-        .db
-        .get_unnumbered_bgp_neighbors()
-        .map_err(|e| {
-            HttpError::for_internal_error(format!(
-                "failed to get unnumbered neighbors: {e}"
-            ))
-        })?
-        .into_iter()
-        .find(|n| n.asn == rq.asn && n.interface == rq.interface)
-        .ok_or_else(|| {
-            HttpError::for_not_found(
-                None,
-                format!(
-                    "no unnumbered neighbor for ASN {} on interface {}",
-                    rq.asn, rq.interface
-                ),
-            )
-        })?;
 
     // Get detailed NDP state
     let unnumbered_manager = &ctx.bgp.unnumbered_manager;
 
     let ndp_detail = unnumbered_manager
-        .get_ndp_interface_detail(&rq.interface)
+        .get_interface_detail(&rq.interface)
         .map_err(|e| {
             HttpError::for_internal_error(format!(
                 "failed to get NDP state: {e}"
@@ -670,18 +630,19 @@ pub async fn get_ndp_interface_detail(
             )
         })?;
 
-    let discovered_peer =
-        ndp_detail.peer_state.as_ref().map(convert_ndp_peer_to_api);
-    let thread_state =
-        convert_thread_state_to_api(ndp_detail.thread_state.as_ref());
+    let discovered_peer = ndp_detail
+        .peer_state
+        .as_ref()
+        .map(convert_discovered_router_to_api);
+    let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
 
-    Ok(HttpResponseOk(NdpInterface {
+    Ok(HttpResponseOk(UnnumberedInterface {
         interface: rq.interface,
         local_address: ndp_detail.local_address,
         scope_id: ndp_detail.scope_id,
-        router_lifetime: neighbor.router_lifetime,
+        router_lifetime: ndp_detail.router_lifetime,
         discovered_peer,
-        thread_state,
+        runtime_state,
     }))
 }
 
@@ -2379,13 +2340,9 @@ pub(crate) mod helpers {
             "op" => format!("{op:?}")
         );
 
-        let session = ctx
-            .bgp
-            .unnumbered_manager
-            .get_neighbor_session(asn, interface)?
-            .ok_or(Error::NotFound(
-                "session for unnumbered neighbor not found".into(),
-            ))?;
+        let session = get_router!(ctx, asn)?.get_session(interface).ok_or(
+            Error::NotFound("session for unnumbered neighbor not found".into()),
+        )?;
 
         reset_session(&session, op)?;
         Ok(HttpResponseUpdatedNoContent())

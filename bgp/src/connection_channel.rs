@@ -19,10 +19,9 @@ use crate::{
     messages::Message,
     router::SessionMap,
     session::{ConnectionEvent, FsmEvent, PeerId, SessionInfo},
-    unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
-use slog::{Logger, info};
+use slog::{Logger, error, info};
 use std::{
     collections::HashMap,
     net::{SocketAddr, ToSocketAddrs},
@@ -34,6 +33,7 @@ use std::{
     thread::{JoinHandle, spawn},
     time::{Duration, Instant},
 };
+use unnumbered::BgpUnnumbered;
 
 const UNIT_CONNECTION: &str = "connection_channel";
 
@@ -193,20 +193,32 @@ pub fn count_failed_connections_to(peer: SocketAddr) -> usize {
 pub struct BgpListenerChannel {
     listener: Listener,
     bind_addr: SocketAddr,
-    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
 }
 
 impl BgpListenerChannel {
     /// Resolve incoming peer address to appropriate PeerId.
-    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
+    fn resolve_session_key(
+        &self,
+        peer_addr: SocketAddr,
+        log: &Logger,
+    ) -> PeerId {
         // Try interface-based routing for IPv6 link-local addresses
         if let Some(ref mgr) = self.unnumbered_manager
             && let SocketAddr::V6(v6_addr) = peer_addr
             && v6_addr.ip().is_unicast_link_local()
         {
             let scope_id = v6_addr.scope_id();
-            if let Some(interface) = mgr.get_interface_by_scope(scope_id) {
-                return PeerId::Interface(interface);
+            match mgr.get_active_interface_by_scope(scope_id) {
+                Ok(Some(interface)) => return PeerId::Interface(interface),
+                res => {
+                    if let Err(e) = res {
+                        error!(log,
+                            "active unnumbered interface query error: {e}";
+                            "error" => format!("{e}")
+                        )
+                    }
+                }
             }
         }
 
@@ -219,7 +231,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn bind<A: ToSocketAddrs>(
         addr: A,
         log: Logger,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Result<Self, Error>
     where
         Self: Sized,
@@ -251,7 +263,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         let local = self.bind_addr;
 
         // Resolve peer address to appropriate PeerId (IP or Interface)
-        let key = self.resolve_session_key(peer);
+        let key = self.resolve_session_key(peer, &log);
 
         let runner = lock!(sessions)
             .get(&key)

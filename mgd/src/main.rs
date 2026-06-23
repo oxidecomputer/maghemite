@@ -41,7 +41,6 @@ mod rib_admin;
 mod signal;
 mod smf;
 mod static_admin;
-mod unnumbered_manager;
 mod validation;
 
 #[derive(Parser, Debug)]

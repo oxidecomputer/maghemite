@@ -6,7 +6,7 @@
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/*.log",
-#:   "/work/proptest-regressions/*",
+#:   "/work/proptest-regressions/**/*",
 #:   "/tmp/*.db",
 #: ]
 #: access_repos = [
@@ -30,21 +30,25 @@ cargo install cargo-nextest --version "${NEXTEST_VERSION}"
 source .github/buildomat/test-common.sh
 
 # Run property-based tests with high intensity (default is 256)
+export PROPTEST_CASES=1000000
 
-# RDB proptest suite
-pushd rdb
-PROPTEST_CASES=1000000 cargo nextest run --lib proptest
-cp ./*.log /work/ 2>/dev/null || true
-if [[ -d proptest-regressions ]]; then
-    cp -r proptest-regressions /work/rdb-proptest-regressions
-fi
-popd
+run_crate_proptests() {
+    local crate="$1"
 
-# BGP proptest suite
-pushd bgp
-PROPTEST_CASES=1000000 cargo nextest run --lib proptest
-cp ./*.log /work/ 2>/dev/null || true
-if [[ -d proptest-regressions ]]; then
-    cp -r proptest-regressions /work/bgp-proptest-regressions
-fi
-popd
+    pushd "${crate}"
+    cargo nextest run --lib proptest
+    cp ./*.log /work/ 2>/dev/null || true
+
+    if [[ -d proptest-regressions ]]; then
+        mkdir -p "/work/proptest-regressions/${crate}"
+        cp -R proptest-regressions/. "/work/proptest-regressions/${crate}/"
+    fi
+
+    popd
+}
+
+run_crate_proptests rdb
+
+run_crate_proptests bgp
+
+run_crate_proptests unnumbered

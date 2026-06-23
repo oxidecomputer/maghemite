@@ -23,7 +23,6 @@ use mg_api_types::bgp::session::{
     ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
     MessageHistoryRequest, MessageHistoryResponse,
 };
-use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
@@ -32,6 +31,9 @@ use mg_api_types::static_routes::{
     DeleteStaticRoute6Request,
 };
 use mg_api_types::switch::SwitchIdentifiers;
+use mg_api_types::unnumbered::{
+    UnnumberedInterface, UnnumberedInterfaceSelector, UnnumberedManagerState,
+};
 use mg_api_types_versions::{v1, v2, v4, v5};
 use mg_common::stats::MgLowerStats;
 use oxnet::IpNet;
@@ -649,25 +651,23 @@ impl MgAdminApi for MgAdminApiImpl {
         static_admin::switch_identifiers(ctx).await
     }
 
-    async fn get_ndp_manager_state(
+    async fn get_bgp_unnumbered_manager_state(
         ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<NdpManagerState>, HttpError> {
-        bgp_admin::get_ndp_manager_state(ctx, request).await
+    ) -> Result<HttpResponseOk<UnnumberedManagerState>, HttpError> {
+        bgp_admin::get_bgp_unnumbered_manager_state(ctx).await
     }
 
-    async fn get_ndp_interfaces(
+    async fn get_bgp_unnumbered_interfaces(
         ctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
-        bgp_admin::get_ndp_interfaces(ctx, request).await
+    ) -> Result<HttpResponseOk<Vec<UnnumberedInterface>>, HttpError> {
+        bgp_admin::get_bgp_unnumbered_interfaces(ctx).await
     }
 
-    async fn get_ndp_interface_detail(
+    async fn get_bgp_unnumbered_interface_detail(
         ctx: RequestContext<Self::Context>,
-        request: Query<NdpInterfaceSelector>,
-    ) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
-        bgp_admin::get_ndp_interface_detail(ctx, request).await
+        request: Query<UnnumberedInterfaceSelector>,
+    ) -> Result<HttpResponseOk<UnnumberedInterface>, HttpError> {
+        bgp_admin::get_bgp_unnumbered_interface_detail(ctx, request).await
     }
 }
 

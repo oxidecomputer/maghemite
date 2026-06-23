@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::unnumbered_manager::{AddNeighborError, ResolveNeighborError};
 use dropshot::{ClientErrorStatusCode, HttpError};
+use unnumbered::AddNeighborError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -22,8 +22,8 @@ pub enum Error {
     #[error("error adding an unnumbered error: {0}")]
     AddUnnumberedNeighbor(#[from] AddNeighborError),
 
-    #[error("error resolving a neighbor: {0}")]
-    ResolveNeighbor(#[from] ResolveNeighborError),
+    #[error("interface error: {0}")]
+    Interface(#[from] network_interface::Error),
 
     #[error("internal communication error: {0}")]
     InternalCommunication(String),
@@ -50,35 +50,12 @@ impl From<Error> for HttpError {
                 }
                 _ => Self::for_internal_error(value.to_string()),
             },
-            Error::AddUnnumberedNeighbor(ref err) => match err {
-                AddNeighborError::Resolve(e) => match e {
-                    ResolveNeighborError::NoSuchInterface
-                    | ResolveNeighborError::NotIpv6Interface => {
-                        Self::for_client_error_with_status(
-                            Some(err.to_string()),
-                            ClientErrorStatusCode::BAD_REQUEST,
-                        )
-                    }
-                    ResolveNeighborError::System(e) => {
-                        Self::for_internal_error(e.to_string())
-                    }
-                },
-                AddNeighborError::NdpManager(e) => {
-                    Self::for_internal_error(e.to_string())
-                }
-            },
-            Error::ResolveNeighbor(ref err) => match err {
-                ResolveNeighborError::NoSuchInterface
-                | ResolveNeighborError::NotIpv6Interface => {
-                    Self::for_client_error_with_status(
-                        Some(err.to_string()),
-                        ClientErrorStatusCode::BAD_REQUEST,
-                    )
-                }
-                ResolveNeighborError::System(e) => {
-                    Self::for_internal_error(e.to_string())
-                }
-            },
+            Error::AddUnnumberedNeighbor(ref err) => {
+                Self::for_internal_error(err.to_string())
+            }
+            Error::Interface(ref err) => {
+                Self::for_internal_error(err.to_string())
+            }
             Error::InternalCommunication(_) => {
                 Self::for_internal_error(value.to_string())
             }

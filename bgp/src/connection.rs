@@ -8,7 +8,6 @@ use crate::{
     messages::Message,
     router::SessionMap,
     session::{FsmEvent, SessionInfo},
-    unnumbered::UnnumberedManager,
 };
 use slog::Logger;
 use std::{
@@ -17,6 +16,7 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
+use unnumbered::BgpUnnumbered;
 
 pub(crate) use mg_api_types::bgp::session::{
     ConnectionDirection, ConnectionId,
@@ -41,7 +41,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     fn bind<A: ToSocketAddrs>(
         addr: A,
         log: Logger,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Result<Self, Error>
     where
         Self: Sized;
