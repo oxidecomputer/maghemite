@@ -11,7 +11,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_api_types_versions::{latest, v1, v2, v4, v5, v8, v10};
+use mg_api_types_versions::{latest, v1, v2, v4, v5, v8, v10, v11};
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):
@@ -25,6 +25,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (12, MD5_AUTH_STRING),
     (11, PREFIX_TO_OXNET),
     (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
@@ -137,7 +138,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/neighbor",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn create_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -147,7 +148,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/neighbor/{asn}/{peer}",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn read_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -157,7 +158,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/neighbors/{asn}",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn read_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -167,12 +168,91 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/neighbor",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn update_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V11 API (VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING) - same
+    // neighbor shape as latest except MD5 auth keys are still plain strings on
+    // the wire.
+
+    #[endpoint {
+        method = PUT,
+        path = "/bgp/config/neighbor",
+        operation_id = "create_neighbor",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn create_neighbor_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v11::bgp::config::Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::create_neighbor(
+            rqctx,
+            request.try_map(TryInto::try_into).map_err(|e| {
+                HttpError::for_bad_request(
+                    None,
+                    format!("invalid MD5 authentication key: {e}"),
+                )
+            })?,
+        )
+        .await
+    }
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/neighbor/{asn}/{peer}",
+        operation_id = "read_neighbor",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn read_neighbor_v11(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<v5::bgp::config::NeighborSelector>,
+    ) -> Result<HttpResponseOk<v11::bgp::config::Neighbor>, HttpError> {
+        Self::read_neighbor(rqctx, path)
+            .await
+            .map(|r| r.map(Into::into))
+    }
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/neighbors/{asn}",
+        operation_id = "read_neighbors",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn read_neighbors_v11(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<v11::bgp::config::Neighbor>>, HttpError>
+    {
+        Self::read_neighbors(rqctx, path)
+            .await
+            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+    }
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/config/neighbor",
+        operation_id = "update_neighbor",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn update_neighbor_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v11::bgp::config::Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::update_neighbor(
+            rqctx,
+            request.try_map(TryInto::try_into).map_err(|e| {
+                HttpError::for_bad_request(
+                    None,
+                    format!("invalid MD5 authentication key: {e}"),
+                )
+            })?,
+        )
+        .await
+    }
 
     #[endpoint {
         method = DELETE,
@@ -184,8 +264,8 @@ pub trait MgAdminApi {
         path: Path<latest::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // V8 API (VERSION_BGP_SRC_ADDR..) - supports src_addr/src_port for
-    // per-neighbor source address binding.
+    // V8 API (VERSION_BGP_SRC_ADDR..VERSION_PREFIX_TO_OXNET) - supports
+    // src_addr/src_port for per-neighbor source address binding.
 
     #[endpoint {
         method = PUT,
@@ -197,7 +277,7 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v8::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::create_neighbor(rqctx, request.map(Into::into)).await
+        Self::create_neighbor_v11(rqctx, request.map(Into::into)).await
     }
 
     #[endpoint {
@@ -208,9 +288,9 @@ pub trait MgAdminApi {
     }]
     async fn read_neighbor_v8(
         rqctx: RequestContext<Self::Context>,
-        path: Path<latest::bgp::config::NeighborSelector>,
+        path: Path<v5::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseOk<v8::bgp::config::Neighbor>, HttpError> {
-        Self::read_neighbor(rqctx, path)
+        Self::read_neighbor_v11(rqctx, path)
             .await
             .map(|r| r.map(Into::into))
     }
@@ -223,9 +303,9 @@ pub trait MgAdminApi {
     }]
     async fn read_neighbors_v8(
         rqctx: RequestContext<Self::Context>,
-        path: Path<latest::bgp::config::AsnSelector>,
+        path: Path<v1::bgp::config::AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<v8::bgp::config::Neighbor>>, HttpError> {
-        Self::read_neighbors(rqctx, path)
+        Self::read_neighbors_v11(rqctx, path)
             .await
             .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
     }
@@ -240,7 +320,7 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v8::bgp::config::Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::update_neighbor(rqctx, request.map(Into::into)).await
+        Self::update_neighbor_v11(rqctx, request.map(Into::into)).await
     }
 
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - supports both
@@ -341,18 +421,9 @@ pub trait MgAdminApi {
     }
 
     // V1/V2 API - legacy Neighbor type with combined import/export policies.
-    //
-    // These four endpoints (create/read/read-all/update) are required methods
-    // rather than provided defaults because there is no `From<v1::Neighbor>
-    // for v4::Neighbor` (or vice-versa) that the trait can call: the v1
-    // `Neighbor` carries a single `allow_import`/`allow_export` policy pair
-    // (IPv4 implicit), whereas v4+ carries per-AF policies plus enable
-    // flags. Constructing a v4 shape from v1 input requires the rdb-backed
-    // defaults that only `Self::Context` can supply (see
-    // `bgp_admin::helpers::add_neighbor_v1`); constructing v1 from v4
-    // requires merging per-AF policies, which loses information when both
-    // AFs are enabled. `delete_neighbor_v1` and `clear_neighbor_v1` can be
-    // provided because their inputs project cleanly into v5/v4 shapes.
+    // v1 is IPv4-implicit, so both directions are total and these endpoints
+    // hop a single version to the v4 handlers via the `v1 <-> v4` `Neighbor`
+    // conversions.
 
     #[endpoint {
         method = PUT,
@@ -363,7 +434,9 @@ pub trait MgAdminApi {
     async fn create_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::create_neighbor_v4(rqctx, request.map(Into::into)).await
+    }
 
     #[endpoint {
         method = GET,
@@ -374,7 +447,11 @@ pub trait MgAdminApi {
     async fn read_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::NeighborSelector>,
-    ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
+        Self::read_neighbor_v4(rqctx, request)
+            .await
+            .map(|r| r.map(Into::into))
+    }
 
     #[endpoint {
         method = GET,
@@ -385,7 +462,11 @@ pub trait MgAdminApi {
     async fn read_neighbors_v1(
         rqctx: RequestContext<Self::Context>,
         request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError> {
+        Self::read_neighbors_v4(rqctx, request)
+            .await
+            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+    }
 
     #[endpoint {
         method = POST,
@@ -396,7 +477,9 @@ pub trait MgAdminApi {
     async fn update_neighbor_v1(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::update_neighbor_v4(rqctx, request.map(Into::into)).await
+    }
 
     #[endpoint {
         method = DELETE,
@@ -452,7 +535,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -465,7 +548,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -475,7 +558,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -488,12 +571,94 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bgp::config::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V11 API (VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING) - same
+    // unnumbered neighbor shape as latest except MD5 auth keys are still plain
+    // strings on the wire.
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbors",
+        operation_id = "read_unnumbered_neighbors",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn read_unnumbered_neighbors_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<
+        HttpResponseOk<Vec<v11::bgp::config::UnnumberedNeighbor>>,
+        HttpError,
+    > {
+        Self::read_unnumbered_neighbors(rqctx, request)
+            .await
+            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
+    }
+
+    #[endpoint {
+        method = PUT,
+        path = "/bgp/config/unnumbered-neighbor",
+        operation_id = "create_unnumbered_neighbor",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn create_unnumbered_neighbor_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v11::bgp::config::UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::create_unnumbered_neighbor(
+            rqctx,
+            request.try_map(TryInto::try_into).map_err(|e| {
+                HttpError::for_bad_request(
+                    None,
+                    format!("invalid MD5 authentication key: {e}"),
+                )
+            })?,
+        )
+        .await
+    }
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbor",
+        operation_id = "read_unnumbered_neighbor",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn read_unnumbered_neighbor_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<v5::bgp::config::UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<v11::bgp::config::UnnumberedNeighbor>, HttpError>
+    {
+        Self::read_unnumbered_neighbor(rqctx, request)
+            .await
+            .map(|r| r.map(Into::into))
+    }
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/config/unnumbered-neighbor",
+        operation_id = "update_unnumbered_neighbor",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn update_unnumbered_neighbor_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v11::bgp::config::UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::update_unnumbered_neighbor(
+            rqctx,
+            request.try_map(TryInto::try_into).map_err(|e| {
+                HttpError::for_bad_request(
+                    None,
+                    format!("invalid MD5 authentication key: {e}"),
+                )
+            })?,
+        )
+        .await
+    }
 
     #[endpoint {
         method = DELETE,
@@ -515,12 +680,12 @@ pub trait MgAdminApi {
     }]
     async fn read_unnumbered_neighbors_v8(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::AsnSelector>,
+        request: Query<v1::bgp::config::AsnSelector>,
     ) -> Result<
         HttpResponseOk<Vec<v8::bgp::config::UnnumberedNeighbor>>,
         HttpError,
     > {
-        Self::read_unnumbered_neighbors(rqctx, request)
+        Self::read_unnumbered_neighbors_v11(rqctx, request)
             .await
             .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
     }
@@ -535,7 +700,8 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v8::bgp::config::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::create_unnumbered_neighbor(rqctx, request.map(Into::into)).await
+        Self::create_unnumbered_neighbor_v11(rqctx, request.map(Into::into))
+            .await
     }
 
     #[endpoint {
@@ -546,10 +712,10 @@ pub trait MgAdminApi {
     }]
     async fn read_unnumbered_neighbor_v8(
         rqctx: RequestContext<Self::Context>,
-        request: Query<latest::bgp::config::UnnumberedNeighborSelector>,
+        request: Query<v5::bgp::config::UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<v8::bgp::config::UnnumberedNeighbor>, HttpError>
     {
-        Self::read_unnumbered_neighbor(rqctx, request)
+        Self::read_unnumbered_neighbor_v11(rqctx, request)
             .await
             .map(|r| r.map(Into::into))
     }
@@ -564,7 +730,8 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v8::bgp::config::UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::update_unnumbered_neighbor(rqctx, request.map(Into::into)).await
+        Self::update_unnumbered_neighbor_v11(rqctx, request.map(Into::into))
+            .await
     }
 
     // V5 API (VERSION_UNNUMBERED..VERSION_BGP_SRC_ADDR) - unnumbered neighbors
@@ -1051,12 +1218,36 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/omicron/apply",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_MD5_AUTH_STRING..,
     }]
     async fn bgp_apply(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V11 API - ApplyRequest with oxnet prefixes but MD5 auth keys are still
+    // plain strings on the wire.
+    #[endpoint {
+        method = POST,
+        path = "/bgp/omicron/apply",
+        operation_id = "bgp_apply",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_MD5_AUTH_STRING,
+    }]
+    async fn bgp_apply_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v11::bgp::config::ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::bgp_apply(
+            rqctx,
+            request.try_map(TryInto::try_into).map_err(|e| {
+                HttpError::for_bad_request(
+                    None,
+                    format!("invalid MD5 authentication key: {e}"),
+                )
+            })?,
+        )
+        .await
+    }
 
     // V8 API - ApplyRequest with per-AF policies and src_addr/src_port but Prefix4/6 not oxnet.
     #[endpoint {
@@ -1069,7 +1260,7 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v8::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::bgp_apply(rqctx, request.map(Into::into)).await
+        Self::bgp_apply_v11(rqctx, request.map(Into::into)).await
     }
 
     // V4-V7 API - ApplyRequest with per-AF policies but no src_addr/src_port.
@@ -1097,7 +1288,7 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v1::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::bgp_apply_v8(rqctx, request.map(Into::into)).await
+        Self::bgp_apply_v4(rqctx, request.map(Into::into)).await
     }
 
     #[endpoint {

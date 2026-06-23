@@ -24,6 +24,7 @@ use crate::{
     session::{ConnectionEvent, FsmEvent, PeerId, SessionEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::bgp::config::Md5AuthString;
 use mg_common::lock;
 use slog::{Logger, info};
 use std::{
@@ -205,7 +206,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn apply_policy(
         conn: &BgpConnectionTcp,
         min_ttl: Option<u8>,
-        md5_key: Option<String>,
+        md5_key: Option<Md5AuthString>,
     ) -> Result<(), Error> {
         let tcp_stream = lock!(conn.conn);
 
@@ -217,7 +218,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             #[cfg(target_os = "linux")]
             {
                 let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-                let len = key.len();
+                let len = key.as_bytes().len();
                 keyval[..len].copy_from_slice(key.as_bytes());
                 set_md5_sig(
                     tcp_stream.as_raw_fd(),
@@ -232,7 +233,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 let local = get_md5_source_addrs(conn.peer.ip())?;
                 conn.manage_md5_associations(
                     tcp_stream.as_raw_fd(),
-                    key,
+                    key.as_str(),
                     local,
                     conn.peer,
                 )?;
@@ -269,7 +270,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         #[cfg(target_os = "linux")]
         if let Some(key) = &config.md5_auth_key {
             let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-            let len = key.len();
+            let len = key.as_bytes().len();
             keyval[..len].copy_from_slice(key.as_bytes());
             set_md5_sig(s.as_raw_fd(), len as u16, keyval, peer).map_err(
                 |e| {
@@ -289,8 +290,14 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         #[cfg(target_os = "illumos")]
         let md5_locals = if let Some(key) = &config.md5_auth_key {
             Some(
-                setup_outbound_md5(s.as_raw_fd(), key, peer.ip(), peer, &log)
-                    .map_err(|e| {
+                setup_outbound_md5(
+                    s.as_raw_fd(),
+                    key.as_str(),
+                    peer.ip(),
+                    peer,
+                    &log,
+                )
+                .map_err(|e| {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply MD5 auth for {peer}: {e}";

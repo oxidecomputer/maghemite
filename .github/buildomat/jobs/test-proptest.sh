@@ -31,6 +31,14 @@ source .github/buildomat/test-common.sh
 
 # Run property-based tests with high intensity (default is 256)
 
+# mg-api-types-versions proptest suite
+pushd mg-api-types/versions
+PROPTEST_CASES=1000000 cargo nextest run --lib proptest
+if [[ -d proptest-regressions ]]; then
+    cp -r proptest-regressions /work/mg-api-types-versions-proptest-regressions
+fi
+popd
+
 # RDB proptest suite
 pushd rdb
 PROPTEST_CASES=1000000 cargo nextest run --lib proptest

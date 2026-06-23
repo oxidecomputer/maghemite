@@ -8,7 +8,8 @@ use client_common::{print_nopipe, println_nopipe};
 use colored::*;
 use mg_admin_client::{Client, types};
 use mg_api_types::bgp::config::{
-    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
+    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, Md5AuthString,
+    NeighborResetRequest,
 };
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
@@ -670,15 +671,21 @@ impl Neighbor {
     fn into_api_types(self) -> Result<ApiNeighborType> {
         match parse_peer_type(&self.peer) {
             PeerType::Numbered(addr) => {
-                Ok(ApiNeighborType::Numbered(self.into_numbered(addr)))
+                Ok(ApiNeighborType::Numbered(self.into_numbered(addr)?))
             }
-            PeerType::Unnumbered(interface) => {
-                Ok(ApiNeighborType::Unnumbered(self.into_unnumbered(interface)))
-            }
+            PeerType::Unnumbered(interface) => Ok(ApiNeighborType::Unnumbered(
+                self.into_unnumbered(interface)?,
+            )),
         }
     }
 
-    fn into_numbered(self, addr: IpAddr) -> types::Neighbor {
+    fn into_numbered(self, addr: IpAddr) -> Result<types::Neighbor> {
+        let md5_auth_key = self
+            .md5_auth_key
+            .clone()
+            .map(Md5AuthString::new)
+            .transpose()?;
+
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if self.enable_ipv4 {
             let import_policy = match self.allow_import4.clone() {
@@ -725,7 +732,7 @@ impl Neighbor {
             None
         };
 
-        types::Neighbor {
+        Ok(types::Neighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
@@ -739,7 +746,7 @@ impl Neighbor {
             resolution: self.clock_resolution,
             group: self.group.clone(),
             passive: self.passive_connection,
-            md5_auth_key: self.md5_auth_key.clone(),
+            md5_auth_key,
             multi_exit_discriminator: self.med,
             communities: self.communities.clone(),
             local_pref: self.local_pref,
@@ -753,10 +760,19 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
-        }
+        })
     }
 
-    fn into_unnumbered(self, interface: String) -> types::UnnumberedNeighbor {
+    fn into_unnumbered(
+        self,
+        interface: String,
+    ) -> Result<types::UnnumberedNeighbor> {
+        let md5_auth_key = self
+            .md5_auth_key
+            .clone()
+            .map(Md5AuthString::new)
+            .transpose()?;
+
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if self.enable_ipv4 {
             let import_policy = match self.allow_import4.clone() {
@@ -803,7 +819,7 @@ impl Neighbor {
             None
         };
 
-        types::UnnumberedNeighbor {
+        Ok(types::UnnumberedNeighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
@@ -822,7 +838,7 @@ impl Neighbor {
             resolution: self.clock_resolution,
             group: self.group.clone(),
             passive: self.passive_connection,
-            md5_auth_key: self.md5_auth_key.clone(),
+            md5_auth_key,
             multi_exit_discriminator: self.med,
             communities: self.communities.clone(),
             local_pref: self.local_pref,
@@ -836,7 +852,7 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
-        }
+        })
     }
 }
 

@@ -214,37 +214,8 @@ impl MgAdminApi for MgAdminApiImpl {
     // create_neighbor_v4, update_neighbor_v4, read_neighbor_v4,
     // read_neighbors_v4, and delete_neighbor_v4 are provided methods.
 
-    // V1 (..VERSION_MP_BGP)
-
-    async fn create_neighbor_v1(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::create_neighbor_v1(ctx, request).await
-    }
-
-    async fn read_neighbor_v1(
-        ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::config::NeighborSelector>,
-    ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
-        bgp_admin::read_neighbor_v1(ctx, request).await
-    }
-
-    async fn read_neighbors_v1(
-        ctx: RequestContext<Self::Context>,
-        request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<v1::bgp::config::Neighbor>>, HttpError> {
-        bgp_admin::read_neighbors_v1(ctx, request).await
-    }
-
-    async fn update_neighbor_v1(
-        ctx: RequestContext<Self::Context>,
-        request: TypedBody<v1::bgp::config::Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::update_neighbor_v1(ctx, request).await
-    }
-
-    // delete_neighbor_v1 and clear_neighbor_v1 are provided methods.
+    // V1 (..VERSION_MP_BGP): create/read/update/delete and clear are all
+    // provided methods that hop to the v4 handlers.
 
     async fn clear_neighbor(
         ctx: RequestContext<Self::Context>,

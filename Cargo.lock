@@ -3569,7 +3569,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#4abde35f281e1934fccc316a212d86d21ddad6a9"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#33fd10c84c2ccc8b8a22edca1756a519fd458e43"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -3832,6 +3832,7 @@ dependencies = [
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
+ "proptest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
