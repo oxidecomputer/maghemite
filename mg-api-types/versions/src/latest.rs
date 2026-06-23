@@ -10,11 +10,11 @@
 //! `vN` with `latest` leaves the rest of the path unchanged.
 
 pub mod bfd {
-    pub use crate::v1::bfd::BfdPeerConfig;
-    pub use crate::v1::bfd::BfdPeerInfo;
     pub use crate::v1::bfd::BfdPeerState;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
     pub use crate::v1::bfd::SessionMode;
+    pub use crate::v12::bfd::BfdPeerConfig;
+    pub use crate::v12::bfd::BfdPeerInfo;
 }
 
 pub mod bgp {
@@ -38,16 +38,18 @@ pub mod bgp {
         pub use crate::v5::bgp::config::UnnumberedNeighborResetRequest;
         pub use crate::v5::bgp::config::UnnumberedNeighborSelector;
 
-        pub use crate::v11::bgp::config::ApplyRequest;
-        pub use crate::v11::bgp::config::BgpPeerConfig;
-        pub use crate::v11::bgp::config::BgpPeerParameters;
+        // Config types carrying the `dscp` field come from v12; the rest
+        // of the per-AF / origination types are unchanged since v11.
         pub use crate::v11::bgp::config::Ipv4UnicastConfig;
         pub use crate::v11::bgp::config::Ipv6UnicastConfig;
-        pub use crate::v11::bgp::config::Neighbor;
         pub use crate::v11::bgp::config::Origin4;
         pub use crate::v11::bgp::config::PeerInfo;
-        pub use crate::v11::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v11::bgp::config::UnnumberedNeighbor;
+        pub use crate::v12::bgp::config::ApplyRequest;
+        pub use crate::v12::bgp::config::BgpPeerConfig;
+        pub use crate::v12::bgp::config::BgpPeerParameters;
+        pub use crate::v12::bgp::config::Neighbor;
+        pub use crate::v12::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v12::bgp::config::UnnumberedNeighbor;
     }
 
     pub mod peer {
@@ -153,9 +155,9 @@ pub mod rdb {
     }
 
     pub mod neighbor {
-        pub use crate::v4::rdb::neighbor::BgpNeighborInfo;
-        pub use crate::v4::rdb::neighbor::BgpNeighborParameters;
-        pub use crate::v4::rdb::neighbor::BgpUnnumberedNeighborInfo;
+        pub use crate::v12::rdb::neighbor::BgpNeighborInfo;
+        pub use crate::v12::rdb::neighbor::BgpNeighborParameters;
+        pub use crate::v12::rdb::neighbor::BgpUnnumberedNeighborInfo;
     }
 
     pub mod path {
@@ -169,6 +171,12 @@ pub mod rdb {
 
     pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_BGP;
     pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_STATIC;
+}
+
+pub mod common {
+    pub mod headers {
+        pub use crate::v12::common::headers::Dscp;
+    }
 }
 
 pub mod ndp {

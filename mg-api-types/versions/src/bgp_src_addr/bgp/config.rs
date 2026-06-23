@@ -124,16 +124,11 @@ pub struct ApplyRequest {
 
 // ----- v1 (initial, frozen) -> v8 upgrades -----
 
-impl From<v1::bgp::config::BgpPeerConfig> for BgpPeerConfig {
-    fn from(cfg: v1::bgp::config::BgpPeerConfig) -> Self {
+impl From<v1::bgp::config::BgpPeerParameters> for BgpPeerParameters {
+    fn from(p: v1::bgp::config::BgpPeerParameters) -> Self {
         // v1 is frozen; if this destructure stops compiling the v1
         // contract has been violated upstream — fix that, don't teach
         // this conversion to handle a new field.
-        let v1::bgp::config::BgpPeerConfig {
-            host,
-            name,
-            parameters,
-        } = cfg;
         let v1::bgp::config::BgpPeerParameters {
             hold_time,
             idle_hold_time,
@@ -152,41 +147,71 @@ impl From<v1::bgp::config::BgpPeerConfig> for BgpPeerConfig {
             allow_import,
             allow_export,
             vlan_id,
-        } = parameters;
+        } = p;
+        BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: ImportExportPolicy4::from(allow_import),
+                export_policy: ImportExportPolicy4::from(allow_export),
+            }),
+            ipv6_unicast: None,
+            vlan_id,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            idle_hold_jitter: None,
+            deterministic_collision_resolution: false,
+            src_addr: None,
+            src_port: None,
+        }
+    }
+}
+
+impl From<v1::bgp::config::BgpPeerConfig> for BgpPeerConfig {
+    fn from(cfg: v1::bgp::config::BgpPeerConfig) -> Self {
+        let v1::bgp::config::BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
         Self {
             host,
             name,
-            parameters: BgpPeerParameters {
-                hold_time,
-                idle_hold_time,
-                delay_open,
-                connect_retry,
-                keepalive,
-                resolution,
-                passive,
-                remote_asn,
-                min_ttl,
-                md5_auth_key,
-                multi_exit_discriminator,
-                communities,
-                local_pref,
-                enforce_first_as,
-                ipv4_unicast: Some(Ipv4UnicastConfig {
-                    nexthop: None,
-                    import_policy: ImportExportPolicy4::from(allow_import),
-                    export_policy: ImportExportPolicy4::from(allow_export),
-                }),
-                ipv6_unicast: None,
-                vlan_id,
-                connect_retry_jitter: Some(JitterRange {
-                    min: 0.75,
-                    max: 1.0,
-                }),
-                idle_hold_jitter: None,
-                deterministic_collision_resolution: false,
-                src_addr: None,
-                src_port: None,
-            },
+            parameters: BgpPeerParameters::from(parameters),
+        }
+    }
+}
+
+impl From<v1::bgp::config::Neighbor> for Neighbor {
+    fn from(n: v1::bgp::config::Neighbor) -> Self {
+        let v1::bgp::config::Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: BgpPeerParameters::from(parameters),
         }
     }
 }

@@ -3,11 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
-    IO_TIMEOUT,
+    DEFAULT_BGP_TTL, IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        ConnectionId, SocketOption, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -24,12 +24,19 @@ use crate::{
     session::{ConnectionEvent, FsmEvent, PeerId, SessionEvent, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{IPPROTO_IP, IPPROTO_IPV6, c_void};
+use mg_api_types::common::headers::Dscp;
 use mg_common::lock;
 use slog::{Logger, info};
+use socket2::SockRef;
+use std::os::fd::AsRawFd;
 use std::{
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    num::NonZeroU8,
+    os::fd::AsFd,
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -37,15 +44,12 @@ use std::{
 };
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
-use {
-    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void},
-    std::os::fd::AsRawFd,
-};
+use libc::{IPPROTO_TCP, c_int};
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
 #[cfg(target_os = "linux")]
-use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
+use libc::{IP_MINTTL, IPV6_MINHOPCOUNT, TCP_MD5SIG, sockaddr_storage};
 
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
@@ -54,8 +58,12 @@ use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
+// XXX: drop these local constants once libc 0.2.187 is released.
+// rust-lang/libc#5089 adds IP_MINTTL/IPV6_MINHOPCOUNT bindings for solarish.
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
+#[cfg(target_os = "illumos")]
+const IPV6_MINHOPCOUNT: i32 = 0x2f;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
 #[cfg(target_os = "illumos")]
@@ -117,6 +125,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             ))?;
         let listener = TcpListener::bind(addr)?;
         let bind_addr = listener.local_addr()?;
+        set_outgoing_ttl(&listener, DEFAULT_BGP_TTL, bind_addr)?;
 
         info!(log, "TcpListener created"; "listener" => ?listener);
         // We set nonblocking to true on the listener because accept() can block
@@ -202,52 +211,6 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         }
     }
 
-    fn apply_policy(
-        conn: &BgpConnectionTcp,
-        min_ttl: Option<u8>,
-        md5_key: Option<String>,
-    ) -> Result<(), Error> {
-        let tcp_stream = lock!(conn.conn);
-
-        if let Some(ttl) = min_ttl {
-            apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
-        }
-
-        if let Some(ref key) = md5_key {
-            #[cfg(target_os = "linux")]
-            {
-                let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-                let len = key.len();
-                keyval[..len].copy_from_slice(key.as_bytes());
-                set_md5_sig(
-                    tcp_stream.as_raw_fd(),
-                    len as u16,
-                    keyval,
-                    conn.peer,
-                )?;
-            }
-
-            #[cfg(target_os = "illumos")]
-            {
-                let local = get_md5_source_addrs(conn.peer.ip())?;
-                conn.manage_md5_associations(
-                    tcp_stream.as_raw_fd(),
-                    key,
-                    local,
-                    conn.peer,
-                )?;
-            }
-
-            #[cfg(not(any(target_os = "linux", target_os = "illumos")))]
-            {
-                // MD5 authentication not supported on this platform
-                let _ = key; // Suppress unused variable warning
-            }
-        }
-
-        Ok(())
-    }
-
     fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
     }
@@ -287,7 +250,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
 
         // Setup MD5 for Illumos (initialization + SA tracking data)
         #[cfg(target_os = "illumos")]
-        let md5_locals = if let Some(key) = &config.md5_auth_key {
+        let _md5_locals = if let Some(key) = &config.md5_auth_key {
             Some(
                 setup_outbound_md5(s.as_raw_fd(), key, peer.ip(), peer, &log)
                     .map_err(|e| {
@@ -332,6 +295,17 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 }
 
+                if let Err(e) = apply_socket_options(&s, &config, peer) {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply socket options for {peer}: {e}";
+                        "direction" => ConnectionDirection::Outbound,
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+
                 // Establish the connection (THIS IS THE BLOCKING CALL)
                 let sa: socket2::SockAddr = peer.into();
                 let new_conn: TcpStream = match s.connect_timeout(&sa, timeout) {
@@ -348,20 +322,6 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 };
 
-                // Apply TTL if specified
-                if let Some(ttl) = config.min_ttl
-                    && let Err(e) = apply_min_ttl(&new_conn, ttl, peer)
-                {
-                    connection_log_lite!(log,
-                        warn,
-                        "failed to apply min TTL for {peer}: {e}";
-                        "direction" => ConnectionDirection::Outbound,
-                        "peer" => format!("{peer}"),
-                        "error" => format!("{e}")
-                    );
-                    return;
-                }
-
                 // Determine the actual source address
                 let actual_source = match new_conn.local_addr() {
                     Ok(addr) => addr,
@@ -377,7 +337,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 };
 
-                // Create the connection object with the established stream
+                // Create the connection object with the established stream.
                 let conn = match BgpConnectionTcp::with_conn(
                     actual_source,
                     peer,
@@ -401,21 +361,18 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 };
 
-                // Setup SA tracking and keepalive for Illumos MD5 (using pre-selected sources)
-                #[cfg(target_os = "illumos")]
-                if let Some((key, locals)) = md5_locals
-                    && let Err(e) =
-                        conn.set_md5_security_associations(&key, locals, peer)
-                    {
-                        connection_log_lite!(log,
-                            warn,
-                            "failed to start SA tracking for {peer}: {e}";
-                            "direction" => ConnectionDirection::Outbound,
-                            "peer" => format!("{peer}"),
-                            "error" => format!("{e}")
-                        );
-                        return;
-                    }
+                if let Some(ref key) = config.md5_auth_key
+                    && let Err(e) = conn.apply_md5(key)
+                {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply MD5 auth for {peer}: {e}";
+                        "direction" => ConnectionDirection::Outbound,
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
 
                 connection_log_lite!(log,
                     info,
@@ -524,6 +481,18 @@ impl BgpConnection for BgpConnectionTcp {
 
         Ok(())
     }
+
+    fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error> {
+        let guard = lock!(self.conn);
+        match *option {
+            SocketOption::Dscp(dscp) => apply_dscp(&*guard, dscp, self.peer),
+            SocketOption::MinTtl(ttl) => apply_ttl(&*guard, ttl, self.peer),
+        }
+    }
+
+    fn apply_md5(&self, key: &str) -> Result<(), Error> {
+        apply_md5_policy(self, Some(key))
+    }
 }
 
 impl Drop for BgpConnectionTcp {
@@ -557,6 +526,7 @@ impl BgpConnectionTcp {
         config: &SessionInfo,
     ) -> Result<Self, Error> {
         conn.set_nodelay(true)?;
+        apply_socket_options(&conn, config, peer)?;
 
         let id = ConnectionId::new(source, peer);
 
@@ -1236,41 +1206,185 @@ fn create_outbound_socket(
     })
 }
 
-/// Apply min TTL setting to a TCP connection
-#[allow(unused_variables)]
-fn apply_min_ttl(
-    conn: &TcpStream,
+/// Apply DSCP marking to a BGP TCP connection.
+///
+/// Sets the DSCP field in the IP header via IP_TOS (IPv4) or
+/// IPV6_TCLASS (IPv6) using socket2 wrappers where available,
+/// falling back to raw libc::setsockopt on illumos where socket2
+/// lacks bindings.
+fn apply_dscp(
+    sock: &impl AsFd,
+    dscp: Dscp,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    let tos = u32::from(dscp.as_tos_byte());
+    let sock = SockRef::from(sock);
+    if peer.is_ipv4() {
+        set_dscp_v4(&sock, tos)
+    } else {
+        traffic_class_v6(&sock, tos)
+    }
+}
+
+/// Set IPv4 DSCP/TOS. Uses socket2 on platforms that support it,
+/// raw libc on illumos.
+#[cfg(not(target_os = "illumos"))]
+fn set_dscp_v4(sock: &SockRef, tos: u32) -> Result<(), Error> {
+    sock.set_tos_v4(tos).map_err(Error::Io)
+}
+
+#[cfg(target_os = "illumos")]
+fn set_dscp_v4(sock: &SockRef, tos: u32) -> Result<(), Error> {
+    unsafe {
+        let fd = sock.as_raw_fd();
+        if libc::setsockopt(
+            fd,
+            IPPROTO_IP,
+            libc::IP_TOS,
+            &tos as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+/// Set IPv6 DSCP/Traffic Class. Uses socket2 on platforms that
+/// support it, raw libc on illumos.
+#[cfg(not(target_os = "illumos"))]
+fn traffic_class_v6(sock: &SockRef, tos: u32) -> Result<(), Error> {
+    sock.set_tclass_v6(tos).map_err(Error::Io)
+}
+
+#[cfg(target_os = "illumos")]
+fn traffic_class_v6(sock: &SockRef, tos: u32) -> Result<(), Error> {
+    unsafe {
+        let fd = sock.as_raw_fd();
+        if libc::setsockopt(
+            fd,
+            IPPROTO_IPV6,
+            libc::IPV6_TCLASS,
+            &tos as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+fn apply_socket_options(
+    sock: &(impl AsFd + AsRawFd),
+    config: &SessionInfo,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    apply_ttl(sock, config.min_ttl, peer)?;
+    apply_dscp(sock, config.dscp, peer)
+}
+
+fn apply_md5_policy(
+    conn: &BgpConnectionTcp,
+    key: Option<&str>,
+) -> Result<(), Error> {
+    let Some(key) = key else {
+        return Ok(());
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        let tcp_stream = lock!(conn.conn);
+        let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
+        let len = key.len();
+        keyval[..len].copy_from_slice(key.as_bytes());
+        set_md5_sig(tcp_stream.as_raw_fd(), len as u16, keyval, conn.peer)?;
+    }
+
+    #[cfg(target_os = "illumos")]
+    {
+        let tcp_stream = lock!(conn.conn);
+        let local = get_md5_source_addrs(conn.peer.ip())?;
+        conn.manage_md5_associations(
+            tcp_stream.as_raw_fd(),
+            key,
+            local,
+            conn.peer,
+        )?;
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "illumos")))]
+    {
+        let _ = (&conn, &key);
+    }
+
+    Ok(())
+}
+
+/// Apply BGP TTL policy to a TCP connection.
+///
+/// Sets the outgoing TTL/hop-limit to the configured `min_ttl` (if any)
+/// or `DEFAULT_BGP_TTL` otherwise, and sets the incoming
+/// IP_MINTTL/IPV6_MINHOPCOUNT filter to `min_ttl` (or 0 = disabled).
+fn apply_ttl(
+    sock: &(impl AsFd + AsRawFd),
+    min_ttl: Option<NonZeroU8>,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    let ttl = min_ttl.map(NonZeroU8::get);
+    set_outgoing_ttl(sock, ttl.unwrap_or(DEFAULT_BGP_TTL), peer)?;
+    set_ip_minttl(sock, ttl.unwrap_or(0), peer)
+}
+
+/// Set the outgoing TTL/hop-limit on a TCP socket.
+///
+/// Uses IP_TTL for IPv4 and IPV6_UNICAST_HOPS for IPv6 via socket2.
+/// `TcpStream::set_ttl` would only set IP_TTL — silently a no-op on
+/// IPv6 sockets — so dispatch on the peer's address family.
+fn set_outgoing_ttl(
+    sock: &impl AsFd,
     ttl: u8,
     peer: SocketAddr,
 ) -> Result<(), Error> {
-    conn.set_ttl(ttl.into())?;
+    let sock = SockRef::from(sock);
+    if peer.is_ipv4() {
+        sock.set_ttl_v4(u32::from(ttl)).map_err(Error::Io)
+    } else {
+        sock.set_unicast_hops_v6(u32::from(ttl)).map_err(Error::Io)
+    }
+}
+
+/// Set the incoming minimum TTL/hop-limit filter on a TCP socket.
+// XXX: replace with socket2 wrappers when they become available.
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "illumos")),
+    allow(unused_variables)
+)]
+fn set_ip_minttl(
+    sock: &(impl AsFd + AsRawFd),
+    ttl: u8,
+    peer: SocketAddr,
+) -> Result<(), Error> {
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
-        let fd = conn.as_raw_fd();
+        let (proto, optname) = if peer.is_ipv4() {
+            (IPPROTO_IP, IP_MINTTL)
+        } else {
+            (IPPROTO_IPV6, IPV6_MINHOPCOUNT)
+        };
         let min_ttl = ttl as u32;
-        unsafe {
-            if peer.is_ipv4()
-                && libc::setsockopt(
-                    fd,
-                    IPPROTO_IP,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
-                    std::mem::size_of::<u32>() as u32,
-                ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
-            if peer.is_ipv6()
-                && libc::setsockopt(
-                    fd,
-                    IPPROTO_IPV6,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
-                    std::mem::size_of::<u32>() as u32,
-                ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
+        let rc = unsafe {
+            libc::setsockopt(
+                sock.as_raw_fd(),
+                proto,
+                optname,
+                &min_ttl as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+        if rc != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
         }
     }
     Ok(())
@@ -1526,4 +1640,135 @@ fn setup_outbound_md5(
     init_md5_associations(fd, key, local.clone(), peer)?;
 
     Ok((key.to_string(), local))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mg_api_types::common::headers::Dscp;
+    use std::net::{TcpListener, TcpStream};
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn apply_dscp_sets_ip_tos() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let dscp = Dscp::from_dscp_value(48).unwrap();
+        apply_dscp(&stream, dscp, addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::IPPROTO_IP,
+                libc::IP_TOS,
+                &mut readback as *mut u32 as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        // DSCP 48 → TOS byte = 48 << 2 = 192
+        assert_eq!(readback, u32::from(dscp.as_tos_byte()));
+    }
+
+    #[test]
+    fn apply_dscp_sets_ipv6_tclass() {
+        let listener = TcpListener::bind("[::1]:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let dscp = Dscp::from_dscp_value(46).unwrap(); // EF
+        apply_dscp(&stream, dscp, addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &mut readback as *mut u32 as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
+        assert_eq!(readback, u32::from(dscp.as_tos_byte()));
+    }
+
+    #[test]
+    fn apply_min_ttl_sets_ipv4_ttl() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        apply_ttl(&stream, NonZeroU8::new(42), addr).unwrap();
+
+        let readback = SockRef::from(&stream).ttl_v4().unwrap();
+        assert_eq!(readback, 42);
+    }
+
+    #[test]
+    fn apply_min_ttl_sets_ipv6_unicast_hops() {
+        let listener = TcpListener::bind("[::1]:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        apply_ttl(&stream, NonZeroU8::new(42), addr).unwrap();
+
+        let readback = SockRef::from(&stream).unicast_hops_v6().unwrap();
+        assert_eq!(readback, 42);
+    }
+
+    // IP_MINTTL / IPV6_MINHOPCOUNT are only set on Linux and illumos.
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
+    #[test]
+    fn apply_min_ttl_sets_ipv4_minttl_filter() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IP,
+                IP_MINTTL,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        assert_eq!(readback, 200);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
+    #[test]
+    fn apply_min_ttl_sets_ipv6_minhopcount_filter() {
+        let listener = TcpListener::bind("[::1]:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IPV6,
+                IPV6_MINHOPCOUNT,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        assert_eq!(readback, 200);
+    }
 }

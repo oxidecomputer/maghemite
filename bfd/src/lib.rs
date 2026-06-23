@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use mg_api_types::bfd::{BfdPeerState, SessionMode};
+use mg_api_types::common::headers::Dscp;
 use mg_common::thread::ManagedThread;
 use slog::{Logger, warn};
 use sm::StateMachine;
@@ -107,12 +108,14 @@ pub struct AddPeerRequest {
     pub endpoint: BfdEndpoint,
     pub egress_thread: Option<Arc<ManagedThread>>,
     pub db: rdb::Db,
+    pub dscp: Dscp,
 }
 
 /// A session holds a BFD state machine for a particular peer.
 pub struct Session {
     pub sm: StateMachine,
     pub mode: SessionMode,
+    pub dscp: Dscp,
     pub counters: Arc<SessionCounters>,
     /// Managed egress thread for UDP packet transmission. Stored here to
     /// ensure automatic cleanup on drop — the ManagedThread's Drop impl
@@ -137,6 +140,7 @@ impl Session {
         Ok(Session {
             sm,
             mode: rq.mode,
+            dscp: rq.dscp,
             counters,
             _egress_thread: rq.egress_thread,
         })
@@ -314,6 +318,7 @@ mod test {
                 endpoint: a,
                 egress_thread: None,
                 db: db.db().clone(),
+                dscp: Dscp::CS6,
             },
         )?;
         assert_eq!(daemon.peer_state(v4_addr), Some(BfdPeerState::Down));
@@ -330,6 +335,7 @@ mod test {
                 endpoint: a,
                 egress_thread: None,
                 db: db.db().clone(),
+                dscp: Dscp::CS6,
             },
         )?;
         assert_eq!(daemon.peer_state(v6_addr), Some(BfdPeerState::Down));
@@ -368,6 +374,7 @@ mod test {
                 endpoint: a,
                 egress_thread: None,
                 db: db.db().clone(),
+                dscp: Dscp::CS6,
             },
         )?;
         net.register(v4_addr2, b);
@@ -382,6 +389,7 @@ mod test {
                 endpoint: a,
                 egress_thread: None,
                 db: db.db().clone(),
+                dscp: Dscp::CS6,
             },
         )?;
         net.register(v6_addr2, b);
@@ -398,6 +406,7 @@ mod test {
                 endpoint: a,
                 egress_thread: None,
                 db: db.db().clone(),
+                dscp: Dscp::CS6,
             },
         )?;
         net.register(v4_addr1, b);
@@ -412,6 +421,7 @@ mod test {
                 endpoint: a,
                 egress_thread: None,
                 db: db.db().clone(),
+                dscp: Dscp::CS6,
             },
         )?;
         net.register(v6_addr1, b);

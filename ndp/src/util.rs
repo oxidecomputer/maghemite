@@ -5,16 +5,21 @@
 // Copyright 2026 Oxide Computer Company
 
 use crate::packet::{Icmp6RouterAdvertisement, Icmp6RouterSolicitation};
-use libc::{c_int, socklen_t};
 use slog::{Logger, error};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
-    ffi::c_void,
     net::{Ipv6Addr, SocketAddrV6},
-    os::fd::AsRawFd,
     thread::sleep,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "linux")]
+use libc::IPV6_MINHOPCOUNT;
+
+// TODO: drop this local once libc 0.2.187 is released — rust-lang/libc#5089
+// adds IPV6_MINHOPCOUNT to the solarish bindings.
+#[cfg(target_os = "illumos")]
+const IPV6_MINHOPCOUNT: libc::c_int = 0x2f;
 
 pub const ALL_NODES_MCAST: Ipv6Addr =
     Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
@@ -210,17 +215,22 @@ pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
     s.set_read_timeout(Some(READ_TIMEOUT))
         .map_err(E::SetReadTimeoutError)?;
 
-    unsafe {
-        // from <netinet/in.h>
-        const IPV6_MINHOPCOUNT: c_int = 0x2f;
-        let min_hops: c_int = 255;
-        let rc = libc::setsockopt(
-            s.as_raw_fd(),
-            libc::IPPROTO_IPV6,
-            IPV6_MINHOPCOUNT,
-            &min_hops as *const _ as *const c_void,
-            std::mem::size_of::<libc::c_int>() as socklen_t,
-        );
+    // IPV6_MINHOPCOUNT is not wrapped by socket2 and is only available on
+    // Linux and illumos. The option enforces RFC 5082 GTSM on inbound
+    // ICMPv6 — required so we only accept RAs/RSes from on-link neighbors.
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
+    {
+        use std::os::fd::AsRawFd;
+        let min_hops: libc::c_int = 255;
+        let rc = unsafe {
+            libc::setsockopt(
+                s.as_raw_fd(),
+                libc::IPPROTO_IPV6,
+                IPV6_MINHOPCOUNT,
+                &min_hops as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
         if rc < 0 {
             return Err(ListeningSocketError::SetIpv6MinHopCount(
                 std::io::Error::last_os_error(),
