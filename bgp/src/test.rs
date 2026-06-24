@@ -36,7 +36,7 @@ use std::{
     thread::{Builder, sleep},
     time::{Duration, Instant},
 };
-use unnumbered::{BgpUnnumbered, NdpNeighbor};
+use unnumbered::BgpUnnumbered;
 
 // Use non-standard port outside the privileged range to avoid needing privs
 const TEST_BGP_PORT: u16 = 10179;
@@ -177,7 +177,7 @@ struct NeighborConfig {
 #[derive(Clone)]
 struct TestBgpUnnumbered {
     scopes: Arc<Mutex<HashMap<u32, String>>>,
-    neighbors: Arc<Mutex<HashMap<String, Option<NdpNeighbor>>>>,
+    neighbors: Arc<Mutex<HashMap<String, Option<Ipv6Addr>>>>,
 }
 
 impl TestBgpUnnumbered {
@@ -204,17 +204,10 @@ impl TestBgpUnnumbered {
         interface: &str,
         addr: Ipv6Addr,
     ) -> Result<(), &'static str> {
-        let scope_id = lock!(self.scopes)
-            .iter()
-            .find_map(|(scope_id, name)| {
-                (name == interface).then_some(*scope_id)
-            })
-            .ok_or("interface not active")?;
-
         let mut neighbors = lock!(self.neighbors);
         let entry =
             neighbors.get_mut(interface).ok_or("interface not active")?;
-        *entry = Some(NdpNeighbor { addr, scope_id });
+        *entry = Some(addr);
         Ok(())
     }
 
@@ -225,7 +218,7 @@ impl TestBgpUnnumbered {
         let mut neighbors = lock!(self.neighbors);
         let entry =
             neighbors.get_mut(interface).ok_or("interface not active")?;
-        Ok(entry.take().map(|neighbor| neighbor.addr))
+        Ok(entry.take())
     }
 }
 
@@ -240,8 +233,17 @@ impl BgpUnnumbered for TestBgpUnnumbered {
     fn get_discovered_ndp_neighbor(
         &self,
         interface: &str,
-    ) -> Result<Option<NdpNeighbor>, unnumbered::UnnumberedError> {
+    ) -> Result<Option<Ipv6Addr>, unnumbered::UnnumberedError> {
         Ok(lock!(self.neighbors).get(interface).copied().flatten())
+    }
+
+    fn get_active_interface_scope_id(
+        &self,
+        interface: &str,
+    ) -> Result<Option<u32>, unnumbered::UnnumberedError> {
+        Ok(lock!(self.scopes).iter().find_map(|(scope_id, name)| {
+            (name == interface).then_some(*scope_id)
+        }))
     }
 }
 

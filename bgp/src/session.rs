@@ -47,7 +47,7 @@ use slog::Logger;
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1745,8 +1745,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // Unnumbered: query BgpUnnumbered for NDP neighbor
                 let mgr = self.unnumbered_manager.as_ref()?;
                 match mgr.get_discovered_ndp_neighbor(iface) {
-                    Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port))
+                    Ok(Some(addr)) => {
+                        match mgr.get_active_interface_scope_id(iface) {
+                            Ok(Some(scope_id)) => {
+                                Some(SocketAddr::V6(SocketAddrV6::new(
+                                    addr,
+                                    self.neighbor.port,
+                                    0,
+                                    scope_id,
+                                )))
+                            }
+                            Ok(None) => None,
+                            Err(e) => {
+                                session_log_lite!(
+                                    self,
+                                    debug,
+                                    "failed to query scope for interface";
+                                    "interface" => iface,
+                                    "error" => e.to_string()
+                                );
+                                None
+                            }
+                        }
                     }
                     Ok(None) => None, // No neighbor discovered yet - expected
                     Err(e) => {
@@ -1781,8 +1801,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             PeerId::Interface(iface) => {
                 let mgr = self.unnumbered_manager.as_ref()?;
                 match mgr.get_discovered_ndp_neighbor(iface) {
-                    Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port))
+                    Ok(Some(addr)) => {
+                        match mgr.get_active_interface_scope_id(iface) {
+                            Ok(Some(scope_id)) => {
+                                Some(SocketAddr::V6(SocketAddrV6::new(
+                                    addr,
+                                    self.neighbor.port,
+                                    0,
+                                    scope_id,
+                                )))
+                            }
+                            Ok(None) => None,
+                            Err(e) => {
+                                session_log_lite!(
+                                    self,
+                                    warn,
+                                    "failed to query scope for interface";
+                                    "interface" => iface,
+                                    "error" => e.to_string()
+                                );
+                                None
+                            }
+                        }
                     }
                     Ok(None) => {
                         session_log_lite!(

@@ -9,7 +9,7 @@ use crate::{
     router::SessionMap,
     session::{FsmEvent, PeerId, SessionInfo, SessionRunner},
 };
-use slog::{Logger, error};
+use slog::{Logger, debug, error};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex, mpsc::Sender},
@@ -52,7 +52,35 @@ pub fn resolve_session_key(
         && v6_addr.ip().is_unicast_link_local()
     {
         match mgr.get_active_interface_by_scope(v6_addr.scope_id()) {
-            Ok(Some(interface)) => return PeerId::Interface(interface),
+            Ok(Some(interface)) => {
+                match mgr.get_discovered_ndp_neighbor(&interface) {
+                    Ok(Some(neighbor)) if neighbor == *v6_addr.ip() => {
+                        return PeerId::Interface(interface);
+                    }
+                    Ok(Some(neighbor)) => {
+                        debug!(log,
+                            "incoming unnumbered peer does not match discovered NDP neighbor";
+                            "interface" => interface.as_str(),
+                            "peer" => peer_addr,
+                            "discovered" => neighbor.to_string(),
+                        );
+                    }
+                    Ok(None) => {
+                        debug!(log,
+                            "incoming unnumbered peer has no discovered NDP neighbor";
+                            "interface" => interface.as_str(),
+                            "peer" => peer_addr,
+                        );
+                    }
+                    Err(e) => {
+                        error!(log,
+                            "discovered unnumbered neighbor query error: {e}";
+                            "interface" => interface.as_str(),
+                            "error" => format!("{e}"),
+                        );
+                    }
+                }
+            }
             // Fallback to IP-based key on failure/missing interface
             Ok(None) => {}
             Err(e) => {

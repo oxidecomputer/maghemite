@@ -96,17 +96,10 @@ pub fn send_ra(
             return;
         }
     };
-    cksum(src, dst, ICMP6_RA_ULP_LEN, &mut out);
+    let dst_ip = dst.unwrap_or(ALL_NODES_MCAST);
+    cksum(src, Some(dst_ip), ICMP6_RA_ULP_LEN, &mut out);
 
-    let dst = SocketAddrV6::new(
-        match dst {
-            Some(d) => d,
-            None => ALL_NODES_MCAST,
-        },
-        0,
-        0,
-        ifindex.get(),
-    );
+    let dst = SocketAddrV6::new(dst_ip, 0, 0, ifindex.get());
     if let Err(e) = s.send_to(&out, &dst.into()) {
         error!(log, "send_ra: send: {e}");
     }
@@ -127,17 +120,10 @@ pub fn send_rs(
             return;
         }
     };
-    cksum(src, dst, ICMP6_RS_ULP_LEN, &mut out);
+    let dst_ip = dst.unwrap_or(ALL_ROUTERS_MCAST);
+    cksum(src, Some(dst_ip), ICMP6_RS_ULP_LEN, &mut out);
 
-    let dst = SocketAddrV6::new(
-        match dst {
-            Some(d) => d,
-            None => ALL_ROUTERS_MCAST,
-        },
-        0,
-        0,
-        ifindex.get(),
-    );
+    let dst = SocketAddrV6::new(dst_ip, 0, 0, ifindex.get());
     if let Err(e) = s.send_to(&out, &dst.into()) {
         error!(log, "send_rs: send: {e}");
     }

@@ -259,6 +259,8 @@ pub struct RouterAdvertisementInfo {
     pub router_lifetime: u16,
     /// Reachable time from the RA
     pub reachable_time: u32,
+    /// Reachable time used by the discovery runtime
+    pub effective_reachable_time: Duration,
     /// Retransmit timer from the RA
     pub retrans_timer: u32,
     /// Whether the peer has expired
@@ -306,6 +308,9 @@ impl RouterDiscoveryState {
             last_seen: neighbor.last_seen,
             router_lifetime: neighbor.advertisement.lifetime,
             reachable_time: neighbor.advertisement.reachable_time,
+            effective_reachable_time: neighbor
+                .advertisement
+                .effective_reachable_time(),
             retrans_timer: neighbor.advertisement.retrans_timer,
             expired: neighbor.expired(),
         })
@@ -347,6 +352,33 @@ impl RouterDiscoveryState {
 #[cfg(test)]
 mod test {
     use crate::packet::{Icmp6RouterAdvertisement, Icmp6RouterSolicitation};
+    use crate::util::{ALL_NODES_MCAST, ALL_ROUTERS_MCAST, cksum};
+    use std::net::Ipv6Addr;
+
+    #[test]
+    fn router_solicitation_checksum_uses_all_routers_multicast() {
+        let src = "fe80::1".parse().unwrap();
+        let mut data = ispf::to_bytes_be(&Icmp6RouterSolicitation::default())
+            .expect("serialize router solicitation");
+
+        cksum(src, Some(ALL_ROUTERS_MCAST), 8, &mut data);
+
+        assert_eq!(&data[2..4], &[0x7d, 0x36]);
+    }
+
+    #[test]
+    fn router_advertisement_checksum_defaults_to_all_nodes_multicast() {
+        let src: Ipv6Addr = "fe80::1".parse().unwrap();
+        let mut default_dst =
+            ispf::to_bytes_be(&Icmp6RouterAdvertisement::default())
+                .expect("serialize router advertisement");
+        let mut all_nodes_dst = default_dst.clone();
+
+        cksum(src, None, 16, &mut default_dst);
+        cksum(src, Some(ALL_NODES_MCAST), 16, &mut all_nodes_dst);
+
+        assert_eq!(default_dst[2..4], all_nodes_dst[2..4]);
+    }
 
     #[test]
     fn router_solicitation_with_link_layer_addr() {

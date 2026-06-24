@@ -5,6 +5,7 @@
 use crate::{
     IO_TIMEOUT,
     connection::{BgpConnection, BgpListener},
+    error::Error,
     router::SessionMap,
     session::{FsmEvent, SessionEvent},
 };
@@ -123,7 +124,14 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         );
                         accepted
                     }
-                    Err(crate::error::Error::Timeout) => {
+                    Err(Error::Timeout) => {
+                        continue 'accept;
+                    }
+                    Err(Error::UnknownPeer(peer)) => {
+                        debug!(log,
+                            "no session found for peer, dropping connection";
+                            "peer" => peer.to_string(),
+                        );
                         continue 'accept;
                     }
                     Err(e) => {
@@ -188,11 +196,12 @@ impl<Cnx: BgpConnection + 'static> Drop for Dispatcher<Cnx> {
 mod tests {
     use crate::{connection::resolve_session_key, session::PeerId};
     use slog::Logger;
-    use std::sync::Arc;
-    use unnumbered::{BgpUnnumbered, NdpNeighbor, UnnumberedError};
+    use std::{net::Ipv6Addr, sync::Arc};
+    use unnumbered::{BgpUnnumbered, UnnumberedError};
 
     struct TestUnnumbered {
         scope_result: Result<Option<String>, UnnumberedError>,
+        neighbor_result: Result<Option<Ipv6Addr>, UnnumberedError>,
     }
 
     impl BgpUnnumbered for TestUnnumbered {
@@ -203,11 +212,18 @@ mod tests {
             self.scope_result.clone()
         }
 
+        fn get_active_interface_scope_id(
+            &self,
+            _interface: &str,
+        ) -> Result<Option<u32>, UnnumberedError> {
+            Ok(None)
+        }
+
         fn get_discovered_ndp_neighbor(
             &self,
             _interface: &str,
-        ) -> Result<Option<NdpNeighbor>, UnnumberedError> {
-            Ok(None)
+        ) -> Result<Option<Ipv6Addr>, UnnumberedError> {
+            self.neighbor_result.clone()
         }
     }
 
@@ -218,12 +234,28 @@ mod tests {
     fn unnumbered_manager(
         scope_result: Result<Option<String>, UnnumberedError>,
     ) -> Arc<dyn BgpUnnumbered> {
-        Arc::new(TestUnnumbered { scope_result })
+        Arc::new(TestUnnumbered {
+            scope_result,
+            neighbor_result: Ok(None),
+        })
+    }
+
+    fn unnumbered_manager_with_neighbor(
+        scope_result: Result<Option<String>, UnnumberedError>,
+        neighbor_result: Result<Option<Ipv6Addr>, UnnumberedError>,
+    ) -> Arc<dyn BgpUnnumbered> {
+        Arc::new(TestUnnumbered {
+            scope_result,
+            neighbor_result,
+        })
     }
 
     #[test]
-    fn link_local_scope_resolves_to_interface_session_key() {
-        let manager = unnumbered_manager(Ok(Some("eth0".into())));
+    fn discovered_link_local_uses_interface_key() {
+        let manager = unnumbered_manager_with_neighbor(
+            Ok(Some("eth0".into())),
+            Ok(Some("fe80::1".parse().unwrap())),
+        );
         let peer = "[fe80::1%7]:179".parse().unwrap();
 
         let key = resolve_session_key(peer, Some(&manager), &log());
@@ -232,7 +264,30 @@ mod tests {
     }
 
     #[test]
-    fn link_local_without_active_scope_falls_back_to_ip_session_key() {
+    fn undiscovered_link_local_uses_ip_key() {
+        let manager = unnumbered_manager(Ok(Some("eth0".into())));
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
+    }
+
+    #[test]
+    fn mismatched_link_local_uses_ip_key() {
+        let manager = unnumbered_manager_with_neighbor(
+            Ok(Some("eth0".into())),
+            Ok(Some("fe80::2".parse().unwrap())),
+        );
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
+    }
+
+    #[test]
+    fn inactive_link_local_scope_uses_ip_key() {
         let manager = unnumbered_manager(Ok(None));
         let peer = "[fe80::1%7]:179".parse().unwrap();
 
@@ -242,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn link_local_resolution_error_falls_back_to_ip_session_key() {
+    fn link_local_lookup_error_uses_ip_key() {
         let manager =
             unnumbered_manager(Err(UnnumberedError::ResolutionFailed {
                 interface: "eth0".into(),

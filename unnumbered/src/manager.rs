@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::NewUnnumberedInterfaceError;
-use crate::bgp::{BgpUnnumbered, NdpNeighbor};
+use crate::bgp::BgpUnnumbered;
 use crate::error::UnnumberedError;
 use crate::interface::{InterfaceMap, UnnumberedInterface};
 use mg_common::lock;
@@ -44,9 +44,9 @@ pub struct UnnumberedManager {
 
     /// Interfaces configured for unnumbered operation.
     ///
-    /// This records admin intent and is preserved across interface runtime
-    /// flaps. Pending interfaces are derived from configured interfaces that
-    /// do not currently have active router-discovery runtime.
+    /// This records admin configuration across interface runtime flaps.
+    /// Pending interfaces are derived from configured interfaces that do not
+    /// currently have active router-discovery runtime.
     configured_interfaces: Arc<Mutex<HashMap<String, u16>>>,
 
     /// Managed thread for interface monitoring.
@@ -289,6 +289,11 @@ impl UnnumberedManager {
             );
         }
 
+        // Reconciliation runs from a single snapshot of configured interfaces.
+        // Mutations made after this snapshot are picked up by the next pass
+        // rather than re-checked around activation; this keeps the reconciler
+        // eventually consistent and avoids holding manager locks while runtime
+        // threads are started.
         let configured: Vec<_> = lock!(configured_interfaces)
             .iter()
             .map(|(interface_name, router_lifetime)| {
@@ -353,10 +358,11 @@ impl UnnumberedManager {
         let _removed = lock!(active_interfaces).remove_by_name(interface_name);
     }
 
-    /// Record configured intent for NDP peer discovery on an interface.
+    /// Configure NDP peer discovery on an interface.
     ///
     /// Runtime setup is handled asynchronously by the monitor thread, which
-    /// reconciles configured intent with currently available system interfaces.
+    /// reconciles configured interfaces with currently available system
+    /// interfaces.
     ///
     /// BGP session creation is handled separately by the caller.
     ///
@@ -385,9 +391,9 @@ impl UnnumberedManager {
         Ok(())
     }
 
-    /// Remove configured intent for NDP peer discovery on an interface.
+    /// Remove NDP peer discovery configuration for an interface.
     ///
-    /// This drops any active runtime and removes configured intent so the
+    /// This drops any active runtime and removes configuration so the
     /// monitor will not reactivate the interface.
     ///
     /// BGP session deletion is handled separately by the caller.
@@ -397,7 +403,7 @@ impl UnnumberedManager {
     ) -> Result<(), network_interface::Error> {
         let interface_str = interface.as_ref();
 
-        // Remove configured intent so the monitor will not reactivate it.
+        // Remove configuration so the monitor will not reactivate it.
         lock!(self.configured_interfaces).remove(interface_str);
 
         // Remove from active if it was active. Dropping the interface also
@@ -422,8 +428,9 @@ impl UnnumberedManager {
 
     /// Get the currently discovered neighbor for an interface.
     ///
-    /// Returns the peer's link-local IPv6 address and scope_id if a neighbor
-    /// has been discovered via NDP, or None if no neighbor is present.
+    /// Returns the peer's link-local IPv6 address if a neighbor has been
+    /// discovered via NDP, or None if no neighbor is present. The scope is
+    /// owned by the interface state, not by the discovered neighbor.
     ///
     /// This is used by SessionRunner to actively query for peer addresses
     /// when attempting connections on unnumbered interfaces.
@@ -432,21 +439,16 @@ impl UnnumberedManager {
     /// * `interface` - The interface name (e.g., "eth0")
     ///
     /// # Returns
-    /// * `Ok(Some(NdpNeighbor))` - Neighbor discovered on this interface
+    /// * `Ok(Some(Ipv6Addr))` - Neighbor discovered on this interface
     /// * `Ok(None)` - No neighbor discovered or interface not ready
     /// * `Err(network_interface::Error)` - Failed to enumerate interfaces
     pub fn get_neighbor_by_interface(
         &self,
         interface: impl AsRef<str>,
-    ) -> Result<Option<NdpNeighbor>, network_interface::Error> {
+    ) -> Result<Option<Ipv6Addr>, network_interface::Error> {
         Ok(lock!(self.active_interfaces)
             .get_by_name(interface.as_ref())
-            .and_then(|ifx| {
-                ifx.discovered_neighbor().map(|addr| NdpNeighbor {
-                    addr,
-                    scope_id: ifx.scope_id().get(),
-                })
-            }))
+            .and_then(|ifx| ifx.discovered_neighbor()))
     }
 
     /// Get the interface name for a given IPv6 scope_id.
@@ -493,8 +495,8 @@ impl UnnumberedManager {
         // Get discovered neighbor for interface
         if let Ok(Some(discovered)) = self.get_neighbor_by_interface(interface)
         {
-            // Compare IP addresses (ignore port/flowinfo/scope_id differences)
-            IpAddr::V6(discovered.addr) == peer.ip()
+            // Compare IP addresses (ignore port/flowinfo differences)
+            IpAddr::V6(discovered) == peer.ip()
         } else {
             false
         }
@@ -523,10 +525,19 @@ impl BgpUnnumbered for UnnumberedManager {
         Ok(Self::get_interface_for_scope(self, scope_id))
     }
 
+    fn get_active_interface_scope_id(
+        &self,
+        interface: &str,
+    ) -> Result<Option<u32>, UnnumberedError> {
+        Ok(lock!(self.active_interfaces)
+            .get_by_name(interface)
+            .map(|ifx| ifx.scope_id().get()))
+    }
+
     fn get_discovered_ndp_neighbor(
         &self,
         interface: &str,
-    ) -> Result<Option<NdpNeighbor>, UnnumberedError> {
+    ) -> Result<Option<Ipv6Addr>, UnnumberedError> {
         Self::get_neighbor_by_interface(self, interface).map_err(|e| {
             UnnumberedError::ResolutionFailed {
                 interface: interface.to_string(),
@@ -639,6 +650,7 @@ pub struct DiscoveredRouterState {
     pub when: std::time::Instant,
     pub router_lifetime: u16,
     pub reachable_time: u32,
+    pub effective_reachable_time: std::time::Duration,
     pub retrans_timer: u32,
     pub expired: bool,
 }
@@ -651,6 +663,7 @@ impl From<ndp::RouterAdvertisementInfo> for DiscoveredRouterState {
             when: info.last_seen,
             router_lifetime: info.router_lifetime,
             reachable_time: info.reachable_time,
+            effective_reachable_time: info.effective_reachable_time,
             retrans_timer: info.retrans_timer,
             expired: info.expired,
         }
@@ -760,13 +773,16 @@ mod tests {
             .get_neighbor_by_interface("eth0")
             .unwrap()
             .expect("neighbor should be discovered");
-        assert_eq!(discovered.addr, neighbor);
-        assert_eq!(discovered.scope_id, 7);
+        assert_eq!(discovered, neighbor);
         assert_eq!(
             BgpUnnumbered::get_discovered_ndp_neighbor(&*manager, "eth0")
-                .unwrap()
-                .map(|n| (n.addr, n.scope_id)),
-            Some((neighbor, 7))
+                .unwrap(),
+            Some(neighbor)
+        );
+        assert_eq!(
+            BgpUnnumbered::get_active_interface_scope_id(&*manager, "eth0")
+                .unwrap(),
+            Some(7)
         );
         assert!(manager.get_neighbor_by_interface("eth1").unwrap().is_none());
 
@@ -934,10 +950,7 @@ mod tests {
         reconcile_test(&manager, &available);
 
         assert_eq!(
-            manager
-                .get_neighbor_by_interface("eth0")
-                .unwrap()
-                .map(|neighbor| neighbor.addr),
+            manager.get_neighbor_by_interface("eth0").unwrap(),
             Some(neighbor),
         );
     }

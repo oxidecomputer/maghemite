@@ -544,18 +544,16 @@ fn convert_discovered_router_to_api(
     let discovered_at = instant_to_iso8601(state.first_seen);
     let last_advertisement = instant_to_iso8601(state.when);
 
-    // Calculate time until expiry
-    let effective_lifetime =
-        Duration::from_secs(u64::from(state.router_lifetime));
     let time_until_expiry = if state.expired {
         // Calculate time since expiry
         let time_since_expiry = elapsed_since_when
-            .checked_sub(effective_lifetime)
+            .checked_sub(state.effective_reachable_time)
             .unwrap_or(Duration::ZERO);
         Some(mg_common::format_duration_human(time_since_expiry))
     } else {
         // Calculate time until expiry
-        let time_until = effective_lifetime
+        let time_until = state
+            .effective_reachable_time
             .checked_sub(elapsed_since_when)
             .unwrap_or(Duration::ZERO);
         Some(mg_common::format_duration_human(time_until))
@@ -1927,19 +1925,14 @@ pub(crate) mod helpers {
 
         let peer = PeerId::Interface(interface.to_string());
         ctx.db.remove_bgp_prefixes_from_peer(&peer);
-
-        // Delete the BGP session for this unnumbered neighbor.
-        // Unnumbered sessions are keyed by interface name, not IP address.
+        ctx.db
+            .remove_unnumbered_bgp_neighbor(asn.into(), interface)?;
         get_router!(&ctx, asn)?.delete_session(peer);
 
         // Unregister the interface from NDP peer discovery
         ctx.bgp
             .unnumbered_manager
             .unconfigure_interface(interface)?;
-
-        // And now clear out the top level database entry
-        ctx.db
-            .remove_unnumbered_bgp_neighbor(asn.into(), interface)?;
 
         Ok(HttpResponseDeleted())
     }
