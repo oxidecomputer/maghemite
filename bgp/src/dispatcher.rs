@@ -6,12 +6,11 @@ use crate::{
     IO_TIMEOUT,
     connection::{BgpConnection, BgpListener},
     router::SessionMap,
-    session::{FsmEvent, PeerId, SessionEvent},
+    session::{FsmEvent, SessionEvent},
 };
 use mg_common::lock;
 use slog::{Logger, debug, error, info, warn};
 use std::{
-    net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     thread::sleep,
@@ -55,49 +54,6 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             log: Mutex::new(log),
             shutdown: AtomicBool::new(false),
         }
-    }
-
-    /// Try to resolve peer address to an unnumbered interface.
-    ///
-    /// Returns `Some(PeerId::Interface)` if:
-    /// - We have an unnumbered manager
-    /// - The peer address is IPv6 link-local
-    /// - We have an interface configured for this scope_id
-    /// - The interface is active on the system
-    fn try_resolve_unnumbered(
-        &self,
-        peer_addr: SocketAddr,
-        log: &Logger,
-    ) -> Option<PeerId> {
-        let mgr = self.unnumbered_manager.as_ref()?;
-        let v6_addr = match peer_addr {
-            SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => v6,
-            _ => return None,
-        };
-        match mgr.get_active_interface_by_scope(v6_addr.scope_id()) {
-            Ok(Some(interface)) => Some(PeerId::Interface(interface)),
-            Ok(None) => None,
-            Err(e) => {
-                error!(log,
-                    "active unnumbered interface query error: {e}";
-                    "error" => format!("{e}")
-                );
-                None
-            }
-        }
-    }
-
-    /// Resolve incoming peer address to appropriate PeerId.
-    ///
-    /// For IPv6 link-local addresses, attempts interface-based routing via
-    /// unnumbered manager. Falls back to IP-based routing otherwise.
-    fn resolve_session_key(
-        &self,
-        peer_addr: SocketAddr,
-        log: &Logger,
-    ) -> PeerId {
-        self.try_resolve_unnumbered(peer_addr, log)
-            .unwrap_or_else(|| PeerId::Ip(peer_addr.ip()))
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
@@ -160,12 +116,12 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     self.sessions.clone(),
                     IO_TIMEOUT,
                 ) {
-                    Ok(c) => {
+                    Ok(accepted) => {
                         debug!(log,
-                            "accepted inbound connection from: {}", c.peer();
-                            "peer" => c.peer(),
+                            "accepted inbound connection from: {}", accepted.connection.peer();
+                            "peer" => accepted.connection.peer(),
                         );
-                        c
+                        accepted
                     }
                     Err(crate::error::Error::Timeout) => {
                         continue 'accept;
@@ -176,42 +132,28 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     }
                 };
 
-                let peer_addr = accepted.peer();
-                let key = self.resolve_session_key(peer_addr, &log);
+                let peer_addr = accepted.connection.peer();
                 let session_log = log.new(slog::o!(
                     "peer" => peer_addr,
-                    "session_key" => format!("{key:?}"),
+                    "session_key" => format!("{:?}", accepted.session_key),
                 ));
 
-                let (runner, min_ttl, md5_key) = {
-                    let sessions = lock!(self.sessions);
-                    let Some(runner) = sessions.get(&key).cloned() else {
-                        debug!(
-                            session_log,
-                            "no session found for peer, dropping connection"
-                        );
-                        continue 'accept;
-                    };
-                    let config = lock!(runner.session);
-                    (
-                        runner.clone(),
-                        config.min_ttl,
-                        config.md5_auth_key.clone(),
-                    )
-                };
-
-                if let Err(e) =
-                    Listener::apply_policy(&accepted, min_ttl, md5_key)
-                {
+                if let Err(e) = Listener::apply_policy(
+                    &accepted.connection,
+                    accepted.min_ttl,
+                    accepted.md5_key,
+                ) {
                     warn!(session_log,
                         "failed to apply policy for connection";
                         "error" => format!("{e}")
                     );
                 }
 
-                if let Err(e) = runner.event_tx.send(FsmEvent::Session(
-                    SessionEvent::TcpConnectionAcked(accepted),
-                )) {
+                if let Err(e) =
+                    accepted.runner.event_tx.send(FsmEvent::Session(
+                        SessionEvent::TcpConnectionAcked(accepted.connection),
+                    ))
+                {
                     error!(session_log,
                         "failed to send connected event to session";
                         "error" => format!("{e}")
