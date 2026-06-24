@@ -8,8 +8,8 @@
 #:   "/work/*",
 #: ]
 #:
-#: [dependencies.build-interop]
-#: job = "build-interop"
+#: [dependencies.build-dhcp-server]
+#: job = "build-dhcp-server"
 #:
 #: [dependencies.build]
 #: job = "build"
@@ -43,7 +43,7 @@ export FALCON_DATASET="cpool/falcon"
 
 banner 'setup'
 
-cp /input/build-interop/work/dhcp-server .
+cp /input/build-dhcp-server/work/dhcp-server .
 cp /input/build/work/release/falcon-lab .
 cp /input/build/work/release/mgd .
 cp /input/build/work/release/ddmd .
