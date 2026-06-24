@@ -8,8 +8,8 @@
 #:   "/work/*",
 #: ]
 #:
-#: [dependencies.build-interop]
-#: job = "build-interop"
+#: [dependencies.build-dhcp-server]
+#: job = "build-dhcp-server"
 #:
 #: [dependencies.build]
 #: job = "build"
@@ -43,7 +43,7 @@ export FALCON_DATASET="cpool/falcon"
 
 banner 'setup'
 
-cp /input/build-interop/work/dhcp-server .
+cp /input/build-dhcp-server/work/dhcp-server .
 cp /input/build/work/release/falcon-lab .
 cp /input/build/work/release/mgd .
 cp /input/build/work/release/ddmd .
@@ -54,6 +54,14 @@ mkdir -p cargo-bay
 mv mgd cargo-bay/
 mv ddmd cargo-bay/
 
+# Juniper/cRPD images require a runtime license. Fetch it on the CI runner,
+# which has catacomb access, and pass it to the guest by file via cargo-bay.
+# The license contents must never be printed or committed.
+curl -sSfL --retry 10 --retry-all-errors \
+	-o cargo-bay/falcon-juniper-license.key \
+	http://catacomb.eng.oxide.computer:12346/falcon/jl
+chmod 0600 cargo-bay/falcon-juniper-license.key
+
 export EXT_INTERFACE=${EXT_INTERFACE:-igb0}
 
 first=$(bmat address ls -f extra -Ho first)
@@ -62,8 +70,15 @@ gw=$(bmat address ls -f extra -Ho gateway)
 server=$(ipadm show-addr "${EXT_INTERFACE}"/dhcp -po ADDR | sed 's#/.*##g')
 pfexec ./dhcp-server "${first}" "${last}" "${gw}" "${server}" &> /work/dhcp-server.log &
 
-RUST_LOG=debug pfexec ./falcon-lab run \
-	trio-unnumbered
+run_test() {
+	local test=$1
+	local status=0
 
-RUST_LOG=debug pfexec ./falcon-lab run \
-	trio-bfd-static-routing
+	RUST_LOG=debug pfexec ./falcon-lab run "${test}" || status=$?
+	pfexec ./falcon-lab cleanup "${test}" || true
+	return "${status}"
+}
+
+run_test mgd-unnumbered
+run_test quartet-unnumbered
+run_test quartet-bfd-static-routing

@@ -5,10 +5,12 @@
 use crate::{
     bgp::basic_unnumbered_neighbor,
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
+    diagnostics::ProtocolDiagnostics,
     eos::EosNode,
     frr::FrrNode,
+    juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
-    topo::{Trio, trio},
+    topo::{MgdDuo, Quartet, mgd_duo, quartet},
     wait_for_eq,
 };
 use anyhow::{Context, Result};
@@ -37,10 +39,19 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tokio::time::timeout;
 
-const TRIO_UNNUMBERED_TOPO_NAME: &str = "mgtriou";
-const TRIO_BFD_STATIC_TOPO_NAME: &str = "mgtriobfd";
+const QUARTET_UNNUMBERED_TOPO_NAME: &str = "mgquartetu";
+const MGD_UNNUMBERED_TOPO_NAME: &str = "mgduou";
+const QUARTET_BFD_STATIC_TOPO_NAME: &str = "mgquartetbfd";
 const OP_TIMEOUT: Duration = Duration::from_secs(10);
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+// The mgd-duo topology creates the direct test link before each node's
+// management link, so the peer-facing viona interface is vioif0 and the DHCP
+// management interface is vioif1.
+const MGD_DUO_PEER_LINK: &str = "vioif0";
+const MGD_DUO_MGMT_ADDR: &str = "vioif1/dhcp";
 
 // BFD-static test addressing. `OX_*` addresses are configured on the helios
 // side of each softnpu link; `CR*` addresses are configured on the peer.
@@ -48,19 +59,27 @@ const OX_CR1_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const CR1_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 2);
 const OX_CR2_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 1, 1);
 const CR2_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 1, 2);
+const OX_CR3_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 1);
+const CR3_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
 const OX_CR1_V4_CIDR: &str = "10.0.0.1/24";
 const OX_CR2_V4_CIDR: &str = "10.0.1.1/24";
+const OX_CR3_V4_CIDR: &str = "10.0.2.1/24";
 const CR1_V4_CIDR: &str = "10.0.0.2/24";
 const CR2_V4_CIDR: &str = "10.0.1.2/24";
+const CR3_V4_CIDR: &str = "10.0.2.2/24";
 
 const OX_CR1_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 1, 0, 0, 0, 0, 0, 1); // fd00:1::1
 const CR1_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 1, 0, 0, 0, 0, 0, 2); // fd00:1::2
 const OX_CR2_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 2, 0, 0, 0, 0, 0, 1); // fd00:2::1
 const CR2_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 2, 0, 0, 0, 0, 0, 2); // fd00:2::2
+const OX_CR3_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 3, 0, 0, 0, 0, 0, 1); // fd00:3::1
+const CR3_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 3, 0, 0, 0, 0, 0, 2); // fd00:3::2
 const OX_CR1_V6_CIDR: &str = "fd00:1::1/64";
 const OX_CR2_V6_CIDR: &str = "fd00:2::1/64";
+const OX_CR3_V6_CIDR: &str = "fd00:3::1/64";
 const CR1_V6_CIDR: &str = "fd00:1::2/64";
 const CR2_V6_CIDR: &str = "fd00:2::2/64";
+const CR3_V6_CIDR: &str = "fd00:3::2/64";
 
 /// Destination prefixes with nexthops via both cr1 and cr2.
 const TEST_PREFIX_V4: &str = "192.168.100.0/24";
@@ -70,100 +89,264 @@ const TEST_PREFIX_V6: &str = "fd01::/64";
 const BFD_REQUIRED_RX_US: u64 = 300_000;
 const BFD_DETECTION_MULT: u8 = 3;
 
-/// Output of `boot_trio`: the running topology plus clients ready for
+/// Output of `boot_quartet`: the running topology plus clients ready for
 /// test-specific configuration.
-struct BootedTrio {
+struct BootedQuartet {
     ad: Arc<Runner>,
     ox: MgdNode,
     cr1: FrrNode,
     cr2: EosNode,
+    cr3: JuniperNode,
     mgd: MgdClient,
     dpd: DpdClient,
     #[allow(dead_code)]
     mgmt_addr: IpAddr,
     topo_name: String,
+    protocols: ProtocolDiagnostics,
+}
+
+#[derive(Copy, Clone)]
+struct QuartetNodes {
+    cr1: FrrNode,
+    cr2: EosNode,
+    cr3: JuniperNode,
+}
+
+struct QuartetPeerStates<T> {
+    cr1: T,
+    cr2: T,
+    cr3: T,
+}
+
+impl<T> QuartetPeerStates<T> {
+    fn new(cr1: T, cr2: T, cr3: T) -> Self {
+        Self { cr1, cr2, cr3 }
+    }
+}
+
+/// Output of `boot_mgd_duo`: two Helios nodes with mgd admin clients ready for
+/// test-specific configuration.
+struct BootedMgdDuo {
+    ad: Arc<Runner>,
+    ox1: MgdNode,
+    ox2: MgdNode,
+    mgd1: MgdClient,
+    mgd2: MgdClient,
+    topo_name: String,
 }
 
 /// Run a test body against a booted topology and dump diagnostics from every
-/// VM if it fails. The body consumes the `BootedTrio`, so cache the bits
+/// VM if it fails. The body consumes the `BootedQuartet`, so cache the bits
 /// `collect_diagnostics` needs before handing it off.
-async fn run_with_diagnostics<F, Fut>(bt: BootedTrio, body: F) -> Result<()>
+async fn run_with_optional_diagnostics<F, Fut>(
+    bt: BootedQuartet,
+    diag_on_fail: bool,
+    body: F,
+) -> Result<()>
 where
-    F: FnOnce(BootedTrio) -> Fut,
+    F: FnOnce(BootedQuartet) -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
 {
     let ad = bt.ad.clone();
     let ox = bt.ox;
     let cr1 = bt.cr1;
     let cr2 = bt.cr2;
+    let cr3 = bt.cr3;
     let mgd = bt.mgd.clone();
     let topo_name = bt.topo_name.clone();
+    let protocols = bt.protocols;
     let result = body(bt).await;
     if let Err(e) = &result {
         warn!(ad.log, "{topo_name} failed: {e:#}");
-        collect_diagnostics(&ad, ox, cr1, cr2, &topo_name).await;
-        ox.collect_ndp_diagnostics(&ad, &mgd, &topo_name).await;
+        // Some failure tests intentionally suspend routing daemons to verify
+        // convergence. Resume them before diagnostics so collection can use
+        // each vendor's normal CLI/API path rather than timing out on the
+        // fault we injected.
+        restore_quartet_before_diagnostics(&ad, cr1, cr2, cr3).await;
+        if diag_on_fail {
+            collect_diagnostics(&ad, ox, cr1, cr2, cr3, &topo_name, protocols)
+                .await;
+            ox.collect_ndp_diagnostics(&ad, &mgd, &topo_name).await;
+        }
     }
     result
 }
 
-/// Launch the trio topology and complete the work shared by every trio-based
+async fn restore_quartet_before_diagnostics(
+    ad: &Runner,
+    cr1: FrrNode,
+    cr2: EosNode,
+    cr3: JuniperNode,
+) {
+    match timeout(OP_TIMEOUT, cr1.resume_bfdd(ad)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            warn!(ad.log, "failed to resume cr1 before diagnostics: {e:#}")
+        }
+        Err(_) => warn!(ad.log, "timed out resuming cr1 before diagnostics"),
+    }
+    match timeout(OP_TIMEOUT, cr2.unpause(ad)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            warn!(ad.log, "failed to unpause cr2 before diagnostics: {e:#}")
+        }
+        Err(_) => warn!(ad.log, "timed out unpausing cr2 before diagnostics"),
+    }
+    match timeout(OP_TIMEOUT, cr3.unpause(ad)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            warn!(ad.log, "failed to unpause cr3 before diagnostics: {e:#}")
+        }
+        Err(_) => warn!(ad.log, "timed out unpausing cr3 before diagnostics"),
+    }
+}
+
+/// Run a test body against a booted mgd-duo topology and dump diagnostics from
+/// both Helios nodes if it fails.
+async fn run_mgd_duo_with_optional_diagnostics<F, Fut>(
+    bt: BootedMgdDuo,
+    diag_on_fail: bool,
+    body: F,
+) -> Result<()>
+where
+    F: FnOnce(BootedMgdDuo) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let ad = bt.ad.clone();
+    let ox1 = bt.ox1;
+    let ox2 = bt.ox2;
+    let topo_name = bt.topo_name.clone();
+    let result = body(bt).await;
+    if let Err(e) = &result {
+        warn!(ad.log, "{topo_name} failed: {e:#}");
+        if diag_on_fail {
+            collect_mgd_duo_diagnostics(&ad, ox1, ox2, &topo_name).await;
+        }
+    }
+    result
+}
+
+/// Launch two Helios nodes with a direct link between them and obtain mgd
+/// admin clients over their management links.
+async fn boot_mgd_duo(
+    topo_name: &str,
+    persistent: bool,
+    diag_on_fail: bool,
+) -> Result<BootedMgdDuo> {
+    let MgdDuo { mut d, ox1, ox2 } = mgd_duo(topo_name)?;
+    d.persistent = persistent;
+    d.launch().await.context("launch failed")?;
+    let ad = Arc::new(d);
+
+    let result = async {
+        let ox1_illumos = ox1.illumos();
+        let ox2_illumos = ox2.illumos();
+        let (mgmt1, mgmt2) = tokio::try_join!(
+            ox1_illumos.dhcp(&ad, MGD_DUO_MGMT_ADDR),
+            ox2_illumos.dhcp(&ad, MGD_DUO_MGMT_ADDR),
+        )?;
+        let mgd1 = ox1.client(&ad, mgmt1).await?;
+        let mgd2 = ox2.client(&ad, mgmt2).await?;
+
+        Ok((mgd1, mgd2))
+    }
+    .await;
+
+    match result {
+        Ok((mgd1, mgd2)) => Ok(BootedMgdDuo {
+            ad,
+            ox1,
+            ox2,
+            mgd1,
+            mgd2,
+            topo_name: topo_name.to_string(),
+        }),
+        Err(e) => {
+            warn!(ad.log, "{topo_name} boot failed: {e:#}");
+            if diag_on_fail {
+                collect_mgd_duo_boot_diagnostics(&ad, ox1, ox2, topo_name)
+                    .await;
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Launch the quartet topology and complete the work shared by every quartet-based
 /// test: dhcp mgmt, concurrent peer install + npuvm setup, dpd startup,
 /// softnpu link creation, and tfport readiness. The caller supplies a closure
 /// that populates a `JoinSet` with per-peer setup futures so that they run
 /// concurrently with the npuvm install.
-async fn boot_trio<F>(
+async fn boot_quartet<F>(
     topo_name: &str,
     persistent: bool,
+    diag_on_fail: bool,
     commits: NpuvmCommits,
+    protocols: ProtocolDiagnostics,
     spawn_peer_setups: F,
-) -> Result<BootedTrio>
+) -> Result<BootedQuartet>
 where
     F: FnOnce(
         FrrNode,
         EosNode,
+        JuniperNode,
         Arc<Runner>,
     ) -> tokio::task::JoinSet<Result<()>>,
 {
-    let Trio {
+    let Quartet {
         mut d,
         ox,
         cr1,
         cr2,
-    } = trio(topo_name)?;
+        cr3,
+    } = quartet(topo_name)?;
     d.persistent = persistent;
-    d.launch().await.context("launch failed")?;
+    clear_staged_routing_configs().context("clear stale Junos config")?;
+    info!(d.log, "{topo_name}: launching quartet topology");
+    timeout(LAUNCH_TIMEOUT, d.launch())
+        .await
+        .context("launch timed out")?
+        .context("launch failed")?;
+    info!(d.log, "{topo_name}: quartet topology launch complete");
     let ad = Arc::new(d);
 
     // Any failure between launch and Ok needs to dump diagnostics from the
     // running deployment. Wrap the rest of boot in a closure so we have a
     // single Err path to hook.
     let result =
-        boot_trio_inner(&ad, ox, cr1, cr2, commits, spawn_peer_setups).await;
+        boot_quartet_inner(&ad, ox, cr1, cr2, cr3, commits, spawn_peer_setups)
+            .await;
 
     match result {
-        Ok((mgd, dpd, mgmt_addr)) => Ok(BootedTrio {
+        Ok((mgd, dpd, mgmt_addr)) => Ok(BootedQuartet {
             ad,
             ox,
             cr1,
             cr2,
+            cr3,
             mgd,
             dpd,
             mgmt_addr,
             topo_name: topo_name.to_string(),
+            protocols,
         }),
         Err(e) => {
-            collect_diagnostics(&ad, ox, cr1, cr2, topo_name).await;
+            warn!(ad.log, "{topo_name} boot failed: {e:#}");
+            if diag_on_fail {
+                collect_boot_diagnostics(&ad, ox, cr1, cr2, cr3, topo_name)
+                    .await;
+            }
             Err(e)
         }
     }
 }
 
-async fn boot_trio_inner<F>(
+async fn boot_quartet_inner<F>(
     ad: &Arc<Runner>,
     ox: MgdNode,
     cr1: FrrNode,
     cr2: EosNode,
+    cr3: JuniperNode,
     commits: NpuvmCommits,
     spawn_peer_setups: F,
 ) -> Result<(MgdClient, DpdClient, IpAddr)>
@@ -171,13 +354,20 @@ where
     F: FnOnce(
         FrrNode,
         EosNode,
+        JuniperNode,
         Arc<Runner>,
     ) -> tokio::task::JoinSet<Result<()>>,
 {
     let mgmt_addr = ox.illumos().dhcp(ad, "vioif1/dhcp").await?;
 
-    let mut js = spawn_peer_setups(cr1, cr2, ad.clone());
-    js.spawn(ox.dendrite().npuvm(ad.clone(), 2, 0, commits));
+    let mut js = spawn_peer_setups(cr1, cr2, cr3, ad.clone());
+    let npuvm_ad = ad.clone();
+    js.spawn(async move {
+        ox.dendrite()
+            .npuvm(npuvm_ad, 3, 0, commits)
+            .await
+            .context("setup ox npuvm")
+    });
     for result in js.join_all().await.into_iter() {
         result?;
     }
@@ -188,57 +378,197 @@ where
         .await
         .context("wait_for_dpd")?;
 
-    for link in ["qsfp0", "qsfp1"] {
+    for link in ["qsfp0", "qsfp1", "qsfp2"] {
         softnpu_link_create(&dpd, link)
             .await
             .context(format!("create {link}"))?;
     }
-    for link in ["tfportqsfp0_0", "tfportqsfp1_0"] {
+    for link in ["tfportqsfp0_0", "tfportqsfp1_0", "tfportqsfp2_0"] {
         ox.illumos().wait_for_link(ad, link, OP_TIMEOUT).await?;
     }
 
     Ok((mgd, dpd, mgmt_addr))
 }
 
-pub async fn cleanup_unnumbered_test() -> Result<()> {
-    // dropping this with out persistent set will destroy
-    // the topo
-    let _topo = trio(TRIO_UNNUMBERED_TOPO_NAME)?;
+pub async fn cleanup_quartet_unnumbered_test() -> Result<()> {
+    clear_staged_routing_configs().context("clear stale Junos config")?;
+    cleanup_topology(QUARTET_UNNUMBERED_TOPO_NAME, |name| {
+        quartet(name).map(drop)
+    })
+}
+
+pub async fn cleanup_mgd_unnumbered_test() -> Result<()> {
+    cleanup_topology(MGD_UNNUMBERED_TOPO_NAME, |name| mgd_duo(name).map(drop))
+}
+
+fn cleanup_topology(
+    topo_name: &str,
+    cleanup: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    cleanup(topo_name)
+}
+
+pub async fn run_mgd_unnumbered_test(
+    persistent: bool,
+    diag_on_fail: bool,
+) -> Result<()> {
+    let bt = boot_mgd_duo(MGD_UNNUMBERED_TOPO_NAME, persistent, diag_on_fail)
+        .await?;
+
+    run_mgd_duo_with_optional_diagnostics(bt, diag_on_fail, mgd_unnumbered_body)
+        .await
+}
+
+async fn mgd_unnumbered_body(bt: BootedMgdDuo) -> Result<()> {
+    let BootedMgdDuo {
+        ad,
+        ox1,
+        ox2,
+        mgd1,
+        mgd2,
+        ..
+    } = bt;
+
+    for ox in [ox1, ox2] {
+        let addr = format!("{MGD_DUO_PEER_LINK}/ll");
+        ox.illumos()
+            .addrconf(&ad, &addr)
+            .await
+            .context(format!("create {addr}"))?;
+    }
+
+    tokio::try_join!(ox1.run_mgd(&ad), ox2.run_mgd(&ad))?;
+    tokio::try_join!(
+        wait_for_mgd(&mgd1, OP_TIMEOUT, &ad.log),
+        wait_for_mgd(&mgd2, OP_TIMEOUT, &ad.log),
+    )?;
+
+    const OX1_ASN: u32 = 33;
+    const OX2_ASN: u32 = 44;
+
+    info!(ad.log, "adding BGP routers to both mgd nodes");
+    let ox1_router = Router {
+        asn: OX1_ASN,
+        graceful_shutdown: false,
+        id: 33,
+        listen: "[::]:179".to_owned(),
+    };
+    let ox2_router = Router {
+        asn: OX2_ASN,
+        graceful_shutdown: false,
+        id: 44,
+        listen: "[::]:179".to_owned(),
+    };
+    tokio::try_join!(
+        mgd1.create_router(&ox1_router),
+        mgd2.create_router(&ox2_router),
+    )
+    .context("mgd: create routers")?;
+
+    info!(ad.log, "adding unnumbered BGP neighbors to both mgd nodes");
+    let ox1_neighbor = basic_unnumbered_neighbor(
+        "ox2",
+        "mgd-duo",
+        MGD_DUO_PEER_LINK,
+        OX1_ASN,
+        0,
+    );
+    let ox2_neighbor = basic_unnumbered_neighbor(
+        "ox1",
+        "mgd-duo",
+        MGD_DUO_PEER_LINK,
+        OX2_ASN,
+        0,
+    );
+    tokio::try_join!(
+        mgd1.create_unnumbered_neighbor(&ox1_neighbor),
+        mgd2.create_unnumbered_neighbor(&ox2_neighbor),
+    )
+    .context("mgd: create unnumbered neighbors")?;
+
+    wait_for_eq!(
+        mgd1.get_neighbors(OX1_ASN)
+            .await
+            .map(|x| x.into_inner().len())
+            .unwrap_or(0),
+        1,
+        "mgd1 neighbor count"
+    );
+    wait_for_eq!(
+        mgd2.get_neighbors(OX2_ASN)
+            .await
+            .map(|x| x.into_inner().len())
+            .unwrap_or(0),
+        1,
+        "mgd2 neighbor count"
+    );
+
+    wait_for_eq!(
+        neighbor_fsm_state(&mgd1, OX1_ASN, "ox2").await,
+        Some(FsmStateKind::Established),
+        "mgd1 bgp ox2 established"
+    );
+    wait_for_eq!(
+        neighbor_fsm_state(&mgd2, OX2_ASN, "ox1").await,
+        Some(FsmStateKind::Established),
+        "mgd2 bgp ox1 established"
+    );
+
+    info!(ad.log, "mgd-to-mgd bgp unnumbered test passed 🎉");
+
     Ok(())
 }
 
-pub async fn run_trio_unnumbered_test(
+pub async fn run_quartet_unnumbered_test(
     persistent: bool,
+    diag_on_fail: bool,
     commits: NpuvmCommits,
 ) -> Result<()> {
-    let bt = boot_trio(
-        TRIO_UNNUMBERED_TOPO_NAME,
+    let bt = boot_quartet(
+        QUARTET_UNNUMBERED_TOPO_NAME,
         persistent,
+        diag_on_fail,
         commits,
-        |cr1, cr2, ad| {
+        ProtocolDiagnostics::Bgp,
+        |cr1, cr2, cr3, ad| {
             let mut js = tokio::task::JoinSet::new();
-            js.spawn(frr_setup(cr1, ad.clone()));
-            js.spawn(eos_setup(cr2, ad.clone()));
+            let cr1_ad = ad.clone();
+            let cr2_ad = ad.clone();
+            let cr3_ad = ad;
+            js.spawn(async move {
+                frr_setup(cr1, cr1_ad).await.context("setup cr1 frr")
+            });
+            js.spawn(async move {
+                eos_setup(cr2, cr2_ad).await.context("setup cr2 eos")
+            });
+            js.spawn(async move {
+                juniper_setup(cr3, cr3_ad)
+                    .await
+                    .context("setup cr3 juniper")
+            });
             js
         },
     )
     .await?;
 
-    run_with_diagnostics(bt, trio_unnumbered_body).await
+    run_with_optional_diagnostics(bt, diag_on_fail, quartet_unnumbered_body)
+        .await
 }
 
-async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
-    let BootedTrio {
+async fn quartet_unnumbered_body(bt: BootedQuartet) -> Result<()> {
+    let BootedQuartet {
         ad,
         ox,
         cr1,
         cr2,
+        cr3,
         mgd,
         dpd,
         ..
     } = bt;
+    let peers = QuartetNodes { cr1, cr2, cr3 };
 
-    for link in ["tfportqsfp0_0", "tfportqsfp1_0"] {
+    for link in ["tfportqsfp0_0", "tfportqsfp1_0", "tfportqsfp2_0"] {
         let addr = format!("{link}/ll");
         ox.illumos()
             .addrconf(&ad, &addr)
@@ -250,10 +580,10 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
     ox.ddm().run_ddm(&ad).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
-    // Fanout of 2 so both peer paths survive best-path selection and we can
+    // Fanout of 3 so all peer paths survive best-path selection and we can
     // validate ECMP in loc_rib and dpd.
     mgd.update_bestpath_fanout(&BestpathFanoutRequest {
-        fanout: std::num::NonZeroU8::new(2).expect("fanout > 0"),
+        fanout: std::num::NonZeroU8::new(3).expect("fanout > 0"),
     })
     .await
     .context("mgd: set bestpath fanout")?;
@@ -291,6 +621,16 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
     .await
     .context("mgd: create cr2 unnumbered neighbor")?;
 
+    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
+        "cr3",
+        "test",
+        "tfportqsfp2_0",
+        33,
+        1800,
+    ))
+    .await
+    .context("mgd: create cr3 unnumbered neighbor")?;
+
     mgd.create_origin4(&Origin4 {
         asn: 33,
         prefixes: vec!["4.5.6.0/24".parse().expect("parse ipv4 origin")],
@@ -316,54 +656,56 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
             .await
             .map(|x| x.into_inner().len())
             .unwrap_or(0),
-        2,
+        3,
         "mgd neighbor count"
     );
 
-    for name in ["cr1", "cr2"] {
-        let desc = format!("mgd bgp {name} established");
-        wait_for_eq!(
-            neighbor_fsm_state(&mgd, local_asn, name).await,
-            Some(FsmStateKind::Established),
-            &desc
-        );
-    }
+    expect_bgp_neighbor_states(
+        &mgd,
+        local_asn,
+        QuartetPeerStates::new(
+            FsmStateKind::Established,
+            FsmStateKind::Established,
+            FsmStateKind::Established,
+        ),
+    )
+    .await?;
 
-    // Both peers advertise the same prefix, so mgd should see a single
-    // imported entry per family with two paths, and — with fanout=2 — the
-    // same two paths should survive into the selected (loc) RIB.
+    // All peers advertise the same prefix, so mgd should see a single
+    // imported entry per family with three paths, and — with fanout=3 — the
+    // same three paths should survive into the selected (loc) RIB.
     wait_for_eq!(
         mgd_imported_paths(&mgd, AddressFamily::Ipv4, CR_V4_PREFIX).await,
-        Some(2),
+        Some(3),
         "mgd imported paths for 1.2.3.0/24"
     );
     wait_for_eq!(
         mgd_imported_paths(&mgd, AddressFamily::Ipv6, CR_V6_PREFIX).await,
-        Some(2),
+        Some(3),
         "mgd imported paths for fd99::/64"
     );
     wait_for_eq!(
         mgd_selected_paths(&mgd, AddressFamily::Ipv4, CR_V4_PREFIX).await,
-        Some(2),
+        Some(3),
         "mgd selected paths for 1.2.3.0/24"
     );
     wait_for_eq!(
         mgd_selected_paths(&mgd, AddressFamily::Ipv6, CR_V6_PREFIX).await,
-        Some(2),
+        Some(3),
         "mgd selected paths for fd99::/64"
     );
 
-    // dpd should have the specific prefixes, each with two ECMP targets.
+    // dpd should have the specific prefixes, each with three ECMP targets.
     let cr_v4: Ipv4Net = CR_V4_PREFIX.parse().expect("parse cr v4 prefix");
     let cr_v6: Ipv6Net = CR_V6_PREFIX.parse().expect("parse cr v6 prefix");
     wait_for_eq!(
         dpd_v4_targets(&dpd, &cr_v4).await.len(),
-        2,
+        3,
         "dpd ipv4 targets for 1.2.3.0/24"
     );
     wait_for_eq!(
         dpd_v6_targets(&dpd, &cr_v6).await.len(),
-        2,
+        3,
         "dpd ipv6 targets for fd99::/64"
     );
 
@@ -371,7 +713,9 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
     let ox_v4: Ipv4Net = OX_V4_ORIGIN.parse().expect("parse ox v4 origin");
     let ox_v6: Ipv6Net = OX_V6_ORIGIN.parse().expect("parse ox v6 origin");
     wait_for_eq!(
-        cr1.bgp_ipv4_imported(&ad)
+        peers
+            .cr1
+            .bgp_ipv4_imported(&ad)
             .await
             .map(|r| r.all().any(|(p, _)| *p == ox_v4))
             .unwrap_or(false),
@@ -379,7 +723,9 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
         "cr1 imported 4.5.6.0/24"
     );
     wait_for_eq!(
-        cr1.bgp_ipv6_imported(&ad)
+        peers
+            .cr1
+            .bgp_ipv6_imported(&ad)
             .await
             .map(|r| r.all().any(|(p, _)| *p == ox_v6))
             .unwrap_or(false),
@@ -387,7 +733,9 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
         "cr1 imported fdee::/64"
     );
     wait_for_eq!(
-        cr2.bgp_ipv4_imported(&ad)
+        peers
+            .cr2
+            .bgp_ipv4_imported(&ad)
             .await
             .map(|r| r.all().any(|(p, _)| *p == ox_v4))
             .unwrap_or(false),
@@ -395,20 +743,40 @@ async fn trio_unnumbered_body(bt: BootedTrio) -> Result<()> {
         "cr2 imported 4.5.6.0/24"
     );
     wait_for_eq!(
-        cr2.bgp_ipv6_imported(&ad)
+        peers
+            .cr2
+            .bgp_ipv6_imported(&ad)
             .await
             .map(|r| r.all().any(|(p, _)| *p == ox_v6))
             .unwrap_or(false),
         true,
         "cr2 imported fdee::/64"
     );
+    wait_for_eq!(
+        peers
+            .cr3
+            .bgp_route_imported(&ad, OX_V4_ORIGIN)
+            .await
+            .unwrap_or(false),
+        true,
+        "cr3 imported 4.5.6.0/24"
+    );
+    wait_for_eq!(
+        peers
+            .cr3
+            .bgp_route_imported(&ad, OX_V6_ORIGIN)
+            .await
+            .unwrap_or(false),
+        true,
+        "cr3 imported fdee::/64"
+    );
 
-    info!(ad.log, "trio bgp unnumbered test passed 🎉");
+    info!(ad.log, "quartet bgp unnumbered test passed 🎉");
 
     Ok(())
 }
 
-/// Snapshot logs and live state from every VM in the trio into `/work/` so
+/// Snapshot logs and live state from every VM in the quartet into `/work/` so
 /// a failed run preserves the evidence past deployment teardown. The actual
 /// per-daemon and per-peer collection lives on each node type's
 /// `collect_diagnostics` method; this function is just the composition.
@@ -417,7 +785,9 @@ async fn collect_diagnostics(
     ox: MgdNode,
     cr1: FrrNode,
     cr2: EosNode,
+    cr3: JuniperNode,
     topo_name: &str,
+    protocols: ProtocolDiagnostics,
 ) {
     warn!(d.log, "collecting diagnostics for {topo_name}");
     // ox VM: illumos network state, plus each daemon's log via its lens.
@@ -426,8 +796,92 @@ async fn collect_diagnostics(
     ox.ddm().collect_diagnostics(d, topo_name).await;
     ox.collect_diagnostics(d, topo_name).await;
     // Peer routers.
-    cr1.collect_diagnostics(d, topo_name).await;
-    cr2.collect_diagnostics(d, topo_name).await;
+    cr1.collect_diagnostics(d, topo_name, protocols).await;
+    cr2.collect_diagnostics(d, topo_name, protocols).await;
+    cr3.collect_diagnostics(d, topo_name, protocols).await;
+}
+
+/// Boot/setup failures happen before the topology is fully configured, so avoid
+/// network-state snapshots (`ip*`, `ipadm`, routes, neighbors). Collect only
+/// lightweight service/container state that explains which setup task failed.
+async fn collect_boot_diagnostics(
+    d: &Runner,
+    ox: MgdNode,
+    cr1: FrrNode,
+    cr2: EosNode,
+    cr3: JuniperNode,
+    topo_name: &str,
+) {
+    warn!(d.log, "collecting boot diagnostics for {topo_name}");
+    crate::diagnostics::capture(d, ox.0, topo_name, "ox-svcs-xv", "svcs -xv")
+        .await;
+    ox.dendrite().collect_diagnostics(d, topo_name).await;
+
+    crate::diagnostics::capture(
+        d,
+        cr1.0,
+        topo_name,
+        "cr1-frr-status",
+        "systemctl status frr --no-pager || true",
+    )
+    .await;
+    crate::diagnostics::capture(
+        d,
+        cr1.0,
+        topo_name,
+        "cr1-frr-journal",
+        "journalctl -u frr --no-pager -n 200 || true",
+    )
+    .await;
+
+    for (label, cmd) in [
+        ("cr2-docker-ps", "docker ps -a"),
+        (
+            "cr2-docker-logs",
+            "timeout 5s docker logs --tail 500 ceos || true",
+        ),
+    ] {
+        crate::diagnostics::capture(d, cr2.0, topo_name, label, cmd).await;
+    }
+
+    cr3.collect_boot_diagnostics(d, topo_name).await;
+}
+
+/// Snapshot logs and live state from both Helios mgd peers in the mgd-duo
+/// topology.
+async fn collect_mgd_duo_diagnostics(
+    d: &Runner,
+    ox1: MgdNode,
+    ox2: MgdNode,
+    topo_name: &str,
+) {
+    warn!(d.log, "collecting diagnostics for {topo_name}");
+    for ox in [ox1, ox2] {
+        ox.illumos().collect_diagnostics(d, topo_name).await;
+        ox.collect_diagnostics(d, topo_name).await;
+    }
+}
+
+/// Boot/setup diagnostics for the mgd-duo topology, intentionally excluding
+/// network snapshots because address/link setup may be the part that failed.
+async fn collect_mgd_duo_boot_diagnostics(
+    d: &Runner,
+    ox1: MgdNode,
+    ox2: MgdNode,
+    topo_name: &str,
+) {
+    warn!(d.log, "collecting boot diagnostics for {topo_name}");
+    for ox in [ox1, ox2] {
+        let name = d.get_node(ox.0).name.clone();
+        crate::diagnostics::capture(
+            d,
+            ox.0,
+            topo_name,
+            &format!("{name}-svcs-xv"),
+            "svcs -xv",
+        )
+        .await;
+    }
 }
 
 async fn frr_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
@@ -496,42 +950,93 @@ async fn eos_setup(r: EosNode, d: Arc<Runner>) -> Result<()> {
     Ok(())
 }
 
-pub async fn cleanup_bfd_static_test() -> Result<()> {
-    // dropping this without persistent set will destroy the topo
-    let _topo = trio(TRIO_BFD_STATIC_TOPO_NAME)?;
+async fn juniper_setup(r: JuniperNode, d: Arc<Runner>) -> Result<()> {
+    info!(d.log, "{}: starting juniper unnumbered setup", r.name(&d));
+    const BASE_CONFIG: &str = "
+        set interfaces eth1 unit 0 family inet
+        set interfaces eth1 unit 0 family inet6
+        set protocols router-advertisement interface eth1
+        set routing-options router-id 1.2.3.2
+        set routing-options autonomous-system 46
+        set routing-options static route 1.2.3.0/24 discard
+        set routing-options rib inet6.0 static route fd99::/64 discard
+        set policy-options policy-statement expo term announce4 from route-filter 1.2.3.0/24 exact
+        set policy-options policy-statement expo term announce4 then accept
+        set policy-options policy-statement expo term announce6 from route-filter fd99::/64 exact
+        set policy-options policy-statement expo term announce6 then accept
+        set policy-options policy-statement expo then reject
+        set protocols bgp group unnumbered type external
+        set protocols bgp group unnumbered family inet unicast extended-nexthop
+        set protocols bgp group unnumbered family inet6 unicast
+        set protocols bgp group unnumbered peer-as 33
+        set protocols bgp group unnumbered export expo
+        set protocols bgp group unnumbered dynamic-neighbor bgp_unnumbered peer-auto-discovery family inet6 ipv6-nd
+        set protocols bgp group unnumbered dynamic-neighbor bgp_unnumbered peer-auto-discovery interface eth1
+    ";
+
+    r.setup(&d, BASE_CONFIG).await?;
     Ok(())
 }
 
-pub async fn run_trio_bfd_static_test(
+pub async fn cleanup_quartet_bfd_static_test() -> Result<()> {
+    clear_staged_routing_configs().context("clear stale Junos config")?;
+    cleanup_topology(QUARTET_BFD_STATIC_TOPO_NAME, |name| {
+        quartet(name).map(drop)
+    })
+}
+
+pub async fn run_quartet_bfd_static_test(
     persistent: bool,
+    diag_on_fail: bool,
     commits: NpuvmCommits,
 ) -> Result<()> {
-    let bt = boot_trio(
-        TRIO_BFD_STATIC_TOPO_NAME,
+    let bt = boot_quartet(
+        QUARTET_BFD_STATIC_TOPO_NAME,
         persistent,
+        diag_on_fail,
         commits,
-        |cr1, cr2, ad| {
+        ProtocolDiagnostics::Bfd,
+        |cr1, cr2, cr3, ad| {
             let mut js = tokio::task::JoinSet::new();
-            js.spawn(frr_bfd_setup(cr1, ad.clone()));
-            js.spawn(eos_bfd_setup(cr2, ad.clone()));
+            let cr1_ad = ad.clone();
+            let cr2_ad = ad.clone();
+            let cr3_ad = ad;
+            js.spawn(async move {
+                frr_bfd_setup(cr1, cr1_ad)
+                    .await
+                    .context("setup cr1 frr bfd")
+            });
+            js.spawn(async move {
+                eos_bfd_setup(cr2, cr2_ad)
+                    .await
+                    .context("setup cr2 eos bfd")
+            });
+            js.spawn(async move {
+                juniper_bfd_setup(cr3, cr3_ad)
+                    .await
+                    .context("setup cr3 juniper bfd")
+            });
             js
         },
     )
     .await?;
 
-    run_with_diagnostics(bt, trio_bfd_static_body).await
+    run_with_optional_diagnostics(bt, diag_on_fail, quartet_bfd_static_body)
+        .await
 }
 
-async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
-    let BootedTrio {
+async fn quartet_bfd_static_body(bt: BootedQuartet) -> Result<()> {
+    let BootedQuartet {
         ad,
         ox,
         cr1,
         cr2,
+        cr3,
         mgd,
         dpd,
         ..
     } = bt;
+    let peers = QuartetNodes { cr1, cr2, cr3 };
 
     // Register each ox-side address with dpd so softnpu punts packets for
     // those destinations to the CPU port. Link-local v6 is handled
@@ -541,6 +1046,7 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     for (qsfp, v4, v6) in [
         ("qsfp0", OX_CR1_V4, OX_CR1_V6),
         ("qsfp1", OX_CR2_V4, OX_CR2_V6),
+        ("qsfp2", OX_CR3_V4, OX_CR3_V6),
     ] {
         let port = PortId::Qsfp(qsfp.parse().expect("parse qsfp port"));
         let link = LinkId(0);
@@ -576,6 +1082,7 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     for (link, v4_cidr, v6_cidr) in [
         ("tfportqsfp0_0", OX_CR1_V4_CIDR, OX_CR1_V6_CIDR),
         ("tfportqsfp1_0", OX_CR2_V4_CIDR, OX_CR2_V6_CIDR),
+        ("tfportqsfp2_0", OX_CR3_V4_CIDR, OX_CR3_V6_CIDR),
     ] {
         let ll = format!("{link}/ll");
         ox.illumos()
@@ -598,11 +1105,11 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     ox.ddm().run_ddm(&ad).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
-    // Default fanout is 1, which collapses the two static paths into a single
-    // selected nexthop. Bump to 2 so both paths propagate through best-path
+    // Default fanout is 1, which collapses the static paths into a single
+    // selected nexthop. Bump to 3 so all paths propagate through best-path
     // selection and land in dpd as ECMP.
     mgd.update_bestpath_fanout(&BestpathFanoutRequest {
-        fanout: std::num::NonZeroU8::new(2).expect("fanout > 0"),
+        fanout: std::num::NonZeroU8::new(3).expect("fanout > 0"),
     })
     .await
     .context("mgd: set bestpath fanout")?;
@@ -615,7 +1122,7 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     info!(ad.log, "installing static v4 route {TEST_PREFIX_V4}");
     mgd.static_add_v4_route(&AddStaticRoute4Request {
         routes: StaticRoute4List {
-            list: [CR1_V4, CR2_V4]
+            list: [CR1_V4, CR2_V4, CR3_V4]
                 .into_iter()
                 .map(|nh| StaticRoute4 {
                     prefix: prefix_v4,
@@ -632,7 +1139,7 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     info!(ad.log, "installing static v6 route {TEST_PREFIX_V6}");
     mgd.static_add_v6_route(&AddStaticRoute6Request {
         routes: StaticRoute6List {
-            list: [CR1_V6, CR2_V6]
+            list: [CR1_V6, CR2_V6, CR3_V6]
                 .into_iter()
                 .map(|nh| StaticRoute6 {
                     prefix: prefix_v6,
@@ -646,12 +1153,17 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
     .await
     .context("mgd: add v6 static route")?;
 
-    info!(ad.log, "adding BFD peers for cr1 and cr2 (dual-stack)");
+    info!(
+        ad.log,
+        "adding BFD peers for cr1, cr2, and cr3 (dual-stack)"
+    );
     for (peer, listen) in [
         (IpAddr::V4(CR1_V4), IpAddr::V4(OX_CR1_V4)),
         (IpAddr::V4(CR2_V4), IpAddr::V4(OX_CR2_V4)),
+        (IpAddr::V4(CR3_V4), IpAddr::V4(OX_CR3_V4)),
         (IpAddr::V6(CR1_V6), IpAddr::V6(OX_CR1_V6)),
         (IpAddr::V6(CR2_V6), IpAddr::V6(OX_CR2_V6)),
+        (IpAddr::V6(CR3_V6), IpAddr::V6(OX_CR3_V6)),
     ] {
         mgd.add_bfd_peer(&BfdPeerConfig {
             peer,
@@ -666,32 +1178,52 @@ async fn trio_bfd_static_body(bt: BootedTrio) -> Result<()> {
 
     use BfdPeerState::{Down, Up};
 
-    info!(ad.log, "phase 1: both peers up");
-    expect_bfd(&mgd, cr1, cr2, &ad, Up, Up).await?;
-    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, "phase 1").await?;
+    info!(ad.log, "phase 1: all peers up");
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Up, Up, Up)).await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, true, "phase 1")
+        .await?;
 
     info!(ad.log, "phase 2: pause bfdd on cr1");
     cr1.pause_bfdd(&ad).await?;
-    expect_bfd(&mgd, cr1, cr2, &ad, Down, Up).await?;
-    expect_route(&dpd, &prefix_v4, &prefix_v6, false, true, "phase 2").await?;
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Down, Up, Up)).await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, false, true, true, "phase 2")
+        .await?;
 
     info!(ad.log, "phase 3: pause ceos on cr2");
     cr2.pause(&ad).await?;
-    expect_bfd(&mgd, cr1, cr2, &ad, Down, Down).await?;
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Down, Down, Up))
+        .await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, false, false, true, "phase 3")
+        .await?;
+
+    info!(ad.log, "phase 4: pause cRPD on cr3");
+    cr3.pause(&ad).await?;
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Down, Down, Down))
+        .await?;
     // With every nexthop shutdown, all shutdown nexthops are reinstated.
-    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, "phase 3").await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, true, "phase 4")
+        .await?;
 
-    info!(ad.log, "phase 4: resume bfdd on cr1");
+    info!(ad.log, "phase 5: resume bfdd on cr1");
     cr1.resume_bfdd(&ad).await?;
-    expect_bfd(&mgd, cr1, cr2, &ad, Up, Down).await?;
-    expect_route(&dpd, &prefix_v4, &prefix_v6, true, false, "phase 4").await?;
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Up, Down, Down))
+        .await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, true, false, false, "phase 5")
+        .await?;
 
-    info!(ad.log, "phase 5: unpause ceos on cr2");
+    info!(ad.log, "phase 6: unpause ceos on cr2");
     cr2.unpause(&ad).await?;
-    expect_bfd(&mgd, cr1, cr2, &ad, Up, Up).await?;
-    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, "phase 5").await?;
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Up, Up, Down)).await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, false, "phase 6")
+        .await?;
 
-    info!(ad.log, "trio bfd static routing test passed 🎉");
+    info!(ad.log, "phase 7: unpause cRPD on cr3");
+    cr3.unpause(&ad).await?;
+    expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Up, Up, Up)).await?;
+    expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, true, "phase 7")
+        .await?;
+
+    info!(ad.log, "quartet bfd static routing test passed 🎉");
 
     Ok(())
 }
@@ -772,6 +1304,40 @@ async fn eos_bfd_setup(r: EosNode, d: Arc<Runner>) -> Result<()> {
     Ok(())
 }
 
+async fn juniper_bfd_setup(r: JuniperNode, d: Arc<Runner>) -> Result<()> {
+    info!(d.log, "{}: starting juniper bfd setup", r.name(&d));
+    // Address the softnpu-facing link (v4 + v6) and install dummy
+    // BFD-tracked static routes whose nexthops are the ox side of the link.
+    // Junos creates BFD sessions for those nexthops; mgd creates matching
+    // sessions toward the Junos addresses in the test body. Disable Junos BFD
+    // timer adaptation for now: mgd has known RFC 5880 timer-negotiation bugs
+    // (oxidecomputer/maghemite#798), and Junos adaptive backoff can otherwise
+    // make this interop test flap.
+    let rx_ms = BFD_REQUIRED_RX_US / 1000;
+    let config = format!(
+        "
+        set interfaces eth1 unit 0 family inet address {cr_v4_cidr}
+        set interfaces eth1 unit 0 family inet6 address {cr_v6_cidr}
+        set routing-options static route 100.65.0.0/24 next-hop {ox_v4}
+        set routing-options static route 100.65.0.0/24 bfd-liveness-detection minimum-interval {rx_ms}
+        set routing-options static route 100.65.0.0/24 bfd-liveness-detection multiplier {mult}
+        set routing-options static route 100.65.0.0/24 bfd-liveness-detection no-adaptation
+        set routing-options rib inet6.0 static route 3ffe::/64 next-hop {ox_v6}
+        set routing-options rib inet6.0 static route 3ffe::/64 bfd-liveness-detection minimum-interval {rx_ms}
+        set routing-options rib inet6.0 static route 3ffe::/64 bfd-liveness-detection multiplier {mult}
+        set routing-options rib inet6.0 static route 3ffe::/64 bfd-liveness-detection no-adaptation
+        ",
+        cr_v4_cidr = CR3_V4_CIDR,
+        cr_v6_cidr = CR3_V6_CIDR,
+        ox_v4 = OX_CR3_V4,
+        ox_v6 = OX_CR3_V6,
+        mult = BFD_DETECTION_MULT,
+    );
+
+    r.setup(&d, &config).await?;
+    Ok(())
+}
+
 /// Expect a scalar BFD state per peer. Since failure injection targets the
 /// peer daemon as a whole, the v4 and v6 sessions to a given peer always
 /// share the same state.
@@ -781,37 +1347,47 @@ async fn eos_bfd_setup(r: EosNode, d: Arc<Runner>) -> Result<()> {
 /// `Down` phases have no observable peer-side truth.
 async fn expect_bfd(
     mgd: &MgdClient,
-    cr1: FrrNode,
-    cr2: EosNode,
+    peers: QuartetNodes,
     d: &Runner,
-    cr1_state: BfdPeerState,
-    cr2_state: BfdPeerState,
+    states: QuartetPeerStates<BfdPeerState>,
 ) -> Result<()> {
     for (peer, want) in [
-        (IpAddr::V4(CR1_V4), cr1_state),
-        (IpAddr::V6(CR1_V6), cr1_state),
-        (IpAddr::V4(CR2_V4), cr2_state),
-        (IpAddr::V6(CR2_V6), cr2_state),
+        (IpAddr::V4(CR1_V4), states.cr1),
+        (IpAddr::V6(CR1_V6), states.cr1),
+        (IpAddr::V4(CR2_V4), states.cr2),
+        (IpAddr::V6(CR2_V6), states.cr2),
+        (IpAddr::V4(CR3_V4), states.cr3),
+        (IpAddr::V6(CR3_V6), states.cr3),
     ] {
         let desc = format!("mgd bfd {peer} -> {want:?}");
         wait_for_eq!(bfd_state(mgd, peer).await, Some(want), &desc);
     }
 
-    if matches!(cr1_state, BfdPeerState::Up) {
+    if matches!(states.cr1, BfdPeerState::Up) {
         for peer in [IpAddr::V4(OX_CR1_V4), IpAddr::V6(OX_CR1_V6)] {
             let desc = format!("cr1 bfd {peer} -> Up");
             wait_for_eq!(
-                cr1.bfd_peer_up(d, peer).await.unwrap_or(false),
+                peers.cr1.bfd_peer_up(d, peer).await.unwrap_or(false),
                 true,
                 &desc
             );
         }
     }
-    if matches!(cr2_state, BfdPeerState::Up) {
+    if matches!(states.cr2, BfdPeerState::Up) {
         for peer in [IpAddr::V4(OX_CR2_V4), IpAddr::V6(OX_CR2_V6)] {
             let desc = format!("cr2 bfd {peer} -> Up");
             wait_for_eq!(
-                cr2.bfd_peer_up(d, peer).await.unwrap_or(false),
+                peers.cr2.bfd_peer_up(d, peer).await.unwrap_or(false),
+                true,
+                &desc
+            );
+        }
+    }
+    if matches!(states.cr3, BfdPeerState::Up) {
+        for peer in [IpAddr::V4(OX_CR3_V4), IpAddr::V6(OX_CR3_V6)] {
+            let desc = format!("cr3 bfd {peer} -> Up");
+            wait_for_eq!(
+                peers.cr3.bfd_peer_up(d, peer).await.unwrap_or(false),
                 true,
                 &desc
             );
@@ -828,6 +1404,7 @@ async fn expect_route(
     prefix_v6: &Ipv6Net,
     cr1_in: bool,
     cr2_in: bool,
+    cr3_in: bool,
     phase: &str,
 ) -> Result<()> {
     // Push cr1 before cr2 so the list is already in the sorted order that
@@ -841,6 +1418,10 @@ async fn expect_route(
     if cr2_in {
         want_v4.push(IpAddr::V4(CR2_V4));
         want_v6.push(IpAddr::V6(CR2_V6));
+    }
+    if cr3_in {
+        want_v4.push(IpAddr::V4(CR3_V4));
+        want_v6.push(IpAddr::V6(CR3_V6));
     }
 
     let desc_v4 = format!("{phase} v4");
@@ -864,6 +1445,26 @@ async fn bfd_state(mgd: &MgdClient, peer: IpAddr) -> Option<BfdPeerState> {
         .into_iter()
         .find(|p| p.config.peer == peer)
         .map(|p| p.state)
+}
+
+async fn expect_bgp_neighbor_states(
+    mgd: &MgdClient,
+    local_asn: u32,
+    states: QuartetPeerStates<FsmStateKind>,
+) -> Result<()> {
+    for (name, want) in [
+        ("cr1", states.cr1),
+        ("cr2", states.cr2),
+        ("cr3", states.cr3),
+    ] {
+        let desc = format!("mgd bgp {name} -> {want:?}");
+        wait_for_eq!(
+            neighbor_fsm_state(mgd, local_asn, name).await,
+            Some(want),
+            &desc
+        );
+    }
+    Ok(())
 }
 
 /// Look up the FSM state of the neighbor with the given `name`. The
