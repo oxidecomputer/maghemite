@@ -7,9 +7,12 @@ configuration.
 
 ## Runtime cargo-bay contents
 
-Before running Junos topologies, `cargo-bay/` must contain:
+Before running any topology, `cargo-bay/` must contain:
 
 - `mgd` and `ddmd`, staged by local test setup or the Buildomat job.
+
+Junos topologies additionally require:
+
 - `falcon-juniper-license.key`, a Juniper license file. This file is a secret:
   do not commit it, print it, include it in diagnostics, or pass its contents in
   command-line arguments.

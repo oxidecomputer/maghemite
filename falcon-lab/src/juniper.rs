@@ -100,10 +100,10 @@ impl JuniperNode {
         // guest-side systemd services that mount cargo-bay, install the
         // license, and apply `<node>-junos.set`; see falcon-lab/README.md.
         self.stage_routing_config(d, routing_config)?;
-        self.stage_license()?;
+        self.verify_license_available()?;
         info!(
             d.log,
-            "{}: staged Juniper config and license for guest systemd services",
+            "{}: staged Juniper config and verified license for guest systemd services",
             self.name(d)
         );
         Ok(())
@@ -130,7 +130,7 @@ impl JuniperNode {
         Ok(path)
     }
 
-    fn stage_license(&self) -> Result<PathBuf> {
+    fn verify_license_available(&self) -> Result<PathBuf> {
         let path = Path::new(CARGO_BAY).join(LICENSE_PATH);
         let metadata = fs::metadata(&path).with_context(|| {
             format!(

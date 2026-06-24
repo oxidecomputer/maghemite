@@ -157,6 +157,10 @@ where
     let result = body(bt).await;
     if let Err(e) = &result {
         warn!(ad.log, "{topo_name} failed: {e:#}");
+        // Some failure tests intentionally suspend routing daemons to verify
+        // convergence. Resume them before diagnostics so collection can use
+        // each vendor's normal CLI/API path rather than timing out on the
+        // fault we injected.
         restore_quartet_before_diagnostics(&ad, cr1, cr2, cr3).await;
         if diag_on_fail {
             collect_diagnostics(&ad, ox, cr1, cr2, cr3, &topo_name, protocols)

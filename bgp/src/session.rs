@@ -1781,7 +1781,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    /// Resolve the outbound connection target for this attempt.
+    /// Resolve the target for an outbound connection attempt.
     ///
     /// For numbered peers this is the configured address. For unnumbered peers
     /// it queries NDP for the neighbor on the peer's interface.
