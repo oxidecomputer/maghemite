@@ -15,6 +15,7 @@ use slog::{Logger, debug, error};
 use socket2::Socket;
 use std::mem::MaybeUninit;
 use std::net::Ipv6Addr;
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{Builder, sleep};
@@ -68,7 +69,7 @@ impl RouterDiscoveryThreads {
         state: Arc<RouterDiscoveryState>,
         log: Logger,
     ) -> Result<Self, NewRouterDiscoveryError> {
-        let sk = create_socket(ifx.index)
+        let sk = create_socket(ifx.scope_id)
             .map_err(NewRouterDiscoveryError::SocketCreate)?;
 
         let ifname = ifx.name.clone();
@@ -176,11 +177,11 @@ fn tx_loop(
             &sk,
             ifx.ip,
             None,
-            ifx.index,
+            ifx.scope_id,
             state.get_tx_router_lifetime(),
             &log,
         );
-        send_rs(&sk, ifx.ip, None, ifx.index, &log);
+        send_rs(&sk, ifx.ip, None, ifx.scope_id, &log);
         sleep(INTERVAL);
     }
 }
@@ -222,7 +223,7 @@ fn handle_rs(
         sk,
         ifx.ip,
         Some(src),
-        ifx.index,
+        ifx.scope_id,
         state.get_tx_router_lifetime(),
         log,
     );
@@ -241,8 +242,8 @@ pub struct Ipv6NetworkInterface {
     pub name: String,
     /// Interface's address
     pub ip: Ipv6Addr,
-    /// Interface's index
-    pub index: u32,
+    /// IPv6 scope ID (interface index)
+    pub scope_id: NonZeroU32,
 }
 
 /// Detailed information about a discovered peer on an interface.

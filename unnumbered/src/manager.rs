@@ -42,10 +42,12 @@ pub struct UnnumberedManager {
     /// Interfaces currently active for unnumbered operation.
     active_interfaces: Arc<Mutex<InterfaceMap>>,
 
-    /// Interfaces that are configured but not yet available on the system.
-    /// When an interface appears, it will be moved to active and router
-    /// discovery will be started.
-    pending_interfaces: Arc<Mutex<HashMap<String, u16>>>,
+    /// Interfaces configured for unnumbered operation.
+    ///
+    /// This records admin intent and is preserved across interface runtime
+    /// flaps. Pending interfaces are derived from configured interfaces that
+    /// do not currently have active router-discovery runtime.
+    configured_interfaces: Arc<Mutex<HashMap<String, u16>>>,
 
     /// Managed thread for interface monitoring.
     /// Stored to ensure automatic cleanup on drop - the ManagedThread's Drop
@@ -68,14 +70,14 @@ impl UnnumberedManager {
         let monitor_thread = Arc::new(ManagedThread::new());
         let dropped = monitor_thread.dropped_flag();
         let active_interfaces = Arc::new(Mutex::new(InterfaceMap::new()));
-        let pending_interfaces = Arc::new(Mutex::new(HashMap::new()));
+        let configured_interfaces = Arc::new(Mutex::new(HashMap::new()));
         let monitor_condvar = Arc::new(Condvar::new());
         let monitor_mutex = Arc::new(Mutex::new(()));
 
         let manager = Arc::new(Self {
             log: log.clone(),
             active_interfaces: Arc::clone(&active_interfaces),
-            pending_interfaces: Arc::clone(&pending_interfaces),
+            configured_interfaces: Arc::clone(&configured_interfaces),
             monitor_thread: Arc::clone(&monitor_thread),
             monitor_condvar: Arc::clone(&monitor_condvar),
             monitor_mutex: Arc::clone(&monitor_mutex),
@@ -90,7 +92,7 @@ impl UnnumberedManager {
                 Self::run_interface_monitor(
                     log,
                     active_interfaces,
-                    pending_interfaces,
+                    configured_interfaces,
                     monitor_condvar,
                     monitor_mutex,
                     dropped,
@@ -107,7 +109,7 @@ impl UnnumberedManager {
         Arc::new(Self {
             log: Logger::root(slog::Discard, o!()),
             active_interfaces: Arc::new(Mutex::new(InterfaceMap::new())),
-            pending_interfaces: Arc::new(Mutex::new(HashMap::new())),
+            configured_interfaces: Arc::new(Mutex::new(HashMap::new())),
             monitor_thread: Arc::new(ManagedThread::new()),
             monitor_condvar: Arc::new(Condvar::new()),
             monitor_mutex: Arc::new(Mutex::new(())),
@@ -128,7 +130,7 @@ impl UnnumberedManager {
     fn run_interface_monitor(
         log: Logger,
         active_interfaces: Arc<Mutex<InterfaceMap>>,
-        pending_interfaces: Arc<Mutex<HashMap<String, u16>>>,
+        configured_interfaces: Arc<Mutex<HashMap<String, u16>>>,
         monitor_condvar: Arc<Condvar>,
         monitor_mutex: Arc<Mutex<()>>,
         dropped: Arc<AtomicBool>,
@@ -143,25 +145,17 @@ impl UnnumberedManager {
             }
 
             // Check if there's any work to do
-            let has_pending = !lock!(pending_interfaces).is_empty();
+            let has_configured = !lock!(configured_interfaces).is_empty();
             let has_active = !lock!(active_interfaces).is_empty();
 
-            if has_pending || has_active {
+            if has_configured || has_active {
                 // Get all system interfaces once (single syscall)
                 match Self::get_available_interfaces(&log) {
                     Ok(available) => {
-                        // Check for interfaces that have appeared
-                        Self::check_pending_interfaces(
+                        Self::reconcile_interfaces(
                             &log,
                             &active_interfaces,
-                            &pending_interfaces,
-                            &available,
-                        );
-
-                        // Check for interfaces that have been removed
-                        Self::check_active_interfaces(
-                            &log,
-                            &active_interfaces,
+                            &configured_interfaces,
                             &available,
                         );
                     }
@@ -175,13 +169,11 @@ impl UnnumberedManager {
                 }
             }
 
-            // Wait for the poll interval or until woken up
+            // Wait until notified about new work/shutdown, or poll again
+            // after the interval.
             let guard = lock!(monitor_mutex);
-            let _result = monitor_condvar.wait_timeout_while(
-                guard,
-                INTERFACE_POLL_INTERVAL,
-                |_| !dropped.load(Ordering::Relaxed),
-            );
+            let _result =
+                monitor_condvar.wait_timeout(guard, INTERFACE_POLL_INTERVAL);
         }
 
         info!(log, "interface monitor exited");
@@ -212,7 +204,10 @@ impl UnnumberedManager {
             let ifx = Ipv6NetworkInterface {
                 name: iface.name,
                 ip,
-                index: iface.index,
+                scope_id: match NonZeroU32::new(iface.index) {
+                    Some(scope_id) => scope_id,
+                    None => continue,
+                },
             };
             if let Some(previous) =
                 available.insert(ifx.name.clone(), ifx.clone())
@@ -230,194 +225,180 @@ impl UnnumberedManager {
         Ok(available)
     }
 
-    /// Check pending interfaces to see if any have become available.
-    ///
-    /// Takes a pre-computed set of available interfaces to avoid repeated syscalls.
-    fn check_pending_interfaces(
+    fn reconcile_interfaces(
         log: &Logger,
         active_interfaces: &Mutex<InterfaceMap>,
-        pending_interfaces: &Mutex<HashMap<String, u16>>,
+        configured_interfaces: &Mutex<HashMap<String, u16>>,
         available: &HashMap<String, Ipv6NetworkInterface>,
     ) {
-        let mut pending = lock!(pending_interfaces);
-        let mut to_activate = Vec::new();
+        Self::reconcile_interfaces_with_activator(
+            log,
+            active_interfaces,
+            configured_interfaces,
+            available,
+            |ifx, router_lifetime| {
+                Self::start_interface_runtime(log, ifx, router_lifetime)
+            },
+        );
+    }
 
-        // Find interfaces that are now available
-        for (interface_name, router_lifetime) in pending.iter() {
-            if let Some(ifx) = available.get(interface_name) {
-                to_activate.push((ifx.clone(), *router_lifetime));
+    fn reconcile_interfaces_with_activator<F, E>(
+        log: &Logger,
+        active_interfaces: &Mutex<InterfaceMap>,
+        configured_interfaces: &Mutex<HashMap<String, u16>>,
+        available: &HashMap<String, Ipv6NetworkInterface>,
+        activate: F,
+    ) where
+        F: Fn(&Ipv6NetworkInterface, u16) -> Result<UnnumberedInterface, E>,
+        E: std::fmt::Display,
+    {
+        let mut to_deactivate = Vec::new();
+
+        {
+            let configured = lock!(configured_interfaces);
+            let active = lock!(active_interfaces);
+
+            for active_ifx in active.iter() {
+                let interface_name = active_ifx.name();
+                let Some(router_lifetime) = configured.get(interface_name)
+                else {
+                    to_deactivate.push(interface_name.to_string());
+                    continue;
+                };
+
+                let Some(ifx) = available.get(interface_name) else {
+                    to_deactivate.push(interface_name.to_string());
+                    continue;
+                };
+
+                if active_ifx.scope_id() != ifx.scope_id
+                    || active_ifx.local_address() != ifx.ip
+                {
+                    to_deactivate.push(interface_name.to_string());
+                } else if active_ifx.tx_router_lifetime() != *router_lifetime {
+                    active_ifx.set_tx_router_lifetime(*router_lifetime);
+                }
             }
         }
 
-        // Remove from pending and activate
-        for (ifx, router_lifetime) in to_activate {
-            pending.remove(&ifx.name);
-
-            info!(
-                log,
-                "interface became available, activating NDP";
-                "interface" => ifx.name.as_str(),
-            );
-
-            if let Err(e) = Self::activate_resolved_interface(
+        for interface_name in to_deactivate {
+            Self::remove_interface_runtime(
                 log,
                 active_interfaces,
-                &ifx,
-                router_lifetime,
-            ) {
-                warn!(
-                    log,
-                    "failed to activate interface";
-                    "interface" => ifx.name.as_str(),
-                    "error" => e.to_string(),
-                );
-                // Re-add to pending so we try again later.
-                pending.insert(ifx.name.clone(), router_lifetime);
-            } else {
+                &interface_name,
+            );
+        }
+
+        let configured: Vec<_> = lock!(configured_interfaces)
+            .iter()
+            .map(|(interface_name, router_lifetime)| {
+                (interface_name.clone(), *router_lifetime)
+            })
+            .collect();
+
+        for (interface_name, router_lifetime) in configured {
+            if let Some(ifx) = available.get(&interface_name) {
+                if lock!(active_interfaces).contains_name(&interface_name) {
+                    continue;
+                }
+
                 info!(
                     log,
-                    "interface activated for NDP";
+                    "interface became available, activating NDP";
                     "interface" => ifx.name.as_str(),
-                    "scope_id" => ifx.index,
-                    "local_addr" => ifx.ip.to_string(),
                 );
+
+                match activate(ifx, router_lifetime) {
+                    Ok(active) => {
+                        lock!(active_interfaces).insert_overwrite(active);
+                    }
+                    Err(e) => {
+                        warn!(
+                            log,
+                            "failed to activate interface";
+                            "interface" => ifx.name.as_str(),
+                            "error" => e.to_string(),
+                        );
+                    }
+                }
             }
         }
     }
 
-    /// Check active interfaces to see if any have been removed.
-    ///
-    /// Takes a pre-computed set of available interfaces to avoid repeated syscalls.
-    fn check_active_interfaces(
+    fn start_interface_runtime(
         log: &Logger,
-        active_interfaces: &Mutex<InterfaceMap>,
-        available: &HashMap<String, Ipv6NetworkInterface>,
-    ) {
-        let to_deactivate: Vec<String> = lock!(active_interfaces)
-            .iter()
-            .filter(|interface| !available.contains_key(interface.name()))
-            .map(|interface| interface.name().to_string())
-            .collect();
-
-        // Remove from active and deactivate
-        for interface_name in to_deactivate {
-            Self::deactivate_interface(log, active_interfaces, &interface_name);
-        }
-    }
-
-    /// Activate an already-resolved interface.
-    ///
-    /// This starts router discovery for the interface and records it as active
-    /// for unnumbered lookups.
-    fn activate_resolved_interface(
-        log: &Logger,
-        active_interfaces: &Mutex<InterfaceMap>,
         ifx: &Ipv6NetworkInterface,
         router_lifetime: u16,
-    ) -> Result<(), AddNeighborError> {
-        let active = UnnumberedInterface::new(
-            ifx.clone(),
-            router_lifetime,
-            log.clone(),
-        )?;
-        lock!(active_interfaces).insert_overwrite(active);
-        Ok(())
+    ) -> Result<UnnumberedInterface, AddNeighborError> {
+        UnnumberedInterface::new(ifx.clone(), router_lifetime, log.clone())
+            .map_err(AddNeighborError::from)
     }
 
-    /// Deactivate an interface that has been removed.
+    /// Remove an interface runtime.
     ///
     /// This removes the interface from the active interface map.
-    fn deactivate_interface(
+    fn remove_interface_runtime(
         log: &Logger,
         active_interfaces: &Mutex<InterfaceMap>,
         interface_name: &str,
     ) {
         info!(
             log,
-            "interface removed, deactivating NDP";
+            "deactivating NDP runtime";
             "interface" => interface_name,
         );
 
         // Clean up active interface state. Dropping the interface also drops
         // its router-discovery thread handles.
-        lock!(active_interfaces).remove_by_name(interface_name);
+        let _removed = lock!(active_interfaces).remove_by_name(interface_name);
     }
 
-    /// Register an interface for NDP peer discovery.
+    /// Record configured intent for NDP peer discovery on an interface.
     ///
-    /// This method only handles NDP-related setup:
-    /// - Resolves the interface to get its IPv6 link-local address
-    /// - Starts router discovery for the interface
-    /// - Records the interface as active for unnumbered lookups
+    /// Runtime setup is handled asynchronously by the monitor thread, which
+    /// reconciles configured intent with currently available system interfaces.
     ///
     /// BGP session creation is handled separately by the caller.
     ///
-    /// If the interface doesn't exist yet, this is not an error - the interface
-    /// will be added to a pending list and registered when it appears. The
-    /// caller should still create the BGP session, which will wait for the
-    /// interface to become available.
-    pub fn add_interface(
+    /// If the interface doesn't exist yet, this is not an error. The caller
+    /// should still create the BGP session, which will wait for the interface
+    /// to become available.
+    pub fn configure_interface(
         self: &Arc<Self>,
         interface: impl AsRef<str>,
         router_lifetime: u16,
     ) -> Result<(), AddNeighborError> {
         let interface_str = interface.as_ref();
 
-        // Try to get the interface. If it does not exist or is not ready for
-        // unnumbered operation yet, add it to the pending list.
-        match Self::get_interface(interface_str, &self.log)? {
-            Some(ifx) => {
-                Self::activate_resolved_interface(
-                    &self.log,
-                    &self.active_interfaces,
-                    &ifx,
-                    router_lifetime,
-                )?;
+        lock!(self.configured_interfaces)
+            .insert(interface_str.to_string(), router_lifetime);
 
-                info!(
-                    self.log,
-                    "interface registered for NDP peer discovery";
-                    "interface" => interface_str,
-                    "scope_id" => ifx.index,
-                    "local_addr" => ifx.ip.to_string(),
-                );
-            }
-            None => {
-                // Interface not ready - add to pending list. The monitor
-                // thread will activate it when it appears and has a link-local
-                // IPv6 address.
-                info!(
-                    self.log,
-                    "interface not currently available, adding to pending";
-                    "interface" => interface_str,
-                );
+        info!(
+            self.log,
+            "interface configured for NDP peer discovery";
+            "interface" => interface_str,
+        );
 
-                lock!(self.pending_interfaces)
-                    .insert(interface_str.to_string(), router_lifetime);
-
-                // Wake up the monitor thread since there's new work
-                self.monitor_condvar.notify_one();
-            }
-        };
+        // Wake up the monitor thread since there's new or updated work.
+        self.monitor_condvar.notify_one();
 
         Ok(())
     }
 
-    /// Unregister an interface from NDP peer discovery.
+    /// Remove configured intent for NDP peer discovery on an interface.
     ///
-    /// This method only handles NDP-related cleanup:
-    /// - Drops the active interface and its router-discovery thread handles
-    /// - Removes from pending/active tracking
+    /// This drops any active runtime and removes configured intent so the
+    /// monitor will not reactivate the interface.
     ///
     /// BGP session deletion is handled separately by the caller.
-    pub fn remove_interface(
+    pub fn unconfigure_interface(
         self: &Arc<Self>,
         interface: impl AsRef<str>,
     ) -> Result<(), network_interface::Error> {
         let interface_str = interface.as_ref();
 
-        // Remove from pending if it was waiting to be activated
-        lock!(self.pending_interfaces).remove(interface_str);
+        // Remove configured intent so the monitor will not reactivate it.
+        lock!(self.configured_interfaces).remove(interface_str);
 
         // Remove from active if it was active. Dropping the interface also
         // drops its router-discovery thread handles.
@@ -518,52 +499,6 @@ impl UnnumberedManager {
             false
         }
     }
-
-    fn get_interface(
-        name: &str,
-        log: &Logger,
-    ) -> Result<Option<Ipv6NetworkInterface>, network_interface::Error> {
-        let candidates: Vec<_> = NetworkInterface::show()?
-            .into_iter()
-            .filter(|x| x.name == name)
-            .collect();
-
-        if candidates.is_empty() {
-            return Ok(None);
-        }
-
-        let mut local: Vec<_> = candidates
-            .into_iter()
-            .filter_map(|x| x.addr.map(|addr| (addr, x.index)))
-            .filter_map(|(addr, idx)| match addr.ip() {
-                IpAddr::V6(ip) if ip.is_unicast_link_local() => Some((ip, idx)),
-                _ => None,
-            })
-            .collect();
-
-        let Some((addr, index)) = local.pop() else {
-            return Ok(None);
-        };
-
-        if !local.is_empty() {
-            warn!(
-                log,
-                "more than 1 link local address for interface";
-                "using" => addr.to_string(),
-                "also found" => local
-                    .into_iter()
-                    .map(|x| x.0.to_string())
-                    .collect::<Vec<_>>()
-                    .join(","),
-            );
-        }
-
-        Ok(Some(Ipv6NetworkInterface {
-            name: name.to_owned(),
-            ip: addr,
-            index,
-        }))
-    }
 }
 
 impl Drop for UnnumberedManager {
@@ -619,8 +554,11 @@ impl UnnumberedManager {
 
     /// Get all interfaces that are configured but not yet available on the system.
     pub fn get_pending_interfaces(&self) -> Vec<PendingInterfaceInfo> {
-        lock!(self.pending_interfaces)
+        let configured = lock!(self.configured_interfaces);
+        let active = lock!(self.active_interfaces);
+        configured
             .iter()
+            .filter(|(name, _)| !active.contains_name(name))
             .map(|(name, router_lifetime)| PendingInterfaceInfo {
                 interface: name.clone(),
                 router_lifetime: *router_lifetime,
@@ -752,6 +690,38 @@ mod tests {
             .unwrap()
     }
 
+    fn available_interface(
+        name: &str,
+        addr: Ipv6Addr,
+        index: u32,
+    ) -> Ipv6NetworkInterface {
+        Ipv6NetworkInterface {
+            name: name.to_string(),
+            ip: addr,
+            scope_id: NonZeroU32::new(index).unwrap(),
+        }
+    }
+
+    fn reconcile_test(
+        manager: &UnnumberedManager,
+        available: &HashMap<String, Ipv6NetworkInterface>,
+    ) {
+        UnnumberedManager::reconcile_interfaces_with_activator(
+            &manager.log,
+            &manager.active_interfaces,
+            &manager.configured_interfaces,
+            available,
+            |ifx, router_lifetime| {
+                UnnumberedInterface::new_manual(
+                    ifx.name.clone(),
+                    ifx.ip,
+                    ifx.scope_id.get(),
+                    router_lifetime,
+                )
+            },
+        );
+    }
+
     #[test]
     fn drop_releases_manager() {
         let manager = UnnumberedManager::new(Logger::root(slog::Discard, o!()));
@@ -828,9 +798,195 @@ mod tests {
     }
 
     #[test]
-    fn remove_interface_clears_pending_and_active_state() {
+    fn pending_interface_derivation() {
         let manager = UnnumberedManager::new_test();
-        lock!(manager.pending_interfaces).insert("eth0".into(), 30);
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
+        lock!(manager.configured_interfaces).insert("eth1".into(), 60);
+        lock!(manager.active_interfaces).insert_overwrite(manual_interface(
+            "eth1",
+            link_local(1),
+            7,
+            60,
+        ));
+
+        let pending = manager.get_pending_interfaces();
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].interface, "eth0");
+        assert_eq!(pending[0].router_lifetime, 30);
+    }
+
+    #[test]
+    fn runtime_unaffected_by_lifetime_change() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 60);
+        let interface = manual_interface("eth0", link_local(1), 7, 30);
+        let neighbor = link_local(2);
+        interface.record_router_advertisement(
+            ndp::Icmp6RouterAdvertisement::default(),
+            neighbor,
+        );
+        lock!(manager.active_interfaces).insert_overwrite(interface);
+        let available = HashMap::from([(
+            "eth0".to_string(),
+            available_interface("eth0", link_local(1), 7),
+        )]);
+
+        reconcile_test(&manager, &available);
+
+        let active = lock!(manager.active_interfaces);
+        let interface = active.get_by_name("eth0").unwrap();
+        assert_eq!(interface.tx_router_lifetime(), 60);
+        assert_eq!(interface.discovered_neighbor(), Some(neighbor));
+    }
+
+    #[test]
+    fn configured_interface_reactivates_after_flap() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
+        lock!(manager.active_interfaces).insert_overwrite(manual_interface(
+            "eth0",
+            link_local(1),
+            7,
+            30,
+        ));
+
+        reconcile_test(&manager, &HashMap::new());
+
+        assert_eq!(manager.get_interface_for_scope(7), None);
+        let pending = manager.get_pending_interfaces();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].interface, "eth0");
+
+        let available = HashMap::from([(
+            "eth0".to_string(),
+            available_interface("eth0", link_local(1), 7),
+        )]);
+        reconcile_test(&manager, &available);
+
+        assert!(manager.get_pending_interfaces().is_empty());
+        assert_eq!(manager.get_interface_for_scope(7), Some("eth0".into()));
+    }
+
+    #[test]
+    fn scope_change_restarts_runtime() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
+        let interface = manual_interface("eth0", link_local(1), 7, 30);
+        interface.record_router_advertisement(
+            ndp::Icmp6RouterAdvertisement::default(),
+            link_local(2),
+        );
+        lock!(manager.active_interfaces).insert_overwrite(interface);
+        let available = HashMap::from([(
+            "eth0".to_string(),
+            available_interface("eth0", link_local(1), 8),
+        )]);
+
+        reconcile_test(&manager, &available);
+
+        assert_eq!(manager.get_interface_for_scope(7), None);
+        assert_eq!(manager.get_interface_for_scope(8), Some("eth0".into()));
+        let detail = manager.get_interface_detail("eth0").unwrap().unwrap();
+        assert_eq!(detail.scope_id, 8);
+        assert!(detail.peer_state.is_none());
+    }
+
+    #[test]
+    fn addr_change_restarts_runtime() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
+        let interface = manual_interface("eth0", link_local(1), 7, 30);
+        interface.record_router_advertisement(
+            ndp::Icmp6RouterAdvertisement::default(),
+            link_local(2),
+        );
+        lock!(manager.active_interfaces).insert_overwrite(interface);
+        let available = HashMap::from([(
+            "eth0".to_string(),
+            available_interface("eth0", link_local(99), 7),
+        )]);
+
+        reconcile_test(&manager, &available);
+
+        let detail = manager.get_interface_detail("eth0").unwrap().unwrap();
+        assert_eq!(detail.local_address, link_local(99));
+        assert_eq!(detail.scope_id, 7);
+        assert!(detail.peer_state.is_none());
+    }
+
+    #[test]
+    fn reconciler_retains_unchanged_interface() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
+        let interface = manual_interface("eth0", link_local(1), 7, 30);
+        let neighbor = link_local(2);
+        interface.record_router_advertisement(
+            ndp::Icmp6RouterAdvertisement::default(),
+            neighbor,
+        );
+        lock!(manager.active_interfaces).insert_overwrite(interface);
+        let available = HashMap::from([(
+            "eth0".to_string(),
+            available_interface("eth0", link_local(1), 7),
+        )]);
+
+        reconcile_test(&manager, &available);
+
+        assert_eq!(
+            manager
+                .get_neighbor_by_interface("eth0")
+                .unwrap()
+                .map(|neighbor| neighbor.addr),
+            Some(neighbor),
+        );
+    }
+
+    #[test]
+    fn failed_reactivation_leaves_interface_pending() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
+        lock!(manager.active_interfaces).insert_overwrite(manual_interface(
+            "eth0",
+            link_local(1),
+            7,
+            30,
+        ));
+        let available = HashMap::from([(
+            "eth0".to_string(),
+            available_interface("eth0", link_local(1), 8),
+        )]);
+
+        UnnumberedManager::reconcile_interfaces_with_activator(
+            &manager.log,
+            &manager.active_interfaces,
+            &manager.configured_interfaces,
+            &available,
+            |_ifx,
+             _router_lifetime|
+             -> Result<UnnumberedInterface, &'static str> {
+                Err("activation failed")
+            },
+        );
+
+        assert_eq!(manager.get_interface_for_scope(7), None);
+        assert!(
+            lock!(manager.active_interfaces)
+                .get_by_name("eth0")
+                .is_none()
+        );
+        let pending = manager.get_pending_interfaces();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].interface, "eth0");
+
+        reconcile_test(&manager, &available);
+        assert_eq!(manager.get_interface_for_scope(8), Some("eth0".into()));
+    }
+
+    #[test]
+    fn unconfigure_interface_clears_pending_and_active_state() {
+        let manager = UnnumberedManager::new_test();
+        lock!(manager.configured_interfaces).insert("eth0".into(), 30);
         lock!(manager.active_interfaces).insert_overwrite(manual_interface(
             "eth0",
             link_local(1),
@@ -838,9 +994,9 @@ mod tests {
             123,
         ));
 
-        manager.remove_interface("eth0").unwrap();
+        manager.unconfigure_interface("eth0").unwrap();
 
-        assert!(lock!(manager.pending_interfaces).is_empty());
+        assert!(lock!(manager.configured_interfaces).is_empty());
         assert!(
             lock!(manager.active_interfaces)
                 .get_by_name("eth0")

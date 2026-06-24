@@ -74,16 +74,13 @@ pub enum ListeningSocketError {
 
     #[error("failed to bind socket to interface: {0}")]
     SetBoundIf(std::io::Error),
-
-    #[error("interface index must be non-zero")]
-    InvalidInterfaceIndex,
 }
 
 pub fn send_ra(
     s: &Socket,
     src: Ipv6Addr,
     dst: Option<Ipv6Addr>,
-    ifindex: u32,
+    ifindex: NonZeroU32,
     router_lifetime: u16,
     log: &Logger,
 ) {
@@ -108,7 +105,7 @@ pub fn send_ra(
         },
         0,
         0,
-        ifindex,
+        ifindex.get(),
     );
     if let Err(e) = s.send_to(&out, &dst.into()) {
         error!(log, "send_ra: send: {e}");
@@ -119,7 +116,7 @@ pub fn send_rs(
     s: &Socket,
     src: Ipv6Addr,
     dst: Option<Ipv6Addr>,
-    ifindex: u32,
+    ifindex: NonZeroU32,
     log: &Logger,
 ) {
     let pkt = Icmp6RouterSolicitation::default();
@@ -139,7 +136,7 @@ pub fn send_rs(
         },
         0,
         0,
-        ifindex,
+        ifindex.get(),
     );
     if let Err(e) = s.send_to(&out, &dst.into()) {
         error!(log, "send_rs: send: {e}");
@@ -185,9 +182,12 @@ impl Drop for DropSleep {
 /// Create a listening socket for solicitations and advertisements. This
 /// socket listens on the unspecified address to pick up both unicast
 /// and multicast solicitations and advertisements.
-pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
+pub fn create_socket(
+    ifindex: NonZeroU32,
+) -> Result<Socket, ListeningSocketError> {
     use ListeningSocketError as E;
     const READ_TIMEOUT: Duration = Duration::from_secs(1);
+    let index = ifindex.get();
 
     let s = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
         .map_err(E::NewSocketError)?;
@@ -210,7 +210,6 @@ pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
     s.join_multicast_v6(&ALL_ROUTERS_MCAST, index)
         .map_err(E::JoinAllRoutersMulticast)?;
 
-    let ifindex = NonZeroU32::new(index).ok_or(E::InvalidInterfaceIndex)?;
     s.bind_device_by_index_v6(Some(ifindex))
         .map_err(E::SetBoundIf)?;
 

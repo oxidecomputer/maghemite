@@ -61,6 +61,10 @@ impl RouterDiscoveryRuntime {
         self.state().get_tx_router_lifetime()
     }
 
+    fn set_tx_router_lifetime(&self, tx_router_lifetime: u16) {
+        self.state().set_tx_router_lifetime(tx_router_lifetime);
+    }
+
     fn get_runtime_state(&self) -> ndp::RouterDiscoveryRuntimeState {
         match self {
             #[cfg(test)]
@@ -125,8 +129,8 @@ impl UnnumberedInterface {
     ) -> Result<Self, NewUnnumberedInterfaceError> {
         let name = ifx.name.clone();
         let local_address = ifx.ip;
-        let scope_id = ifx.index;
-        let (name, scope_id) = Self::validate(name, local_address, scope_id)?;
+        let scope_id = ifx.scope_id;
+        Self::validate_address(&name, local_address)?;
 
         let router_discovery =
             RouterDiscoveryRuntime::start(ifx, tx_router_lifetime, log)?;
@@ -155,6 +159,7 @@ impl UnnumberedInterface {
         ))
     }
 
+    #[cfg(test)]
     fn validate(
         name: impl Into<String>,
         local_address: Ipv6Addr,
@@ -163,13 +168,21 @@ impl UnnumberedInterface {
         let name = name.into();
         let scope_id = NonZeroU32::new(scope_id)
             .ok_or(UnnumberedInterfaceError::InvalidScopeId)?;
+        Self::validate_address(&name, local_address)?;
+        Ok((name, scope_id))
+    }
+
+    fn validate_address(
+        name: &str,
+        local_address: Ipv6Addr,
+    ) -> Result<(), UnnumberedInterfaceError> {
         if !local_address.is_unicast_link_local() {
             return Err(UnnumberedInterfaceError::NotLinkLocal {
-                interface: name,
+                interface: name.to_string(),
                 address: local_address,
             });
         }
-        Ok((name, scope_id))
+        Ok(())
     }
 
     fn from_validated_parts(
@@ -210,6 +223,11 @@ impl UnnumberedInterface {
 
     pub fn tx_router_lifetime(&self) -> u16 {
         self.router_discovery.tx_router_lifetime()
+    }
+
+    pub fn set_tx_router_lifetime(&self, tx_router_lifetime: u16) {
+        self.router_discovery
+            .set_tx_router_lifetime(tx_router_lifetime);
     }
 
     pub fn get_runtime_state(&self) -> ndp::RouterDiscoveryRuntimeState {

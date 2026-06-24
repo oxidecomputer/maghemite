@@ -1933,7 +1933,9 @@ pub(crate) mod helpers {
         get_router!(&ctx, asn)?.delete_session(peer);
 
         // Unregister the interface from NDP peer discovery
-        ctx.bgp.unnumbered_manager.remove_interface(interface)?;
+        ctx.bgp
+            .unnumbered_manager
+            .unconfigure_interface(interface)?;
 
         // And now clear out the top level database entry
         ctx.db
@@ -2329,9 +2331,10 @@ pub(crate) mod helpers {
         )?;
 
         // Register interface for NDP peer discovery (NDP-only, no session creation)
-        ctx.bgp
-            .unnumbered_manager
-            .add_interface(&rq.interface, rq.act_as_a_default_ipv6_router)?;
+        ctx.bgp.unnumbered_manager.configure_interface(
+            &rq.interface,
+            rq.act_as_a_default_ipv6_router,
+        )?;
 
         if start_session {
             start_bgp_session(&event_tx)?;
