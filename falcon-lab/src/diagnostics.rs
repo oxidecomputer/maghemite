@@ -7,6 +7,22 @@ use libfalcon::{NodeRef, Runner};
 use slog::{info, warn};
 use std::path::Path;
 
+#[derive(Copy, Clone)]
+pub enum ProtocolDiagnostics {
+    Bgp,
+    Bfd,
+}
+
+impl ProtocolDiagnostics {
+    pub fn bgp(self) -> bool {
+        matches!(self, Self::Bgp)
+    }
+
+    pub fn bfd(self) -> bool {
+        matches!(self, Self::Bfd)
+    }
+}
+
 /// Run `cmd` on `node`, capture stdout, and persist it as an artifact
 /// labelled `<topo>-<label>.log`.
 pub async fn capture(

@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::linux::LinuxNode;
+use crate::{diagnostics::ProtocolDiagnostics, linux::LinuxNode};
 use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
@@ -11,6 +11,8 @@ use serde::Deserialize;
 use slog::info;
 use std::collections::HashMap;
 use std::net::IpAddr;
+
+const CEOS_CONTAINER: &str = "ceos";
 
 #[derive(Copy, Clone)]
 pub struct EosNode(pub NodeRef);
@@ -31,7 +33,9 @@ impl EosNode {
             let status = d
                 .exec(
                     self.0,
-                    "docker inspect ceos --format '{{.State.Status}}'",
+                    &format!(
+                        "docker inspect {CEOS_CONTAINER} --format '{{{{.State.Status}}}}'"
+                    ),
                 )
                 .await?;
 
@@ -54,7 +58,10 @@ impl EosNode {
         );
 
         let response = d
-            .exec(self.0, &format!("docker exec ceos Cli -c '{script}'"))
+            .exec(
+                self.0,
+                &format!("docker exec {CEOS_CONTAINER} Cli -c '{script}'"),
+            )
             .await?;
 
         Ok(response)
@@ -64,21 +71,31 @@ impl EosNode {
         LinuxNode(self.0)
     }
 
-    /// Capture BGP / BFD / routing state via the Arista CLI.
-    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+    /// Capture protocol-specific state via the Arista CLI.
+    pub async fn collect_diagnostics(
+        &self,
+        d: &Runner,
+        topo: &str,
+        protocols: ProtocolDiagnostics,
+    ) {
         let name = self.name(d);
-        // `Cli -c` takes a single newline-separated script.
-        const SCRIPT: &str = "enable
-            show running-config
-            show ip interface brief
-            show ip bgp summary
-            show ip bgp
-            show ipv6 bgp
-            show ip route
-            show ipv6 route
-            show bfd peers
-        ";
-        match self.shell(d, SCRIPT).await {
+        // `Cli -c` takes a single newline-separated script. Linux diagnostics
+        // below collect host/container interfaces and routes for every test,
+        // so keep this focused on the protocol under test.
+        let script = if protocols.bgp() {
+            "enable
+                show running-config
+                show ip bgp summary
+                show ip bgp
+                show ipv6 bgp
+            "
+        } else {
+            "enable
+                show running-config
+                show bfd peers
+            "
+        };
+        match self.shell(d, script).await {
             Ok(out) => crate::diagnostics::write_artifact(
                 d,
                 topo,
@@ -88,19 +105,25 @@ impl EosNode {
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {name}-cli: {e}"),
         }
+        self.linux().collect_diagnostics(d, topo, &name).await;
+        self.linux()
+            .collect_container_diagnostics(d, topo, &name, CEOS_CONTAINER)
+            .await;
     }
 
     /// Freeze the ceos container. BFD packets stop being processed without
     /// tearing down running-config, so `unpause` restores the session.
     pub async fn pause(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: pausing ceos", self.name(d));
-        d.exec(self.0, "docker pause ceos").await?;
+        info!(d.log, "{}: pausing {CEOS_CONTAINER}", self.name(d));
+        d.exec(self.0, &format!("docker pause {CEOS_CONTAINER}"))
+            .await?;
         Ok(())
     }
 
     pub async fn unpause(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: unpausing ceos", self.name(d));
-        d.exec(self.0, "docker unpause ceos").await?;
+        info!(d.log, "{}: unpausing {CEOS_CONTAINER}", self.name(d));
+        d.exec(self.0, &format!("docker unpause {CEOS_CONTAINER}"))
+            .await?;
         Ok(())
     }
 

@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::linux::LinuxNode;
+use crate::{diagnostics::ProtocolDiagnostics, linux::LinuxNode};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
@@ -79,19 +79,28 @@ impl FrrNode {
             .any(|p| p.peer == peer && p.status.eq_ignore_ascii_case("up")))
     }
 
-    /// Capture BGP / BFD / routing state via vtysh, plus linux network state
-    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+    /// Capture protocol-specific FRR state via vtysh, plus Linux network state.
+    pub async fn collect_diagnostics(
+        &self,
+        d: &Runner,
+        topo: &str,
+        protocols: ProtocolDiagnostics,
+    ) {
         let name = self.name(d);
-        const VTYSH: &str = "
-            show running-config
-            show ip bgp summary
-            show ip bgp
-            show ipv6 bgp
-            show ip route
-            show ipv6 route
-            show bfd peers
-        ";
-        match self.shell(d, VTYSH).await {
+        let commands = if protocols.bgp() {
+            "
+                show running-config
+                show ip bgp summary
+                show ip bgp
+                show ipv6 bgp
+            "
+        } else {
+            "
+                show running-config
+                show bfd peers
+            "
+        };
+        match self.shell(d, commands).await {
             Ok(out) => crate::diagnostics::write_artifact(
                 d,
                 topo,
@@ -101,23 +110,7 @@ impl FrrNode {
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {name}-vtysh: {e}"),
         }
-        // Plain `ip` snapshots (not a vtysh command, so issued directly).
-        for (suffix, cmd) in [
-            ("ip-link", "ip -d -s link show"),
-            ("ip-addr", "ip -d -s addr show"),
-            ("ip-neigh", "ip -d -s neigh show"),
-            ("ip-nexthop", "ip -d -s nexthop show"),
-            ("ip-route", "ip -d -s route show table all"),
-        ] {
-            crate::diagnostics::capture(
-                d,
-                self.0,
-                topo,
-                &format!("{name}-{suffix}"),
-                cmd,
-            )
-            .await;
-        }
+        self.linux().collect_diagnostics(d, topo, &name).await;
     }
 
     /// Execute a vtysh command and return the output.

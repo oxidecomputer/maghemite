@@ -64,8 +64,12 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 const UNIT_BGP: &str = "bgp";
-const DEFAULT_BGP_LISTEN: SocketAddr =
-    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
+const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
+    Ipv6Addr::UNSPECIFIED,
+    BGP_PORT.get(),
+    0,
+    0,
+));
 
 #[derive(Clone)]
 pub struct BgpContext {
@@ -80,7 +84,7 @@ impl BgpContext {
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
-        let unnumbered_manager = UnnumberedManagerNdp::new(router.clone(), log);
+        let unnumbered_manager = UnnumberedManagerNdp::new(log);
         Self {
             router,
             sessions,
@@ -369,9 +373,9 @@ pub async fn read_neighbor(
                 asn: result.asn,
                 name: result.name,
                 group: result.group,
-                host: std::net::SocketAddr::new(
-                    std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
-                    179,
+                host: SocketAddr::new(
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    BGP_PORT.get(),
                 )
                 .into(),
                 parameters: result.parameters,
@@ -1962,6 +1966,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
@@ -1973,6 +1978,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )?;
             true
         };
@@ -2051,6 +2057,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
@@ -2062,6 +2069,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )?;
             true
         };
@@ -2157,36 +2165,26 @@ pub(crate) mod helpers {
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
 
-        // XXX: remove this when PeerConfig no longer requires a SocketAddr
-        let placeholder_host = std::net::SocketAddrV6::new(
-            std::net::Ipv6Addr::UNSPECIFIED,
-            0,
-            0,
-            0,
-        );
-
         let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
-                rq.interface.clone(),
-                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
+            match get_router!(&ctx, rq.asn)?.ensure_session(
+                PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
                 event_rx,
                 info,
-                ctx.bgp.unnumbered_manager.clone(),
+                Some(ctx.bgp.unnumbered_manager.clone()),
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
             }
         } else {
-            get_router!(&ctx, rq.asn)?.new_unnumbered_session(
-                rq.interface.clone(),
-                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
+            get_router!(&ctx, rq.asn)?.new_session(
+                PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
                 event_rx,
                 info,
-                ctx.bgp.unnumbered_manager.clone(),
+                Some(ctx.bgp.unnumbered_manager.clone()),
             )?;
             true
         };
@@ -2378,13 +2376,9 @@ pub(crate) mod helpers {
             "op" => format!("{op:?}")
         );
 
-        let session = ctx
-            .bgp
-            .unnumbered_manager
-            .get_neighbor_session(asn, interface)?
-            .ok_or(Error::NotFound(
-                "session for unnumbered neighbor not found".into(),
-            ))?;
+        let session = get_router!(ctx, asn)?.get_session(interface).ok_or(
+            Error::NotFound("session for unnumbered neighbor not found".into()),
+        )?;
 
         reset_session(&session, op)?;
         Ok(HttpResponseUpdatedNoContent())
@@ -2643,7 +2637,7 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
-    use bgp::{policy::PolicySource, router::SessionMap};
+    use bgp::{BGP_PORT, policy::PolicySource, router::SessionMap};
     use client_common::println_nopipe;
     use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
@@ -2739,7 +2733,7 @@ fn update(message, asn, addr) {
         BgpPeerConfig {
             host: oxnet::SocketAddrJson(SocketAddr::new(
                 ip.parse().unwrap(),
-                179,
+                BGP_PORT.get(),
             )),
             name: name.into(),
             parameters: params(hold_time),

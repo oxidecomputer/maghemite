@@ -2,8 +2,9 @@
 
 use crate::dendrite::NpuvmCommits;
 use crate::test::{
-    cleanup_bfd_static_test, cleanup_unnumbered_test, run_trio_bfd_static_test,
-    run_trio_unnumbered_test,
+    cleanup_mgd_unnumbered_test, cleanup_quartet_bfd_static_test,
+    cleanup_quartet_unnumbered_test, run_mgd_unnumbered_test,
+    run_quartet_bfd_static_test, run_quartet_unnumbered_test,
 };
 use clap::{Parser, Subcommand};
 
@@ -14,6 +15,7 @@ mod diagnostics;
 mod eos;
 mod frr;
 mod illumos;
+mod juniper;
 mod linux;
 mod mgd;
 mod test;
@@ -41,6 +43,9 @@ struct Run {
     #[clap(long)]
     no_cleanup: bool,
 
+    #[clap(long)]
+    no_diag_on_fail: bool,
+
     #[clap(long, default_value = "fd2c726815cdb03c2687e1bf2912a9184905557b")]
     npuvm_commit: String,
 
@@ -64,8 +69,9 @@ struct Serial {
 
 #[derive(Debug, Subcommand)]
 enum TestCommand {
-    TrioUnnumbered,
-    TrioBfdStaticRouting,
+    MgdUnnumbered,
+    QuartetUnnumbered,
+    QuartetBfdStaticRouting,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -82,18 +88,38 @@ async fn run() -> anyhow::Result<()> {
                 sidecar_lite: cmd.sidecar_lite_commit,
             };
             match cmd.command {
-                TestCommand::TrioUnnumbered => {
-                    run_trio_unnumbered_test(cmd.no_cleanup, commits).await?
+                TestCommand::MgdUnnumbered => {
+                    run_mgd_unnumbered_test(
+                        cmd.no_cleanup,
+                        !cmd.no_diag_on_fail,
+                    )
+                    .await?
                 }
-                TestCommand::TrioBfdStaticRouting => {
-                    run_trio_bfd_static_test(cmd.no_cleanup, commits).await?
+                TestCommand::QuartetUnnumbered => {
+                    run_quartet_unnumbered_test(
+                        cmd.no_cleanup,
+                        !cmd.no_diag_on_fail,
+                        commits,
+                    )
+                    .await?
+                }
+                TestCommand::QuartetBfdStaticRouting => {
+                    run_quartet_bfd_static_test(
+                        cmd.no_cleanup,
+                        !cmd.no_diag_on_fail,
+                        commits,
+                    )
+                    .await?
                 }
             }
         }
         Command::Cleanup(cmd) => match cmd.command {
-            TestCommand::TrioUnnumbered => cleanup_unnumbered_test().await?,
-            TestCommand::TrioBfdStaticRouting => {
-                cleanup_bfd_static_test().await?
+            TestCommand::MgdUnnumbered => cleanup_mgd_unnumbered_test().await?,
+            TestCommand::QuartetUnnumbered => {
+                cleanup_quartet_unnumbered_test().await?
+            }
+            TestCommand::QuartetBfdStaticRouting => {
+                cleanup_quartet_bfd_static_test().await?
             }
         },
         Command::Serial(cmd) => {
