@@ -35,6 +35,12 @@ pub enum Error {
 impl From<Error> for HttpError {
     fn from(value: Error) -> Self {
         match value {
+            Error::Db(rdb::error::Error::Conflict(_)) => {
+                Self::for_client_error_with_status(
+                    Some(value.to_string()),
+                    ClientErrorStatusCode::CONFLICT,
+                )
+            }
             Error::Db(_) => Self::for_internal_error(value.to_string()),
             Error::Conflict(_) => Self::for_client_error_with_status(
                 Some(value.to_string()),
@@ -48,6 +54,12 @@ impl From<Error> for HttpError {
                         ClientErrorStatusCode::CONFLICT,
                     )
                 }
+                bgp::error::Error::Datastore(rdb::error::Error::Conflict(
+                    _,
+                )) => Self::for_client_error_with_status(
+                    Some(err.to_string()),
+                    ClientErrorStatusCode::CONFLICT,
+                ),
                 _ => Self::for_internal_error(value.to_string()),
             },
             Error::AddUnnumberedNeighbor(ref err) => {

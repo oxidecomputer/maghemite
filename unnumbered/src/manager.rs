@@ -40,21 +40,21 @@ pub enum AddNeighborError {
 pub struct UnnumberedManager {
     log: Logger,
     /// Interfaces currently active for unnumbered operation.
-    active_interfaces: Mutex<InterfaceMap>,
+    active_interfaces: Arc<Mutex<InterfaceMap>>,
 
     /// Interfaces that are configured but not yet available on the system.
     /// When an interface appears, it will be moved to active and router
     /// discovery will be started.
-    pending_interfaces: Mutex<HashMap<String, u16>>,
+    pending_interfaces: Arc<Mutex<HashMap<String, u16>>>,
 
     /// Managed thread for interface monitoring.
     /// Stored to ensure automatic cleanup on drop - the ManagedThread's Drop
     /// impl will signal shutdown and join the thread.
-    _monitor_thread: Arc<ManagedThread>,
+    monitor_thread: Arc<ManagedThread>,
 
     /// Condvar to wake the monitor thread when work is added
-    monitor_condvar: Condvar,
-    monitor_mutex: Mutex<()>,
+    monitor_condvar: Arc<Condvar>,
+    monitor_mutex: Arc<Mutex<()>>,
 }
 
 impl UnnumberedManager {
@@ -67,24 +67,34 @@ impl UnnumberedManager {
         // the manager, so we can pass the flag to the thread function.
         let monitor_thread = Arc::new(ManagedThread::new());
         let dropped = monitor_thread.dropped_flag();
+        let active_interfaces = Arc::new(Mutex::new(InterfaceMap::new()));
+        let pending_interfaces = Arc::new(Mutex::new(HashMap::new()));
+        let monitor_condvar = Arc::new(Condvar::new());
+        let monitor_mutex = Arc::new(Mutex::new(()));
 
         let manager = Arc::new(Self {
             log: log.clone(),
-            active_interfaces: Mutex::new(InterfaceMap::new()),
-            pending_interfaces: Mutex::new(HashMap::new()),
-            _monitor_thread: Arc::clone(&monitor_thread),
-            monitor_condvar: Condvar::new(),
-            monitor_mutex: Mutex::new(()),
+            active_interfaces: Arc::clone(&active_interfaces),
+            pending_interfaces: Arc::clone(&pending_interfaces),
+            monitor_thread: Arc::clone(&monitor_thread),
+            monitor_condvar: Arc::clone(&monitor_condvar),
+            monitor_mutex: Arc::clone(&monitor_mutex),
         });
 
         // Spawn and register the interface monitor thread.
         // The ManagedThread will automatically signal shutdown and join the
         // thread when the manager is dropped.
-        let monitor_manager = Arc::clone(&manager);
         let handle = thread::Builder::new()
             .name("unnumbered-interface-monitor".to_string())
             .spawn(move || {
-                monitor_manager.run_interface_monitor(dropped);
+                Self::run_interface_monitor(
+                    log,
+                    active_interfaces,
+                    pending_interfaces,
+                    monitor_condvar,
+                    monitor_mutex,
+                    dropped,
+                );
             })
             .expect("failed to spawn interface monitor thread");
         monitor_thread.start(handle);
@@ -96,11 +106,11 @@ impl UnnumberedManager {
     fn new_test() -> Arc<Self> {
         Arc::new(Self {
             log: Logger::root(slog::Discard, o!()),
-            active_interfaces: Mutex::new(InterfaceMap::new()),
-            pending_interfaces: Mutex::new(HashMap::new()),
-            _monitor_thread: Arc::new(ManagedThread::new()),
-            monitor_condvar: Condvar::new(),
-            monitor_mutex: Mutex::new(()),
+            active_interfaces: Arc::new(Mutex::new(InterfaceMap::new())),
+            pending_interfaces: Arc::new(Mutex::new(HashMap::new())),
+            monitor_thread: Arc::new(ManagedThread::new()),
+            monitor_condvar: Arc::new(Condvar::new()),
+            monitor_mutex: Arc::new(Mutex::new(())),
         })
     }
 
@@ -115,33 +125,49 @@ impl UnnumberedManager {
     ///
     /// The `dropped` flag is set by the ManagedThread when the manager is dropped,
     /// signaling this thread to exit.
-    fn run_interface_monitor(&self, dropped: Arc<AtomicBool>) {
-        info!(self.log, "interface monitor started");
+    fn run_interface_monitor(
+        log: Logger,
+        active_interfaces: Arc<Mutex<InterfaceMap>>,
+        pending_interfaces: Arc<Mutex<HashMap<String, u16>>>,
+        monitor_condvar: Arc<Condvar>,
+        monitor_mutex: Arc<Mutex<()>>,
+        dropped: Arc<AtomicBool>,
+    ) {
+        info!(log, "interface monitor started");
 
         loop {
             // Check for shutdown (set by ManagedThread::drop)
             if dropped.load(Ordering::Relaxed) {
-                info!(self.log, "interface monitor shutting down");
+                info!(log, "interface monitor shutting down");
                 break;
             }
 
             // Check if there's any work to do
-            let has_pending = !lock!(self.pending_interfaces).is_empty();
-            let has_active = !lock!(self.active_interfaces).is_empty();
+            let has_pending = !lock!(pending_interfaces).is_empty();
+            let has_active = !lock!(active_interfaces).is_empty();
 
             if has_pending || has_active {
                 // Get all system interfaces once (single syscall)
-                match Self::get_available_interfaces(&self.log) {
+                match Self::get_available_interfaces(&log) {
                     Ok(available) => {
                         // Check for interfaces that have appeared
-                        self.check_pending_interfaces(&available);
+                        Self::check_pending_interfaces(
+                            &log,
+                            &active_interfaces,
+                            &pending_interfaces,
+                            &available,
+                        );
 
                         // Check for interfaces that have been removed
-                        self.check_active_interfaces(&available);
+                        Self::check_active_interfaces(
+                            &log,
+                            &active_interfaces,
+                            &available,
+                        );
                     }
                     Err(e) => {
                         warn!(
-                            self.log,
+                            log,
                             "failed to enumerate system interfaces";
                             "error" => %e,
                         );
@@ -150,13 +176,15 @@ impl UnnumberedManager {
             }
 
             // Wait for the poll interval or until woken up
-            let guard = lock!(self.monitor_mutex);
-            let _result = self
-                .monitor_condvar
-                .wait_timeout(guard, INTERFACE_POLL_INTERVAL);
+            let guard = lock!(monitor_mutex);
+            let _result = monitor_condvar.wait_timeout_while(
+                guard,
+                INTERFACE_POLL_INTERVAL,
+                |_| !dropped.load(Ordering::Relaxed),
+            );
         }
 
-        info!(self.log, "interface monitor exited");
+        info!(log, "interface monitor exited");
     }
 
     /// Get the interfaces that are available for NDP.
@@ -206,10 +234,12 @@ impl UnnumberedManager {
     ///
     /// Takes a pre-computed set of available interfaces to avoid repeated syscalls.
     fn check_pending_interfaces(
-        &self,
+        log: &Logger,
+        active_interfaces: &Mutex<InterfaceMap>,
+        pending_interfaces: &Mutex<HashMap<String, u16>>,
         available: &HashMap<String, Ipv6NetworkInterface>,
     ) {
-        let mut pending = lock!(self.pending_interfaces);
+        let mut pending = lock!(pending_interfaces);
         let mut to_activate = Vec::new();
 
         // Find interfaces that are now available
@@ -224,16 +254,19 @@ impl UnnumberedManager {
             pending.remove(&ifx.name);
 
             info!(
-                self.log,
+                log,
                 "interface became available, activating NDP";
                 "interface" => ifx.name.as_str(),
             );
 
-            if let Err(e) =
-                self.activate_resolved_interface(&ifx, router_lifetime)
-            {
+            if let Err(e) = Self::activate_resolved_interface(
+                log,
+                active_interfaces,
+                &ifx,
+                router_lifetime,
+            ) {
                 warn!(
-                    self.log,
+                    log,
                     "failed to activate interface";
                     "interface" => ifx.name.as_str(),
                     "error" => e.to_string(),
@@ -242,7 +275,7 @@ impl UnnumberedManager {
                 pending.insert(ifx.name.clone(), router_lifetime);
             } else {
                 info!(
-                    self.log,
+                    log,
                     "interface activated for NDP";
                     "interface" => ifx.name.as_str(),
                     "scope_id" => ifx.index,
@@ -256,10 +289,11 @@ impl UnnumberedManager {
     ///
     /// Takes a pre-computed set of available interfaces to avoid repeated syscalls.
     fn check_active_interfaces(
-        &self,
+        log: &Logger,
+        active_interfaces: &Mutex<InterfaceMap>,
         available: &HashMap<String, Ipv6NetworkInterface>,
     ) {
-        let to_deactivate: Vec<String> = lock!(self.active_interfaces)
+        let to_deactivate: Vec<String> = lock!(active_interfaces)
             .iter()
             .filter(|interface| !available.contains_key(interface.name()))
             .map(|interface| interface.name().to_string())
@@ -267,7 +301,7 @@ impl UnnumberedManager {
 
         // Remove from active and deactivate
         for interface_name in to_deactivate {
-            self.deactivate_interface(&interface_name);
+            Self::deactivate_interface(log, active_interfaces, &interface_name);
         }
     }
 
@@ -276,32 +310,37 @@ impl UnnumberedManager {
     /// This starts router discovery for the interface and records it as active
     /// for unnumbered lookups.
     fn activate_resolved_interface(
-        &self,
+        log: &Logger,
+        active_interfaces: &Mutex<InterfaceMap>,
         ifx: &Ipv6NetworkInterface,
         router_lifetime: u16,
     ) -> Result<(), AddNeighborError> {
         let active = UnnumberedInterface::new(
             ifx.clone(),
             router_lifetime,
-            self.log.clone(),
+            log.clone(),
         )?;
-        lock!(self.active_interfaces).insert_overwrite(active);
+        lock!(active_interfaces).insert_overwrite(active);
         Ok(())
     }
 
     /// Deactivate an interface that has been removed.
     ///
     /// This removes the interface from the active interface map.
-    fn deactivate_interface(&self, interface_name: &str) {
+    fn deactivate_interface(
+        log: &Logger,
+        active_interfaces: &Mutex<InterfaceMap>,
+        interface_name: &str,
+    ) {
         info!(
-            self.log,
+            log,
             "interface removed, deactivating NDP";
             "interface" => interface_name,
         );
 
         // Clean up active interface state. Dropping the interface also drops
         // its router-discovery thread handles.
-        lock!(self.active_interfaces).remove_by_name(interface_name);
+        lock!(active_interfaces).remove_by_name(interface_name);
     }
 
     /// Register an interface for NDP peer discovery.
@@ -328,7 +367,12 @@ impl UnnumberedManager {
         // unnumbered operation yet, add it to the pending list.
         match Self::get_interface(interface_str, &self.log)? {
             Some(ifx) => {
-                self.activate_resolved_interface(&ifx, router_lifetime)?;
+                Self::activate_resolved_interface(
+                    &self.log,
+                    &self.active_interfaces,
+                    &ifx,
+                    router_lifetime,
+                )?;
 
                 info!(
                     self.log,
@@ -522,6 +566,16 @@ impl UnnumberedManager {
     }
 }
 
+impl Drop for UnnumberedManager {
+    fn drop(&mut self) {
+        let _guard = lock!(self.monitor_mutex);
+        self.monitor_thread
+            .dropped_flag()
+            .store(true, Ordering::Relaxed);
+        self.monitor_condvar.notify_one();
+    }
+}
+
 // =========================================================================
 // BgpUnnumbered Trait Implementation
 // =========================================================================
@@ -554,7 +608,7 @@ impl UnnumberedManager {
     /// and active interfaces.
     pub fn get_manager_state(&self) -> UnnumberedManagerState {
         UnnumberedManagerState {
-            monitor_running: self._monitor_thread.is_running(),
+            monitor_running: self.monitor_thread.is_running(),
             pending_interfaces: self.get_pending_interfaces(),
             active_interfaces: lock!(self.active_interfaces)
                 .iter()
@@ -696,6 +750,16 @@ mod tests {
     ) -> UnnumberedInterface {
         UnnumberedInterface::new_manual(name, addr, scope_id, router_lifetime)
             .unwrap()
+    }
+
+    #[test]
+    fn drop_releases_manager() {
+        let manager = UnnumberedManager::new(Logger::root(slog::Discard, o!()));
+        let weak = std::sync::Arc::downgrade(&manager);
+
+        drop(manager);
+
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
