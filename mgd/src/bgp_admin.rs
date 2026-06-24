@@ -1231,6 +1231,18 @@ async fn do_bgp_apply(
 
     // Validate originate prefixes before processing
     validate_prefixes(&rq.originate)?;
+    helpers::ensure_unique_bgp_peers(
+        rq.peers
+            .values()
+            .flatten()
+            .map(|peer| PeerId::Ip(peer.host.ip()))
+            .chain(
+                rq.unnumbered_peers
+                    .values()
+                    .flatten()
+                    .map(|peer| PeerId::Interface(peer.interface.clone())),
+            ),
+    )?;
 
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")
@@ -1292,6 +1304,40 @@ async fn do_bgp_apply(
             do_delete_router(ctx, old_asn).await?;
         }
     }
+
+    let mut peer_ids: Vec<_> = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(Error::Db)?
+        .into_iter()
+        .map(|nbr| (nbr.asn, PeerId::Ip(nbr.host.ip())))
+        .collect();
+    peer_ids.extend(
+        ctx.db
+            .get_unnumbered_bgp_neighbors()
+            .map_err(Error::Db)?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Interface(nbr.interface))),
+    );
+
+    // bgp_apply is the desired final state for this ASN. Existing peers under
+    // this ASN are replaced by the request below, so do not count them as
+    // duplicates of their requested updates.
+    peer_ids.retain(|(peer_asn, _)| *peer_asn != rq.asn);
+    helpers::ensure_unique_bgp_peers(
+        peer_ids.into_iter().map(|(_, peer)| peer).chain(
+            rq.peers
+                .values()
+                .flatten()
+                .map(|peer| PeerId::Ip(peer.host.ip()))
+                .chain(
+                    rq.unnumbered_peers
+                        .values()
+                        .flatten()
+                        .map(|peer| PeerId::Interface(peer.interface.clone())),
+                ),
+        ),
+    )?;
 
     helpers::ensure_router(
         ctx.clone(),
@@ -1896,6 +1942,21 @@ pub(crate) mod helpers {
         Ok(HttpResponseDeleted())
     }
 
+    pub(crate) fn ensure_unique_bgp_peers(
+        peers: impl IntoIterator<Item = PeerId>,
+    ) -> Result<(), Error> {
+        let mut seen = HashSet::new();
+        for peer in peers {
+            if !seen.insert(peer.clone()) {
+                return Err(Error::Conflict(format!(
+                    "BGP peer {peer} is already configured",
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn add_neighbor_v1(
         ctx: Arc<HandlerContext>,
         rq: v1::bgp::config::Neighbor,
@@ -1905,6 +1966,21 @@ pub(crate) mod helpers {
         bgp_log!(log, info, "add neighbor {}", rq.host.ip();
             "params" => format!("{rq:#?}")
         );
+
+        let peer = PeerId::Ip(rq.host.ip());
+        let mut peers: Vec<_> = ctx
+            .db
+            .get_bgp_neighbors()?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Ip(nbr.host.ip())))
+            .collect();
+        if ensure {
+            peers.retain(|(asn, existing)| {
+                !(*asn == rq.asn && existing == &peer)
+            });
+        }
+        peers.push((rq.asn, peer));
+        ensure_unique_bgp_peers(peers.into_iter().map(|(_, peer)| peer))?;
 
         let (event_tx, event_rx) = channel();
 
@@ -2002,6 +2078,21 @@ pub(crate) mod helpers {
         // Validate that at least one AF is enabled
         rq.validate_address_families()
             .map_err(Error::InvalidRequest)?;
+
+        let peer = PeerId::Ip(rq.host.ip());
+        let mut peers: Vec<_> = ctx
+            .db
+            .get_bgp_neighbors()?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Ip(nbr.host.ip())))
+            .collect();
+        if ensure {
+            peers.retain(|(asn, existing)| {
+                !(*asn == rq.asn && existing == &peer)
+            });
+        }
+        peers.push((rq.asn, peer));
+        ensure_unique_bgp_peers(peers.into_iter().map(|(_, peer)| peer))?;
 
         let (event_tx, event_rx) = channel();
 
@@ -2116,6 +2207,21 @@ pub(crate) mod helpers {
         // Validate that at least one AF is enabled
         rq.validate_address_families()
             .map_err(Error::InvalidRequest)?;
+
+        let peer = PeerId::Interface(rq.interface.clone());
+        let mut peers: Vec<_> = ctx
+            .db
+            .get_unnumbered_bgp_neighbors()?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Interface(nbr.interface)))
+            .collect();
+        if ensure {
+            peers.retain(|(asn, existing)| {
+                !(*asn == rq.asn && existing == &peer)
+            });
+        }
+        peers.push((rq.asn, peer));
+        ensure_unique_bgp_peers(peers.into_iter().map(|(_, peer)| peer))?;
 
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
@@ -2606,7 +2712,9 @@ mod tests {
     use client_common::println_nopipe;
     use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
-        Ipv6UnicastConfig, UnnumberedBgpPeerConfig,
+        Ipv6UnicastConfig, Neighbor as BgpNeighborConfig,
+        Router as BgpRouterConfig, UnnumberedBgpPeerConfig,
+        UnnumberedNeighbor as BgpUnnumberedNeighborConfig,
     };
     use mg_api_types::bgp::peer::PeerId;
     use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
@@ -2740,6 +2848,15 @@ fn update(message, asn, addr) {
 
     fn empty_req(asn: u32) -> ApplyRequest {
         apply_req(asn, HashMap::default(), HashMap::default())
+    }
+
+    fn router(asn: u32) -> BgpRouterConfig {
+        BgpRouterConfig {
+            asn,
+            id: asn,
+            listen: super::DEFAULT_BGP_LISTEN.to_string(),
+            graceful_shutdown: false,
+        }
     }
 
     /// Apply request carrying both a numbered and an unnumbered peer under
@@ -2948,6 +3065,137 @@ fn update(message, asn, addr) {
         );
         assert!(!routers.contains_key(&123));
         assert!(routers.contains_key(&456));
+    }
+
+    #[tokio::test]
+    async fn apply_updates_bgp_peers() {
+        let ctx = test_ctx("apply_updates_bgp_peers");
+
+        do_bgp_apply(&ctx, mixed_req(123, 6))
+            .await
+            .expect("apply initial peers");
+        assert_single_neighbor_state(&ctx, 123, 6);
+
+        do_bgp_apply(&ctx, mixed_req(123, 10))
+            .await
+            .expect("update existing peers");
+        assert_single_neighbor_state(&ctx, 123, 10);
+    }
+
+    #[tokio::test]
+    async fn duplicate_bgp_peer_is_rejected() {
+        let ctx = test_ctx("duplicate_bgp_peer_is_rejected");
+        let numbered_peer = numbered("203.0.113.1", "bob", 6);
+        let unnumbered_peer = unnumbered("tfportqsfp1_0", "alice", 6);
+
+        super::helpers::ensure_router(ctx.clone(), router(123))
+            .await
+            .expect("create asn 123");
+        super::helpers::ensure_router(ctx.clone(), router(456))
+            .await
+            .expect("create asn 456");
+
+        super::helpers::add_neighbor(
+            ctx.clone(),
+            BgpNeighborConfig::from_bgp_peer_config(
+                123,
+                "qsfp0".into(),
+                numbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect("add first numbered peer");
+        super::helpers::add_unnumbered_neighbor(
+            ctx.clone(),
+            BgpUnnumberedNeighborConfig::from_bgp_peer_config(
+                123,
+                "qsfp1".into(),
+                unnumbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect("add first unnumbered peer");
+
+        let err = super::helpers::add_neighbor(
+            ctx.clone(),
+            BgpNeighborConfig::from_bgp_peer_config(
+                456,
+                "qsfp1".into(),
+                numbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect_err("duplicate peer IP should fail");
+        assert!(matches!(err, crate::error::Error::Conflict(_)));
+        let err = super::helpers::add_unnumbered_neighbor(
+            ctx.clone(),
+            BgpUnnumberedNeighborConfig::from_bgp_peer_config(
+                456,
+                "qsfp2".into(),
+                unnumbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect_err("duplicate unnumbered peer should fail");
+        assert!(matches!(err, crate::error::Error::Conflict(_)));
+
+        assert_neighbor_counts(&ctx, 1, 1);
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors")[0].asn,
+            123,
+        );
+        assert_eq!(
+            ctx.db
+                .get_unnumbered_bgp_neighbors()
+                .expect("get unnumbered bgp neighbors")[0]
+                .asn,
+            123,
+        );
+
+        let result = do_bgp_apply(
+            &ctx,
+            apply_req(
+                789,
+                HashMap::from([
+                    ("qsfp0".into(), vec![numbered_peer.clone()]),
+                    ("qsfp1".into(), vec![numbered_peer]),
+                ]),
+                HashMap::default(),
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "duplicate peer IP in apply request should fail",
+        );
+        let result = do_bgp_apply(
+            &ctx,
+            apply_req(
+                789,
+                HashMap::default(),
+                HashMap::from([
+                    ("qsfp0".into(), vec![unnumbered_peer.clone()]),
+                    ("qsfp1".into(), vec![unnumbered_peer]),
+                ]),
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "duplicate unnumbered peer in apply request should fail",
+        );
+        assert_neighbor_counts(&ctx, 1, 1);
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors")[0].asn,
+            123,
+        );
+        assert_eq!(
+            ctx.db
+                .get_unnumbered_bgp_neighbors()
+                .expect("get unnumbered bgp neighbors")[0]
+                .asn,
+            123,
+        );
     }
 
     /// Regression test for https://github.com/oxidecomputer/maghemite/issues/772
