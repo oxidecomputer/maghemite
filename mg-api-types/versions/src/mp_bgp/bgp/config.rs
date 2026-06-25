@@ -188,6 +188,236 @@ pub struct ApplyRequest {
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
+// ----- v1 (initial, frozen) <-> v4 upgrades/downgrades -----
+
+impl From<v1::bgp::config::BgpPeerParameters> for BgpPeerParameters {
+    fn from(p: v1::bgp::config::BgpPeerParameters) -> Self {
+        let v1::bgp::config::BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            allow_import,
+            allow_export,
+            vlan_id,
+        } = p;
+        Self {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: ImportExportPolicy4::from(allow_import),
+                export_policy: ImportExportPolicy4::from(allow_export),
+            }),
+            ipv6_unicast: None,
+            deterministic_collision_resolution: false,
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+        }
+    }
+}
+
+impl From<v1::bgp::config::BgpPeerConfig> for BgpPeerConfig {
+    fn from(cfg: v1::bgp::config::BgpPeerConfig) -> Self {
+        let v1::bgp::config::BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
+        Self {
+            host,
+            name,
+            parameters: parameters.into(),
+        }
+    }
+}
+
+impl From<v1::bgp::config::Neighbor> for Neighbor {
+    fn from(n: v1::bgp::config::Neighbor) -> Self {
+        let v1::bgp::config::Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: parameters.into(),
+        }
+    }
+}
+
+impl From<v1::bgp::config::ApplyRequest> for ApplyRequest {
+    fn from(req: v1::bgp::config::ApplyRequest) -> Self {
+        let v1::bgp::config::ApplyRequest {
+            asn,
+            originate,
+            checker,
+            shaper,
+            peers,
+        } = req;
+        Self {
+            asn,
+            originate: originate.into_iter().map(Prefix::V4).collect(),
+            checker,
+            shaper,
+            peers: peers
+                .into_iter()
+                .map(|(group, peers)| {
+                    (
+                        group,
+                        peers.into_iter().map(BgpPeerConfig::from).collect(),
+                    )
+                })
+                .collect(),
+            unnumbered_peers: HashMap::default(),
+        }
+    }
+}
+
+impl TryFrom<BgpPeerParameters> for v1::bgp::config::BgpPeerParameters {
+    type Error = &'static str;
+
+    fn try_from(p: BgpPeerParameters) -> Result<Self, Self::Error> {
+        let BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            ipv4_unicast,
+            ipv6_unicast,
+            deterministic_collision_resolution: _,
+            idle_hold_jitter: _,
+            connect_retry_jitter: _,
+        } = p;
+
+        if ipv6_unicast.is_some() {
+            return Err("v1 BGP neighbors cannot represent IPv6 unicast");
+        }
+        let Some(Ipv4UnicastConfig {
+            nexthop: _,
+            import_policy,
+            export_policy,
+        }) = ipv4_unicast
+        else {
+            return Err("v1 BGP neighbors require IPv4 unicast");
+        };
+
+        Ok(Self {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            allow_import:
+                v1::bgp::policy::ImportExportPolicy::from_per_af_policies(
+                    &import_policy,
+                    &ImportExportPolicy6::NoFiltering,
+                ),
+            allow_export:
+                v1::bgp::policy::ImportExportPolicy::from_per_af_policies(
+                    &export_policy,
+                    &ImportExportPolicy6::NoFiltering,
+                ),
+            vlan_id,
+        })
+    }
+}
+
+impl TryFrom<BgpPeerConfig> for v1::bgp::config::BgpPeerConfig {
+    type Error = &'static str;
+
+    fn try_from(cfg: BgpPeerConfig) -> Result<Self, Self::Error> {
+        let BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
+        if !host.ip().is_ipv4() {
+            return Err("v1 BGP neighbors cannot represent IPv6 peers");
+        }
+        Ok(Self {
+            host,
+            name,
+            parameters: parameters.try_into()?,
+        })
+    }
+}
+
+impl TryFrom<Neighbor> for v1::bgp::config::Neighbor {
+    type Error = &'static str;
+
+    fn try_from(n: Neighbor) -> Result<Self, Self::Error> {
+        let Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        if !host.ip().is_ipv4() {
+            return Err("v1 BGP neighbors cannot represent IPv6 peers");
+        }
+        Ok(Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: parameters.try_into()?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct DynamicTimerInfo {
     pub configured: Duration,

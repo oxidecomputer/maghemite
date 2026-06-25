@@ -6,8 +6,8 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        BgpConnection, BgpConnector, BgpListener, ConnectTarget,
+        ConnectionDirection, ConnectionId, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -207,6 +207,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         conn: &BgpConnectionTcp,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
+        _listen_port: std::num::NonZeroU16,
     ) -> Result<(), Error> {
         let tcp_stream = lock!(conn.conn);
 
@@ -230,7 +231,8 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 
             #[cfg(target_os = "illumos")]
             {
-                let local = get_md5_source_addrs(conn.peer.ip())?;
+                let local =
+                    get_md5_source_addrs(conn.peer.ip(), _listen_port.get())?;
                 conn.manage_md5_associations(
                     tcp_stream.as_raw_fd(),
                     key,
@@ -258,12 +260,13 @@ pub struct BgpConnectorTcp;
 
 impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
     fn connect(
-        peer: SocketAddr,
+        addrs: ConnectTarget,
         timeout: Duration,
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
         config: SessionInfo,
     ) -> Result<JoinHandle<()>, Error> {
+        let peer = addrs.destination;
         let s = create_outbound_socket(peer, &log)?;
 
         // Apply MD5 authentication before connecting (Linux)
@@ -290,8 +293,15 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         #[cfg(target_os = "illumos")]
         let md5_locals = if let Some(key) = &config.md5_auth_key {
             Some(
-                setup_outbound_md5(s.as_raw_fd(), key, peer.ip(), peer, &log)
-                    .map_err(|e| {
+                setup_outbound_md5(
+                    s.as_raw_fd(),
+                    key,
+                    peer.ip(),
+                    peer,
+                    config.addr.listen_port.get(),
+                    &log,
+                )
+                .map_err(|e| {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply MD5 auth for {peer}: {e}";
@@ -334,7 +344,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 }
 
                 // Bind to source address/port if specified
-                if let Some(src) = config.bind_addr {
+                if let Some(src) = addrs.source {
                     let ba: socket2::SockAddr = src.into();
                     if let Err(e) = s.bind(&ba) {
                         connection_log_lite!(log,
@@ -1387,7 +1397,10 @@ fn source_address_select(dst: IpAddr) -> anyhow::Result<Vec<IpAddr>> {
 /// Helper function to select and validate MD5 source addresses.
 /// Eliminates duplication between inbound and outbound paths
 #[cfg(target_os = "illumos")]
-fn get_md5_source_addrs(peer_ip: IpAddr) -> Result<Vec<SocketAddr>, Error> {
+fn get_md5_source_addrs(
+    peer_ip: IpAddr,
+    local_port: u16,
+) -> Result<Vec<SocketAddr>, Error> {
     let sources = source_address_select(peer_ip)
         .map_err(|e| Error::InvalidAddress(e.to_string()))?;
 
@@ -1399,7 +1412,7 @@ fn get_md5_source_addrs(peer_ip: IpAddr) -> Result<Vec<SocketAddr>, Error> {
 
     Ok(sources
         .iter()
-        .map(|x| SocketAddr::new(*x, crate::BGP_PORT.get()))
+        .map(|x| SocketAddr::new(*x, local_port))
         .collect())
 }
 
@@ -1410,8 +1423,17 @@ fn any_port(mut s: SocketAddr) -> SocketAddr {
     s
 }
 
-/// Generate all four bidirectional SA pairs for MD5 protection.
-/// Covers both directions of traffic with both port configurations
+/// Generate PF_KEY TCP-MD5 selectors for both possible BGP TCP 4-tuples.
+///
+/// `src` should use our BGP listening port. During outbound pre-connect setup
+/// this comes from session configuration because the socket is not connected
+/// yet; during inbound setup the dispatcher passes the same shared listen port
+/// used by every session.
+/// `dst` uses the peer's configured/listening port for outbound connections and
+/// the peer's observed client endpoint for inbound connections.
+///
+/// Port 0 is used as the PF_KEY wildcard for the side whose ephemeral client
+/// port is not known.
 #[cfg(target_os = "illumos")]
 fn sa_set(src: SocketAddr, dst: SocketAddr) -> [(SocketAddr, SocketAddr); 4] {
     // There are two directions of traffic we have to cover with two port
@@ -1510,6 +1532,7 @@ fn setup_outbound_md5(
     key: &str,
     peer_ip: IpAddr,
     peer: SocketAddr,
+    local_port: u16,
     logger: &Logger,
 ) -> Result<(String, Vec<SocketAddr>), Error> {
     let sources = source_address_select(peer_ip).map_err(|e| {
@@ -1537,7 +1560,7 @@ fn setup_outbound_md5(
 
     let local: Vec<SocketAddr> = sources
         .iter()
-        .map(|x| SocketAddr::new(*x, crate::BGP_PORT.get()))
+        .map(|x| SocketAddr::new(*x, local_port))
         .collect();
 
     init_md5_associations(fd, key, local.clone(), peer)?;

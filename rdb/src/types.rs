@@ -48,9 +48,7 @@ pub struct Ipv6Marker;
 
 impl From<StaticRouteKey> for Path {
     fn from(value: StaticRouteKey) -> Self {
-        // Compile barrier: adding a StaticRouteKey field will fail to
-        // bind here, forcing a decision about whether it should appear
-        // on the published Path.
+        // Full destructure: a new StaticRouteKey field must be handled here.
         let StaticRouteKey {
             // `prefix` is the map key on the rdb side; Path itself does
             // not carry the prefix.
