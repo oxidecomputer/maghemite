@@ -11,7 +11,7 @@ use crate::{
     juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
     topo::{MgdDuo, Quartet, mgd_duo, quartet},
-    wait_for_eq,
+    wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result};
 use dpd_client::{
@@ -85,8 +85,13 @@ const CR3_V6_CIDR: &str = "fd00:3::2/64";
 const TEST_PREFIX_V4: &str = "192.168.100.0/24";
 const TEST_PREFIX_V6: &str = "fd01::/64";
 
-/// BFD detection time: 300ms * 3 = 900ms.
-const BFD_REQUIRED_RX_US: u64 = 300_000;
+/// BFD detection time: 1s * 3 = 3s.
+///
+/// mgd currently advertises a fixed 1s desired transmit interval, regardless of
+/// its configured required receive interval. Keep the lab's receive interval at
+/// 1s so peers that honor mgd's advertised desired transmit interval do not
+/// send too slowly for mgd's detection time.
+const BFD_REQUIRED_RX_US: u64 = 1_000_000;
 const BFD_DETECTION_MULT: u8 = 3;
 
 /// Output of `boot_quartet`: the running topology plus clients ready for
@@ -178,12 +183,14 @@ async fn restore_quartet_before_diagnostics(
     cr2: EosNode,
     cr3: JuniperNode,
 ) {
-    match timeout(OP_TIMEOUT, cr1.resume_bfdd(ad)).await {
+    match timeout(OP_TIMEOUT, cr1.start_frr(ad)).await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
-            warn!(ad.log, "failed to resume cr1 before diagnostics: {e:#}")
+            warn!(ad.log, "failed to start cr1 frr before diagnostics: {e:#}")
         }
-        Err(_) => warn!(ad.log, "timed out resuming cr1 before diagnostics"),
+        Err(_) => {
+            warn!(ad.log, "timed out starting cr1 frr before diagnostics")
+        }
     }
     match timeout(OP_TIMEOUT, cr2.unpause(ad)).await {
         Ok(Ok(())) => {}
@@ -1183,8 +1190,8 @@ async fn quartet_bfd_static_body(bt: BootedQuartet) -> Result<()> {
     expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, true, "phase 1")
         .await?;
 
-    info!(ad.log, "phase 2: pause bfdd on cr1");
-    cr1.pause_bfdd(&ad).await?;
+    info!(ad.log, "phase 2: stop frr on cr1");
+    cr1.stop_frr(&ad).await?;
     expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Down, Up, Up)).await?;
     expect_route(&dpd, &prefix_v4, &prefix_v6, false, true, true, "phase 2")
         .await?;
@@ -1204,8 +1211,8 @@ async fn quartet_bfd_static_body(bt: BootedQuartet) -> Result<()> {
     expect_route(&dpd, &prefix_v4, &prefix_v6, true, true, true, "phase 4")
         .await?;
 
-    info!(ad.log, "phase 5: resume bfdd on cr1");
-    cr1.resume_bfdd(&ad).await?;
+    info!(ad.log, "phase 5: start frr on cr1");
+    cr1.start_frr(&ad).await?;
     expect_bfd(&mgd, peers, &ad, QuartetPeerStates::new(Up, Down, Down))
         .await?;
     expect_route(&dpd, &prefix_v4, &prefix_v6, true, false, false, "phase 5")
@@ -1255,6 +1262,7 @@ async fn frr_bfd_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
             no shutdown
           exit
         exit
+        write memory
         ",
         cr_v4_cidr = CR1_V4_CIDR,
         cr_v6_cidr = CR1_V6_CIDR,
@@ -1345,6 +1353,8 @@ async fn juniper_bfd_setup(r: JuniperNode, d: Arc<Runner>) -> Result<()> {
 /// mgd-side state is always checked. Peer-side state is checked only when
 /// the peer is expected `Up`: a paused daemon cannot answer queries, so
 /// `Down` phases have no observable peer-side truth.
+const BFD_STABLE_SAMPLES: usize = 3;
+
 async fn expect_bfd(
     mgd: &MgdClient,
     peers: QuartetNodes,
@@ -1360,15 +1370,21 @@ async fn expect_bfd(
         (IpAddr::V6(CR3_V6), states.cr3),
     ] {
         let desc = format!("mgd bfd {peer} -> {want:?}");
-        wait_for_eq!(bfd_state(mgd, peer).await, Some(want), &desc);
+        wait_for_eq_stable!(
+            bfd_state(mgd, peer).await,
+            Some(want),
+            BFD_STABLE_SAMPLES,
+            &desc
+        );
     }
 
     if matches!(states.cr1, BfdPeerState::Up) {
         for peer in [IpAddr::V4(OX_CR1_V4), IpAddr::V6(OX_CR1_V6)] {
             let desc = format!("cr1 bfd {peer} -> Up");
-            wait_for_eq!(
+            wait_for_eq_stable!(
                 peers.cr1.bfd_peer_up(d, peer).await.unwrap_or(false),
                 true,
+                BFD_STABLE_SAMPLES,
                 &desc
             );
         }
@@ -1376,9 +1392,10 @@ async fn expect_bfd(
     if matches!(states.cr2, BfdPeerState::Up) {
         for peer in [IpAddr::V4(OX_CR2_V4), IpAddr::V6(OX_CR2_V6)] {
             let desc = format!("cr2 bfd {peer} -> Up");
-            wait_for_eq!(
+            wait_for_eq_stable!(
                 peers.cr2.bfd_peer_up(d, peer).await.unwrap_or(false),
                 true,
+                BFD_STABLE_SAMPLES,
                 &desc
             );
         }
@@ -1386,9 +1403,10 @@ async fn expect_bfd(
     if matches!(states.cr3, BfdPeerState::Up) {
         for peer in [IpAddr::V4(OX_CR3_V4), IpAddr::V6(OX_CR3_V6)] {
             let desc = format!("cr3 bfd {peer} -> Up");
-            wait_for_eq!(
+            wait_for_eq_stable!(
                 peers.cr3.bfd_peer_up(d, peer).await.unwrap_or(false),
                 true,
+                BFD_STABLE_SAMPLES,
                 &desc
             );
         }

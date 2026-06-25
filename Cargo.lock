@@ -1976,6 +1976,7 @@ dependencies = [
  "anyhow",
  "bgp",
  "clap",
+ "client-common",
  "colored",
  "ddm-admin-client",
  "dpd-client",

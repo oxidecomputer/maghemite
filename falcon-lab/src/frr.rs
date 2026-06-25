@@ -35,9 +35,8 @@ impl FrrNode {
             )
             .await?;
         }
-        d.exec(self.0, "systemctl restart frr").await?;
-        // XXX do better than arbitrary wait
-        sleep(Duration::from_secs(5)).await;
+        self.stop_frr(d).await?;
+        self.start_frr(d).await?;
         Ok(())
     }
 
@@ -53,18 +52,17 @@ impl FrrNode {
         LinuxNode(self.0)
     }
 
-    /// Freeze the BFD daemon. Control packets stop flowing without disturbing
-    /// the peer's configuration or interfaces, so `resume_bfdd` restores the
-    /// session without reapplying config.
-    pub async fn pause_bfdd(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: pausing frr bfdd", self.name(d));
-        d.exec(self.0, "pkill -STOP bfdd").await?;
+    pub async fn stop_frr(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: stopping frr", self.name(d));
+        d.exec(self.0, "systemctl stop frr").await?;
         Ok(())
     }
 
-    pub async fn resume_bfdd(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: resuming frr bfdd", self.name(d));
-        d.exec(self.0, "pkill -CONT bfdd").await?;
+    pub async fn start_frr(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: starting frr", self.name(d));
+        d.exec(self.0, "systemctl start frr").await?;
+        // XXX do better than arbitrary wait
+        sleep(Duration::from_secs(5)).await;
         Ok(())
     }
 
