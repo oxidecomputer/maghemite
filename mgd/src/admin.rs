@@ -663,11 +663,25 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::get_bgp_unnumbered_interfaces(ctx).await
     }
 
+    async fn get_ndp_interfaces_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<v5::ndp::NdpInterface>>, HttpError> {
+        bgp_admin::get_ndp_interfaces_v5(ctx, request).await
+    }
+
     async fn get_bgp_unnumbered_interface_detail(
         ctx: RequestContext<Self::Context>,
         request: Query<UnnumberedInterfaceSelector>,
     ) -> Result<HttpResponseOk<UnnumberedInterface>, HttpError> {
         bgp_admin::get_bgp_unnumbered_interface_detail(ctx, request).await
+    }
+
+    async fn get_ndp_interface_detail_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<v5::ndp::NdpInterfaceSelector>,
+    ) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError> {
+        bgp_admin::get_ndp_interface_detail_v5(ctx, request).await
     }
 }
 

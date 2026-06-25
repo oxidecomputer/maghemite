@@ -62,8 +62,12 @@ use std::time::{Duration, Instant, SystemTime};
 use unnumbered::{DiscoveredRouterState, UnnumberedManager};
 
 const UNIT_BGP: &str = "bgp";
-const DEFAULT_BGP_LISTEN: SocketAddr =
-    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
+const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
+    Ipv6Addr::UNSPECIFIED,
+    BGP_PORT.get(),
+    0,
+    0,
+));
 
 #[derive(Clone)]
 pub struct BgpContext {
@@ -367,9 +371,9 @@ pub async fn read_neighbor(
                 asn: result.asn,
                 name: result.name,
                 group: result.group,
-                host: std::net::SocketAddr::new(
-                    std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
-                    179,
+                host: SocketAddr::new(
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    BGP_PORT.get(),
                 )
                 .into(),
                 parameters: result.parameters,
@@ -638,6 +642,55 @@ pub async fn get_bgp_unnumbered_interfaces(
     Ok(HttpResponseOk(interfaces))
 }
 
+pub async fn get_ndp_interfaces_v5(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<v1::bgp::config::AsnSelector>,
+) -> Result<HttpResponseOk<Vec<v5::ndp::NdpInterface>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    // Legacy NDP endpoints were scoped by ASN, but unnumbered/NDP runtime
+    // state is now global and interface-oriented. Recreate the old
+    // ASN-to-interface view by joining the selected router's unnumbered BGP
+    // sessions with active unnumbered manager interface state.
+    let router = get_router!(ctx, rq.asn)?.clone();
+    let interfaces: HashSet<_> = lock!(router.sessions)
+        .keys()
+        .filter_map(|peer| match peer {
+            PeerId::Interface(interface) => Some(interface.clone()),
+            PeerId::Ip(_) => None,
+        })
+        .collect();
+
+    let interfaces = ctx
+        .bgp
+        .unnumbered_manager
+        .list_interfaces()
+        .into_iter()
+        .filter(|ndp| interfaces.contains(&ndp.interface))
+        .map(|ndp| {
+            let discovered_peer = ndp
+                .peer_state
+                .as_ref()
+                .map(convert_discovered_router_to_api);
+            let runtime_state =
+                convert_runtime_state_to_api(&ndp.runtime_state);
+
+            UnnumberedInterface {
+                interface: ndp.interface,
+                local_address: ndp.local_address,
+                scope_id: ndp.scope_id,
+                router_lifetime: ndp.router_lifetime,
+                discovered_peer,
+                runtime_state,
+            }
+            .into()
+        })
+        .collect();
+
+    Ok(HttpResponseOk(interfaces))
+}
+
 pub async fn get_bgp_unnumbered_interface_detail(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: Query<UnnumberedInterfaceSelector>,
@@ -676,6 +729,58 @@ pub async fn get_bgp_unnumbered_interface_detail(
         discovered_peer,
         runtime_state,
     }))
+}
+
+pub async fn get_ndp_interface_detail_v5(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<v5::ndp::NdpInterfaceSelector>,
+) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    // Legacy NDP detail is scoped by ASN and interface, but unnumbered/NDP
+    // runtime state is now global and interface-oriented. Validate the old
+    // ASN-to-interface mapping through BGP session ownership before returning
+    // runtime state from the unnumbered manager.
+    get_router!(ctx, rq.asn)?
+        .get_session(rq.interface.clone())
+        .ok_or(Error::NotFound(
+            "session for unnumbered neighbor not found".into(),
+        ))?;
+
+    let ndp_detail = ctx
+        .bgp
+        .unnumbered_manager
+        .get_interface_detail(&rq.interface)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!(
+                "failed to get NDP state: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            HttpError::for_not_found(
+                None,
+                format!("interface {} not managed by NDP", rq.interface),
+            )
+        })?;
+
+    let discovered_peer = ndp_detail
+        .peer_state
+        .as_ref()
+        .map(convert_discovered_router_to_api);
+    let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
+
+    Ok(HttpResponseOk(
+        UnnumberedInterface {
+            interface: rq.interface,
+            local_address: ndp_detail.local_address,
+            scope_id: ndp_detail.scope_id,
+            router_lifetime: ndp_detail.router_lifetime,
+            discovered_peer,
+            runtime_state,
+        }
+        .into(),
+    ))
 }
 
 // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1996,6 +2101,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
@@ -2007,6 +2113,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )?;
             true
         };
@@ -2100,6 +2207,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
@@ -2111,6 +2219,7 @@ pub(crate) mod helpers {
                 event_tx.clone(),
                 event_rx,
                 info,
+                None,
             )?;
             true
         };
@@ -2221,36 +2330,26 @@ pub(crate) mod helpers {
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
 
-        // XXX: remove this when PeerConfig no longer requires a SocketAddr
-        let placeholder_host = std::net::SocketAddrV6::new(
-            std::net::Ipv6Addr::UNSPECIFIED,
-            0,
-            0,
-            0,
-        );
-
         let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
-                rq.interface.clone(),
-                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
+            match get_router!(&ctx, rq.asn)?.ensure_session(
+                PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
                 event_rx,
                 info,
-                ctx.bgp.unnumbered_manager.clone(),
+                Some(ctx.bgp.unnumbered_manager.clone()),
             )? {
                 EnsureSessionResult::New(_) => true,
                 EnsureSessionResult::Updated(_) => false,
             }
         } else {
-            get_router!(&ctx, rq.asn)?.new_unnumbered_session(
-                rq.interface.clone(),
-                PeerConfig::from_unnumbered_neighbor(&rq, placeholder_host),
+            get_router!(&ctx, rq.asn)?.new_session(
+                PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
                 event_rx,
                 info,
-                ctx.bgp.unnumbered_manager.clone(),
+                Some(ctx.bgp.unnumbered_manager.clone()),
             )?;
             true
         };
@@ -2704,7 +2803,7 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
-    use bgp::{policy::PolicySource, router::SessionMap};
+    use bgp::{BGP_PORT, policy::PolicySource, router::SessionMap};
     use client_common::println_nopipe;
     use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
@@ -2806,7 +2905,7 @@ fn update(message, asn, addr) {
         BgpPeerConfig {
             host: oxnet::SocketAddrJson(SocketAddr::new(
                 ip.parse().unwrap(),
-                179,
+                BGP_PORT.get(),
             )),
             name: name.into(),
             parameters: params(hold_time),

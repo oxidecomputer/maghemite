@@ -74,6 +74,9 @@ pub enum ListeningSocketError {
 
     #[error("failed to bind socket to interface: {0}")]
     SetBoundIf(std::io::Error),
+
+    #[error("interface index must be non-zero")]
+    InvalidInterfaceIndex,
 }
 
 pub fn send_ra(
@@ -196,6 +199,7 @@ pub fn create_socket(
     s.join_multicast_v6(&ALL_ROUTERS_MCAST, index)
         .map_err(E::JoinAllRoutersMulticast)?;
 
+    let ifindex = NonZeroU32::new(index).ok_or(E::InvalidInterfaceIndex)?;
     s.bind_device_by_index_v6(Some(ifindex))
         .map_err(E::SetBoundIf)?;
 

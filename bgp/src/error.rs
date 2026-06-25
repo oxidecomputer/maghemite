@@ -7,6 +7,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
 };
 
+use mg_api_types::bgp::peer::PeerId;
 use num_enum::TryFromPrimitiveError;
 
 #[derive(thiserror::Error, Debug)]
@@ -122,7 +123,7 @@ pub enum Error {
     NotConnected,
 
     #[error("Connection attempt from unknown peer: {0}")]
-    UnknownPeer(IpAddr),
+    UnknownPeer(PeerId),
 
     #[error("Session for peer already exists")]
     PeerExists,

@@ -48,6 +48,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    num::NonZeroU16,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -55,7 +56,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use unnumbered::BgpUnnumbered;
+use unnumbered::{BgpUnnumbered, UnnumberedError};
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
@@ -271,6 +272,20 @@ fn derive_nexthop_interface(
         }
         _ => None,
     }
+}
+
+/// Why an outbound connection target could not be resolved for an attempt.
+/// These are all retryable, per-attempt conditions.
+#[derive(Debug, thiserror::Error)]
+enum ResolveTargetError {
+    #[error("no unnumbered manager configured")]
+    NoUnnumberedManager,
+    #[error("interface is not active")]
+    InterfaceInactive,
+    #[error("no NDP neighbor discovered yet")]
+    NoNeighbor,
+    #[error(transparent)]
+    Unnumbered(#[from] UnnumberedError),
 }
 
 pub fn v4_over_v6_nexthop(
@@ -1018,7 +1033,7 @@ pub struct NeighborInfo {
     pub name: Arc<Mutex<String>>,
     pub peer_group: String,
     pub peer: PeerId,
-    pub port: u16,
+    pub port: NonZeroU16,
 }
 
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
@@ -1750,7 +1765,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             Ok(Some(scope_id)) => {
                                 Some(SocketAddr::V6(SocketAddrV6::new(
                                     addr,
-                                    self.neighbor.port,
+                                    self.neighbor.port.get(),
                                     0,
                                     scope_id,
                                 )))
@@ -1783,69 +1798,40 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             PeerId::Ip(ip) => {
                 // Numbered: construct from NeighborInfo
-                Some(SocketAddr::new(*ip, self.neighbor.port))
+                Some(SocketAddr::new(*ip, self.neighbor.port.get()))
             }
         }
     }
 
-    /// Resolve peer address for outbound connection attempts.
+    /// Resolve the target for an outbound connection attempt.
     ///
-    /// For numbered peers, returns the configured address.
-    /// For unnumbered peers, verifies interface is active and queries NDP neighbor.
-    /// Returns None if:
-    /// - Unnumbered peer has no BgpUnnumbered configured
-    /// - Interface is not active on the system
-    /// - No NDP neighbor has been discovered
-    fn try_resolve_connect_addr(&self) -> Option<SocketAddr> {
+    /// For numbered peers this is the configured address. For unnumbered peers
+    /// it queries NDP for the neighbor on the peer's interface.
+    fn try_resolve_connect_addr(
+        &self,
+    ) -> Result<SocketAddr, ResolveTargetError> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {
-                let mgr = self.unnumbered_manager.as_ref()?;
-                match mgr.get_discovered_ndp_neighbor(iface) {
-                    Ok(Some(addr)) => {
-                        match mgr.get_active_interface_scope_id(iface) {
-                            Ok(Some(scope_id)) => {
-                                Some(SocketAddr::V6(SocketAddrV6::new(
-                                    addr,
-                                    self.neighbor.port,
-                                    0,
-                                    scope_id,
-                                )))
-                            }
-                            Ok(None) => None,
-                            Err(e) => {
-                                session_log_lite!(
-                                    self,
-                                    warn,
-                                    "failed to query scope for interface";
-                                    "interface" => iface,
-                                    "error" => e.to_string()
-                                );
-                                None
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        session_log_lite!(
-                            self,
-                            debug,
-                            "no NDP neighbor discovered yet";
-                            "interface" => iface
-                        );
-                        None
-                    }
-                    Err(e) => {
-                        session_log_lite!(
-                            self,
-                            warn,
-                            "failed to query neighbor for interface";
-                            "interface" => iface,
-                            "error" => e.to_string()
-                        );
-                        None
-                    }
-                }
+                let mgr = self
+                    .unnumbered_manager
+                    .as_ref()
+                    .ok_or(ResolveTargetError::NoUnnumberedManager)?;
+                let addr = mgr
+                    .get_discovered_ndp_neighbor(iface)?
+                    .ok_or(ResolveTargetError::NoNeighbor)?;
+                let scope_id = mgr
+                    .get_active_interface_scope_id(iface)?
+                    .ok_or(ResolveTargetError::InterfaceInactive)?;
+                Ok(SocketAddr::V6(SocketAddrV6::new(
+                    addr,
+                    self.neighbor.port.get(),
+                    0,
+                    scope_id,
+                )))
             }
-            PeerId::Ip(ip) => Some(SocketAddr::new(*ip, self.neighbor.port)),
+            PeerId::Ip(ip) => {
+                Ok(SocketAddr::new(*ip, self.neighbor.port.get()))
+            }
         }
     }
 
@@ -1947,16 +1933,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // release lock before calling connect
         }
 
-        // Resolve peer address. For unnumbered peers, this verifies interface
-        // is active and queries NDP for the neighbor address.
-        let Some(peer_addr) = self.try_resolve_connect_addr() else {
-            session_log_lite!(
-                self,
-                debug,
-                "cannot resolve peer address, skipping connection attempt";
-                "peer" => format!("{:?}", self.neighbor.peer)
-            );
-            return;
+        // Resolve the peer address. For unnumbered peers this queries NDP for
+        // the neighbor on the peer's interface.
+        let peer_addr = match self.try_resolve_connect_addr() {
+            Ok(peer_addr) => peer_addr,
+            Err(e) => {
+                session_log_lite!(
+                    self,
+                    debug,
+                    "skipping connection attempt: {e}";
+                    "peer" => format!("{:?}", self.neighbor.peer),
+                    "reason" => e.to_string()
+                );
+                return;
+            }
         };
 
         let handle = match Cnx::Connector::connect(
@@ -8869,12 +8859,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         *lock!(self.neighbor.name) = cfg.name;
         let mut reset_needed = false;
 
-        // Note: We don't validate that cfg.host matches self.neighbor.peer here.
+        // We don't validate that cfg.peer matches self.neighbor.peer here.
         // Session identity is enforced by the lookup mechanism - you can only
-        // update a session you found via its PeerId (IP for numbered, interface
-        // for unnumbered). The cfg.host field is a placeholder for unnumbered
-        // sessions anyway.
-        // XXX: consider re-adding this when PeerConfig uses PeerId
+        // update a session you found via its PeerId.
 
         if cfg.keepalive >= cfg.hold_time {
             return Err(Error::KeepaliveLargerThanHoldTime);
@@ -9250,7 +9237,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_ip,
                     remote_ip,
                     local_tcp_port: 0u16,
-                    remote_tcp_port: self.neighbor.port,
+                    remote_tcp_port: self.neighbor.port.get(),
                     received_capabilities: vec![],
                     timers,
                     counters,

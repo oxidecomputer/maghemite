@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
+    BGP_PORT,
     config::{PeerConfig, RouterConfig},
     connection::{BgpConnection, BgpListener},
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
@@ -28,6 +29,7 @@ use rdb::Asn;
 use std::{
     collections::{BTreeSet, HashMap},
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    num::NonZeroU16,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -448,7 +450,9 @@ where
             let peer_config = PeerConfig {
                 name: neighbor.peer_name.clone(),
                 group: String::new(),
-                host: neighbor.remote_host,
+                id: PeerId::Ip((neighbor.remote_host).ip()),
+                port: NonZeroU16::new((neighbor.remote_host).port())
+                    .unwrap_or(BGP_PORT),
                 hold_time: 6,
                 idle_hold_time: 0,
                 delay_open: 0,
@@ -476,6 +480,7 @@ where
                     event_tx.clone(),
                     event_rx,
                     session_info,
+                    None,
                 )
                 .unwrap_or_else(|_| {
                     panic!("new session on router {}", logical_router.name)
@@ -805,7 +810,8 @@ fn basic_update_helper<
                 let peer_config = PeerConfig {
                     name: "r2".into(),
                     group: String::new(),
-                    host: r2_addr,
+                    id: PeerId::Ip((r2_addr).ip()),
+                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
                     hold_time: 6,
                     idle_hold_time: 0,
                     delay_open: 0,
@@ -868,7 +874,8 @@ fn basic_update_helper<
                 let peer_config = PeerConfig {
                     name: "r2".into(),
                     group: String::new(),
-                    host: r2_addr,
+                    id: PeerId::Ip((r2_addr).ip()),
+                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
                     hold_time: 6,
                     idle_hold_time: 0,
                     delay_open: 0,
@@ -946,7 +953,8 @@ fn basic_update_helper<
                 let peer_config = PeerConfig {
                     name: "r2".into(),
                     group: String::new(),
-                    host: r2_addr,
+                    id: PeerId::Ip((r2_addr).ip()),
+                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
                     hold_time: 6,
                     idle_hold_time: 0,
                     delay_open: 0,
@@ -1044,7 +1052,8 @@ fn three_router_chain_helper<
                 session_info: SessionInfo::from_peer_config(&PeerConfig {
                     name: "r2".into(),
                     group: String::new(),
-                    host: r2_addr,
+                    id: PeerId::Ip((r2_addr).ip()),
+                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
                     hold_time: 6,
                     idle_hold_time: 0,
                     delay_open: 0,
@@ -1067,7 +1076,9 @@ fn three_router_chain_helper<
                     session_info: SessionInfo::from_peer_config(&PeerConfig {
                         name: "r1".into(),
                         group: String::new(),
-                        host: r1_addr,
+                        id: PeerId::Ip((r1_addr).ip()),
+                        port: NonZeroU16::new((r1_addr).port())
+                            .unwrap_or(BGP_PORT),
                         hold_time: 6,
                         idle_hold_time: 0,
                         delay_open: 0,
@@ -1082,7 +1093,9 @@ fn three_router_chain_helper<
                     session_info: SessionInfo::from_peer_config(&PeerConfig {
                         name: "r3".into(),
                         group: String::new(),
-                        host: r3_addr,
+                        id: PeerId::Ip((r3_addr).ip()),
+                        port: NonZeroU16::new((r3_addr).port())
+                            .unwrap_or(BGP_PORT),
                         hold_time: 6,
                         idle_hold_time: 0,
                         delay_open: 0,
@@ -1105,7 +1118,8 @@ fn three_router_chain_helper<
                 session_info: SessionInfo::from_peer_config(&PeerConfig {
                     name: "r2".into(),
                     group: String::new(),
-                    host: r2_addr,
+                    id: PeerId::Ip((r2_addr).ip()),
+                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
                     hold_time: 6,
                     idle_hold_time: 0,
                     delay_open: 0,
@@ -1282,8 +1296,8 @@ fn test_three_router_chain_tcp_ipv6() {
 #[test]
 #[serial_test::serial]
 fn test_neighbor_thread_lifecycle_no_leaks() {
-    let r1_addr = sockaddr!(&format!("127.0.0.10:{TEST_BGP_PORT}"));
-    let r2_addr = sockaddr!(&format!("127.0.0.11:{TEST_BGP_PORT}"));
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.10:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.11:{TEST_BGP_PORT}"));
 
     // Wait for baseline BGP thread count to reach 0
     // This handles the case where previous tests' threads are still being cleaned up by the OS.
@@ -1308,7 +1322,8 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     let r1_peer_config = PeerConfig {
         name: "r2".into(),
         group: String::new(),
-        host: r2_addr,
+        id: PeerId::Ip((r2_addr).ip()),
+        port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -1320,7 +1335,8 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     let r2_peer_config = PeerConfig {
         name: "r1".into(),
         group: String::new(),
-        host: r1_addr,
+        id: PeerId::Ip((r1_addr).ip()),
+        port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -1485,7 +1501,8 @@ fn test_import_export_policy_filtering() {
     let r1_peer_config = PeerConfig {
         name: "r2".into(),
         group: String::new(),
-        host: r2_addr,
+        id: PeerId::Ip((r2_addr).ip()),
+        port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -1506,7 +1523,8 @@ fn test_import_export_policy_filtering() {
     let r2_peer_config = PeerConfig {
         name: "r1".into(),
         group: String::new(),
-        host: r1_addr,
+        id: PeerId::Ip((r1_addr).ip()),
+        port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -1994,10 +2012,13 @@ fn unnumbered_peering_helper(
             false,
         );
 
+        let peer1_addr: SocketAddr =
+            sockaddr!(&format!("[fe80::2]:{TEST_BGP_PORT}"));
         let peer_config1 = PeerConfig {
             name: format!("peer_{}", iface),
             group: String::new(),
-            host: sockaddr!(&format!("[fe80::2]:{TEST_BGP_PORT}")),
+            id: PeerId::Interface(iface.clone()),
+            port: NonZeroU16::new(peer1_addr.port()).unwrap_or(BGP_PORT),
             hold_time: 6,
             idle_hold_time: 0,
             delay_open: 0,
@@ -2007,14 +2028,13 @@ fn unnumbered_peering_helper(
         };
 
         let result1 = router1
-            .ensure_unnumbered_session(
-                iface.clone(),
+            .ensure_session(
                 peer_config1,
                 Some(bind_addr1),
                 event_tx1.clone(),
                 event_rx1,
                 session_info1,
-                mock_ndp1.clone(),
+                Some(mock_ndp1.clone()),
             )
             .expect("create session1");
 
@@ -2045,10 +2065,13 @@ fn unnumbered_peering_helper(
             false,
         );
 
+        let peer2_addr: SocketAddr =
+            sockaddr!(&format!("[fe80::1]:{TEST_BGP_PORT}"));
         let peer_config2 = PeerConfig {
             name: format!("peer_{}", iface),
             group: String::new(),
-            host: sockaddr!(&format!("[fe80::1]:{TEST_BGP_PORT}")),
+            id: PeerId::Interface(iface.clone()),
+            port: NonZeroU16::new(peer2_addr.port()).unwrap_or(BGP_PORT),
             hold_time: 6,
             idle_hold_time: 0,
             delay_open: 0,
@@ -2058,14 +2081,13 @@ fn unnumbered_peering_helper(
         };
 
         let result2 = router2
-            .ensure_unnumbered_session(
-                iface.clone(),
+            .ensure_session(
                 peer_config2,
                 Some(bind_addr2),
                 event_tx2.clone(),
                 event_rx2,
                 session_info2,
-                mock_ndp2.clone(),
+                Some(mock_ndp2.clone()),
             )
             .expect("create session2");
 
@@ -2761,7 +2783,8 @@ fn unnumbered_pair(
     let peer_config1 = PeerConfig {
         name: format!("peer_{}", interface_name),
         group: String::new(),
-        host: r2_addr,
+        id: PeerId::Interface(interface_name.to_string()),
+        port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -2771,14 +2794,13 @@ fn unnumbered_pair(
     };
 
     let result1 = router1
-        .ensure_unnumbered_session(
-            interface_name.to_string(),
+        .ensure_session(
             peer_config1,
             Some(r1_addr),
             event_tx1.clone(),
             event_rx1,
             session_info1,
-            mock_ndp1.clone(),
+            Some(mock_ndp1.clone()),
         )
         .expect("create session1");
 
@@ -2793,7 +2815,8 @@ fn unnumbered_pair(
     let peer_config2 = PeerConfig {
         name: format!("peer_{}", interface_name),
         group: String::new(),
-        host: r1_addr,
+        id: PeerId::Interface(interface_name.to_string()),
+        port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -2803,14 +2826,13 @@ fn unnumbered_pair(
     };
 
     let result2 = router2
-        .ensure_unnumbered_session(
-            interface_name.to_string(),
+        .ensure_session(
             peer_config2,
             Some(r2_addr),
             event_tx2.clone(),
             event_rx2,
             session_info2,
-            mock_ndp2.clone(),
+            Some(mock_ndp2.clone()),
         )
         .expect("create session2");
 
@@ -3038,7 +3060,8 @@ fn unnumbered_three_router_chain(
     let peer_config1 = PeerConfig {
         name: format!("r1_to_r2_{}", r1_r2_interface),
         group: String::new(),
-        host: r2_eth0_addr,
+        id: PeerId::Interface(r1_r2_interface.to_string()),
+        port: NonZeroU16::new((r2_eth0_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -3047,14 +3070,13 @@ fn unnumbered_three_router_chain(
         resolution: 100,
     };
     let result1 = router1
-        .ensure_unnumbered_session(
-            r1_r2_interface.to_string(),
+        .ensure_session(
             peer_config1,
             Some(r1_addr),
             event_tx1.clone(),
             event_rx1,
             session_info1,
-            mock_ndp1.clone(),
+            Some(mock_ndp1.clone()),
         )
         .expect("create r1 session");
     let session1 = match result1 {
@@ -3069,7 +3091,8 @@ fn unnumbered_three_router_chain(
     let peer_config2_r1 = PeerConfig {
         name: format!("r2_to_r1_{}", r1_r2_interface),
         group: String::new(),
-        host: r1_addr,
+        id: PeerId::Interface(r1_r2_interface.to_string()),
+        port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -3078,14 +3101,13 @@ fn unnumbered_three_router_chain(
         resolution: 100,
     };
     let result2_r1 = router2
-        .ensure_unnumbered_session(
-            r1_r2_interface.to_string(),
+        .ensure_session(
             peer_config2_r1,
             Some(r2_eth0_addr),
             event_tx2_r1.clone(),
             event_rx2_r1,
             session_info2_r1,
-            mock_ndp2.clone(),
+            Some(mock_ndp2.clone()),
         )
         .expect("create r2-r1 session");
     let session2_r1 = match result2_r1 {
@@ -3100,7 +3122,8 @@ fn unnumbered_three_router_chain(
     let peer_config2_r3 = PeerConfig {
         name: format!("r2_to_r3_{}", r2_r3_interface),
         group: String::new(),
-        host: r3_addr,
+        id: PeerId::Interface(r2_r3_interface.to_string()),
+        port: NonZeroU16::new((r3_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -3109,14 +3132,13 @@ fn unnumbered_three_router_chain(
         resolution: 100,
     };
     let result2_r3 = router2
-        .ensure_unnumbered_session(
-            r2_r3_interface.to_string(),
+        .ensure_session(
             peer_config2_r3,
             Some(r2_eth1_addr),
             event_tx2_r3.clone(),
             event_rx2_r3,
             session_info2_r3,
-            mock_ndp2.clone(),
+            Some(mock_ndp2.clone()),
         )
         .expect("create r2-r3 session");
     let session2_r3 = match result2_r3 {
@@ -3130,7 +3152,8 @@ fn unnumbered_three_router_chain(
     let peer_config3 = PeerConfig {
         name: format!("r3_to_r2_{}", r2_r3_interface),
         group: String::new(),
-        host: r2_eth1_addr,
+        id: PeerId::Interface(r2_r3_interface.to_string()),
+        port: NonZeroU16::new((r2_eth1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -3139,14 +3162,13 @@ fn unnumbered_three_router_chain(
         resolution: 100,
     };
     let result3 = router3
-        .ensure_unnumbered_session(
-            r2_r3_interface.to_string(),
+        .ensure_session(
             peer_config3,
             Some(r3_addr),
             event_tx3.clone(),
             event_rx3,
             session_info3,
-            mock_ndp3.clone(),
+            Some(mock_ndp3.clone()),
         )
         .expect("create r3 session");
     let session3 = match result3 {
@@ -3983,7 +4005,8 @@ fn test_unnumbered_interface_lifecycle() {
     let peer_config1 = PeerConfig {
         name: "peer_eth0".to_string(),
         group: String::new(),
-        host: r2_addr,
+        id: PeerId::Interface("eth0".to_string()),
+        port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -3993,14 +4016,13 @@ fn test_unnumbered_interface_lifecycle() {
     };
 
     let result1 = router1
-        .ensure_unnumbered_session(
-            "eth0".to_string(),
+        .ensure_session(
             peer_config1,
             Some(r1_addr),
             event_tx1.clone(),
             event_rx1,
             session_info1,
-            mock_ndp1.clone(),
+            Some(mock_ndp1.clone()),
         )
         .expect("create session1");
 
@@ -4019,7 +4041,8 @@ fn test_unnumbered_interface_lifecycle() {
     let peer_config2 = PeerConfig {
         name: "peer_eth0".to_string(),
         group: String::new(),
-        host: r1_addr,
+        id: PeerId::Interface("eth0".to_string()),
+        port: NonZeroU16::new((r1_addr).port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -4029,14 +4052,13 @@ fn test_unnumbered_interface_lifecycle() {
     };
 
     let result2 = router2
-        .ensure_unnumbered_session(
-            "eth0".to_string(),
+        .ensure_session(
             peer_config2,
             Some(r2_addr),
             event_tx2.clone(),
             event_rx2,
             session_info2,
-            mock_ndp2.clone(),
+            Some(mock_ndp2.clone()),
         )
         .expect("create session2");
 

@@ -15,6 +15,8 @@ pub mod policy;
 pub mod router;
 pub mod session;
 
+use std::num::NonZeroU16;
+
 mod rhai_integration;
 
 #[cfg(test)]
@@ -30,7 +32,7 @@ mod test;
 #[cfg(test)]
 pub mod connection_channel;
 
-pub const BGP_PORT: u16 = 179;
+pub const BGP_PORT: NonZeroU16 = NonZeroU16::new(179).unwrap();
 pub const BGP_VERSION: u8 = 4;
 pub const COMPONENT_BGP: &str = "bgp";
 pub const MOD_ROUTER: &str = "router";

@@ -1561,12 +1561,8 @@ pub trait MgAdminApi {
     }]
     async fn get_ndp_interfaces_v5(
         rqctx: RequestContext<Self::Context>,
-        _request: Query<v1::bgp::config::AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<v5::ndp::NdpInterface>>, HttpError> {
-        Self::get_bgp_unnumbered_interfaces(rqctx)
-            .await
-            .map(|r| r.map(|v| v.into_iter().map(Into::into).collect()))
-    }
+        request: Query<v1::bgp::config::AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<v5::ndp::NdpInterface>>, HttpError>;
 
     #[endpoint {
         method = GET,
@@ -1577,15 +1573,5 @@ pub trait MgAdminApi {
     async fn get_ndp_interface_detail_v5(
         rqctx: RequestContext<Self::Context>,
         request: Query<v5::ndp::NdpInterfaceSelector>,
-    ) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError> {
-        let request = request.into_inner();
-        let request =
-            Query::from(latest::unnumbered::UnnumberedInterfaceSelector {
-                interface: request.interface,
-            });
-
-        Self::get_bgp_unnumbered_interface_detail(rqctx, request)
-            .await
-            .map(|r| r.map(Into::into))
-    }
+    ) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError>;
 }

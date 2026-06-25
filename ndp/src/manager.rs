@@ -114,9 +114,10 @@ impl RouterDiscoveryThreads {
 /// Run the router discovery receive loop. Advertisements are used to set the
 /// current peer address. Advertisements are sent in response to solicitations.
 ///
-/// A read timeout of 1 second is used. When the time out hits instead of
-/// receiving a advertisement or solicitation packet, the current neighbor (if
-/// any) is checked for expiration.
+/// A read timeout of 1 second is used. When the timeout hits instead of
+/// receiving an advertisement or solicitation packet, the current neighbor (if
+/// any) is checked for expiration. Successfully received packets are followed
+/// by a short sleep to limit how quickly an RA/RS storm can drive this loop.
 fn rx_loop(
     s: Socket,
     ifx: Ipv6NetworkInterface,
@@ -124,18 +125,18 @@ fn rx_loop(
     log: Logger,
     dropped: Arc<AtomicBool>,
 ) {
-    const INTERVAL: Duration = Duration::from_secs(1);
+    const STORM_BACKOFF: Duration = Duration::from_secs(1);
     loop {
         if dropped.load(Ordering::SeqCst) {
             break;
         }
-        let _ds = DropSleep(INTERVAL);
 
         let mut buf: [MaybeUninit<u8>; 1024] =
             [const { MaybeUninit::uninit() }; 1024];
 
         match s.recv_from(&mut buf) {
             Ok((len, src)) => {
+                let _rate_limit = DropSleep(STORM_BACKOFF);
                 let buf: &[u8] = unsafe {
                     std::slice::from_raw_parts(buf.as_ptr().cast(), len)
                 };
