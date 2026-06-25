@@ -71,7 +71,8 @@ impl EosNode {
         LinuxNode(self.0)
     }
 
-    /// Capture protocol-specific state via the Arista CLI.
+    /// Capture protocol-specific state via the Arista CLI, plus container and
+    /// host state.
     pub async fn collect_diagnostics(
         &self,
         d: &Runner,
@@ -79,31 +80,31 @@ impl EosNode {
         protocols: ProtocolDiagnostics,
     ) {
         let name = self.name(d);
-        // `Cli -c` takes a single newline-separated script. Linux diagnostics
-        // below collect host/container interfaces and routes for every test,
-        // so keep this focused on the protocol under test.
-        let script = if protocols.bgp() {
-            "enable
-                show running-config
-                show ip bgp summary
-                show ip bgp
-                show ipv6 bgp
-            "
-        } else {
-            "enable
-                show running-config
-                show bfd peers
-            "
-        };
-        match self.shell(d, script).await {
-            Ok(out) => crate::diagnostics::write_artifact(
-                d,
-                topo,
-                &format!("{name}-cli"),
-                None,
-                &out,
-            ),
-            Err(e) => slog::warn!(d.log, "diagnostics {name}-cli: {e}"),
+        let mut commands = vec![("running-config", "show running-config")];
+        if protocols.bgp() {
+            commands.extend([
+                ("ip-bgp-summary", "show ip bgp summary"),
+                ("ip-bgp", "show ip bgp"),
+                ("ipv6-bgp", "show ipv6 bgp"),
+            ]);
+        }
+        if protocols.bfd() {
+            commands.push(("bfd-peers", "show bfd peers"));
+        }
+        for (suffix, cmd) in commands {
+            let script = format!("enable\n{cmd}");
+            match self.shell(d, &script).await {
+                Ok(out) => crate::diagnostics::write_artifact(
+                    d,
+                    topo,
+                    &format!("{name}-{suffix}"),
+                    Some(cmd),
+                    &out,
+                ),
+                Err(e) => {
+                    slog::warn!(d.log, "diagnostics {name}-{suffix}: {e}")
+                }
+            }
         }
         self.linux().collect_diagnostics(d, topo, &name).await;
         self.linux()

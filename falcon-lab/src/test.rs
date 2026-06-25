@@ -152,6 +152,7 @@ where
     let cr1 = bt.cr1;
     let cr2 = bt.cr2;
     let cr3 = bt.cr3;
+    let mgd = bt.mgd.clone();
     let topo_name = bt.topo_name.clone();
     let protocols = bt.protocols;
     let result = body(bt).await;
@@ -165,6 +166,7 @@ where
         if diag_on_fail {
             collect_diagnostics(&ad, ox, cr1, cr2, cr3, &topo_name, protocols)
                 .await;
+            ox.collect_ndp_diagnostics(&ad, &mgd, &topo_name).await;
         }
     }
     result
