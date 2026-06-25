@@ -4,15 +4,16 @@
 
 use crate::{
     BGP_PORT,
-    config::{PeerConfig, RouterConfig},
+    config::RouterConfig,
+    connection::ConnectTarget,
     connection::{BgpConnection, BgpListener},
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
     router::{EnsureSessionResult, Router, SessionMap},
     session::{
-        AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
-        SessionInfo, SessionRunner,
+        AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, NeighborInfo,
+        PeerId, SessionAddrInfo, SessionInfo, SessionRunner,
     },
     unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
@@ -42,7 +43,168 @@ use std::{
 };
 
 // Use non-standard port outside the privileged range to avoid needing privs
-const TEST_BGP_PORT: u16 = 10179;
+const TEST_BGP_PORT: NonZeroU16 = NonZeroU16::new(10179).unwrap();
+
+lazy_static! {
+    static ref TEST_BGP_LISTEN_PORT: Arc<NonZeroU16> = Arc::new(TEST_BGP_PORT);
+}
+
+fn test_listen_port() -> Arc<NonZeroU16> {
+    Arc::clone(&TEST_BGP_LISTEN_PORT)
+}
+
+/// Test-only bag carrying a peer's identity + timers, so a test can build a
+/// `NeighborInfo` and a timer-carrying `SessionInfo` from one place.
+#[derive(Clone, Debug)]
+struct PeerConfig {
+    name: String,
+    group: String,
+    id: PeerId,
+    port: NonZeroU16,
+    hold_time: u64,
+    idle_hold_time: u64,
+    delay_open: u64,
+    connect_retry: u64,
+    keepalive: u64,
+    resolution: u64,
+}
+
+impl PeerConfig {
+    fn neighbor(&self) -> NeighborInfo {
+        NeighborInfo {
+            name: Arc::new(Mutex::new(self.name.clone())),
+            peer_group: Arc::new(Mutex::new(self.group.clone())),
+            peer: self.id.clone(),
+        }
+    }
+
+    /// Stamp this peer's timers onto an existing `SessionInfo` (the old
+    /// `new_session` overwrote session timers from the peer config).
+    fn with_timers(&self, mut info: SessionInfo) -> SessionInfo {
+        info.hold_time = Duration::from_secs(self.hold_time);
+        info.keepalive_time = Duration::from_secs(self.keepalive);
+        info.idle_hold_time = Duration::from_secs(self.idle_hold_time);
+        info.delay_open_time = Duration::from_secs(self.delay_open);
+        info.connect_retry_time = Duration::from_secs(self.connect_retry);
+        info.resolution = Duration::from_millis(self.resolution);
+        info
+    }
+
+    /// Build a `SessionInfo` with these timers and minimal policy defaults
+    /// (mirrors the removed `SessionInfo::from_peer_config`).
+    fn session_info(&self) -> SessionInfo {
+        SessionInfo {
+            passive_tcp_establishment: false,
+            remote_asn: None,
+            remote_id: None,
+            addr: SessionAddrInfo {
+                remote_port: self.port,
+                source_addr: None,
+                source_port: None,
+                listen_port: test_listen_port(),
+            },
+            min_ttl: None,
+            md5_auth_key: None,
+            multi_exit_discriminator: None,
+            communities: BTreeSet::new(),
+            local_pref: None,
+            enforce_first_as: false,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: ImportExportPolicy4::default(),
+                export_policy: ImportExportPolicy4::default(),
+            }),
+            ipv6_unicast: None,
+            vlan_id: None,
+            connect_retry_time: Duration::from_secs(self.connect_retry),
+            keepalive_time: Duration::from_secs(self.keepalive),
+            hold_time: Duration::from_secs(self.hold_time),
+            idle_hold_time: Duration::from_secs(self.idle_hold_time),
+            delay_open_time: Duration::from_secs(self.delay_open),
+            resolution: Duration::from_millis(self.resolution),
+            idle_hold_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            connect_retry_jitter: None,
+            deterministic_collision_resolution: false,
+        }
+    }
+}
+
+#[test]
+fn ensure_session_updates_peer_metadata_for_existing_peer() {
+    let log = init_file_logger(
+        "ensure_session_updates_peer_metadata_for_existing_peer.log",
+    );
+    let db = rdb::test::get_test_db(
+        "ensure_session_updates_peer_metadata_for_existing_peer",
+        log.clone(),
+    )
+    .expect("create db");
+    let sessions = Arc::new(Mutex::new(SessionMap::new()));
+    let router = Arc::new(Router::<BgpConnectionChannel>::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64512),
+            id: 1,
+        },
+        log,
+        db.db().clone(),
+        sessions,
+    ));
+
+    let peer = PeerConfig {
+        name: "peer".into(),
+        group: "old-group".into(),
+        id: PeerId::Ip(ip!("203.0.113.1")),
+        port: TEST_BGP_PORT,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let (event_tx, event_rx) = channel();
+    let mut session_info = peer.session_info();
+    session_info.passive_tcp_establishment = true;
+    let session = match router
+        .ensure_session(peer.neighbor(), event_tx, event_rx, session_info, None)
+        .expect("create session")
+    {
+        EnsureSessionResult::New(session) => session,
+        EnsureSessionResult::Updated(_) => panic!("expected new session"),
+    };
+    let peer_info = session.get_peer_info();
+    assert_eq!(peer_info.name, "peer");
+    assert_eq!(peer_info.peer_group, "old-group");
+
+    let mut updated_peer = peer.clone();
+    updated_peer.name = "updated-peer".into();
+    updated_peer.group = "new-group".into();
+    let (event_tx, event_rx) = channel();
+    let mut session_info = updated_peer.session_info();
+    session_info.passive_tcp_establishment = true;
+    let session = match router
+        .ensure_session(
+            updated_peer.neighbor(),
+            event_tx,
+            event_rx,
+            session_info,
+            None,
+        )
+        .expect("update session")
+    {
+        EnsureSessionResult::New(_) => panic!("expected existing session"),
+        EnsureSessionResult::Updated(session) => session,
+    };
+
+    let peer_info = session.get_peer_info();
+    assert_eq!(peer_info.name, "updated-peer");
+    assert_eq!(peer_info.peer_group, "new-group");
+
+    router.shutdown();
+}
 
 // =============================================================================
 // Test timer configuration
@@ -167,7 +329,6 @@ struct LogicalRouter {
     asn: Asn,
     id: u32,
     listen_addr: SocketAddr,
-    bind_addr: Option<SocketAddr>,
     neighbors: Vec<NeighborConfig>,
 }
 
@@ -177,17 +338,16 @@ struct NeighborConfig {
     session_info: SessionInfo,
 }
 
-/// Create SessionInfo for tests with fixed timer values and route exchange configuration.
-/// This constructs SessionInfo directly without using PeerConfig.
+/// Create a SessionInfo for tests with fixed timer values and route-exchange config.
 ///
 /// # Arguments
 /// * `route_exchange` - Which route address families to exchange
-/// * `local_addr` - Local bind address for this session
+/// * `source_addr` - Local source IP for outbound connections
 /// * `remote_addr` - Remote peer address (for nexthop defaults)
 /// * `passive` - Whether to use passive TCP establishment
 fn create_test_session_info(
     route_exchange: RouteExchange,
-    local_addr: SocketAddr,
+    source_addr: SocketAddr,
     remote_addr: SocketAddr,
     passive: bool,
 ) -> SessionInfo {
@@ -257,7 +417,12 @@ fn create_test_session_info(
         passive_tcp_establishment: passive,
         remote_asn: None,
         remote_id: None,
-        bind_addr: Some(local_addr),
+        addr: SessionAddrInfo {
+            remote_port: TEST_BGP_PORT,
+            source_addr: Some(source_addr.ip()),
+            source_port: Some(0),
+            listen_port: test_listen_port(),
+        },
         min_ttl: None,
         md5_auth_key: None,
         multi_exit_discriminator: None,
@@ -281,6 +446,33 @@ fn create_test_session_info(
         }),
         deterministic_collision_resolution: false,
     }
+}
+
+fn with_ephemeral_source_ip(
+    mut info: SessionInfo,
+    source_ip: IpAddr,
+) -> SessionInfo {
+    info.addr.source_addr = Some(source_ip);
+    info.addr.source_port = Some(0);
+    info
+}
+
+fn connect_target<Cnx: BgpConnection + 'static>(
+    session: &SessionRunner<Cnx>,
+) -> Option<ConnectTarget> {
+    lock!(session.session)
+        .addr
+        .resolve_connect_addrs(
+            &session.neighbor.peer,
+            session.unnumbered_manager.as_deref(),
+        )
+        .ok()
+}
+
+fn peer_socket_addr<Cnx: BgpConnection + 'static>(
+    session: &SessionRunner<Cnx>,
+) -> Option<SocketAddr> {
+    connect_target(session).map(|target| target.destination)
 }
 
 fn test_setup<Cnx, Listener>(
@@ -337,6 +529,7 @@ where
         let dispatcher = Arc::new(Dispatcher::new(
             sessions.clone(),
             logical_router.listen_addr.to_string(),
+            test_listen_port(),
             log.clone(),
             None,
         ));
@@ -374,7 +567,7 @@ where
             // Each session gets its own channel pair for FsmEvents
             let (event_tx, event_rx) = channel();
 
-            // Create PeerConfig from neighbor's configuration for compatibility with new_session
+            // Build the test peer-config bag from this neighbor.
             let peer_config = PeerConfig {
                 name: neighbor.peer_name.clone(),
                 group: String::new(),
@@ -389,37 +582,19 @@ where
                 resolution: 100,
             };
 
-            // Use bind_addr IP from LogicalRouter (port 0 so OS picks ephemeral),
-            // otherwise use listen_addr IP. The source port for outbound connections
-            // must not conflict with the dispatcher's listen port.
-            let bind_addr = logical_router
-                .bind_addr
-                .map(|addr| SocketAddr::new(addr.ip(), 0))
-                .unwrap_or_else(|| {
-                    SocketAddr::new(logical_router.listen_addr.ip(), 0)
-                });
-
             let session_info = neighbor.session_info.clone();
 
-            let session_runner = router
+            router
                 .new_session(
-                    peer_config,
-                    Some(bind_addr),
+                    peer_config.neighbor(),
                     event_tx.clone(),
                     event_rx,
-                    session_info,
+                    peer_config.with_timers(session_info),
                     None,
                 )
                 .unwrap_or_else(|_| {
                     panic!("new session on router {}", logical_router.name)
                 });
-
-            // If LogicalRouter.bind_addr is None, clear the bind_addr
-            // that was just set by new_session (at router.rs:212)
-            if logical_router.bind_addr.is_none() {
-                let mut info = lock!(session_runner.session);
-                info.bind_addr = None;
-            }
 
             // Store the sender so we can send ManualStart later
             session_senders.push(event_tx);
@@ -481,7 +656,6 @@ fn basic_peering_helper<
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
-            bind_addr: Some(r1_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r2".to_string(),
                 remote_host: r2_addr,
@@ -498,7 +672,6 @@ fn basic_peering_helper<
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
-            bind_addr: Some(r2_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r1".to_string(),
                 remote_host: r1_addr,
@@ -661,7 +834,6 @@ fn basic_update_helper<
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
-            bind_addr: Some(r1_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r2".to_string(),
                 remote_host: r2_addr,
@@ -678,7 +850,6 @@ fn basic_update_helper<
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
-            bind_addr: Some(r2_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r1".to_string(),
                 remote_host: r1_addr,
@@ -757,7 +928,10 @@ fn basic_update_helper<
                     Some(new_nexthop);
 
                 r1.router
-                    .update_session(peer_config, session_info)
+                    .update_session(
+                        peer_config.neighbor(),
+                        peer_config.with_timers(session_info),
+                    )
                     .expect("update nexthop");
 
                 // Verify nexthop change is reflected in re-advertised route
@@ -821,7 +995,10 @@ fn basic_update_helper<
                     Some(new_nexthop);
 
                 r1.router
-                    .update_session(peer_config, session_info)
+                    .update_session(
+                        peer_config.neighbor(),
+                        peer_config.with_timers(session_info),
+                    )
                     .expect("update nexthop");
 
                 // Verify nexthop change is reflected in re-advertised route
@@ -906,7 +1083,10 @@ fn basic_update_helper<
                 }
 
                 r1.router
-                    .update_session(peer_config, session_info)
+                    .update_session(
+                        peer_config.neighbor(),
+                        peer_config.with_timers(session_info),
+                    )
                     .expect("update nexthop");
 
                 // Verify IPv4 nexthop change if applicable
@@ -973,22 +1153,26 @@ fn three_router_chain_helper<
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
-            bind_addr: Some(r1_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r2".to_string(),
                 remote_host: r2_addr,
-                session_info: SessionInfo::from_peer_config(&PeerConfig {
-                    name: "r2".into(),
-                    group: String::new(),
-                    id: PeerId::Ip((r2_addr).ip()),
-                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                }),
+                session_info: with_ephemeral_source_ip(
+                    PeerConfig {
+                        name: "r2".into(),
+                        group: String::new(),
+                        id: PeerId::Ip((r2_addr).ip()),
+                        port: NonZeroU16::new((r2_addr).port())
+                            .unwrap_or(BGP_PORT),
+                        hold_time: 6,
+                        idle_hold_time: 0,
+                        delay_open: 0,
+                        connect_retry: 1,
+                        keepalive: 3,
+                        resolution: 100,
+                    }
+                    .session_info(),
+                    r1_addr.ip(),
+                ),
             }],
         },
         LogicalRouter {
@@ -996,41 +1180,48 @@ fn three_router_chain_helper<
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
-            bind_addr: Some(r2_addr),
             neighbors: vec![
                 NeighborConfig {
                     peer_name: "r1".to_string(),
                     remote_host: r1_addr,
-                    session_info: SessionInfo::from_peer_config(&PeerConfig {
-                        name: "r1".into(),
-                        group: String::new(),
-                        id: PeerId::Ip((r1_addr).ip()),
-                        port: NonZeroU16::new((r1_addr).port())
-                            .unwrap_or(BGP_PORT),
-                        hold_time: 6,
-                        idle_hold_time: 0,
-                        delay_open: 0,
-                        connect_retry: 1,
-                        keepalive: 3,
-                        resolution: 100,
-                    }),
+                    session_info: with_ephemeral_source_ip(
+                        PeerConfig {
+                            name: "r1".into(),
+                            group: String::new(),
+                            id: PeerId::Ip((r1_addr).ip()),
+                            port: NonZeroU16::new((r1_addr).port())
+                                .unwrap_or(BGP_PORT),
+                            hold_time: 6,
+                            idle_hold_time: 0,
+                            delay_open: 0,
+                            connect_retry: 1,
+                            keepalive: 3,
+                            resolution: 100,
+                        }
+                        .session_info(),
+                        r2_addr.ip(),
+                    ),
                 },
                 NeighborConfig {
                     peer_name: "r3".to_string(),
                     remote_host: r3_addr,
-                    session_info: SessionInfo::from_peer_config(&PeerConfig {
-                        name: "r3".into(),
-                        group: String::new(),
-                        id: PeerId::Ip((r3_addr).ip()),
-                        port: NonZeroU16::new((r3_addr).port())
-                            .unwrap_or(BGP_PORT),
-                        hold_time: 6,
-                        idle_hold_time: 0,
-                        delay_open: 0,
-                        connect_retry: 1,
-                        keepalive: 3,
-                        resolution: 100,
-                    }),
+                    session_info: with_ephemeral_source_ip(
+                        PeerConfig {
+                            name: "r3".into(),
+                            group: String::new(),
+                            id: PeerId::Ip((r3_addr).ip()),
+                            port: NonZeroU16::new((r3_addr).port())
+                                .unwrap_or(BGP_PORT),
+                            hold_time: 6,
+                            idle_hold_time: 0,
+                            delay_open: 0,
+                            connect_retry: 1,
+                            keepalive: 3,
+                            resolution: 100,
+                        }
+                        .session_info(),
+                        r2_addr.ip(),
+                    ),
                 },
             ],
         },
@@ -1039,22 +1230,26 @@ fn three_router_chain_helper<
             asn: Asn::FourOctet(4200000003),
             id: 3,
             listen_addr: r3_addr,
-            bind_addr: Some(r3_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r2".to_string(),
                 remote_host: r2_addr,
-                session_info: SessionInfo::from_peer_config(&PeerConfig {
-                    name: "r2".into(),
-                    group: String::new(),
-                    id: PeerId::Ip((r2_addr).ip()),
-                    port: NonZeroU16::new((r2_addr).port()).unwrap_or(BGP_PORT),
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                }),
+                session_info: with_ephemeral_source_ip(
+                    PeerConfig {
+                        name: "r2".into(),
+                        group: String::new(),
+                        id: PeerId::Ip((r2_addr).ip()),
+                        port: NonZeroU16::new((r2_addr).port())
+                            .unwrap_or(BGP_PORT),
+                        hold_time: 6,
+                        idle_hold_time: 0,
+                        delay_open: 0,
+                        connect_retry: 1,
+                        keepalive: 3,
+                        resolution: 100,
+                    }
+                    .session_info(),
+                    r3_addr.ip(),
+                ),
             }],
         },
     ];
@@ -1279,11 +1474,13 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
-            bind_addr: Some(r1_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r2".to_string(),
                 remote_host: r2_addr,
-                session_info: SessionInfo::from_peer_config(&r1_peer_config),
+                session_info: with_ephemeral_source_ip(
+                    r1_peer_config.session_info(),
+                    r1_addr.ip(),
+                ),
             }],
         },
         LogicalRouter {
@@ -1291,11 +1488,13 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
-            bind_addr: Some(r2_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r1".to_string(),
                 remote_host: r1_addr,
-                session_info: SessionInfo::from_peer_config(&r2_peer_config),
+                session_info: with_ephemeral_source_ip(
+                    r2_peer_config.session_info(),
+                    r2_addr.ip(),
+                ),
             }],
         },
     ];
@@ -1439,7 +1638,10 @@ fn test_import_export_policy_filtering() {
         resolution: 100,
     };
     let r1_session_info = {
-        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        let mut info = with_ephemeral_source_ip(
+            r1_peer_config.session_info(),
+            r1_addr.ip(),
+        );
         if let Some(ref mut cfg) = info.ipv4_unicast {
             cfg.export_policy =
                 ImportExportPolicy4::Allow(export_allow.clone());
@@ -1461,7 +1663,10 @@ fn test_import_export_policy_filtering() {
         resolution: 100,
     };
     let r2_session_info = {
-        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        let mut info = with_ephemeral_source_ip(
+            r2_peer_config.session_info(),
+            r2_addr.ip(),
+        );
         if let Some(ref mut cfg) = info.ipv4_unicast {
             cfg.import_policy =
                 ImportExportPolicy4::Allow(import_allow.clone());
@@ -1475,7 +1680,6 @@ fn test_import_export_policy_filtering() {
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
-            bind_addr: Some(r1_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r2".to_string(),
                 remote_host: r2_addr,
@@ -1487,7 +1691,6 @@ fn test_import_export_policy_filtering() {
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
-            bind_addr: Some(r2_addr),
             neighbors: vec![NeighborConfig {
                 peer_name: "r1".to_string(),
                 remote_host: r1_addr,
@@ -1572,14 +1775,14 @@ fn test_import_export_policy_filtering() {
         "r1 session should be in Established state before policy update"
     );
     let r1_session_info_no_export = {
-        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        let mut info = lock!(r1_session.session).clone();
         if let Some(ref mut cfg) = info.ipv4_unicast {
             cfg.export_policy = ImportExportPolicy4::NoFiltering;
         }
         info
     };
     r1.router
-        .update_session(r1_peer_config.clone(), r1_session_info_no_export)
+        .update_session(r1_peer_config.neighbor(), r1_session_info_no_export)
         .expect("update r1 session to remove export policy");
 
     // prefix_b should now appear (was filtered by export, now allowed)
@@ -1617,14 +1820,14 @@ fn test_import_export_policy_filtering() {
 
     // Now remove r2's import policy - prefix_c should appear via route-refresh
     let r2_session_info_no_import = {
-        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        let mut info = lock!(r2_session.session).clone();
         if let Some(ref mut cfg) = info.ipv4_unicast {
             cfg.import_policy = ImportExportPolicy4::NoFiltering;
         }
         info
     };
     r2.router
-        .update_session(r2_peer_config.clone(), r2_session_info_no_import)
+        .update_session(r2_peer_config.neighbor(), r2_session_info_no_import)
         .expect("update r2 session to remove import policy");
 
     // Wait for prefix_c to appear after import policy removal
@@ -1844,13 +2047,14 @@ fn unnumbered_peering_helper(
         // Router 1 dispatcher for this interface
         let r1_addr = SocketAddr::V6(SocketAddrV6::new(
             "fe80::1".parse().unwrap(),
-            TEST_BGP_PORT,
+            TEST_BGP_PORT.get(),
             0,
             *scope_id,
         ));
         let disp1 = Arc::new(Dispatcher::new(
             sessions1.clone(),
             r1_addr.to_string(),
+            test_listen_port(),
             log.clone(),
             Some(mock_ndp1.clone()),
         ));
@@ -1869,13 +2073,14 @@ fn unnumbered_peering_helper(
         // Router 2 dispatcher for this interface
         let r2_addr = SocketAddr::V6(SocketAddrV6::new(
             "fe80::2".parse().unwrap(),
-            TEST_BGP_PORT,
+            TEST_BGP_PORT.get(),
             0,
             *scope_id,
         ));
         let disp2 = Arc::new(Dispatcher::new(
             sessions2.clone(),
             r2_addr.to_string(),
+            test_listen_port(),
             log.clone(),
             Some(mock_ndp2.clone()),
         ));
@@ -1924,7 +2129,7 @@ fn unnumbered_peering_helper(
         let (event_tx1, event_rx1) = channel();
         let bind_addr1 = SocketAddr::V6(SocketAddrV6::new(
             "fe80::1".parse().unwrap(),
-            TEST_BGP_PORT,
+            TEST_BGP_PORT.get(),
             0,
             *scope_id,
         ));
@@ -1933,7 +2138,7 @@ fn unnumbered_peering_helper(
             bind_addr1,
             SocketAddr::V6(SocketAddrV6::new(
                 "fe80::2".parse().unwrap(),
-                TEST_BGP_PORT,
+                TEST_BGP_PORT.get(),
                 0,
                 *scope_id,
             )),
@@ -1957,11 +2162,10 @@ fn unnumbered_peering_helper(
 
         let result1 = router1
             .ensure_session(
-                peer_config1,
-                Some(bind_addr1),
+                peer_config1.neighbor(),
                 event_tx1.clone(),
                 event_rx1,
-                session_info1,
+                peer_config1.with_timers(session_info1),
                 Some(mock_ndp1.clone()),
             )
             .expect("create session1");
@@ -1977,7 +2181,7 @@ fn unnumbered_peering_helper(
         let (event_tx2, event_rx2) = channel();
         let bind_addr2 = SocketAddr::V6(SocketAddrV6::new(
             "fe80::2".parse().unwrap(),
-            TEST_BGP_PORT,
+            TEST_BGP_PORT.get(),
             0,
             *scope_id,
         ));
@@ -1986,7 +2190,7 @@ fn unnumbered_peering_helper(
             bind_addr2,
             SocketAddr::V6(SocketAddrV6::new(
                 "fe80::1".parse().unwrap(),
-                TEST_BGP_PORT,
+                TEST_BGP_PORT.get(),
                 0,
                 *scope_id,
             )),
@@ -2010,11 +2214,10 @@ fn unnumbered_peering_helper(
 
         let result2 = router2
             .ensure_session(
-                peer_config2,
-                Some(bind_addr2),
+                peer_config2.neighbor(),
                 event_tx2.clone(),
                 event_rx2,
-                session_info2,
+                peer_config2.with_timers(session_info2),
                 Some(mock_ndp2.clone()),
             )
             .expect("create session2");
@@ -2088,14 +2291,8 @@ fn test_unnumbered_session_survives_peer_change() {
     sleep(Duration::from_secs(5));
     eprintln_nopipe!("Session1 state: {:?}", session1.state());
     eprintln_nopipe!("Session2 state: {:?}", session2.state());
-    eprintln_nopipe!(
-        "Session1 peer addr: {:?}",
-        session1.get_peer_socket_addr()
-    );
-    eprintln_nopipe!(
-        "Session2 peer addr: {:?}",
-        session2.get_peer_socket_addr()
-    );
+    eprintln_nopipe!("Session1 peer addr: {:?}", peer_socket_addr(session1));
+    eprintln_nopipe!("Session2 peer addr: {:?}", peer_socket_addr(session2));
     eprintln_nopipe!("Session1 is_unnumbered: {}", session1.is_unnumbered());
     eprintln_nopipe!("Session2 is_unnumbered: {}", session2.is_unnumbered());
 
@@ -2106,11 +2303,11 @@ fn test_unnumbered_session_survives_peer_change() {
     // Verify initial peer addresses
     let peer2_addr = SocketAddr::V6(SocketAddrV6::new(
         "fe80::2".parse().unwrap(),
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
-    assert_eq!(session1.get_peer_socket_addr(), Some(peer2_addr));
+    assert_eq!(peer_socket_addr(session1), Some(peer2_addr));
 
     // Simulate cable swap: Router 1's interface now sees a different peer
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
@@ -2119,11 +2316,11 @@ fn test_unnumbered_session_survives_peer_change() {
     // Router 1's query now returns the new peer
     let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
-    wait_for!(session1.get_peer_socket_addr() == Some(new_peer_addr));
+    wait_for!(peer_socket_addr(session1) == Some(new_peer_addr));
 
     // CRITICAL: Session must stay Established (NDP change doesn't affect FSM)
     assert_eq!(
@@ -2147,7 +2344,7 @@ fn test_unnumbered_session_survives_peer_change() {
     wait_for_eq!(session1.state(), FsmStateKind::Established);
 
     // After reset, session1 still queries the new peer address
-    assert_eq!(session1.get_peer_socket_addr(), Some(new_peer_addr));
+    assert_eq!(peer_socket_addr(session1), Some(new_peer_addr));
 
     // Clean up
     router1.shutdown();
@@ -2197,7 +2394,7 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
     mock_ndp1.expire_peer("eth0").unwrap();
 
     // Router 1's query now returns None
-    wait_for!(session1.get_peer_socket_addr().is_none());
+    wait_for!(peer_socket_addr(session1).is_none());
 
     // CRITICAL: Session must STAY Established despite NDP expiry
     // Verify for longer than hold_time to ensure keepalives are exchanged
@@ -2221,9 +2418,13 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
     mock_ndp1.discover_peer("eth0", peer2_ip).unwrap();
 
     // Router 1's query returns the peer again
-    let peer2_addr =
-        SocketAddr::V6(SocketAddrV6::new(peer2_ip, TEST_BGP_PORT, 0, scope_id));
-    wait_for!(session1.get_peer_socket_addr() == Some(peer2_addr));
+    let peer2_addr = SocketAddr::V6(SocketAddrV6::new(
+        peer2_ip,
+        TEST_BGP_PORT.get(),
+        0,
+        scope_id,
+    ));
+    wait_for!(peer_socket_addr(session1) == Some(peer2_addr));
 
     // Sessions should still be Established
     assert_eq!(session1.state(), FsmStateKind::Established);
@@ -2285,11 +2486,11 @@ fn test_multiple_unnumbered_sessions() {
     mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
     let new_peer = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_eth0,
     ));
-    wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer));
+    wait_for!(peer_socket_addr(session1_eth0) == Some(new_peer));
 
     // CRITICAL: All sessions must stay Established
     assert_eq!(
@@ -2316,12 +2517,12 @@ fn test_multiple_unnumbered_sessions() {
     // Verify eth1 peer address unchanged
     let peer2_eth1 = SocketAddr::V6(SocketAddrV6::new(
         "fe80::2".parse().unwrap(),
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_eth1,
     ));
     assert_eq!(
-        session1_eth1.get_peer_socket_addr(),
+        peer_socket_addr(session1_eth1),
         Some(peer2_eth1),
         "eth1 peer should be unchanged"
     );
@@ -2397,13 +2598,13 @@ fn test_same_linklocal_multiple_interfaces() {
     // Expected SocketAddrs - same IP but different scope_id per interface
     let peer_eth0 = SocketAddr::V6(SocketAddrV6::new(
         peer_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_eth0,
     ));
     let peer_eth1 = SocketAddr::V6(SocketAddrV6::new(
         peer_ip, // SAME IP as eth0
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_eth1,
     ));
@@ -2422,8 +2623,8 @@ fn test_same_linklocal_multiple_interfaces() {
     // Verify both sessions see the same IP but different scope_id
     // This is the core of the test: same peer IP (fe80::2) is correctly
     // distinguished by scope_id (2 for eth0, 3 for eth1)
-    assert_eq!(session1_eth0.get_peer_socket_addr(), Some(peer_eth0));
-    assert_eq!(session1_eth1.get_peer_socket_addr(), Some(peer_eth1));
+    assert_eq!(peer_socket_addr(session1_eth0), Some(peer_eth0));
+    assert_eq!(peer_socket_addr(session1_eth1), Some(peer_eth1));
 
     // Originate a route from R2 and verify R1 receives it via both
     // sessions. R1's RIB must contain two paths for the prefix — one
@@ -2459,15 +2660,15 @@ fn test_same_linklocal_multiple_interfaces() {
     mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
     let new_peer_eth0 = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_eth0,
     ));
-    wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer_eth0));
+    wait_for!(peer_socket_addr(session1_eth0) == Some(new_peer_eth0));
 
     // eth1 should still see fe80::2 with its own scope_id
     assert_eq!(
-        session1_eth1.get_peer_socket_addr(),
+        peer_socket_addr(session1_eth1),
         Some(peer_eth1),
         "eth1 should still see fe80::2 with its own scope_id"
     );
@@ -2575,7 +2776,12 @@ fn create_unnumbered_session_info(
         passive_tcp_establishment: passive,
         remote_asn: None,
         remote_id: None,
-        bind_addr: None, // Unnumbered sessions don't use bind_addr
+        addr: SessionAddrInfo {
+            remote_port: TEST_BGP_PORT,
+            source_addr: None,
+            source_port: None,
+            listen_port: test_listen_port(),
+        },
         min_ttl: None,
         md5_auth_key: None,
         multi_exit_discriminator: None,
@@ -2633,10 +2839,18 @@ fn unnumbered_pair(
     // Allocate link-local addresses with scope_id
     let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let r2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
-    let r1_addr =
-        SocketAddr::V6(SocketAddrV6::new(r1_ip, TEST_BGP_PORT, 0, scope_id));
-    let r2_addr =
-        SocketAddr::V6(SocketAddrV6::new(r2_ip, TEST_BGP_PORT, 0, scope_id));
+    let r1_addr = SocketAddr::V6(SocketAddrV6::new(
+        r1_ip,
+        TEST_BGP_PORT.get(),
+        0,
+        scope_id,
+    ));
+    let r2_addr = SocketAddr::V6(SocketAddrV6::new(
+        r2_ip,
+        TEST_BGP_PORT.get(),
+        0,
+        scope_id,
+    ));
 
     // Create session maps
     let sessions1: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
@@ -2648,12 +2862,14 @@ fn unnumbered_pair(
     let dispatcher1 = Arc::new(Dispatcher::new(
         sessions1.clone(),
         r1_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp1.clone()),
     ));
     let dispatcher2 = Arc::new(Dispatcher::new(
         sessions2.clone(),
         r2_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp2.clone()),
     ));
@@ -2717,11 +2933,13 @@ fn unnumbered_pair(
 
     let result1 = router1
         .ensure_session(
-            peer_config1,
-            Some(r1_addr),
+            peer_config1.neighbor(),
             event_tx1.clone(),
             event_rx1,
-            session_info1,
+            peer_config1.with_timers(with_ephemeral_source_ip(
+                session_info1,
+                r1_addr.ip(),
+            )),
             Some(mock_ndp1.clone()),
         )
         .expect("create session1");
@@ -2749,11 +2967,13 @@ fn unnumbered_pair(
 
     let result2 = router2
         .ensure_session(
-            peer_config2,
-            Some(r2_addr),
+            peer_config2.neighbor(),
             event_tx2.clone(),
             event_rx2,
-            session_info2,
+            peer_config2.with_timers(with_ephemeral_source_ip(
+                session_info2,
+                r2_addr.ip(),
+            )),
             Some(mock_ndp2.clone()),
         )
         .expect("create session2");
@@ -2851,25 +3071,25 @@ fn unnumbered_three_router_chain(
     let r3_ip: Ipv6Addr = "fe80::1".parse().unwrap(); // Same as R1, different scope_id
     let r1_addr = SocketAddr::V6(SocketAddrV6::new(
         r1_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         r1_r2_scope_id,
     ));
     let r2_eth0_addr = SocketAddr::V6(SocketAddrV6::new(
         r2_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         r1_r2_scope_id,
     ));
     let r2_eth1_addr = SocketAddr::V6(SocketAddrV6::new(
         r2_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         r2_r3_scope_id,
     ));
     let r3_addr = SocketAddr::V6(SocketAddrV6::new(
         r3_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         r2_r3_scope_id,
     ));
@@ -2886,6 +3106,7 @@ fn unnumbered_three_router_chain(
     let disp1 = Arc::new(Dispatcher::new(
         sessions1.clone(),
         r1_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp1.clone()),
     ));
@@ -2901,6 +3122,7 @@ fn unnumbered_three_router_chain(
     let disp2_eth0 = Arc::new(Dispatcher::new(
         sessions2.clone(),
         r2_eth0_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp2.clone()),
     ));
@@ -2915,6 +3137,7 @@ fn unnumbered_three_router_chain(
     let disp2_eth1 = Arc::new(Dispatcher::new(
         sessions2.clone(),
         r2_eth1_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp2.clone()),
     ));
@@ -2930,6 +3153,7 @@ fn unnumbered_three_router_chain(
     let disp3 = Arc::new(Dispatcher::new(
         sessions3.clone(),
         r3_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp3.clone()),
     ));
@@ -2993,11 +3217,13 @@ fn unnumbered_three_router_chain(
     };
     let result1 = router1
         .ensure_session(
-            peer_config1,
-            Some(r1_addr),
+            peer_config1.neighbor(),
             event_tx1.clone(),
             event_rx1,
-            session_info1,
+            peer_config1.with_timers(with_ephemeral_source_ip(
+                session_info1,
+                r1_addr.ip(),
+            )),
             Some(mock_ndp1.clone()),
         )
         .expect("create r1 session");
@@ -3024,11 +3250,13 @@ fn unnumbered_three_router_chain(
     };
     let result2_r1 = router2
         .ensure_session(
-            peer_config2_r1,
-            Some(r2_eth0_addr),
+            peer_config2_r1.neighbor(),
             event_tx2_r1.clone(),
             event_rx2_r1,
-            session_info2_r1,
+            peer_config2_r1.with_timers(with_ephemeral_source_ip(
+                session_info2_r1,
+                r2_eth0_addr.ip(),
+            )),
             Some(mock_ndp2.clone()),
         )
         .expect("create r2-r1 session");
@@ -3055,11 +3283,13 @@ fn unnumbered_three_router_chain(
     };
     let result2_r3 = router2
         .ensure_session(
-            peer_config2_r3,
-            Some(r2_eth1_addr),
+            peer_config2_r3.neighbor(),
             event_tx2_r3.clone(),
             event_rx2_r3,
-            session_info2_r3,
+            peer_config2_r3.with_timers(with_ephemeral_source_ip(
+                session_info2_r3,
+                r2_eth1_addr.ip(),
+            )),
             Some(mock_ndp2.clone()),
         )
         .expect("create r2-r3 session");
@@ -3085,11 +3315,13 @@ fn unnumbered_three_router_chain(
     };
     let result3 = router3
         .ensure_session(
-            peer_config3,
-            Some(r3_addr),
+            peer_config3.neighbor(),
             event_tx3.clone(),
             event_rx3,
-            session_info3,
+            peer_config3.with_timers(with_ephemeral_source_ip(
+                session_info3,
+                r3_addr.ip(),
+            )),
             Some(mock_ndp3.clone()),
         )
         .expect("create r3 session");
@@ -3199,23 +3431,23 @@ fn test_unnumbered_unaffected_by_ndp() {
     let initial_r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let initial_r2_addr = SocketAddr::V6(SocketAddrV6::new(
         initial_r2_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
     let initial_r1_addr = SocketAddr::V6(SocketAddrV6::new(
         initial_r1_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
     assert_eq!(
-        session1.get_peer_socket_addr(),
+        peer_socket_addr(session1),
         Some(initial_r2_addr),
         "R1 should see R2's address initially"
     );
     assert_eq!(
-        session2.get_peer_socket_addr(),
+        peer_socket_addr(session2),
         Some(initial_r1_addr),
         "R2 should see R1's address initially"
     );
@@ -3229,12 +3461,12 @@ fn test_unnumbered_unaffected_by_ndp() {
     // Step 3: Verify get_peer_addr() returns new IP
     let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
     wait_for!(
-        session1.get_peer_socket_addr() == Some(new_peer_addr),
+        peer_socket_addr(session1) == Some(new_peer_addr),
         "R1 should see new peer address"
     );
 
@@ -3267,7 +3499,7 @@ fn test_unnumbered_unaffected_by_ndp() {
 
     // Step 6: Verify get_peer_addr() returns None
     wait_for!(
-        session1.get_peer_socket_addr().is_none(),
+        peer_socket_addr(session1).is_none(),
         "R1 should see no peer after expiry"
     );
 
@@ -3295,7 +3527,7 @@ fn test_unnumbered_unaffected_by_ndp() {
 
     // Step 9: Verify get_peer_addr() returns original peer
     wait_for!(
-        session1.get_peer_socket_addr() == Some(initial_r2_addr),
+        peer_socket_addr(session1) == Some(initial_r2_addr),
         "R1 should see original peer after rediscovery"
     );
 
@@ -3351,12 +3583,12 @@ fn test_unnumbered_ndp_change() {
     // Verify initial peer addresses
     let initial_r2_addr = SocketAddr::V6(SocketAddrV6::new(
         "fe80::2".parse().unwrap(),
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
     assert_eq!(
-        session1.get_peer_socket_addr(),
+        peer_socket_addr(session1),
         Some(initial_r2_addr),
         "R1 should see R2's initial address"
     );
@@ -3370,12 +3602,12 @@ fn test_unnumbered_ndp_change() {
     // Step 3: Verify get_peer_addr() returns new IP
     let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         scope_id,
     ));
     wait_for!(
-        session1.get_peer_socket_addr() == Some(new_peer_addr),
+        peer_socket_addr(session1) == Some(new_peer_addr),
         "R1 should see new peer address"
     );
 
@@ -3413,7 +3645,7 @@ fn test_unnumbered_ndp_change() {
 
     // Step 8: Verify reconnection used the new peer address
     assert_eq!(
-        session1.get_peer_socket_addr(),
+        peer_socket_addr(session1),
         Some(new_peer_addr),
         "R1 should still see new peer address after reconnection"
     );
@@ -3493,12 +3725,10 @@ fn test_three_router_chain_unnumbered() {
     );
 
     // Step 3: Verify R2's two sessions use different scope_ids
-    let r2_eth0_peer = r2_eth0_session
-        .get_peer_socket_addr()
-        .expect("R2 eth0 should have peer");
-    let r2_eth1_peer = r2_eth1_session
-        .get_peer_socket_addr()
-        .expect("R2 eth1 should have peer");
+    let r2_eth0_peer =
+        peer_socket_addr(r2_eth0_session).expect("R2 eth0 should have peer");
+    let r2_eth1_peer =
+        peer_socket_addr(r2_eth1_session).expect("R2 eth1 should have peer");
 
     // Extract scope_ids from peer addresses
     let eth0_scope = if let SocketAddr::V6(v6) = r2_eth0_peer {
@@ -3534,18 +3764,18 @@ fn test_three_router_chain_unnumbered() {
     // Step 5: Verify only eth0 session's get_peer_addr() changes
     let new_eth0_peer = SocketAddr::V6(SocketAddrV6::new(
         new_eth0_ip,
-        TEST_BGP_PORT,
+        TEST_BGP_PORT.get(),
         0,
         r1_r2_scope_id,
     ));
     wait_for!(
-        r2_eth0_session.get_peer_socket_addr() == Some(new_eth0_peer),
+        peer_socket_addr(r2_eth0_session) == Some(new_eth0_peer),
         "R2 eth0 session should see new peer address"
     );
 
     // Step 6: Verify eth1 session unaffected
     assert_eq!(
-        r2_eth1_session.get_peer_socket_addr(),
+        peer_socket_addr(r2_eth1_session),
         Some(r2_eth1_peer),
         "R2 eth1 session should still have original peer"
     );
@@ -3866,20 +4096,30 @@ fn test_unnumbered_interface_lifecycle() {
     // Create dispatchers (needed for inbound connections)
     let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let r2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
-    let r1_addr =
-        SocketAddr::V6(SocketAddrV6::new(r1_ip, TEST_BGP_PORT, 0, scope_id));
-    let r2_addr =
-        SocketAddr::V6(SocketAddrV6::new(r2_ip, TEST_BGP_PORT, 0, scope_id));
+    let r1_addr = SocketAddr::V6(SocketAddrV6::new(
+        r1_ip,
+        TEST_BGP_PORT.get(),
+        0,
+        scope_id,
+    ));
+    let r2_addr = SocketAddr::V6(SocketAddrV6::new(
+        r2_ip,
+        TEST_BGP_PORT.get(),
+        0,
+        scope_id,
+    ));
 
     let disp1 = Arc::new(Dispatcher::new(
         sessions1.clone(),
         r1_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp1.clone()),
     ));
     let disp2 = Arc::new(Dispatcher::new(
         sessions2.clone(),
         r2_addr.to_string(),
+        test_listen_port(),
         log.clone(),
         Some(mock_ndp2.clone()),
     ));
@@ -3942,11 +4182,10 @@ fn test_unnumbered_interface_lifecycle() {
 
     let result1 = router1
         .ensure_session(
-            peer_config1,
-            Some(r1_addr),
+            peer_config1.neighbor(),
             event_tx1.clone(),
             event_rx1,
-            session_info1,
+            peer_config1.with_timers(session_info1),
             Some(mock_ndp1.clone()),
         )
         .expect("create session1");
@@ -3978,11 +4217,10 @@ fn test_unnumbered_interface_lifecycle() {
 
     let result2 = router2
         .ensure_session(
-            peer_config2,
-            Some(r2_addr),
+            peer_config2.neighbor(),
             event_tx2.clone(),
             event_rx2,
-            session_info2,
+            peer_config2.with_timers(session_info2),
             Some(mock_ndp2.clone()),
         )
         .expect("create session2");

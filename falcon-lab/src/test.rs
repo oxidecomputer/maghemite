@@ -481,8 +481,8 @@ async fn mgd_unnumbered_body(bt: BootedMgdDuo) -> Result<()> {
         0,
     );
     tokio::try_join!(
-        mgd1.create_unnumbered_neighbor(&ox1_neighbor),
-        mgd2.create_unnumbered_neighbor(&ox2_neighbor),
+        mgd1.create_neighbor(&ox1_neighbor),
+        mgd2.create_neighbor(&ox2_neighbor),
     )
     .context("mgd: create unnumbered neighbors")?;
 
@@ -601,35 +601,23 @@ async fn quartet_unnumbered_body(bt: BootedQuartet) -> Result<()> {
     .await
     .context("mgd: create router")?;
 
-    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
-        "cr1",
-        "test",
-        "tfportqsfp0_0",
-        33,
-        0,
-    ))
-    .await
-    .context("mgd: create cr1 unnumbered neighbor")?;
+    let cr1_nbr =
+        basic_unnumbered_neighbor("cr1", "test", "tfportqsfp0_0", 33, 0);
+    mgd.create_neighbor(&cr1_nbr)
+        .await
+        .context("mgd: create cr1 unnumbered neighbor")?;
 
-    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
-        "cr2",
-        "test",
-        "tfportqsfp1_0",
-        33,
-        1800,
-    ))
-    .await
-    .context("mgd: create cr2 unnumbered neighbor")?;
+    let cr2_nbr =
+        basic_unnumbered_neighbor("cr2", "test", "tfportqsfp1_0", 33, 1800);
+    mgd.create_neighbor(&cr2_nbr)
+        .await
+        .context("mgd: create cr2 unnumbered neighbor")?;
 
-    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
-        "cr3",
-        "test",
-        "tfportqsfp2_0",
-        33,
-        1800,
-    ))
-    .await
-    .context("mgd: create cr3 unnumbered neighbor")?;
+    let cr3_nbr =
+        basic_unnumbered_neighbor("cr3", "test", "tfportqsfp2_0", 33, 1800);
+    mgd.create_neighbor(&cr3_nbr)
+        .await
+        .context("mgd: create cr3 unnumbered neighbor")?;
 
     mgd.create_origin4(&Origin4 {
         asn: 33,
