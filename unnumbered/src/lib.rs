@@ -7,7 +7,7 @@ pub mod error;
 mod interface;
 pub mod manager;
 
-pub use bgp::BgpUnnumbered;
+pub use bgp::{BgpUnnumbered, BgpUnnumberedInterface};
 pub use error::UnnumberedError;
 pub use interface::{
     InterfaceMap, NewUnnumberedInterfaceError, UnnumberedInterface,

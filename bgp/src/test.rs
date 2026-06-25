@@ -38,7 +38,7 @@ use std::{
     thread::{Builder, sleep},
     time::{Duration, Instant},
 };
-use unnumbered::BgpUnnumbered;
+use unnumbered::{BgpUnnumbered, BgpUnnumberedInterface, UnnumberedError};
 
 // Use non-standard port outside the privileged range to avoid needing privs
 const TEST_BGP_PORT: u16 = 10179;
@@ -178,27 +178,30 @@ struct NeighborConfig {
 
 #[derive(Clone)]
 struct TestBgpUnnumbered {
-    scopes: Arc<Mutex<HashMap<u32, String>>>,
-    neighbors: Arc<Mutex<HashMap<String, Option<Ipv6Addr>>>>,
+    interfaces: Arc<Mutex<HashMap<String, BgpUnnumberedInterface>>>,
 }
 
 impl TestBgpUnnumbered {
     fn new() -> Arc<Self> {
         Arc::new(TestBgpUnnumbered {
-            scopes: Arc::new(Mutex::new(HashMap::new())),
-            neighbors: Arc::new(Mutex::new(HashMap::new())),
+            interfaces: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     fn activate_interface(&self, interface: impl Into<String>, scope_id: u32) {
         let interface = interface.into();
-        lock!(self.scopes).insert(scope_id, interface.clone());
-        lock!(self.neighbors).entry(interface).or_insert(None);
+        lock!(self.interfaces).insert(
+            interface.clone(),
+            BgpUnnumberedInterface {
+                interface,
+                scope_id,
+                discovered_neighbor: None,
+            },
+        );
     }
 
     fn deactivate_interface(&self, interface: &str) {
-        lock!(self.scopes).retain(|_, name| name != interface);
-        lock!(self.neighbors).remove(interface);
+        lock!(self.interfaces).remove(interface);
     }
 
     fn discover_ndp_neighbor(
@@ -206,10 +209,11 @@ impl TestBgpUnnumbered {
         interface: &str,
         addr: Ipv6Addr,
     ) -> Result<(), &'static str> {
-        let mut neighbors = lock!(self.neighbors);
-        let entry =
-            neighbors.get_mut(interface).ok_or("interface not active")?;
-        *entry = Some(addr);
+        let mut interfaces = lock!(self.interfaces);
+        let interface = interfaces
+            .get_mut(interface)
+            .ok_or("interface not active")?;
+        interface.discovered_neighbor = Some(addr);
         Ok(())
     }
 
@@ -217,10 +221,11 @@ impl TestBgpUnnumbered {
         &self,
         interface: &str,
     ) -> Result<Option<Ipv6Addr>, &'static str> {
-        let mut neighbors = lock!(self.neighbors);
-        let entry =
-            neighbors.get_mut(interface).ok_or("interface not active")?;
-        Ok(entry.take())
+        let mut interfaces = lock!(self.interfaces);
+        let interface = interfaces
+            .get_mut(interface)
+            .ok_or("interface not active")?;
+        Ok(interface.discovered_neighbor.take())
     }
 }
 
@@ -228,24 +233,18 @@ impl BgpUnnumbered for TestBgpUnnumbered {
     fn get_active_interface_by_scope(
         &self,
         scope_id: u32,
-    ) -> Result<Option<String>, unnumbered::UnnumberedError> {
-        Ok(lock!(self.scopes).get(&scope_id).cloned())
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+        Ok(lock!(self.interfaces)
+            .values()
+            .find(|interface| interface.scope_id == scope_id)
+            .cloned())
     }
 
-    fn get_discovered_ndp_neighbor(
+    fn get_active_interface(
         &self,
         interface: &str,
-    ) -> Result<Option<Ipv6Addr>, unnumbered::UnnumberedError> {
-        Ok(lock!(self.neighbors).get(interface).copied().flatten())
-    }
-
-    fn get_active_interface_scope_id(
-        &self,
-        interface: &str,
-    ) -> Result<Option<u32>, unnumbered::UnnumberedError> {
-        Ok(lock!(self.scopes).iter().find_map(|(scope_id, name)| {
-            (name == interface).then_some(*scope_id)
-        }))
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+        Ok(lock!(self.interfaces).get(interface).cloned())
     }
 }
 

@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::NewUnnumberedInterfaceError;
-use crate::bgp::BgpUnnumbered;
+use crate::bgp::{BgpUnnumbered, BgpUnnumberedInterface};
 use crate::error::UnnumberedError;
 use crate::interface::{InterfaceMap, UnnumberedInterface};
 use mg_common::lock;
@@ -521,29 +521,31 @@ impl BgpUnnumbered for UnnumberedManager {
     fn get_active_interface_by_scope(
         &self,
         scope_id: u32,
-    ) -> Result<Option<String>, UnnumberedError> {
-        Ok(Self::get_interface_for_scope(self, scope_id))
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+        let Some(scope_id) = NonZeroU32::new(scope_id) else {
+            return Ok(None);
+        };
+
+        Ok(lock!(self.active_interfaces)
+            .get_by_scope_id(scope_id)
+            .map(|ifx| BgpUnnumberedInterface {
+                interface: ifx.name().to_string(),
+                scope_id: ifx.scope_id().get(),
+                discovered_neighbor: ifx.discovered_neighbor(),
+            }))
     }
 
-    fn get_active_interface_scope_id(
+    fn get_active_interface(
         &self,
         interface: &str,
-    ) -> Result<Option<u32>, UnnumberedError> {
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
         Ok(lock!(self.active_interfaces)
             .get_by_name(interface)
-            .map(|ifx| ifx.scope_id().get()))
-    }
-
-    fn get_discovered_ndp_neighbor(
-        &self,
-        interface: &str,
-    ) -> Result<Option<Ipv6Addr>, UnnumberedError> {
-        Self::get_neighbor_by_interface(self, interface).map_err(|e| {
-            UnnumberedError::ResolutionFailed {
-                interface: interface.to_string(),
-                reason: e.to_string(),
-            }
-        })
+            .map(|ifx| BgpUnnumberedInterface {
+                interface: ifx.name().to_string(),
+                scope_id: ifx.scope_id().get(),
+                discovered_neighbor: ifx.discovered_neighbor(),
+            }))
     }
 }
 
@@ -766,7 +768,11 @@ mod tests {
         assert_eq!(manager.get_interface_for_scope(8), None);
         assert_eq!(
             BgpUnnumbered::get_active_interface_by_scope(&*manager, 7).unwrap(),
-            Some("eth0".into())
+            Some(BgpUnnumberedInterface {
+                interface: "eth0".into(),
+                scope_id: 7,
+                discovered_neighbor: Some(neighbor),
+            })
         );
 
         let discovered = manager
@@ -775,14 +781,12 @@ mod tests {
             .expect("neighbor should be discovered");
         assert_eq!(discovered, neighbor);
         assert_eq!(
-            BgpUnnumbered::get_discovered_ndp_neighbor(&*manager, "eth0")
-                .unwrap(),
-            Some(neighbor)
-        );
-        assert_eq!(
-            BgpUnnumbered::get_active_interface_scope_id(&*manager, "eth0")
-                .unwrap(),
-            Some(7)
+            BgpUnnumbered::get_active_interface(&*manager, "eth0").unwrap(),
+            Some(BgpUnnumberedInterface {
+                interface: "eth0".into(),
+                scope_id: 7,
+                discovered_neighbor: Some(neighbor),
+            })
         );
         assert!(manager.get_neighbor_by_interface("eth1").unwrap().is_none());
 

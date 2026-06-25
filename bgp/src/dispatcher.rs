@@ -197,33 +197,26 @@ mod tests {
     use crate::{connection::resolve_session_key, session::PeerId};
     use slog::Logger;
     use std::{net::Ipv6Addr, sync::Arc};
-    use unnumbered::{BgpUnnumbered, UnnumberedError};
+    use unnumbered::{BgpUnnumbered, BgpUnnumberedInterface, UnnumberedError};
 
     struct TestUnnumbered {
-        scope_result: Result<Option<String>, UnnumberedError>,
-        neighbor_result: Result<Option<Ipv6Addr>, UnnumberedError>,
+        interface_result:
+            Result<Option<BgpUnnumberedInterface>, UnnumberedError>,
     }
 
     impl BgpUnnumbered for TestUnnumbered {
         fn get_active_interface_by_scope(
             &self,
             _scope_id: u32,
-        ) -> Result<Option<String>, UnnumberedError> {
-            self.scope_result.clone()
+        ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+            self.interface_result.clone()
         }
 
-        fn get_active_interface_scope_id(
+        fn get_active_interface(
             &self,
             _interface: &str,
-        ) -> Result<Option<u32>, UnnumberedError> {
+        ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
             Ok(None)
-        }
-
-        fn get_discovered_ndp_neighbor(
-            &self,
-            _interface: &str,
-        ) -> Result<Option<Ipv6Addr>, UnnumberedError> {
-            self.neighbor_result.clone()
         }
     }
 
@@ -232,30 +225,29 @@ mod tests {
     }
 
     fn unnumbered_manager(
-        scope_result: Result<Option<String>, UnnumberedError>,
+        interface_result: Result<
+            Option<BgpUnnumberedInterface>,
+            UnnumberedError,
+        >,
     ) -> Arc<dyn BgpUnnumbered> {
-        Arc::new(TestUnnumbered {
-            scope_result,
-            neighbor_result: Ok(None),
-        })
+        Arc::new(TestUnnumbered { interface_result })
     }
 
-    fn unnumbered_manager_with_neighbor(
-        scope_result: Result<Option<String>, UnnumberedError>,
-        neighbor_result: Result<Option<Ipv6Addr>, UnnumberedError>,
-    ) -> Arc<dyn BgpUnnumbered> {
-        Arc::new(TestUnnumbered {
-            scope_result,
-            neighbor_result,
-        })
+    fn active_interface(
+        discovered_neighbor: Option<Ipv6Addr>,
+    ) -> BgpUnnumberedInterface {
+        BgpUnnumberedInterface {
+            interface: "eth0".into(),
+            scope_id: 7,
+            discovered_neighbor,
+        }
     }
 
     #[test]
     fn discovered_link_local_uses_interface_key() {
-        let manager = unnumbered_manager_with_neighbor(
-            Ok(Some("eth0".into())),
-            Ok(Some("fe80::1".parse().unwrap())),
-        );
+        let manager = unnumbered_manager(Ok(Some(active_interface(Some(
+            "fe80::1".parse().unwrap(),
+        )))));
         let peer = "[fe80::1%7]:179".parse().unwrap();
 
         let key = resolve_session_key(peer, Some(&manager), &log());
@@ -265,7 +257,7 @@ mod tests {
 
     #[test]
     fn undiscovered_link_local_uses_ip_key() {
-        let manager = unnumbered_manager(Ok(Some("eth0".into())));
+        let manager = unnumbered_manager(Ok(Some(active_interface(None))));
         let peer = "[fe80::1%7]:179".parse().unwrap();
 
         let key = resolve_session_key(peer, Some(&manager), &log());
@@ -275,10 +267,9 @@ mod tests {
 
     #[test]
     fn mismatched_link_local_uses_ip_key() {
-        let manager = unnumbered_manager_with_neighbor(
-            Ok(Some("eth0".into())),
-            Ok(Some("fe80::2".parse().unwrap())),
-        );
+        let manager = unnumbered_manager(Ok(Some(active_interface(Some(
+            "fe80::2".parse().unwrap(),
+        )))));
         let peer = "[fe80::1%7]:179".parse().unwrap();
 
         let key = resolve_session_key(peer, Some(&manager), &log());
@@ -312,7 +303,9 @@ mod tests {
 
     #[test]
     fn non_link_local_address_uses_ip_session_key() {
-        let manager = unnumbered_manager(Ok(Some("eth0".into())));
+        let manager = unnumbered_manager(Ok(Some(active_interface(Some(
+            "fe80::1".parse().unwrap(),
+        )))));
         let peer = "[2001:db8::1]:179".parse().unwrap();
 
         let key = resolve_session_key(peer, Some(&manager), &log());

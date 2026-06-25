@@ -1759,36 +1759,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             PeerId::Interface(iface) => {
                 // Unnumbered: query BgpUnnumbered for NDP neighbor
                 let mgr = self.unnumbered_manager.as_ref()?;
-                match mgr.get_discovered_ndp_neighbor(iface) {
-                    Ok(Some(addr)) => {
-                        match mgr.get_active_interface_scope_id(iface) {
-                            Ok(Some(scope_id)) => {
-                                Some(SocketAddr::V6(SocketAddrV6::new(
-                                    addr,
-                                    self.neighbor.port.get(),
-                                    0,
-                                    scope_id,
-                                )))
-                            }
-                            Ok(None) => None,
-                            Err(e) => {
-                                session_log_lite!(
-                                    self,
-                                    debug,
-                                    "failed to query scope for interface";
-                                    "interface" => iface,
-                                    "error" => e.to_string()
-                                );
-                                None
-                            }
-                        }
+                match mgr.get_active_interface(iface) {
+                    Ok(Some(interface)) => {
+                        interface.discovered_neighbor.map(|addr| {
+                            SocketAddr::V6(SocketAddrV6::new(
+                                addr,
+                                self.neighbor.port.get(),
+                                0,
+                                interface.scope_id,
+                            ))
+                        })
                     }
-                    Ok(None) => None, // No neighbor discovered yet - expected
+                    Ok(None) => None, // Interface inactive - expected
                     Err(e) => {
                         session_log_lite!(
                             self,
                             debug,
-                            "failed to query neighbor for interface";
+                            "failed to query active unnumbered interface";
                             "interface" => iface,
                             "error" => e.to_string()
                         );
@@ -1816,17 +1803,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .unnumbered_manager
                     .as_ref()
                     .ok_or(ResolveTargetError::NoUnnumberedManager)?;
-                let addr = mgr
-                    .get_discovered_ndp_neighbor(iface)?
-                    .ok_or(ResolveTargetError::NoNeighbor)?;
-                let scope_id = mgr
-                    .get_active_interface_scope_id(iface)?
+                let interface = mgr
+                    .get_active_interface(iface)?
                     .ok_or(ResolveTargetError::InterfaceInactive)?;
+                let addr = interface
+                    .discovered_neighbor
+                    .ok_or(ResolveTargetError::NoNeighbor)?;
                 Ok(SocketAddr::V6(SocketAddrV6::new(
                     addr,
                     self.neighbor.port.get(),
                     0,
-                    scope_id,
+                    interface.scope_id,
                 )))
             }
             PeerId::Ip(ip) => {

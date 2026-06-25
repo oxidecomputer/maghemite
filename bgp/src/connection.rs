@@ -53,32 +53,21 @@ pub fn resolve_session_key(
     {
         match mgr.get_active_interface_by_scope(v6_addr.scope_id()) {
             Ok(Some(interface)) => {
-                match mgr.get_discovered_ndp_neighbor(&interface) {
-                    Ok(Some(neighbor)) if neighbor == *v6_addr.ip() => {
-                        return PeerId::Interface(interface);
-                    }
-                    Ok(Some(neighbor)) => {
-                        debug!(log,
-                            "incoming unnumbered peer does not match discovered NDP neighbor";
-                            "interface" => interface.as_str(),
-                            "peer" => peer_addr,
-                            "discovered" => neighbor.to_string(),
-                        );
-                    }
-                    Ok(None) => {
-                        debug!(log,
-                            "incoming unnumbered peer has no discovered NDP neighbor";
-                            "interface" => interface.as_str(),
-                            "peer" => peer_addr,
-                        );
-                    }
-                    Err(e) => {
-                        error!(log,
-                            "discovered unnumbered neighbor query error: {e}";
-                            "interface" => interface.as_str(),
-                            "error" => format!("{e}"),
-                        );
-                    }
+                if interface.discovered_neighbor == Some(*v6_addr.ip()) {
+                    return PeerId::Interface(interface.interface);
+                } else if let Some(neighbor) = interface.discovered_neighbor {
+                    debug!(log,
+                        "incoming unnumbered peer does not match discovered NDP neighbor";
+                        "interface" => interface.interface.as_str(),
+                        "peer" => peer_addr,
+                        "discovered" => neighbor.to_string(),
+                    );
+                } else {
+                    debug!(log,
+                        "incoming unnumbered peer has no discovered NDP neighbor";
+                        "interface" => interface.interface.as_str(),
+                        "peer" => peer_addr,
+                    );
                 }
             }
             // Fallback to IP-based key on failure/missing interface

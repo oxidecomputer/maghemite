@@ -5,6 +5,14 @@
 use crate::UnnumberedError;
 use std::net::Ipv6Addr;
 
+/// Active unnumbered interface state exposed to BGP.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BgpUnnumberedInterface {
+    pub interface: String,
+    pub scope_id: u32,
+    pub discovered_neighbor: Option<Ipv6Addr>,
+}
+
 /// Trait for managing unnumbered BGP sessions via NDP neighbor discovery.
 ///
 /// This trait provides the interface between BGP and the external NDP/neighbor
@@ -18,15 +26,10 @@ pub trait BgpUnnumbered: Send + Sync {
     fn get_active_interface_by_scope(
         &self,
         scope_id: u32,
-    ) -> Result<Option<String>, UnnumberedError>;
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError>;
 
-    fn get_active_interface_scope_id(
+    fn get_active_interface(
         &self,
         interface: &str,
-    ) -> Result<Option<u32>, UnnumberedError>;
-
-    fn get_discovered_ndp_neighbor(
-        &self,
-        interface: &str,
-    ) -> Result<Option<Ipv6Addr>, UnnumberedError>;
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError>;
 }
