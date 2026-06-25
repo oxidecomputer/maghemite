@@ -146,7 +146,9 @@ fn rx_loop(
                 if let Ok(ra) = Icmp6RouterAdvertisement::from_wire(buf) {
                     handle_ra(&ifx, &state, &log, ra, src);
                 }
-                if let Ok(rs) = Icmp6RouterSolicitation::from_wire(buf) {
+                if let Ok(rs) =
+                    Icmp6RouterSolicitation::from_wire_with_source(buf, src)
+                {
                     handle_rs(&s, &ifx, &state, &log, rs, src);
                 }
             }
@@ -220,14 +222,32 @@ fn handle_rs(
     _rs: Icmp6RouterSolicitation,
     src: Ipv6Addr,
 ) {
+    let Some(dst) = solicited_ra_destination(src) else {
+        debug!(
+            log,
+            "ignoring RS from non-link-local source {src} on {}", ifx.name,
+        );
+        return;
+    };
+
     send_ra(
         sk,
         ifx.ip,
-        Some(src),
+        dst,
         ifx.scope_id,
         state.get_tx_router_lifetime(),
         log,
     );
+}
+
+fn solicited_ra_destination(src: Ipv6Addr) -> Option<Option<Ipv6Addr>> {
+    if src.is_unspecified() {
+        Some(None)
+    } else if src.is_unicast_link_local() {
+        Some(Some(src))
+    } else {
+        None
+    }
 }
 
 /// Check to see if the reachable time for our current peer (if any) is expired.
@@ -409,6 +429,145 @@ mod test {
         Icmp6RouterAdvertisement::from_wire(&data)
             .expect_err("RS should not parse as RA");
         Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+        Icmp6RouterSolicitation::from_wire_with_source(
+            &data,
+            "fe80::1".parse().unwrap(),
+        )
+        .expect("parsed solicitation with link-local source");
+    }
+
+    #[test]
+    fn router_solicitation_from_unspecified_rejects_slla() {
+        let data: [u8; 16] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 1, 0xab, 0xbb, // source link-layer addr option
+            0xcc, 0xdd, 0xee, 0xff,
+        ];
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire_with_source(
+                &data,
+                Ipv6Addr::UNSPECIFIED,
+            ),
+            Err(crate::packet::Icmp6RsParseError::SllaFromUnspecifiedSource),
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_rejects_multicast_source() {
+        let data: [u8; 8] = [133, 0, 11, 22, 0, 0, 0, 0];
+        let source = "ff02::1".parse().unwrap();
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire_with_source(&data, source),
+            Err(crate::packet::Icmp6RsParseError::MulticastSource(
+                err_source,
+            )) if err_source == source,
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_rejects_truncated_payload() {
+        let data: [u8; 7] = [133, 0, 11, 22, 0, 0, 0];
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire(&data),
+            Err(crate::packet::Icmp6RsParseError::TooShort(7)),
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_rejects_truncated_option_header() {
+        let data: [u8; 9] = [
+            133, 0, 11, 22, // type, code, checksum
+            0, 0, 0, 0, // reserved
+            1, // truncated source link-layer address option header
+        ];
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire(&data),
+            Err(crate::packet::Icmp6RsParseError::Option(
+                crate::packet::Icmp6RsOptionParseError::TruncatedHeader {
+                    remaining: 1,
+                },
+            )),
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_rejects_zero_length_option() {
+        let data: [u8; 16] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 0, 0xab, 0xbb, // zero-length source link-layer addr option
+            0xcc, 0xdd, 0xee, 0xff,
+        ];
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire(&data),
+            Err(crate::packet::Icmp6RsParseError::Option(
+                crate::packet::Icmp6RsOptionParseError::ZeroLength {
+                    option_type: 1,
+                },
+            )),
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_rejects_truncated_option_body() {
+        let data: [u8; 15] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 1, 0xab, 0xbb, // truncated source link-layer addr option
+            0xcc, 0xdd, 0xee,
+        ];
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire(&data),
+            Err(crate::packet::Icmp6RsParseError::Option(
+                crate::packet::Icmp6RsOptionParseError::TruncatedOption {
+                    option_type: 1,
+                    option_len: 8,
+                    remaining: 7,
+                },
+            )),
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_rejects_trailing_partial_option() {
+        let data: [u8; 17] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 1, 0xab, 0xbb, // complete source link-layer addr option
+            0xcc, 0xdd, 0xee, 0xff,
+            5, // trailing partial unknown option header
+        ];
+
+        assert!(matches!(
+            Icmp6RouterSolicitation::from_wire(&data),
+            Err(crate::packet::Icmp6RsParseError::Option(
+                crate::packet::Icmp6RsOptionParseError::TruncatedHeader {
+                    remaining: 1,
+                },
+            )),
+        ));
+    }
+
+    #[test]
+    fn router_solicitation_accepts_complete_unknown_option() {
+        let data: [u8; 24] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 1, 0xab, 0xbb, // complete source link-layer addr option
+            0xcc, 0xdd, 0xee, 0xff, 253, 1, 0,
+            0, // complete unknown option
+            0, 0, 0, 0,
+        ];
+
+        Icmp6RouterSolicitation::from_wire(&data)
+            .expect("parsed solicitation with complete unknown option");
     }
 
     #[test]
@@ -429,6 +588,30 @@ mod test {
         Icmp6RouterAdvertisement::from_wire(&data)
             .expect_err("RS should not parse as RA");
         Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+
+    #[test]
+    fn router_solicitation_from_unspecified_replies_to_all_nodes() {
+        assert_eq!(
+            super::solicited_ra_destination(Ipv6Addr::UNSPECIFIED),
+            Some(None),
+        );
+    }
+
+    #[test]
+    fn router_solicitation_from_link_local_replies_to_sender() {
+        let src = "fe80::1".parse().unwrap();
+
+        assert_eq!(super::solicited_ra_destination(src), Some(Some(src)),);
+    }
+
+    #[test]
+    fn router_solicitation_from_non_link_local_is_ignored() {
+        let global = "2001:db8::1".parse().unwrap();
+        let loopback = Ipv6Addr::LOCALHOST;
+
+        assert_eq!(super::solicited_ra_destination(global), None,);
+        assert_eq!(super::solicited_ra_destination(loopback), None,);
     }
 
     #[test]
