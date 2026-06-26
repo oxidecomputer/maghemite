@@ -44,6 +44,7 @@ use tokio::time::timeout;
 const QUARTET_UNNUMBERED_TOPO_NAME: &str = "mgquartetu";
 const MGD_UNNUMBERED_TOPO_NAME: &str = "mgduou";
 const QUARTET_BFD_STATIC_TOPO_NAME: &str = "mgquartetbfd";
+const CR1_BFD_FRR_CONFIG: &str = "cr1-bfd-frr.conf";
 const OP_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -64,7 +65,6 @@ const CR3_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
 const OX_CR1_V4_CIDR: &str = "10.0.0.1/24";
 const OX_CR2_V4_CIDR: &str = "10.0.1.1/24";
 const OX_CR3_V4_CIDR: &str = "10.0.2.1/24";
-const CR1_V4_CIDR: &str = "10.0.0.2/24";
 const CR2_V4_CIDR: &str = "10.0.1.2/24";
 const CR3_V4_CIDR: &str = "10.0.2.2/24";
 
@@ -77,7 +77,6 @@ const CR3_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 3, 0, 0, 0, 0, 0, 2); // fd00:3::
 const OX_CR1_V6_CIDR: &str = "fd00:1::1/64";
 const OX_CR2_V6_CIDR: &str = "fd00:2::1/64";
 const OX_CR3_V6_CIDR: &str = "fd00:3::1/64";
-const CR1_V6_CIDR: &str = "fd00:1::2/64";
 const CR2_V6_CIDR: &str = "fd00:2::2/64";
 const CR3_V6_CIDR: &str = "fd00:3::2/64";
 
@@ -1239,43 +1238,15 @@ async fn frr_bfd_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
     // Address the softnpu-facing link (v4 + v6) and bring up passive BFD peers
     // for each family. Once mgd initiates BFD to these addresses the sessions
     // establish bidirectionally.
-    let rx_ms = BFD_REQUIRED_RX_US / 1000;
-    let config = format!(
-        "
-        configure
-        interface enp0s8
-          ip address {cr_v4_cidr}
-          ipv6 address {cr_v6_cidr}
-          no shutdown
-        exit
-        bfd
-          peer {ox_v4} local-address {cr_v4}
-            detect-multiplier {mult}
-            receive-interval {rx_ms}
-            transmit-interval {rx_ms}
-            no shutdown
-          exit
-          peer {ox_v6} local-address {cr_v6}
-            detect-multiplier {mult}
-            receive-interval {rx_ms}
-            transmit-interval {rx_ms}
-            no shutdown
-          exit
-        exit
-        write memory
-        ",
-        cr_v4_cidr = CR1_V4_CIDR,
-        cr_v6_cidr = CR1_V6_CIDR,
-        ox_v4 = OX_CR1_V4,
-        ox_v6 = OX_CR1_V6,
-        cr_v4 = CR1_V4,
-        cr_v6 = CR1_V6,
-        mult = BFD_DETECTION_MULT,
-    );
-
     r.install(&d).await?;
+    r.stage_config(
+        CR1_BFD_FRR_CONFIG,
+        include_str!("../config/cr1-bfd-frr.conf"),
+    )?;
     r.enable_daemons(&d, &["bfdd"]).await?;
-    r.shell(&d, &config).await?;
+    r.stop_frr(&d).await?;
+    r.install_staged_config(&d, CR1_BFD_FRR_CONFIG).await?;
+    r.start_frr(&d).await?;
     Ok(())
 }
 

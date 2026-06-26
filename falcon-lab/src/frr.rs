@@ -10,9 +10,13 @@ use oxnet::{Ipv4Net, Ipv6Net};
 use serde::Deserialize;
 use slog::info;
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::sleep;
+
+const CARGO_BAY: &str = "cargo-bay";
 
 #[derive(Copy, Clone)]
 pub struct FrrNode(pub NodeRef);
@@ -63,6 +67,37 @@ impl FrrNode {
         d.exec(self.0, "systemctl start frr").await?;
         // XXX do better than arbitrary wait
         sleep(Duration::from_secs(5)).await;
+        Ok(())
+    }
+
+    pub fn stage_config(
+        &self,
+        config_name: &str,
+        config: &str,
+    ) -> Result<PathBuf> {
+        let dir = Path::new(CARGO_BAY);
+        fs::create_dir_all(dir)
+            .with_context(|| format!("create {}", dir.display()))?;
+        let path = dir.join(config_name);
+        fs::write(&path, config)
+            .with_context(|| format!("write {}", path.display()))?;
+        Ok(path)
+    }
+
+    pub async fn install_staged_config(
+        &self,
+        d: &Runner,
+        config_name: &str,
+    ) -> Result<()> {
+        info!(d.log, "{}: installing frr startup config", self.name(d));
+        d.exec(
+            self.0,
+            &format!(
+                "cp /opt/cargo-bay/{config_name} /etc/frr/frr.conf && chown frr:frrvty /etc/frr/frr.conf && chmod 640 /etc/frr/frr.conf"
+            ),
+        )
+        .await
+        .context("install frr startup config")?;
         Ok(())
     }
 
