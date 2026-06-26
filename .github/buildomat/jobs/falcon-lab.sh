@@ -93,10 +93,17 @@ collect_falcon_artifacts() {
 	rm -rf "${artifact_dir}"
 }
 
+clear_falcon_workspace_files() {
+	if [[ -d .falcon ]]; then
+		find .falcon -maxdepth 1 -type f -exec rm -f {} +
+	fi
+}
+
 run_test() {
 	local test_name=$1
 	local status=0
 
+	clear_falcon_workspace_files
 	RUST_LOG=debug pfexec ./falcon-lab run --no-cleanup "${test_name}" || status=$?
 	if (( status != 0 )); then
 		collect_falcon_artifacts "${test_name}"
