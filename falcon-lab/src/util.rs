@@ -41,9 +41,6 @@ macro_rules! wait_for_eq_stable {
             let expected = $expect;
             if measured == expected {
                 consecutive += 1;
-                if consecutive >= stable_count {
-                    break;
-                }
                 client_common::println_nopipe!(
                     "{}: iteration {}/{}: matched {:?} ({}/{} consecutive)",
                     $desc,
@@ -53,6 +50,9 @@ macro_rules! wait_for_eq_stable {
                     consecutive,
                     stable_count
                 );
+                if consecutive >= stable_count {
+                    break;
+                }
             } else {
                 if consecutive == 0 {
                     client_common::println_nopipe!(
