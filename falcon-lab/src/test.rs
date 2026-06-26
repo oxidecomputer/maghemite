@@ -1324,7 +1324,7 @@ async fn juniper_bfd_setup(r: JuniperNode, d: Arc<Runner>) -> Result<()> {
 /// mgd-side state is always checked. Peer-side state is checked only when
 /// the peer is expected `Up`: a paused daemon cannot answer queries, so
 /// `Down` phases have no observable peer-side truth.
-const BFD_STABLE_SAMPLES: usize = 3;
+const BFD_STABLE_SAMPLES: usize = 5;
 
 async fn expect_bfd(
     mgd: &MgdClient,
