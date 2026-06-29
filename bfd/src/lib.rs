@@ -10,6 +10,7 @@ use sm::StateMachine;
 use std::{
     collections::HashMap,
     net::IpAddr,
+    num::NonZeroU8,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
@@ -27,6 +28,12 @@ pub const MOD_SM: &str = "state_machine";
 pub const UNIT_PEER: &str = "peer";
 
 pub const DEFAULT_BFD_TTL: u32 = 255;
+
+/// Default detection threshold multiplier.
+///
+/// Three seems to be a common choice for other implementations. Without
+/// intuition for or against this default, follow suit.
+pub const DEFAULT_DETECT_MULTIPLIER: NonZeroU8 = NonZeroU8::new(3).unwrap();
 
 /// A type alias for a bidirectional endpoint transporting BFD control messages
 /// and target IP addresses.
@@ -102,7 +109,7 @@ pub struct SessionCounters {
 /// Parameters for adding a new BFD peer session.
 pub struct AddPeerRequest {
     pub required_rx: Duration,
-    pub detection_multiplier: u8,
+    pub detection_multiplier: NonZeroU8,
     pub mode: SessionMode,
     pub endpoint: BfdEndpoint,
     pub egress_thread: Option<Arc<ManagedThread>>,
@@ -144,7 +151,7 @@ impl Session {
 }
 
 /// Information about a BFD peer.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct PeerInfo {
     /// The interval at which the peer would _like_ to receive BFD control
     /// packets.
@@ -169,7 +176,10 @@ pub struct PeerInfo {
 
     /// When multiplied against required_min_rx, defines the detection threshold
     /// connectivity status.
-    pub detection_multiplier: u8,
+    ///
+    /// RFC 5880 §6.8.6, a packet with a detect mult of 0 MUST be discarded; we
+    /// encode that here via a `NonZero` type.
+    pub detection_multiplier: NonZeroU8,
 }
 
 impl Default for PeerInfo {
@@ -181,18 +191,16 @@ impl Default for PeerInfo {
             required_min_rx: Duration::from_secs(1),
             discriminator: 0,
             demand_mode: false,
-            // Three seems to be a common choice for other implementations.
-            // Without intuition for or against this default, follow suit.
-            detection_multiplier: 3,
+            detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
         }
     }
 }
 
 impl PeerInfo {
     /// Initialize a peer info object with a random discriminator.
-    fn with_random_discriminator(
+    pub fn with_random_discriminator(
         required_min_rx: Duration,
-        detection_multiplier: u8,
+        detection_multiplier: NonZeroU8,
     ) -> Self {
         Self {
             required_min_rx,
@@ -309,7 +317,7 @@ mod test {
             v4_addr,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -325,7 +333,7 @@ mod test {
             v6_addr,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -363,7 +371,7 @@ mod test {
             v4_addr1,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -377,7 +385,7 @@ mod test {
             v6_addr1,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -393,7 +401,7 @@ mod test {
             v4_addr2,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -407,7 +415,7 @@ mod test {
             v6_addr2,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,

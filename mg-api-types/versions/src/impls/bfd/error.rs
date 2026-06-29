@@ -2,8 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Functional code for the latest versions of types.
-
-pub(crate) mod bfd;
-pub(crate) mod bgp;
-pub(crate) mod rdb;
+/// Errors converting from older API request versions.
+#[derive(Debug, thiserror::Error)]
+pub enum BfdRequestError {
+    #[error("detection threshold must be nonzero")]
+    DetectionThresholdZero,
+}

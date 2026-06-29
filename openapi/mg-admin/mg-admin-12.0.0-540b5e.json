@@ -6,13 +6,13 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "11.0.0"
+    "version": "12.0.0"
   },
   "paths": {
     "/bfd/peers": {
       "get": {
-        "summary": "Get all the peers and their associated BFD state. Peers are identified by IP",
-        "description": "address.",
+        "summary": "Get all the peers and their associated BFD state.",
+        "description": "Peers are identified by IP address.",
         "operationId": "get_bfd_peers",
         "responses": {
           "200": {
@@ -38,8 +38,8 @@
         }
       },
       "put": {
-        "summary": "Add a new peer to the daemon. A session for the specified peer will start",
-        "description": "immediately.",
+        "summary": "Add a new peer to the daemon.",
+        "description": "A session for the specified peer will start immediately.",
         "operationId": "add_bfd_peer",
         "requestBody": {
           "content": {
@@ -66,8 +66,8 @@
     },
     "/bfd/peers/{addr}": {
       "delete": {
-        "summary": "Remove the specified peer from the daemon. The associated peer session will",
-        "description": "be stopped immediately.",
+        "summary": "Remove the specified peer from the daemon.",
+        "description": "The associated peer session will be stopped immediately.",
         "operationId": "remove_bfd_peer",
         "parameters": [
           {
@@ -1936,7 +1936,7 @@
             "description": "Detection threshold for connectivity as a multipler to required_rx",
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "listen": {
             "description": "Address to listen on for control messages from the peer.",
