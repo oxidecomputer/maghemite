@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use oxnet::IpNet;
+use slog_error_chain::InlineErrorChain;
 use std::collections::HashMap;
 use std::net::IpAddr;
 
@@ -11,7 +12,10 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use mg_api_types_versions::{latest, v1, v2, v4, v5, v8, v10};
+use mg_api_types_versions::{
+    latest::{self, bfd::error::BfdRequestError},
+    v1, v2, v4, v5, v8, v10,
+};
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):
@@ -25,6 +29,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (12, BFD_NONZERO_DETECT_MULT),
     (11, PREFIX_TO_OXNET),
     (10, V4_OVER_V6_STATIC_ROUTES),
     (9, ENDPOINT_RENAME),
@@ -54,29 +59,68 @@ api_versions!([
 pub trait MgAdminApi {
     type Context;
 
-    /// Get all the peers and their associated BFD state. Peers are identified by IP
-    /// address.
+    /// Get all the peers and their associated BFD state.
+    ///
+    /// Peers are identified by IP address.
     #[endpoint {
         method = GET,
         path = "/bfd/peers",
+        versions = VERSION_BFD_NONZERO_DETECT_MULT..,
     }]
     async fn get_bfd_peers(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<latest::bfd::BfdPeerInfo>>, HttpError>;
 
-    /// Add a new peer to the daemon. A session for the specified peer will start
-    /// immediately.
+    #[endpoint {
+        method = GET,
+        path = "/bfd/peers",
+        operation_id = "get_bfd_peers",
+        versions = VERSION_INITIAL..VERSION_BFD_NONZERO_DETECT_MULT,
+    }]
+    async fn get_bfd_peers_v1(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<v1::bfd::BfdPeerInfo>>, HttpError> {
+        let HttpResponseOk(peers) = Self::get_bfd_peers(rqctx).await?;
+        Ok(HttpResponseOk(peers.into_iter().map(From::from).collect()))
+    }
+
+    /// Add a new peer to the daemon.
+    ///
+    /// A session for the specified peer will start immediately.
     #[endpoint {
         method = PUT,
         path = "/bfd/peers",
+        versions = VERSION_BFD_NONZERO_DETECT_MULT..,
     }]
     async fn add_bfd_peer(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<latest::bfd::BfdPeerConfig>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    /// Remove the specified peer from the daemon. The associated peer session will
-    /// be stopped immediately.
+    #[endpoint {
+        method = PUT,
+        path = "/bfd/peers",
+        operation_id = "add_bfd_peer",
+        versions = VERSION_INITIAL..VERSION_BFD_NONZERO_DETECT_MULT,
+    }]
+    async fn add_bfd_peer_v1(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v1::bfd::BfdPeerConfig>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let request = request.try_map(TryFrom::try_from).map_err(
+            |err: BfdRequestError| {
+                HttpError::for_bad_request(
+                    None,
+                    InlineErrorChain::new(&err).to_string(),
+                )
+            },
+        )?;
+        Self::add_bfd_peer(rqctx, request).await
+    }
+
+    /// Remove the specified peer from the daemon.
+    ///
+    /// The associated peer session will be stopped immediately.
     #[endpoint {
         method = DELETE,
         path = "/bfd/peers/{addr}",

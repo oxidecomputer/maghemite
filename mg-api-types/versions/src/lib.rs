@@ -37,6 +37,8 @@ pub mod v1;
 pub mod v10;
 #[path = "prefix_to_oxnet/mod.rs"]
 pub mod v11;
+#[path = "bfd_nonzero_detect_mult/mod.rs"]
+pub mod v12;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

@@ -3830,6 +3830,7 @@ dependencies = [
  "dropshot-api-manager-types",
  "mg-api-types-versions",
  "oxnet",
+ "slog-error-chain",
 ]
 
 [[package]]

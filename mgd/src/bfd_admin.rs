@@ -16,7 +16,6 @@ use mg_common::lock;
 use mg_common::thread::ManagedThread;
 use slog::Logger;
 use socket2::Socket;
-use std::num::NonZeroU8;
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr, UdpSocket},
@@ -104,7 +103,7 @@ pub(crate) async fn get_bfd_peers(
                             "required rx overflow",
                         ))
                     })?,
-                detection_threshold: session.sm.detection_multiplier().get(),
+                detection_threshold: session.sm.detection_multiplier(),
                 listen: ctx
                     .context()
                     .bfd
@@ -138,16 +137,6 @@ pub(crate) fn add_peer(
     ctx: Arc<HandlerContext>,
     rq: BfdPeerConfig,
 ) -> Result<(), HttpError> {
-    // TODO-correctness Should we bump the API version to change
-    // `BfdPeerConfig::detection_threshold` to `NonZeroU8`?
-    let detection_multiplier = NonZeroU8::new(rq.detection_threshold)
-        .ok_or_else(|| {
-            HttpError::for_bad_request(
-                None,
-                "detection_threshold must be nonzero".into(),
-            )
-        })?;
-
     let mut daemon = lock!(ctx.bfd.daemon);
     let dispatcher = ctx.bfd.dispatcher.clone();
     let db = ctx.db.clone();
@@ -190,7 +179,7 @@ pub(crate) fn add_peer(
             rq.peer,
             AddPeerRequest {
                 required_rx: Duration::from_micros(rq.required_rx),
-                detection_multiplier,
+                detection_multiplier: rq.detection_threshold,
                 mode: rq.mode,
                 endpoint: ch,
                 egress_thread: Some(egress_thread),

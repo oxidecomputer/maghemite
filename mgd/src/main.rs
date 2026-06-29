@@ -471,15 +471,7 @@ fn start_bfd_sessions(
     configs: Vec<BfdPeerConfig>,
 ) {
     dlog!(context.log, info, "starting bfd sessions: {configs:#?}");
-    for mut config in configs {
-        // Backwards-compatibility protection: We now reject a detection
-        // threshold of 0 (as required by RFC 5880), but it's possible we
-        // previously persisted a config with such a threshold before adding the
-        // guards that reject them. Bump it up to 1 to ensure we don't panic in
-        // the `unwrap_or_else()` below.
-        if config.detection_threshold == 0 {
-            config.detection_threshold = 1;
-        }
+    for config in configs {
         bfd_admin::add_peer(context.clone(), config)
             .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
     }

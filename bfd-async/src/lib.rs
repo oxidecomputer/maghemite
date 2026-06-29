@@ -53,10 +53,8 @@ pub struct AddPeerRequest {
     mode: SessionMode,
 }
 
-impl TryFrom<BfdPeerConfig> for AddPeerRequest {
-    type Error = DetectionThresholdZero;
-
-    fn try_from(value: BfdPeerConfig) -> Result<Self, Self::Error> {
+impl From<BfdPeerConfig> for AddPeerRequest {
+    fn from(value: BfdPeerConfig) -> Self {
         /// Port to be used for BFD multihop per RFC 5883.
         const BFD_MULTIHOP_PORT: u16 = 4784;
         /// Port to be used for BFD single per RFC 5881.
@@ -75,18 +73,13 @@ impl TryFrom<BfdPeerConfig> for AddPeerRequest {
             SessionMode::MultiHop => BFD_MULTIHOP_PORT,
         };
 
-        let Some(detection_threshold) = NonZeroU8::new(detection_threshold)
-        else {
-            return Err(DetectionThresholdZero);
-        };
-
-        Ok(Self {
+        Self {
             remote_addr: SocketAddr::new(peer, mode_port),
             listen_addr: SocketAddr::new(listen, mode_port),
             required_rx_micros,
             detection_threshold,
             mode,
-        })
+        }
     }
 }
 
