@@ -58,6 +58,10 @@ impl Daemon {
         let peer = rq.remote_addr.ip();
         match self.sessions.entry(peer) {
             hash_map::Entry::Occupied(_) => {
+                // TODO-correctness Currently clients have no way to update an
+                // existing peer: they have to remove it and recreate it. This
+                // needs work both here and in omicron to fix.
+                // <https://github.com/oxidecomputer/omicron/issues/4921>
                 warn!(
                     self.log, "attempt to add peer that already exists";
                     "component" => bfd::COMPONENT_BFD,
