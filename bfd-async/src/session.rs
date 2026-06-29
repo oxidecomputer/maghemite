@@ -221,25 +221,14 @@ impl DriverTask {
     async fn wait_for_event(&mut self, now: Instant) -> Event {
         let deadline = self.sm.next_deadline(now);
 
-        // Cancel-safety: both `recv()` and `sleep_until()` are cancel safe
-        // (`recv()` per its docs; `sleep_until()` because we want to discard it
-        // if we receive a packet). Neither arm contains an `.await`, avoiding
-        // any opportunity for futurelock.
-        tokio::select! {
-            // Prefer servicing an already-queued incoming packet over acting on
-            // the deadline: if the deadline is a recv timeout, an available
-            // packet should reset it; if it's a transmit deadline, our caller
-            // is going to flush any outgoing packets anyway.
-            biased;
-
-            maybe_pkt = self.listener_rx.recv() => match maybe_pkt {
-                Some(pkt) => Event::PacketReceived(pkt),
-                None => Event::ShuttingDown,
-            },
-
-            () = tokio::time::sleep_until(deadline.into()) => {
-                Event::DeadlineExpired
-            }
+        // Cancel-safety: If we hit `deadline`, the `recv()` future will be
+        // cancelled. It's cancel-safe per its docs, so this is fine.
+        match tokio::time::timeout_at(deadline.into(), self.listener_rx.recv())
+            .await
+        {
+            Ok(Some(pkt)) => Event::PacketReceived(pkt),
+            Ok(None) => Event::ShuttingDown,
+            Err(_timeout_elapsed) => Event::DeadlineExpired,
         }
     }
 
