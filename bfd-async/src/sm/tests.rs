@@ -3,12 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use super::*;
+use bfd::DEFAULT_DETECT_MULTIPLIER;
 use proptest::prelude::*;
 use std::num::NonZeroU8;
 use test_strategy::Arbitrary;
 use test_strategy::proptest;
 
-const DETECT_MULT: NonZeroU8 = NonZeroU8::new(3).unwrap();
 const MIN_TX_RX: Duration = Duration::from_millis(50);
 
 /// A fixed local config used by most tests.
@@ -18,7 +18,7 @@ fn local_info() -> PeerInfo {
         required_min_rx: MIN_TX_RX,
         discriminator: 0x1111_1111,
         demand_mode: false,
-        detection_multiplier: DETECT_MULT,
+        detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
     }
 }
 
@@ -28,7 +28,7 @@ fn packet_with(peer_state: BfdPeerState) -> packet::Control {
         my_discriminator: 0x2222_2222,
         desired_min_tx: MIN_TX_RX.as_micros().try_into().unwrap(),
         required_min_rx: MIN_TX_RX.as_micros().try_into().unwrap(),
-        detect_mult: DETECT_MULT,
+        detect_mult: DEFAULT_DETECT_MULTIPLIER,
         ..Default::default()
     };
     pkt.set_state(peer_state);
@@ -336,18 +336,21 @@ impl Sim {
 }
 
 /// A per-direction delivery schedule (`true` = deliver, `false` = drop) whose
-/// runs of drops are always shorter than `DETECT_MULT`. Built by generating
-/// gap sizes in `0..DETECT_MULT` and emitting that many drops before each
-/// delivered packet, so no run of losses can reach the detection threshold.
+/// runs of drops are always shorter than `DEFAULT_DETECT_MULTIPLIER`. Built by
+/// generating gap sizes in `0..DEFAULT_DETECT_MULTIPLIER` and emitting that
+/// many drops before each delivered packet, so no run of losses can reach the
+/// detection threshold.
 fn bounded_loss_schedule() -> impl Strategy<Value = Vec<bool>> {
-    prop::collection::vec(0u8..DETECT_MULT.get(), 1..40).prop_map(|gaps| {
-        let mut schedule = Vec::new();
-        for gap in gaps {
-            schedule.extend(std::iter::repeat_n(false, usize::from(gap)));
-            schedule.push(true);
-        }
-        schedule
-    })
+    prop::collection::vec(0u8..DEFAULT_DETECT_MULTIPLIER.get(), 1..40).prop_map(
+        |gaps| {
+            let mut schedule = Vec::new();
+            for gap in gaps {
+                schedule.extend(std::iter::repeat_n(false, usize::from(gap)));
+                schedule.push(true);
+            }
+            schedule
+        },
+    )
 }
 
 #[test]

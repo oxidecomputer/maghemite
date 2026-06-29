@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::wait_for_condition;
+use bfd::DEFAULT_DETECT_MULTIPLIER;
 use bfd::packet::Control;
 use slog::Discard;
 use slog::o;
@@ -37,7 +38,7 @@ fn spawn_driver(required_rx: Duration) -> Harness {
     let sm = StateMachine::start(
         PeerInfo::with_random_discriminator(
             required_rx,
-            NonZeroU8::new(3).unwrap(),
+            DEFAULT_DETECT_MULTIPLIER,
         ),
         Instant::now(),
     );

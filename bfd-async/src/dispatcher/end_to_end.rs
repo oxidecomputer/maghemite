@@ -20,6 +20,7 @@ use crate::AddPeerError;
 use crate::AddPeerRequest;
 use crate::Daemon;
 use crate::wait_for_condition;
+use bfd::DEFAULT_DETECT_MULTIPLIER;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
 use slog::Logger;
@@ -39,7 +40,7 @@ const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 /// a 300ms detection time, which should be slow enough to avoid flakiness in CI
 /// but fast enough that the test doesn't take forever.
 const REQUIRED_RX_MICROS: u64 = Duration::from_millis(100).as_micros() as u64;
-const DETECTION_MULT: NonZeroU8 = NonZeroU8::new(3).unwrap();
+const DETECTION_MULT: NonZeroU8 = DEFAULT_DETECT_MULTIPLIER;
 
 fn test_logger() -> Logger {
     Logger::root(slog::Discard, slog::o!())

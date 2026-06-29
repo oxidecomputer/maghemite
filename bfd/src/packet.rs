@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::BfdPeerState;
+use crate::{BfdPeerState, DEFAULT_DETECT_MULTIPLIER};
 use anyhow::{Context, Result, anyhow};
 use std::{
     fmt::{Display, Formatter},
@@ -163,8 +163,7 @@ impl Default for Control {
             vers_diag: 1 << 5,
             // default state machine state is down
             flags: BfdPeerState::Down.wire_format(),
-            // default to detection threshold multipler of 3
-            detect_mult: NonZeroU8::new(3).expect("3 is not 0"),
+            detect_mult: DEFAULT_DETECT_MULTIPLIER,
             // 24 is sans auth, if using auth recompute
             length: 24,
             my_discriminator: 0,

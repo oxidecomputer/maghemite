@@ -29,6 +29,12 @@ pub const UNIT_PEER: &str = "peer";
 
 pub const DEFAULT_BFD_TTL: u32 = 255;
 
+/// Default detection threshold multiplier.
+///
+/// Three seems to be a common choice for other implementations. Without
+/// intuition for or against this default, follow suit.
+pub const DEFAULT_DETECT_MULTIPLIER: NonZeroU8 = NonZeroU8::new(3).unwrap();
+
 /// A type alias for a bidirectional endpoint transporting BFD control messages
 /// and target IP addresses.
 pub type BfdEndpoint = bidi::Endpoint<(IpAddr, packet::Control)>;
@@ -185,9 +191,7 @@ impl Default for PeerInfo {
             required_min_rx: Duration::from_secs(1),
             discriminator: 0,
             demand_mode: false,
-            // Three seems to be a common choice for other implementations.
-            // Without intuition for or against this default, follow suit.
-            detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+            detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
         }
     }
 }
@@ -313,7 +317,7 @@ mod test {
             v4_addr,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -329,7 +333,7 @@ mod test {
             v6_addr,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -367,7 +371,7 @@ mod test {
             v4_addr1,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -381,7 +385,7 @@ mod test {
             v6_addr1,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -397,7 +401,7 @@ mod test {
             v4_addr2,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
@@ -411,7 +415,7 @@ mod test {
             v6_addr2,
             AddPeerRequest {
                 required_rx: Duration::from_secs(5),
-                detection_multiplier: NonZeroU8::new(3).expect("3 is not 0"),
+                detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
                 mode: SessionMode::MultiHop,
                 endpoint: a,
                 egress_thread: None,
