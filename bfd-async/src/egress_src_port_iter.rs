@@ -11,7 +11,7 @@ const OFFSET_RANGE: u16 = (u16::MAX - EgressSrcPortIter::SOURCE_PORT_BEGIN) + 1;
 ///
 /// Per RFC 5881 §4, BFD control packets MUST have a source port in the range
 /// `[49152, 65535]`. We assume we'll never have more than 16384 active
-/// sessions, so do not support the RFD's note that source ports "MAY be reused
+/// sessions, so do not support the RFC's note that source ports "MAY be reused
 /// on multiple sessions".
 ///
 /// This type is a concurrency-safe iterator over that range.
