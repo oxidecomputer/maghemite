@@ -34,6 +34,7 @@ gateway-client.workspace = true
 ndp.workspace = true
 network-interface.workspace = true
 socket2.workspace = true
+unnumbered.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

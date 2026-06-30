@@ -15,4 +15,4 @@ set -e
 
 source .github/buildomat/test-common.sh
 
-cargo nextest run -p ndp
+cargo nextest run -p ndp -p unnumbered

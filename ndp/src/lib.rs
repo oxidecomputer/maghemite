@@ -11,3 +11,4 @@ mod packet;
 mod util;
 
 pub use manager::*;
+pub use packet::Icmp6RouterAdvertisement;

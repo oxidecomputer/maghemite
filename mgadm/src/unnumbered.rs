@@ -12,7 +12,7 @@ use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// View NDP status
+    /// View BGP unnumbered router-discovery status
     Status(StatusArgs),
 }
 
@@ -24,48 +24,38 @@ pub struct StatusArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum StatusCmd {
-    /// Show NDP manager state
-    Manager {
-        #[clap(env)]
-        asn: u32,
-    },
+    /// Show BGP unnumbered manager state
+    Manager,
 
-    /// List all NDP-managed interfaces
-    Interfaces {
-        #[clap(env)]
-        asn: u32,
-    },
+    /// List all active BGP unnumbered interfaces
+    Interfaces,
 
     /// Show detailed state for a specific interface
-    Interface {
-        interface: String,
-        #[clap(env)]
-        asn: u32,
-    },
+    Interface { interface: String },
 }
 
 pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
         Commands::Status(args) => match args.command {
-            StatusCmd::Manager { asn } => ndp_manager_status(asn, c).await?,
-            StatusCmd::Interfaces { asn } => ndp_interfaces(asn, c).await?,
-            StatusCmd::Interface { asn, interface } => {
-                ndp_interface_detail(asn, interface, c).await?
+            StatusCmd::Manager => ndp_manager_status(c).await?,
+            StatusCmd::Interfaces => ndp_interfaces(c).await?,
+            StatusCmd::Interface { interface } => {
+                ndp_interface_detail(interface, c).await?
             }
         },
     }
     Ok(())
 }
 
-async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
-    let state = c.get_ndp_manager_state(asn).await?.into_inner();
+async fn ndp_manager_status(c: Client) -> Result<()> {
+    let state = c.get_bgp_unnumbered_manager_state().await?.into_inner();
 
-    println_nopipe!("NDP Manager State (ASN {})", asn);
+    println_nopipe!("BGP Unnumbered Manager State");
     println_nopipe!("{}", "=".repeat(60));
     println_nopipe!();
 
     // Monitor thread status
-    let monitor_status = if state.monitor_thread_running {
+    let monitor_status = if state.monitor_running {
         "Running".green()
     } else {
         "Stopped".red()
@@ -104,11 +94,11 @@ async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
-    let interfaces = c.get_ndp_interfaces(asn).await?.into_inner();
+async fn ndp_interfaces(c: Client) -> Result<()> {
+    let interfaces = c.get_bgp_unnumbered_interfaces().await?.into_inner();
 
     if interfaces.is_empty() {
-        println_nopipe!("No NDP-managed interfaces found for ASN {}", asn);
+        println_nopipe!("No active unnumbered interfaces found");
         return Ok(());
     }
 
@@ -139,21 +129,15 @@ async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
             None => ("None".to_string(), "N/A".dimmed()),
         };
 
-        let (tx_str, rx_str) = match &iface.thread_state {
-            Some(ts) => {
-                let tx = if ts.tx_running {
-                    "Run".green()
-                } else {
-                    "Stop".red()
-                };
-                let rx = if ts.rx_running {
-                    "Run".green()
-                } else {
-                    "Stop".red()
-                };
-                (tx, rx)
-            }
-            None => ("N/A".dimmed(), "N/A".dimmed()),
+        let tx_str = if iface.runtime_state.tx_running {
+            "Run".green()
+        } else {
+            "Stop".red()
+        };
+        let rx_str = if iface.runtime_state.rx_running {
+            "Run".green()
+        } else {
+            "Stop".red()
         };
 
         writeln!(
@@ -173,17 +157,13 @@ async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn ndp_interface_detail(
-    asn: u32,
-    interface: String,
-    c: Client,
-) -> Result<()> {
+async fn ndp_interface_detail(interface: String, c: Client) -> Result<()> {
     let detail = c
-        .get_ndp_interface_detail(asn, &interface)
+        .get_bgp_unnumbered_interface_detail(&interface)
         .await?
         .into_inner();
 
-    println_nopipe!("NDP State: {}", interface);
+    println_nopipe!("BGP Unnumbered Interface: {}", interface);
     println_nopipe!("{}", "=".repeat(60));
     println_nopipe!();
 
@@ -197,25 +177,20 @@ async fn ndp_interface_detail(
     );
     println_nopipe!();
 
-    // Thread state
-    println_nopipe!("Thread State:");
-    if let Some(ts) = &detail.thread_state {
-        let tx_status = if ts.tx_running {
-            "Running".green()
-        } else {
-            "Stopped".red()
-        };
-        let rx_status = if ts.rx_running {
-            "Running".green()
-        } else {
-            "Stopped".red()
-        };
-        println_nopipe!("  TX Loop: {}", tx_status);
-        println_nopipe!("  RX Loop: {}", rx_status);
+    // Router discovery runtime state
+    println_nopipe!("Router Discovery Runtime:");
+    let tx_status = if detail.runtime_state.tx_running {
+        "Running".green()
     } else {
-        println_nopipe!("  TX Loop: {}", "Unknown".dimmed());
-        println_nopipe!("  RX Loop: {}", "Unknown".dimmed());
-    }
+        "Stopped".red()
+    };
+    let rx_status = if detail.runtime_state.rx_running {
+        "Running".green()
+    } else {
+        "Stopped".red()
+    };
+    println_nopipe!("  TX Loop: {}", tx_status);
+    println_nopipe!("  RX Loop: {}", rx_status);
     println_nopipe!();
 
     if let Some(peer) = detail.discovered_peer {

@@ -11,15 +11,14 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        AcceptedConnection, BgpConnection, BgpConnector, BgpListener,
+        ConnectionDirection, ConnectionId, ThreadState, resolve_session_key,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
     messages::Message,
     router::SessionMap,
-    session::{ConnectionEvent, FsmEvent, PeerId, SessionInfo},
-    unnumbered::UnnumberedManager,
+    session::{ConnectionEvent, FsmEvent, SessionInfo},
 };
 use mg_common::lock;
 use slog::{Logger, info};
@@ -34,6 +33,7 @@ use std::{
     thread::{JoinHandle, spawn},
     time::{Duration, Instant},
 };
+use unnumbered::BgpUnnumbered;
 
 const UNIT_CONNECTION: &str = "connection_channel";
 
@@ -193,33 +193,14 @@ pub fn count_failed_connections_to(peer: SocketAddr) -> usize {
 pub struct BgpListenerChannel {
     listener: Listener,
     bind_addr: SocketAddr,
-    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
-}
-
-impl BgpListenerChannel {
-    /// Resolve incoming peer address to appropriate PeerId.
-    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
-        // Try interface-based routing for IPv6 link-local addresses
-        if let Some(ref mgr) = self.unnumbered_manager
-            && let SocketAddr::V6(v6_addr) = peer_addr
-            && v6_addr.ip().is_unicast_link_local()
-        {
-            let scope_id = v6_addr.scope_id();
-            if let Some(interface) = mgr.get_interface_by_scope(scope_id) {
-                return PeerId::Interface(interface);
-            }
-        }
-
-        // Default to IP-based routing
-        PeerId::Ip(peer_addr.ip())
-    }
+    unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
 }
 
 impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn bind<A: ToSocketAddrs>(
         addr: A,
         log: Logger,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Result<Self, Error>
     where
         Self: Sized,
@@ -245,30 +226,41 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         log: Logger,
         sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>>,
         timeout: Duration,
-    ) -> Result<BgpConnectionChannel, Error> {
+    ) -> Result<AcceptedConnection<BgpConnectionChannel>, Error> {
         let (peer, endpoint) = self.listener.accept(timeout)?;
 
         let local = self.bind_addr;
 
-        // Resolve peer address to appropriate PeerId (IP or Interface)
-        let key = self.resolve_session_key(peer);
+        let key =
+            resolve_session_key(peer, self.unnumbered_manager.as_ref(), &log);
 
         let runner = lock!(sessions)
             .get(&key)
             .cloned()
             .ok_or_else(|| Error::UnknownPeer(key.clone()))?;
 
-        let config = lock!(runner.session);
-        Ok(BgpConnectionChannel::with_conn(
-            local,
-            peer,
-            endpoint,
-            runner.event_tx.clone(),
-            IO_TIMEOUT,
-            log,
-            ConnectionDirection::Inbound,
-            &config,
-        ))
+        let (connection, min_ttl, md5_key) = {
+            let config = lock!(runner.session);
+            let connection = BgpConnectionChannel::with_conn(
+                local,
+                peer,
+                endpoint,
+                runner.event_tx.clone(),
+                IO_TIMEOUT,
+                log,
+                ConnectionDirection::Inbound,
+                &config,
+            );
+            (connection, config.min_ttl, config.md5_auth_key.clone())
+        };
+
+        Ok(AcceptedConnection {
+            connection,
+            session_key: key,
+            runner,
+            min_ttl,
+            md5_key,
+        })
     }
 
     fn apply_policy(

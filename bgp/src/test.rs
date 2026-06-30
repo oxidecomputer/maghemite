@@ -14,8 +14,6 @@ use crate::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
         SessionInfo, SessionRunner,
     },
-    unnumbered::UnnumberedManager,
-    unnumbered_mock::UnnumberedManagerMock,
 };
 use client_common::{eprintln_nopipe, println_nopipe};
 use lazy_static::lazy_static;
@@ -29,7 +27,7 @@ use mg_common::*;
 use oxnet::IpNet;
 use rdb::Asn;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
     num::NonZeroU16,
     sync::{
@@ -40,6 +38,7 @@ use std::{
     thread::{Builder, sleep},
     time::{Duration, Instant},
 };
+use unnumbered::{BgpUnnumbered, BgpUnnumberedInterface, UnnumberedError};
 
 // Use non-standard port outside the privileged range to avoid needing privs
 const TEST_BGP_PORT: u16 = 10179;
@@ -175,6 +174,78 @@ struct NeighborConfig {
     peer_name: String,
     remote_host: SocketAddr,
     session_info: SessionInfo,
+}
+
+#[derive(Clone)]
+struct TestBgpUnnumbered {
+    interfaces: Arc<Mutex<HashMap<String, BgpUnnumberedInterface>>>,
+}
+
+impl TestBgpUnnumbered {
+    fn new() -> Arc<Self> {
+        Arc::new(TestBgpUnnumbered {
+            interfaces: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    fn activate_interface(&self, interface: impl Into<String>, scope_id: u32) {
+        let interface = interface.into();
+        lock!(self.interfaces).insert(
+            interface.clone(),
+            BgpUnnumberedInterface {
+                interface,
+                scope_id,
+                discovered_neighbor: None,
+            },
+        );
+    }
+
+    fn deactivate_interface(&self, interface: &str) {
+        lock!(self.interfaces).remove(interface);
+    }
+
+    fn discover_ndp_neighbor(
+        &self,
+        interface: &str,
+        addr: Ipv6Addr,
+    ) -> Result<(), &'static str> {
+        let mut interfaces = lock!(self.interfaces);
+        let interface = interfaces
+            .get_mut(interface)
+            .ok_or("interface not active")?;
+        interface.discovered_neighbor = Some(addr);
+        Ok(())
+    }
+
+    fn expire_ndp_neighbor(
+        &self,
+        interface: &str,
+    ) -> Result<Option<Ipv6Addr>, &'static str> {
+        let mut interfaces = lock!(self.interfaces);
+        let interface = interfaces
+            .get_mut(interface)
+            .ok_or("interface not active")?;
+        Ok(interface.discovered_neighbor.take())
+    }
+}
+
+impl BgpUnnumbered for TestBgpUnnumbered {
+    fn get_active_interface_by_scope(
+        &self,
+        scope_id: u32,
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+        Ok(lock!(self.interfaces)
+            .values()
+            .find(|interface| interface.scope_id == scope_id)
+            .cloned())
+    }
+
+    fn get_active_interface(
+        &self,
+        interface: &str,
+    ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+        Ok(lock!(self.interfaces).get(interface).cloned())
+    }
 }
 
 /// Create SessionInfo for tests with fixed timer values and route exchange configuration.
@@ -1802,10 +1873,10 @@ fn unnumbered_peering_helper(
     route_exchange: RouteExchange,
 ) -> (
     Arc<Router<BgpConnectionChannel>>,
-    Arc<UnnumberedManagerMock>,
+    Arc<TestBgpUnnumbered>,
     Vec<Arc<SessionRunner<BgpConnectionChannel>>>,
     Arc<Router<BgpConnectionChannel>>,
-    Arc<UnnumberedManagerMock>,
+    Arc<TestBgpUnnumbered>,
     Vec<Arc<SessionRunner<BgpConnectionChannel>>>,
     Vec<Arc<Dispatcher<BgpConnectionChannel>>>,
     Vec<Arc<Dispatcher<BgpConnectionChannel>>>,
@@ -1819,13 +1890,13 @@ fn unnumbered_peering_helper(
         .expect("create db2");
 
     // Create mock NDP managers
-    let mock_ndp1 = UnnumberedManagerMock::new();
-    let mock_ndp2 = UnnumberedManagerMock::new();
+    let mock_ndp1 = TestBgpUnnumbered::new();
+    let mock_ndp2 = TestBgpUnnumbered::new();
 
     // Register all interfaces in both mocks
     for (iface, scope_id) in &interfaces {
-        mock_ndp1.register_interface(iface.clone(), *scope_id);
-        mock_ndp2.register_interface(iface.clone(), *scope_id);
+        mock_ndp1.activate_interface(iface.clone(), *scope_id);
+        mock_ndp2.activate_interface(iface.clone(), *scope_id);
     }
 
     // Create session maps
@@ -2030,8 +2101,8 @@ fn unnumbered_peering_helper(
         let peer1_addr: Ipv6Addr = "fe80::1".parse().unwrap();
         let peer2_addr: Ipv6Addr = "fe80::2".parse().unwrap();
 
-        mock_ndp1.discover_peer(iface, peer2_addr).unwrap();
-        mock_ndp2.discover_peer(iface, peer1_addr).unwrap();
+        mock_ndp1.discover_ndp_neighbor(iface, peer2_addr).unwrap();
+        mock_ndp2.discover_ndp_neighbor(iface, peer1_addr).unwrap();
 
         // NOW start the sessions after NDP discovery
         event_tx1
@@ -2114,7 +2185,9 @@ fn test_unnumbered_session_survives_peer_change() {
 
     // Simulate cable swap: Router 1's interface now sees a different peer
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
-    mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
+    mock_ndp1
+        .discover_ndp_neighbor("eth0", new_peer_ip)
+        .unwrap();
 
     // Router 1's query now returns the new peer
     let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
@@ -2194,7 +2267,7 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
     wait_for_eq!(session2.state(), FsmStateKind::Established);
 
     // Expire Router 1's NDP neighbor
-    mock_ndp1.expire_peer("eth0").unwrap();
+    mock_ndp1.expire_ndp_neighbor("eth0").unwrap();
 
     // Router 1's query now returns None
     wait_for!(session1.get_peer_socket_addr().is_none());
@@ -2218,7 +2291,7 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
 
     // Rediscover peer
     let peer2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
-    mock_ndp1.discover_peer("eth0", peer2_ip).unwrap();
+    mock_ndp1.discover_ndp_neighbor("eth0", peer2_ip).unwrap();
 
     // Router 1's query returns the peer again
     let peer2_addr =
@@ -2282,7 +2355,9 @@ fn test_multiple_unnumbered_sessions() {
 
     // Change Router 1's eth0 NDP neighbor
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
-    mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
+    mock_ndp1
+        .discover_ndp_neighbor("eth0", new_peer_ip)
+        .unwrap();
     let new_peer = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
         TEST_BGP_PORT,
@@ -2456,7 +2531,9 @@ fn test_same_linklocal_multiple_interfaces() {
 
     // Verify they're truly independent: change eth0's peer
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
-    mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
+    mock_ndp1
+        .discover_ndp_neighbor("eth0", new_peer_ip)
+        .unwrap();
     let new_peer_eth0 = SocketAddr::V6(SocketAddrV6::new(
         new_peer_ip,
         TEST_BGP_PORT,
@@ -2505,7 +2582,7 @@ fn next_scope_id() -> u32 {
 struct UnnumberedRouterHandle {
     router: Arc<Router<BgpConnectionChannel>>,
     dispatchers: Vec<Arc<Dispatcher<BgpConnectionChannel>>>,
-    mock_ndp: Arc<UnnumberedManagerMock>,
+    mock_ndp: Arc<TestBgpUnnumbered>,
     sessions: Vec<Arc<SessionRunner<BgpConnectionChannel>>>,
     _db_guard: rdb::test::TestDb,
 }
@@ -2623,12 +2700,12 @@ fn unnumbered_pair(
         .expect("create db2");
 
     // Create mock NDP managers
-    let mock_ndp1 = UnnumberedManagerMock::new();
-    let mock_ndp2 = UnnumberedManagerMock::new();
+    let mock_ndp1 = TestBgpUnnumbered::new();
+    let mock_ndp2 = TestBgpUnnumbered::new();
 
     // Register interface in both mocks
-    mock_ndp1.register_interface(interface_name.to_string(), scope_id);
-    mock_ndp2.register_interface(interface_name.to_string(), scope_id);
+    mock_ndp1.activate_interface(interface_name.to_string(), scope_id);
+    mock_ndp2.activate_interface(interface_name.to_string(), scope_id);
 
     // Allocate link-local addresses with scope_id
     let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
@@ -2765,10 +2842,10 @@ fn unnumbered_pair(
 
     // Discover peers via NDP
     mock_ndp1
-        .discover_peer(interface_name, r2_ip)
+        .discover_ndp_neighbor(interface_name, r2_ip)
         .expect("discover peer on r1");
     mock_ndp2
-        .discover_peer(interface_name, r1_ip)
+        .discover_ndp_neighbor(interface_name, r1_ip)
         .expect("discover peer on r2");
 
     // Start sessions
@@ -2832,15 +2909,15 @@ fn unnumbered_three_router_chain(
         .expect("create db3");
 
     // Create mock NDP managers
-    let mock_ndp1 = UnnumberedManagerMock::new();
-    let mock_ndp2 = UnnumberedManagerMock::new();
-    let mock_ndp3 = UnnumberedManagerMock::new();
+    let mock_ndp1 = TestBgpUnnumbered::new();
+    let mock_ndp2 = TestBgpUnnumbered::new();
+    let mock_ndp3 = TestBgpUnnumbered::new();
 
     // Register interfaces with scope_ids
-    mock_ndp1.register_interface(r1_r2_interface.to_string(), r1_r2_scope_id);
-    mock_ndp2.register_interface(r1_r2_interface.to_string(), r1_r2_scope_id);
-    mock_ndp2.register_interface(r2_r3_interface.to_string(), r2_r3_scope_id);
-    mock_ndp3.register_interface(r2_r3_interface.to_string(), r2_r3_scope_id);
+    mock_ndp1.activate_interface(r1_r2_interface.to_string(), r1_r2_scope_id);
+    mock_ndp2.activate_interface(r1_r2_interface.to_string(), r1_r2_scope_id);
+    mock_ndp2.activate_interface(r2_r3_interface.to_string(), r2_r3_scope_id);
+    mock_ndp3.activate_interface(r2_r3_interface.to_string(), r2_r3_scope_id);
 
     // Link-local addresses for each router
     // IMPORTANT: R1 and R3 both use fe80::1 to test peer isolation bug
@@ -3100,16 +3177,16 @@ fn unnumbered_three_router_chain(
 
     // Discover peers via NDP
     mock_ndp1
-        .discover_peer(r1_r2_interface, r2_ip)
+        .discover_ndp_neighbor(r1_r2_interface, r2_ip)
         .expect("r1 discovers r2");
     mock_ndp2
-        .discover_peer(r1_r2_interface, r1_ip)
+        .discover_ndp_neighbor(r1_r2_interface, r1_ip)
         .expect("r2 discovers r1 on eth0");
     mock_ndp2
-        .discover_peer(r2_r3_interface, r3_ip)
+        .discover_ndp_neighbor(r2_r3_interface, r3_ip)
         .expect("r2 discovers r3 on eth1");
     mock_ndp3
-        .discover_peer(r2_r3_interface, r2_ip)
+        .discover_ndp_neighbor(r2_r3_interface, r2_ip)
         .expect("r3 discovers r2");
 
     // Start all sessions
@@ -3223,7 +3300,7 @@ fn test_unnumbered_unaffected_by_ndp() {
     // Step 2: Update NDP neighbor to new IP on R1
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     r1.mock_ndp
-        .discover_peer("eth0", new_peer_ip)
+        .discover_ndp_neighbor("eth0", new_peer_ip)
         .expect("update peer on R1");
 
     // Step 3: Verify get_peer_addr() returns new IP
@@ -3263,7 +3340,9 @@ fn test_unnumbered_unaffected_by_ndp() {
     );
 
     // Step 5: Expire NDP neighbor on R1
-    r1.mock_ndp.expire_peer("eth0").expect("expire peer on R1");
+    r1.mock_ndp
+        .expire_ndp_neighbor("eth0")
+        .expect("expire peer on R1");
 
     // Step 6: Verify get_peer_addr() returns None
     wait_for!(
@@ -3290,7 +3369,7 @@ fn test_unnumbered_unaffected_by_ndp() {
 
     // Step 8: Rediscover original peer
     r1.mock_ndp
-        .discover_peer("eth0", initial_r2_ip)
+        .discover_ndp_neighbor("eth0", initial_r2_ip)
         .expect("rediscover peer on R1");
 
     // Step 9: Verify get_peer_addr() returns original peer
@@ -3364,7 +3443,7 @@ fn test_unnumbered_ndp_change() {
     // Step 2: Change NDP neighbor to new IP on R1
     let new_peer_ip: Ipv6Addr = "fe80::88".parse().unwrap();
     r1.mock_ndp
-        .discover_peer("eth0", new_peer_ip)
+        .discover_ndp_neighbor("eth0", new_peer_ip)
         .expect("update peer on R1");
 
     // Step 3: Verify get_peer_addr() returns new IP
@@ -3528,7 +3607,7 @@ fn test_three_router_chain_unnumbered() {
     // Step 4: Change NDP on R2's eth0 interface to a new peer
     let new_eth0_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     r2.mock_ndp
-        .discover_peer("eth0", new_eth0_ip)
+        .discover_ndp_neighbor("eth0", new_eth0_ip)
         .expect("update eth0 peer on R2");
 
     // Step 5: Verify only eth0 session's get_peer_addr() changes
@@ -3828,19 +3907,18 @@ fn test_unnumbered_dualstack_route_exchange() {
     // Topology cleanup happens via Drop
 }
 
-/// Test: Complete interface availability lifecycle for unnumbered BGP.
+/// Test: Complete NDP neighbor availability lifecycle for unnumbered BGP.
 ///
-/// Validates FSM behavior through the full interface lifecycle:
-/// - Stage 1: Sessions configured before interfaces exist on system
-/// - Stage 2: Interfaces appear, sessions establish
-/// - Stage 3: Interface removed on one side, sessions stay Established
-/// - Stage 4: Sessions reset while interfaces inactive, cannot establish until interfaces return
+/// BGP only needs to distinguish "there is a discovered NDP neighbor" from
+/// "there is no usable neighbor". The concrete unnumbered manager owns the
+/// system-interface and NDP activation details; this BGP-focused test stubs the
+/// BGP-facing resolver directly.
 #[test]
 fn test_unnumbered_interface_lifecycle() {
     let log = init_file_logger("unnumbered_interface_lifecycle.log");
 
     // =========================================================================
-    // Setup: Two routers with interface CONFIGURED but NOT on system
+    // Setup: Two routers with unnumbered sessions but no discovered NDP peer
     // =========================================================================
 
     let db1 = rdb::test::get_test_db("unnumbered_lifecycle_r1", log.clone())
@@ -3848,14 +3926,10 @@ fn test_unnumbered_interface_lifecycle() {
     let db2 = rdb::test::get_test_db("unnumbered_lifecycle_r2", log.clone())
         .expect("create db2");
 
-    let mock_ndp1 = UnnumberedManagerMock::new();
-    let mock_ndp2 = UnnumberedManagerMock::new();
+    let mock_ndp1 = TestBgpUnnumbered::new();
+    let mock_ndp2 = TestBgpUnnumbered::new();
 
     let scope_id = next_scope_id();
-
-    // ONLY configure interface mapping - do NOT add to system yet
-    mock_ndp1.configure_interface("eth0".to_string(), scope_id);
-    mock_ndp2.configure_interface("eth0".to_string(), scope_id);
 
     // Create session maps
     let sessions1: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
@@ -4001,7 +4075,7 @@ fn test_unnumbered_interface_lifecycle() {
         .expect("start session2");
 
     // =========================================================================
-    // Stage 1: Interface not present - sessions cannot establish
+    // Stage 1: No discovered NDP neighbor - sessions cannot establish
     // =========================================================================
 
     // Wait for FSM to reach Connect or Active state
@@ -4022,43 +4096,22 @@ fn test_unnumbered_interface_lifecycle() {
     // Verify sessions are still not Established
     wait_for!(
         session1.state() != FsmStateKind::Established,
-        "Stage 1: Session1 must not reach Established when interface missing"
+        "Stage 1: Session1 must not reach Established without NDP neighbor"
     );
     wait_for!(
         session2.state() != FsmStateKind::Established,
-        "Stage 1: Session2 must not reach Established when interface missing"
+        "Stage 1: Session2 must not reach Established without NDP neighbor"
     );
 
     // =========================================================================
-    // Stage 2: Interface appears - sessions establish
+    // Stage 2: Active interfaces discover peers - sessions establish
     // =========================================================================
 
-    // Simulate interfaces appearing on the system
-    mock_ndp1.add_system_interface("eth0");
-    mock_ndp2.add_system_interface("eth0");
+    mock_ndp1.activate_interface("eth0", scope_id);
+    mock_ndp2.activate_interface("eth0", scope_id);
 
-    // Verify interface_is_active() now returns true
-    assert!(
-        mock_ndp1.interface_is_active("eth0"),
-        "Stage 2: interface_is_active should return true after add_system_interface"
-    );
-    assert!(
-        mock_ndp2.interface_is_active("eth0"),
-        "Stage 2: interface_is_active should return true after add_system_interface"
-    );
-
-    // Simulate monitor thread detecting interfaces and activating NDP
-    // This is what UnnumberedManagerNdp::activate_interface() does
-    mock_ndp1
-        .activate_ndp("eth0")
-        .expect("Stage 2: activate_ndp should succeed");
-    mock_ndp2
-        .activate_ndp("eth0")
-        .expect("Stage 2: activate_ndp should succeed");
-
-    // Discover peers via NDP (now possible since NDP is activated)
-    mock_ndp1.discover_peer("eth0", r2_ip).unwrap();
-    mock_ndp2.discover_peer("eth0", r1_ip).unwrap();
+    mock_ndp1.discover_ndp_neighbor("eth0", r2_ip).unwrap();
+    mock_ndp2.discover_ndp_neighbor("eth0", r1_ip).unwrap();
 
     // Sessions should now establish
     wait_for_eq!(
@@ -4073,17 +4126,10 @@ fn test_unnumbered_interface_lifecycle() {
     );
 
     // =========================================================================
-    // Stage 3: Interface removed - sessions stay Established
+    // Stage 3: NDP neighbor removed on one side - sessions stay Established
     // =========================================================================
 
-    // Remove interface from system on Router 1 (but keep configuration)
-    mock_ndp1.remove_system_interface("eth0");
-
-    // Verify interface_is_active() now returns false
-    assert!(
-        !mock_ndp1.interface_is_active("eth0"),
-        "Stage 3: interface_is_active should return false after removal"
-    );
+    mock_ndp1.deactivate_interface("eth0");
 
     // Sessions must STAY Established - verify for longer than hold_time to
     // ensure keepalives are being exchanged properly
@@ -4103,21 +4149,10 @@ fn test_unnumbered_interface_lifecycle() {
     }
 
     // =========================================================================
-    // Stage 4: Session reset while interface inactive, then re-establishes
+    // Stage 4: Session reset with no neighbor, then re-establishes
     // =========================================================================
 
-    // Remove interface on both sides to simulate link failure scenario
-    mock_ndp2.remove_system_interface("eth0");
-
-    // Verify both interfaces are now inactive
-    assert!(
-        !mock_ndp1.interface_is_active("eth0"),
-        "Stage 4: R1 interface should still be inactive from Stage 3"
-    );
-    assert!(
-        !mock_ndp2.interface_is_active("eth0"),
-        "Stage 4: R2 interface should now be inactive"
-    );
+    mock_ndp2.deactivate_interface("eth0");
 
     // Reset sessions via admin event (simulates operator intervention or
     // external trigger after detecting link issues)
@@ -4138,9 +4173,9 @@ fn test_unnumbered_interface_lifecycle() {
         "Stage 4: Session2 should leave Established after Reset"
     );
 
-    // Sessions should cycle in Connect/Active but not re-establish
-    // (interface_is_active returns false, blocking connection attempts)
-    // Verify for multiple connect_retry cycles
+    // Sessions should cycle in Connect/Active but not re-establish while no
+    // discovered NDP neighbor is available. Verify for multiple connect_retry
+    // cycles.
     let start = Instant::now();
     while start.elapsed() < CONNECT_RETRY_VERIFICATION {
         assert_ne!(
@@ -4156,32 +4191,11 @@ fn test_unnumbered_interface_lifecycle() {
         sleep(Duration::from_millis(500));
     }
 
-    // Now bring interfaces back on both sides
-    mock_ndp1.add_system_interface("eth0");
-    mock_ndp2.add_system_interface("eth0");
+    mock_ndp1.activate_interface("eth0", scope_id);
+    mock_ndp2.activate_interface("eth0", scope_id);
 
-    // Verify interface_is_active() returns true again
-    assert!(
-        mock_ndp1.interface_is_active("eth0"),
-        "Stage 4: R1 interface_is_active should return true after re-add"
-    );
-    assert!(
-        mock_ndp2.interface_is_active("eth0"),
-        "Stage 4: R2 interface_is_active should return true after re-add"
-    );
-
-    // Simulate monitor thread detecting interfaces and re-activating NDP
-    // (remove_system_interface clears NDP state, so must re-activate)
-    mock_ndp1
-        .activate_ndp("eth0")
-        .expect("Stage 4: activate_ndp should succeed after re-add");
-    mock_ndp2
-        .activate_ndp("eth0")
-        .expect("Stage 4: activate_ndp should succeed after re-add");
-
-    // Rediscover peers (NDP state was cleared when interface was removed)
-    mock_ndp1.discover_peer("eth0", r2_ip).unwrap();
-    mock_ndp2.discover_peer("eth0", r1_ip).unwrap();
+    mock_ndp1.discover_ndp_neighbor("eth0", r2_ip).unwrap();
+    mock_ndp2.discover_ndp_neighbor("eth0", r1_ip).unwrap();
 
     // Sessions should now re-establish
     wait_for_eq!(

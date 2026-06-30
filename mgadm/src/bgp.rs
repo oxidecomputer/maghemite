@@ -37,6 +37,10 @@ pub enum Commands {
 
     /// Omicron control plane commands.
     Omicron(OmicronSubcommand),
+
+    /// View BGP unnumbered router-discovery state.
+    #[command(subcommand)]
+    Unnumbered(crate::unnumbered::Commands),
 }
 
 #[derive(Debug, Args)]
@@ -962,6 +966,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Omicron(cmd) => match cmd.command {
             OmicronCmd::Apply { filename } => apply(filename, c).await?,
         },
+        Commands::Unnumbered(cmd) => {
+            crate::unnumbered::commands(cmd, c).await?
+        }
     }
     Ok(())
 }

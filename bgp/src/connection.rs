@@ -7,16 +7,16 @@ use crate::{
     error::Error,
     messages::Message,
     router::SessionMap,
-    session::{FsmEvent, SessionInfo},
-    unnumbered::UnnumberedManager,
+    session::{FsmEvent, PeerId, SessionInfo, SessionRunner},
 };
-use slog::Logger;
+use slog::{Logger, debug, error};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
 };
+use unnumbered::BgpUnnumbered;
 
 pub(crate) use mg_api_types::bgp::session::{
     ConnectionDirection, ConnectionId,
@@ -31,6 +31,60 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 #[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
+/// Accepted inbound connection and its resolved session metadata.
+pub struct AcceptedConnection<Cnx: BgpConnection + 'static> {
+    pub connection: Cnx,
+    pub session_key: PeerId,
+    pub runner: Arc<SessionRunner<Cnx>>,
+    pub min_ttl: Option<u8>,
+    pub md5_key: Option<String>,
+}
+
+/// Resolve an incoming peer address to the session key used by BGP.
+pub fn resolve_session_key(
+    peer_addr: SocketAddr,
+    unnumbered_manager: Option<&Arc<dyn BgpUnnumbered>>,
+    log: &Logger,
+) -> PeerId {
+    // Try interface-based key for IPv6 link-local addresses
+    if let Some(mgr) = unnumbered_manager
+        && let SocketAddr::V6(v6_addr) = peer_addr
+        && v6_addr.ip().is_unicast_link_local()
+    {
+        match mgr.get_active_interface_by_scope(v6_addr.scope_id()) {
+            Ok(Some(interface)) => {
+                if interface.discovered_neighbor == Some(*v6_addr.ip()) {
+                    return PeerId::Interface(interface.interface);
+                } else if let Some(neighbor) = interface.discovered_neighbor {
+                    debug!(log,
+                        "incoming unnumbered peer does not match discovered NDP neighbor";
+                        "interface" => interface.interface.as_str(),
+                        "peer" => peer_addr,
+                        "discovered" => neighbor.to_string(),
+                    );
+                } else {
+                    debug!(log,
+                        "incoming unnumbered peer has no discovered NDP neighbor";
+                        "interface" => interface.interface.as_str(),
+                        "peer" => peer_addr,
+                    );
+                }
+            }
+            // Fallback to IP-based key on failure/missing interface
+            Ok(None) => {}
+            Err(e) => {
+                error!(log,
+                    "active unnumbered interface query error: {e}";
+                    "error" => format!("{e}")
+                );
+            }
+        }
+    }
+
+    // Default to IP-based key
+    PeerId::Ip(peer_addr.ip())
+}
+
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
     /// Bind to an address and listen for connections.
@@ -41,7 +95,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     fn bind<A: ToSocketAddrs>(
         addr: A,
         log: Logger,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Result<Self, Error>
     where
         Self: Sized;
@@ -55,7 +109,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         log: Logger,
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
         timeout: Duration,
-    ) -> Result<Cnx, Error>;
+    ) -> Result<AcceptedConnection<Cnx>, Error>;
 
     /// Apply policy to an established connection. This is called by the
     /// Dispatcher after accept() returns and session lookup is completed.
