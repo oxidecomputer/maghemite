@@ -118,7 +118,7 @@ async fn ndp_interfaces(c: Client) -> Result<()> {
     for iface in interfaces {
         let (peer_str, reachable_str) = match &iface.discovered_peer {
             Some(peer) => {
-                let addr_str = format!("{}%{}", peer.address, iface.interface);
+                let addr_str = format!("{}", peer.address);
                 let reachable = if peer.expired {
                     "No".red()
                 } else {
