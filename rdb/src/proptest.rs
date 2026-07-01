@@ -9,7 +9,9 @@
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
 use crate::types::StaticRouteKey;
-use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
+use mg_api_types::bgp::config::{
+    Ipv4UnicastConfig, Ipv6UnicastConfig, Neighbor, NeighborConfig,
+};
 use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types_versions::v4::bgp::policy::{
     ImportExportPolicy4, ImportExportPolicy6,
@@ -145,10 +147,10 @@ fn ipv6_policy_strategy() -> impl Strategy<Value = ImportExportPolicy6> {
     ]
 }
 
-// Strategy for generating valid BgpNeighborInfo
+// Strategy for generating valid stored `Neighbor`s.
 // Focuses on testing critical fields: nexthop4, nexthop6, and policy variants.
 // Uses sensible defaults for non-critical fields (primitives already well-tested by serde).
-fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
+fn bgp_neighbor_info_strategy() -> impl Strategy<Value = Neighbor> {
     (
         any::<u32>(),            // asn (random)
         any::<String>(), // name (random - tests any JSON-serializable string)
@@ -172,12 +174,14 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                 allow_import6,
                 allow_export6,
             )| {
-                BgpNeighborInfo {
+                Neighbor {
                     asn,
-                    name,
-                    host,
                     group: "test".into(),
-                    parameters: BgpNeighborParameters {
+                    config: NeighborConfig {
+                        name,
+                        peer: mg_api_types::bgp::peer::PeerId::Ip(host.ip()),
+                        port: None,
+                        act_as_a_default_ipv6_router: 0,
                         hold_time: 90,
                         idle_hold_time: 60,
                         delay_open: 0,
@@ -192,14 +196,19 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                         communities: vec![],
                         local_pref: Some(100),
                         enforce_first_as: false,
-                        ipv4_enabled: true,
-                        ipv6_enabled: true,
-                        allow_import4,
-                        allow_export4,
-                        allow_import6,
-                        allow_export6,
-                        nexthop4,
-                        nexthop6,
+                        ipv4_unicast: Some(Ipv4UnicastConfig {
+                            nexthop: nexthop4,
+                            import_policy: allow_import4.into(),
+                            export_policy: allow_export4.into(),
+                        }),
+                        ipv6_unicast: Some(Ipv6UnicastConfig {
+                            nexthop: nexthop6,
+                            import_policy: allow_import6.into(),
+                            export_policy: allow_export6.into(),
+                        }),
+                        deterministic_collision_resolution: false,
+                        idle_hold_jitter: None,
+                        connect_retry_jitter: None,
                         vlan_id: Some(1),
                         src_addr: None,
                         src_port: None,
@@ -422,75 +431,24 @@ proptest! {
         }
     }
 
-    /// Property: BgpNeighborInfo survives JSON serialization/deserialization round-trip
-    /// This ensures that the nexthop4 and nexthop6 fields (and all other fields) are
-    /// correctly preserved when encoding to database and retrieving back.
+    /// Property: a stored `Neighbor` survives JSON serialization/deserialization
+    /// round-trip. Now that the dedicated storage twin is gone and the read type
+    /// is persisted directly, every config field (including the previously
+    /// non-persisted jitter / deterministic-collision fields) round-trips.
     #[test]
     fn prop_bgp_neighbor_info_serialization_roundtrip(neighbor in bgp_neighbor_info_strategy()) {
         // Serialize to JSON (simulating database storage)
         let json = serde_json::to_string(&neighbor)
-            .expect("Failed to serialize BgpNeighborInfo to JSON");
+            .expect("Failed to serialize Neighbor to JSON");
 
         // Deserialize from JSON (simulating database retrieval)
-        let deserialized: BgpNeighborInfo = serde_json::from_str(&json)
-            .expect("Failed to deserialize BgpNeighborInfo from JSON");
+        let deserialized: Neighbor = serde_json::from_str(&json)
+            .expect("Failed to deserialize Neighbor from JSON");
 
-        // All fields should match after round-trip
+        // The whole value must match after round-trip.
         prop_assert_eq!(
-            deserialized.asn, neighbor.asn,
-            "ASN should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.name, neighbor.name,
-            "Name should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.host, neighbor.host,
-            "Host should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.nexthop4, neighbor.parameters.nexthop4,
-            "IPv4 nexthop should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.nexthop6, neighbor.parameters.nexthop6,
-            "IPv6 nexthop should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.ipv4_enabled, neighbor.parameters.ipv4_enabled,
-            "IPv4 enabled flag should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.ipv6_enabled, neighbor.parameters.ipv6_enabled,
-            "IPv6 enabled flag should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.multi_exit_discriminator, neighbor.parameters.multi_exit_discriminator,
-            "MED should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.local_pref, neighbor.parameters.local_pref,
-            "Local preference should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.remote_asn, neighbor.parameters.remote_asn,
-            "Remote ASN should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.allow_import4, neighbor.parameters.allow_import4,
-            "IPv4 import policy should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.allow_export4, neighbor.parameters.allow_export4,
-            "IPv4 export policy should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.allow_import6, neighbor.parameters.allow_import6,
-            "IPv6 import policy should survive serialization round-trip"
-        );
-        prop_assert_eq!(
-            deserialized.parameters.allow_export6, neighbor.parameters.allow_export6,
-            "IPv6 export policy should survive serialization round-trip"
+            deserialized, neighbor,
+            "Neighbor should survive serialization round-trip"
         );
     }
 }

@@ -15,8 +15,8 @@ use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_api_types::bfd::BfdPeerConfig;
+use mg_api_types::bgp::config::Neighbor;
 use mg_api_types::bgp::peer::PeerId;
-use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
 use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
@@ -52,10 +52,6 @@ const BGP_ROUTER: &str = "bgp_router";
 /// information.
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
 
-/// The handle used to open a persistent key-value tree for BGP neighbor
-/// information.
-const BGP_UNNUMBERED_NEIGHBOR: &str = "bgp_unnumbered_neighbor";
-
 /// The handle used to open a persistent key-value tree for settings
 /// information.
 const SETTINGS: &str = "settings";
@@ -78,6 +74,33 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
+
+fn bgp_neighbor_key(asn: u32, peer: &PeerId) -> Result<String, Error> {
+    Ok(serde_json::to_string(&(asn, peer))?)
+}
+
+const ASN_KEY_LEN: usize = 4;
+
+/// Prepend `asn` to `key`, producing the on-disk key for a router-scoped entry.
+fn asn_scoped_key(asn: u32, key: &[u8]) -> Vec<u8> {
+    let mut buf = asn.to_be_bytes().to_vec();
+    buf.extend_from_slice(key);
+    buf
+}
+
+/// Strip the ASN prefix from a router-scoped key, yielding the inner key bytes.
+fn strip_asn(key: &[u8]) -> &[u8] {
+    &key[ASN_KEY_LEN..]
+}
+
+/// Remove every entry in `tree` scoped to `asn`.
+fn remove_asn_scoped(tree: &sled::Tree, asn: u32) -> Result<(), Error> {
+    for item in tree.scan_prefix(asn.to_be_bytes()) {
+        let (key, _) = item?;
+        tree.remove(key)?;
+    }
+    Ok(())
+}
 
 use crate::rib::{Rib, Rib4, Rib6};
 
@@ -121,33 +144,6 @@ pub struct Db {
 }
 unsafe impl Sync for Db {}
 unsafe impl Send for Db {}
-
-/// Width in bytes of the ASN prefix prepended to keys in router-scoped trees
-/// (neighbors, originated prefixes). Scoping every per-router key by ASN keeps
-/// state belonging to distinct routers from colliding in the shared sled trees
-/// and lets a router's state be enumerated/dropped with a single prefix scan.
-const ASN_KEY_LEN: usize = 4;
-
-/// Prepend `asn` to `key`, producing the on-disk key for a router-scoped entry.
-fn asn_scoped_key(asn: u32, key: &[u8]) -> Vec<u8> {
-    let mut buf = asn.to_be_bytes().to_vec();
-    buf.extend_from_slice(key);
-    buf
-}
-
-/// Strip the ASN prefix from a router-scoped key, yielding the inner key bytes.
-fn strip_asn(key: &[u8]) -> &[u8] {
-    &key[ASN_KEY_LEN..]
-}
-
-/// Remove every entry in `tree` scoped to `asn`.
-fn remove_asn_scoped(tree: &sled::Tree, asn: u32) -> Result<(), Error> {
-    for item in tree.scan_prefix(asn.to_be_bytes()) {
-        let (key, _) = item?;
-        tree.remove(key)?;
-    }
-    Ok(())
-}
 
 #[derive(Clone)]
 struct Watcher {
@@ -345,50 +341,28 @@ impl Db {
         Ok(result)
     }
 
-    pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<(), Error> {
+    pub fn add_bgp_neighbor(&self, nbr: Neighbor) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        let key = asn_scoped_key(nbr.asn, nbr.host.ip().to_string().as_bytes());
+        let key = bgp_neighbor_key(nbr.asn, &nbr.config.peer)?;
         let value = serde_json::to_string(&nbr)?;
-        tree.insert(key, value.as_str())?;
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn add_unnumbered_bgp_neighbor(
-        &self,
-        nbr: BgpUnnumberedNeighborInfo,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        let key = asn_scoped_key(nbr.asn, nbr.interface.as_bytes());
-        let value = serde_json::to_string(&nbr)?;
-        tree.insert(key, value.as_str())?;
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn remove_unnumbered_bgp_neighbor(
-        &self,
-        asn: Asn,
-        interface: &str,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        tree.remove(asn_scoped_key(asn.as_u32(), interface.as_bytes()))?;
+        tree.insert(key.as_str(), value.as_str())?;
         tree.flush()?;
         Ok(())
     }
 
     pub fn remove_bgp_neighbor(
         &self,
-        asn: Asn,
-        addr: IpAddr,
+        asn: u32,
+        peer: &PeerId,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        tree.remove(asn_scoped_key(asn.as_u32(), addr.to_string().as_bytes()))?;
+        let key = bgp_neighbor_key(asn, peer)?;
+        tree.remove(key.as_str())?;
         tree.flush()?;
         Ok(())
     }
 
-    pub fn get_bgp_neighbors(&self) -> Result<Vec<BgpNeighborInfo>, Error> {
+    pub fn get_bgp_neighbors(&self) -> Result<Vec<Neighbor>, Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let result = tree
             .scan_prefix(vec![])
@@ -406,7 +380,7 @@ impl Db {
                     }
                 };
                 let value = String::from_utf8_lossy(&value);
-                let value: BgpNeighborInfo = match serde_json::from_str(&value)
+                let value: Neighbor = match serde_json::from_str(&value)
                 {
                     Ok(item) => item,
                     Err(ref e) => {
@@ -414,45 +388,6 @@ impl Db {
                             self,
                             error,
                             "error parsing bgp neighbor entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
-    }
-
-    pub fn get_unnumbered_bgp_neighbors(
-        &self,
-    ) -> Result<Vec<BgpUnnumberedNeighborInfo>, Error> {
-        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (_key, value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching unnumbered bgp neighbor entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&value);
-                let value: BgpUnnumberedNeighborInfo = match serde_json::from_str(&value)
-                {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing unnumbered bgp neighbor entry value {value:?}: {e}";
                             "unit" => UNIT_PERSISTENT
                         );
                         return None;
@@ -1522,7 +1457,7 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
+        Asn, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
         types::test_helpers::path_vecs_equal,
     };
     use client_common::eprintln_nopipe;
@@ -2216,7 +2151,7 @@ mod test {
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0], new_prefixes[0]);
 
-        // Clear origin4 - must only clear this ASN's entries
+        // Clear origin4 - must only clear this ASN's entries.
         db.clear_origin4(ASN).expect("clear origin4");
         let empty = db.get_origin4(ASN).expect("get empty origin4");
         assert!(empty.is_empty());

@@ -4,7 +4,7 @@
 
 use crate::{
     COMPONENT_BGP,
-    config::{PeerConfig, RouterConfig},
+    config::RouterConfig,
     connection::BgpConnection,
     error::Error,
     fanout::{Egress, Fanout4, Fanout6},
@@ -26,13 +26,11 @@ use rhai::AST;
 use slog::Logger;
 use std::{
     collections::BTreeSet,
-    net::SocketAddr,
     sync::{
         Arc, Mutex, MutexGuard, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, Sender},
     },
-    time::Duration,
 };
 
 /// Internal newtype for `IdOrdItem` impl — not exposed outside this module.
@@ -208,6 +206,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     fn stop_all_sessions(&self) {
         let sessions = lock!(self.sessions);
         for (peer, s) in sessions.iter() {
+            if s.local_asn() != self.config.asn {
+                continue;
+            }
             self.remove_fanout(peer.clone());
             s.shutdown();
         }
@@ -217,10 +218,18 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     /// This signals SessionRunner threads to exit and releases Arc<SessionRunner>
     /// references, allowing BgpConnections to drop and their threads to clean up.
     fn delete_all_sessions(&self) {
-        let sessions = std::mem::take(&mut *lock!(self.sessions));
-        for (peer, s) in sessions.iter() {
-            self.remove_fanout(peer.clone());
-            s.shutdown();
+        let mut sessions = lock!(self.sessions);
+        let peers: Vec<_> = sessions
+            .iter()
+            .filter(|(_, session)| session.local_asn() == self.config.asn)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+
+        for peer in peers {
+            if let Some(session) = sessions.remove(&peer) {
+                self.remove_fanout(peer);
+                session.shutdown();
+            }
         }
     }
 
@@ -308,24 +317,22 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     #[allow(clippy::too_many_arguments)]
     pub fn ensure_session(
         self: &Arc<Self>,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
+        neighbor: NeighborInfo,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let sessions = lock!(self.sessions);
-        if sessions.contains_key(&peer.id) {
+        if sessions.contains_key(&neighbor.peer) {
             drop(sessions);
             Ok(EnsureSessionResult::Updated(
-                self.update_session(peer, info)?,
+                self.update_session(neighbor, info)?,
             ))
         } else {
             Ok(EnsureSessionResult::New(self.new_session_locked(
                 sessions,
-                peer,
-                bind_addr,
+                neighbor,
                 event_tx,
                 event_rx,
                 info,
@@ -337,21 +344,19 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new_session(
         self: &Arc<Self>,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
+        neighbor: NeighborInfo,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let sessions = lock!(self.sessions);
-        if sessions.contains_key(&peer.id) {
+        if sessions.contains_key(&neighbor.peer) {
             Err(Error::PeerExists)
         } else {
             self.new_session_locked(
                 sessions,
-                peer,
-                bind_addr,
+                neighbor,
                 event_tx,
                 event_rx,
                 info,
@@ -364,31 +369,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     fn new_session_locked(
         self: &Arc<Self>,
         mut sessions: MutexGuard<SessionMap<Cnx>>,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
+        neighbor: NeighborInfo,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let mut session_info = info.clone();
-        session_info.connect_retry_time =
-            Duration::from_secs(peer.connect_retry);
-        session_info.keepalive_time = Duration::from_secs(peer.keepalive);
-        session_info.hold_time = Duration::from_secs(peer.hold_time);
-        session_info.idle_hold_time = Duration::from_secs(peer.idle_hold_time);
-        session_info.delay_open_time = Duration::from_secs(peer.delay_open);
-        session_info.resolution = Duration::from_millis(peer.resolution);
-        session_info.bind_addr = bind_addr;
-
-        let session = Arc::new(Mutex::new(session_info));
-
-        let neighbor = NeighborInfo {
-            name: Arc::new(Mutex::new(peer.name.clone())),
-            peer_group: peer.group.clone(),
-            peer: peer.id.clone(),
-            port: peer.port,
-        };
+        let session = Arc::new(Mutex::new(info));
 
         let runner = Arc::new(SessionRunner::new(
             session,
@@ -409,16 +396,16 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
     pub fn update_session(
         self: &Arc<Self>,
-        peer: PeerConfig,
+        neighbor: NeighborInfo,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let key = peer.id.clone();
+        let key = neighbor.peer.clone();
         let session = match lock!(self.sessions).get(&key) {
             None => return Err(Error::UnknownPeer(key)),
             Some(s) => s.clone(),
         };
 
-        session.update_session_parameters(peer, info)?;
+        session.update_session_parameters(neighbor, info)?;
 
         Ok(session)
     }
@@ -501,6 +488,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
         self.db.clear_origin4(self.config.asn)?;
         Ok(())
+    }
+
+    /// Prefixes this router is currently originating into IPv4 unicast.
+    pub fn originated4(&self) -> Result<Vec<Ipv4Net>, rdb::error::Error> {
+        self.db.get_origin4(self.config.asn)
     }
 
     fn announce_origin4(&self, prefixes: Vec<Ipv4Net>) {
@@ -605,11 +597,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
         self.db.clear_origin6(self.config.asn)?;
         Ok(())
-    }
-
-    /// Prefixes this router is currently originating into IPv4 unicast.
-    pub fn originated4(&self) -> Result<Vec<Ipv4Net>, rdb::error::Error> {
-        self.db.get_origin4(self.config.asn)
     }
 
     /// Prefixes this router is currently originating into IPv6 unicast.

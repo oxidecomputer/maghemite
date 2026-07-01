@@ -13,6 +13,7 @@ use crate::{
 use slog::Logger;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
+    num::NonZeroU16,
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
@@ -30,6 +31,13 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
 #[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
+
+/// Resolved socket addresses for an outbound connection attempt.
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectTarget {
+    pub destination: SocketAddr,
+    pub source: Option<SocketAddr>,
+}
 
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
@@ -63,6 +71,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         conn: &Cnx,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
+        listen_port: NonZeroU16,
     ) -> Result<(), Error>;
 
     /// `SocketAddr` the listener is receiving connections on
@@ -79,7 +88,7 @@ pub trait BgpConnector<Cnx: BgpConnection> {
     /// Returns a handle to the connection attempt, allowing the caller to track
     /// and manage it.
     fn connect(
-        peer: SocketAddr,
+        addrs: ConnectTarget,
         timeout: Duration,
         log: Logger,
         event_tx: Sender<FsmEvent<Cnx>>,
