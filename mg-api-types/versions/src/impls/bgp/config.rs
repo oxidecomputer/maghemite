@@ -5,7 +5,35 @@
 //! Display and helper impls for the latest BGP neighbor / reset / config types.
 
 use crate::latest;
+use crate::latest::bgp::config::JitterRange;
 use crate::latest::bgp::peer::PeerId;
+
+impl Default for JitterRange {
+    fn default() -> Self {
+        Self { min: 0.75, max: 1.0 }
+    }
+}
+
+impl std::str::FromStr for JitterRange {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() != 2 {
+            return Err(
+                "jitter range must be in format 'min,max' (e.g., '0.75,1.0')"
+                    .to_string(),
+            );
+        }
+        let min = parts[0].trim().parse::<f64>().map_err(|_| {
+            format!("min value '{}' is not a valid float", parts[0].trim())
+        })?;
+        let max = parts[1].trim().parse::<f64>().map_err(|_| {
+            format!("max value '{}' is not a valid float", parts[1].trim())
+        })?;
+        Ok(JitterRange { min, max })
+    }
+}
 
 impl std::fmt::Display for latest::bgp::config::NeighborResetRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
