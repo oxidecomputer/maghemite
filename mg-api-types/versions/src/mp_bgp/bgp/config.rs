@@ -80,27 +80,6 @@ pub struct JitterRange {
     pub max: f64,
 }
 
-impl std::str::FromStr for JitterRange {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(',').collect();
-        if parts.len() != 2 {
-            return Err(
-                "jitter range must be in format 'min,max' (e.g., '0.75,1.0')"
-                    .to_string(),
-            );
-        }
-        let min = parts[0].trim().parse::<f64>().map_err(|_| {
-            format!("min value '{}' is not a valid float", parts[0].trim())
-        })?;
-        let max = parts[1].trim().parse::<f64>().map_err(|_| {
-            format!("max value '{}' is not a valid float", parts[1].trim())
-        })?;
-        Ok(JitterRange { min, max })
-    }
-}
-
 /// Per-address-family configuration for IPv4 Unicast
 #[derive(
     Debug, Default, Clone, Deserialize, Serialize, JsonSchema, PartialEq,
