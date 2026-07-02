@@ -134,7 +134,7 @@ gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "m
 uuid = { version = "1.21", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
-itertools = "0.14"
+itertools = "0.15"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
 proptest = "1.10"
