@@ -70,12 +70,45 @@ gw=$(bmat address ls -f extra -Ho gateway)
 server=$(ipadm show-addr "${EXT_INTERFACE}"/dhcp -po ADDR | sed 's#/.*##g')
 pfexec ./dhcp-server "${first}" "${last}" "${gw}" "${server}" &> /work/dhcp-server.log &
 
+collect_falcon_artifacts() {
+	local test_name=$1
+	local artifact_dir="/work/falcon-${test_name}"
+	local path
+
+	if [[ ! -d .falcon ]]; then
+		return 0
+	fi
+
+	# Preserve only propolis logs before cleanup removes them. Avoid archiving
+	# arbitrary workspace contents, since cargo-bay may contain secrets and
+	# future Falcon versions may add other files here.
+	rm -rf "${artifact_dir}"
+	mkdir -p "${artifact_dir}"
+	for path in .falcon/*.{out,err}; do
+		if [[ -e "${path}" ]]; then
+			cp -p "${path}" "${artifact_dir}/"
+		fi
+	done
+	tar cvfz "/work/falcon-${test_name}.tar.gz" -C /work "falcon-${test_name}" || true
+	rm -rf "${artifact_dir}"
+}
+
+clear_falcon_workspace_files() {
+	if [[ -d .falcon ]]; then
+		find .falcon -maxdepth 1 -type f -exec rm -f {} +
+	fi
+}
+
 run_test() {
-	local test=$1
+	local test_name=$1
 	local status=0
 
-	RUST_LOG=debug pfexec ./falcon-lab run "${test}" || status=$?
-	pfexec ./falcon-lab cleanup "${test}" || true
+	clear_falcon_workspace_files
+	RUST_LOG=debug pfexec ./falcon-lab run --no-cleanup "${test_name}" || status=$?
+	if (( status != 0 )); then
+		collect_falcon_artifacts "${test_name}"
+	fi
+	pfexec ./falcon-lab cleanup "${test_name}" || true
 	return "${status}"
 }
 
