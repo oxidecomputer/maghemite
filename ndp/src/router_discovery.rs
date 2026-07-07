@@ -21,18 +21,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::{Builder, sleep};
 use std::time::{Duration, Instant};
 
-/// The `RouterDiscovery` worker runs router discovery for an individual interface.
-///
-/// Discovery is started on construction and stopped automatically when the
-/// worker is dropped via the `ManagedThread` Drop implementation.
-#[derive(Debug)]
-pub struct RouterDiscoveryThreads {
-    /// Handle to the transmit loop thread
-    _tx_thread: Arc<ManagedThread>,
-    /// Handle to the receive loop thread
-    _rx_thread: Arc<ManagedThread>,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum NewRouterDiscoveryError {
     #[error("socket create: {0}")]
@@ -52,6 +40,18 @@ pub struct RouterDiscoveryRuntimeState {
     pub tx_running: bool,
     /// Whether the RX loop thread is running
     pub rx_running: bool,
+}
+
+/// The `RouterDiscovery` worker runs router discovery for an individual interface.
+///
+/// Discovery is started on construction and stopped automatically when the
+/// worker is dropped via the `ManagedThread` Drop implementation.
+#[derive(Debug)]
+pub struct RouterDiscoveryThreads {
+    /// Handle to the transmit loop thread
+    _tx_thread: Arc<ManagedThread>,
+    /// Handle to the receive loop thread
+    _rx_thread: Arc<ManagedThread>,
 }
 
 impl RouterDiscoveryThreads {
