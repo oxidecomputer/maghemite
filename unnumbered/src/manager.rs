@@ -10,14 +10,16 @@ use mg_common::lock;
 use mg_common::thread::ManagedThread;
 use ndp::Ipv6NetworkInterface;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use slog::{Logger, info, o, warn};
+use slog::{Logger, crit, info, o, warn};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv6Addr},
     num::NonZeroU32,
     sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        mpsc::{
+            Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel,
+        },
     },
     thread,
     time::{Duration, Instant},
@@ -49,14 +51,20 @@ pub struct UnnumberedManager {
     /// currently have active router-discovery runtime.
     configured_interfaces: Arc<Mutex<HashMap<String, u16>>>,
 
+    /// Wakes the monitor thread when configuration changes. Buffer size 1:
+    /// if a wake token is already pending the monitor has yet to run and
+    /// will observe this change too, so a full buffer needs no new token.
+    ///
+    /// None means no monitor thread exists by construction (tests), where
+    /// reconciliation is driven manually. The manager's Drop impl takes the
+    /// sender to disconnect the channel, ending the monitor loop before
+    /// ManagedThread's drop joins the thread.
+    monitor_tx: Option<SyncSender<()>>,
+
     /// Managed thread for interface monitoring.
     /// Stored to ensure automatic cleanup on drop - the ManagedThread's Drop
-    /// impl will signal shutdown and join the thread.
+    /// impl will join the thread.
     monitor_thread: Arc<ManagedThread>,
-
-    /// Condvar to wake the monitor thread when work is added
-    monitor_condvar: Arc<Condvar>,
-    monitor_mutex: Arc<Mutex<()>>,
 }
 
 impl UnnumberedManager {
@@ -65,27 +73,22 @@ impl UnnumberedManager {
             "module" => MOD_UNNUMBERED_MANAGER,
         ));
 
-        // Create the managed thread and get its dropped flag before constructing
-        // the manager, so we can pass the flag to the thread function.
         let monitor_thread = Arc::new(ManagedThread::new());
-        let dropped = monitor_thread.dropped_flag();
         let active_interfaces = Arc::new(Mutex::new(InterfaceMap::new()));
         let configured_interfaces = Arc::new(Mutex::new(HashMap::new()));
-        let monitor_condvar = Arc::new(Condvar::new());
-        let monitor_mutex = Arc::new(Mutex::new(()));
+        let (monitor_tx, monitor_rx) = sync_channel(1);
 
         let manager = Arc::new(Self {
             log: log.clone(),
             active_interfaces: Arc::clone(&active_interfaces),
             configured_interfaces: Arc::clone(&configured_interfaces),
+            monitor_tx: Some(monitor_tx),
             monitor_thread: Arc::clone(&monitor_thread),
-            monitor_condvar: Arc::clone(&monitor_condvar),
-            monitor_mutex: Arc::clone(&monitor_mutex),
         });
 
-        // Spawn and register the interface monitor thread.
-        // The ManagedThread will automatically signal shutdown and join the
-        // thread when the manager is dropped.
+        // Spawn and register the interface monitor thread. Dropping the
+        // manager disconnects the wake channel, which ends the monitor
+        // loop; the ManagedThread then joins the thread.
         let handle = thread::Builder::new()
             .name("unnumbered-interface-monitor".to_string())
             .spawn(move || {
@@ -93,9 +96,7 @@ impl UnnumberedManager {
                     log,
                     active_interfaces,
                     configured_interfaces,
-                    monitor_condvar,
-                    monitor_mutex,
-                    dropped,
+                    monitor_rx,
                 );
             })
             .expect("failed to spawn interface monitor thread");
@@ -110,9 +111,9 @@ impl UnnumberedManager {
             log: Logger::root(slog::Discard, o!()),
             active_interfaces: Arc::new(Mutex::new(InterfaceMap::new())),
             configured_interfaces: Arc::new(Mutex::new(HashMap::new())),
+            // No monitor thread; tests drive reconciliation manually.
+            monitor_tx: None,
             monitor_thread: Arc::new(ManagedThread::new()),
-            monitor_condvar: Arc::new(Condvar::new()),
-            monitor_mutex: Arc::new(Mutex::new(())),
         })
     }
 
@@ -125,25 +126,17 @@ impl UnnumberedManager {
     /// Uses batched interface checking: a single call to `NetworkInterface::show()`
     /// per poll cycle, regardless of how many interfaces are being monitored.
     ///
-    /// The `dropped` flag is set by the ManagedThread when the manager is dropped,
-    /// signaling this thread to exit.
+    /// Exits when `monitor_rx` disconnects, which happens when the manager
+    /// (holding the sender) is dropped.
     fn run_interface_monitor(
         log: Logger,
         active_interfaces: Arc<Mutex<InterfaceMap>>,
         configured_interfaces: Arc<Mutex<HashMap<String, u16>>>,
-        monitor_condvar: Arc<Condvar>,
-        monitor_mutex: Arc<Mutex<()>>,
-        dropped: Arc<AtomicBool>,
+        monitor_rx: Receiver<()>,
     ) {
         info!(log, "interface monitor started");
 
         loop {
-            // Check for shutdown (set by ManagedThread::drop)
-            if dropped.load(Ordering::Relaxed) {
-                info!(log, "interface monitor shutting down");
-                break;
-            }
-
             // Check if there's any work to do
             let has_configured = !lock!(configured_interfaces).is_empty();
             let has_active = !lock!(active_interfaces).is_empty();
@@ -169,11 +162,17 @@ impl UnnumberedManager {
                 }
             }
 
-            // Wait until notified about new work/shutdown, or poll again
-            // after the interval.
-            let guard = lock!(monitor_mutex);
-            let _result =
-                monitor_condvar.wait_timeout(guard, INTERFACE_POLL_INTERVAL);
+            // Sleep until woken by a config change, the poll interval
+            // elapsing, or the manager being dropped (disconnecting the
+            // channel). A token sent while we were reconciling above is
+            // buffered and returns immediately, so wakes cannot be lost.
+            match monitor_rx.recv_timeout(INTERFACE_POLL_INTERVAL) {
+                Ok(()) | Err(RecvTimeoutError::Timeout) => (),
+                Err(RecvTimeoutError::Disconnected) => {
+                    info!(log, "interface monitor shutting down");
+                    break;
+                }
+            }
         }
 
         info!(log, "interface monitor exited");
@@ -385,8 +384,24 @@ impl UnnumberedManager {
             "interface" => interface_str,
         );
 
-        // Wake up the monitor thread since there's new or updated work.
-        self.monitor_condvar.notify_one();
+        // Wake the monitor thread since there's new or updated work. A full
+        // buffer means a wake is already pending and this change will be
+        // observed by it. A disconnected channel means the monitor thread
+        // exited while the manager is still alive — the loop only exits on
+        // sender disconnect, so this indicates the monitor panicked and the
+        // configuration just recorded will never be reconciled. A None
+        // sender means no monitor exists by construction (tests) and the
+        // caller drives reconciliation itself.
+        if let Some(tx) = &self.monitor_tx
+            && let Err(TrySendError::Disconnected(())) = tx.try_send(())
+        {
+            crit!(
+                self.log,
+                "interface monitor thread is gone; \
+                 unnumbered interface reconciliation is not running";
+                "interface" => interface_str,
+            );
+        }
 
         Ok(())
     }
@@ -466,11 +481,11 @@ impl UnnumberedManager {
 
 impl Drop for UnnumberedManager {
     fn drop(&mut self) {
-        let _guard = lock!(self.monitor_mutex);
-        self.monitor_thread
-            .dropped_flag()
-            .store(true, Ordering::Relaxed);
-        self.monitor_condvar.notify_one();
+        // Disconnect the wake channel so the monitor loop exits before
+        // `monitor_thread`'s field drop joins the thread. Drop bodies run
+        // before automatic field drops, so this ordering is guaranteed
+        // regardless of field declaration order.
+        self.monitor_tx = None;
     }
 }
 
