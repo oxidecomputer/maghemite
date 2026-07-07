@@ -2865,17 +2865,13 @@
             "type": "string",
             "format": "ipv6"
           },
-          "discovered_at": {
-            "description": "When the router was first discovered (ISO 8601 timestamp)",
-            "type": "string"
-          },
-          "expired": {
-            "description": "Whether the discovered router entry has expired",
-            "type": "boolean"
-          },
-          "last_advertisement": {
-            "description": "When the most recent Router Advertisement was received (ISO 8601 timestamp)",
-            "type": "string"
+          "effective_reachable_time": {
+            "description": "Effective reachable time governing expiry of this entry",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Duration"
+              }
+            ]
           },
           "reachable_time": {
             "description": "Reachable time from RA (milliseconds)",
@@ -2895,20 +2891,31 @@
             "format": "uint16",
             "minimum": 0
           },
-          "time_until_expiry": {
-            "nullable": true,
-            "description": "Time until expiry (human-readable), or None if already expired",
-            "type": "string"
+          "time_since_discovered": {
+            "description": "Time elapsed since the router was first discovered",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Duration"
+              }
+            ]
+          },
+          "time_since_last_rx": {
+            "description": "Time elapsed since the most recent Router Advertisement was received",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Duration"
+              }
+            ]
           }
         },
         "required": [
           "address",
-          "discovered_at",
-          "expired",
-          "last_advertisement",
+          "effective_reachable_time",
           "reachable_time",
           "retrans_timer",
-          "router_lifetime"
+          "router_lifetime",
+          "time_since_discovered",
+          "time_since_last_rx"
         ]
       },
       "Duration": {
@@ -5429,7 +5436,7 @@
         "properties": {
           "discovered_peer": {
             "nullable": true,
-            "description": "Information about discovered peer (if any, including expired)",
+            "description": "Information about the discovered peer. None if no peer has been discovered or the discovered entry has expired.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/DiscoveredRouter"

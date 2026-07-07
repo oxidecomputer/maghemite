@@ -4,12 +4,12 @@
 
 use anyhow::Result;
 use clap::Parser;
+use client_common::format_duration_human;
 use colored::*;
 use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
-use mg_common::format_duration_human;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
 use std::io::{Write, stdout};

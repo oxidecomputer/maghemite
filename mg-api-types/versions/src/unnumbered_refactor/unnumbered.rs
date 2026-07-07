@@ -3,7 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::net::Ipv6Addr;
+use std::time::Duration;
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -56,7 +58,8 @@ pub struct UnnumberedInterface {
     pub scope_id: u32,
     /// Router lifetime advertised by this router (seconds)
     pub router_lifetime: u16,
-    /// Information about discovered peer (if any, including expired)
+    /// Information about the discovered peer. None if no peer has been
+    /// discovered or the discovered entry has expired.
     pub discovered_peer: Option<DiscoveredRouter>,
     /// Runtime state for router discovery on this interface
     pub runtime_state: RouterDiscoveryRuntimeState,
@@ -67,21 +70,18 @@ pub struct UnnumberedInterface {
 pub struct DiscoveredRouter {
     /// Router IPv6 address
     pub address: Ipv6Addr,
-    /// When the router was first discovered (ISO 8601 timestamp)
-    pub discovered_at: String,
-    /// When the most recent Router Advertisement was received (ISO 8601
-    /// timestamp)
-    pub last_advertisement: String,
+    /// Time elapsed since the router was first discovered
+    pub time_since_discovered: Duration,
+    /// Time elapsed since the most recent Router Advertisement was received
+    pub time_since_last_rx: Duration,
+    /// Effective reachable time governing expiry of this entry
+    pub effective_reachable_time: Duration,
     /// Router lifetime from RA (seconds)
     pub router_lifetime: u16,
     /// Reachable time from RA (milliseconds)
     pub reachable_time: u32,
     /// Retransmit timer from RA (milliseconds)
     pub retrans_timer: u32,
-    /// Whether the discovered router entry has expired
-    pub expired: bool,
-    /// Time until expiry (human-readable), or None if already expired
-    pub time_until_expiry: Option<String>,
 }
 
 impl From<PendingUnnumberedInterface> for v5::ndp::NdpPendingInterface {
@@ -95,15 +95,29 @@ impl From<PendingUnnumberedInterface> for v5::ndp::NdpPendingInterface {
 
 impl From<DiscoveredRouter> for v5::ndp::NdpPeer {
     fn from(router: DiscoveredRouter) -> Self {
+        // The legacy API reported wall-clock ISO 8601 timestamps and a
+        // human-readable time-until-expiry. Expired peers never reach this
+        // conversion — they are represented as a missing discovered_peer —
+        // so `expired` is always false here.
+        let to_iso8601 = |elapsed: Duration| {
+            chrono::Duration::from_std(elapsed)
+                .ok()
+                .and_then(|d| Utc::now().checked_sub_signed(d))
+                .unwrap_or(DateTime::<Utc>::MIN_UTC)
+                .to_rfc3339_opts(SecondsFormat::Secs, true)
+        };
+        let time_until_expiry = router.time_until_expiration();
         Self {
             address: router.address,
-            discovered_at: router.discovered_at,
-            last_advertisement: router.last_advertisement,
+            discovered_at: to_iso8601(router.time_since_discovered),
+            last_advertisement: to_iso8601(router.time_since_last_rx),
             router_lifetime: router.router_lifetime,
             reachable_time: router.reachable_time,
             retrans_timer: router.retrans_timer,
-            expired: router.expired,
-            time_until_expiry: router.time_until_expiry,
+            expired: false,
+            time_until_expiry: Some(client_common::format_duration_human(
+                time_until_expiry,
+            )),
         }
     }
 }
@@ -181,13 +195,12 @@ mod tests {
             router_lifetime: 123,
             discovered_peer: Some(DiscoveredRouter {
                 address: link_local(2),
-                discovered_at: "2026-06-24T12:00:00Z".into(),
-                last_advertisement: "2026-06-24T12:00:01Z".into(),
+                time_since_discovered: Duration::from_secs(60),
+                time_since_last_rx: Duration::from_secs(1),
+                effective_reachable_time: Duration::from_secs(42),
                 router_lifetime: 42,
                 reachable_time: 5000,
                 retrans_timer: 1000,
-                expired: false,
-                time_until_expiry: Some("41s".into()),
             }),
             runtime_state: RouterDiscoveryRuntimeState {
                 tx_running: true,
@@ -203,13 +216,17 @@ mod tests {
         assert_eq!(legacy.router_lifetime, 123);
         let peer = legacy.discovered_peer.unwrap();
         assert_eq!(peer.address, link_local(2));
-        assert_eq!(peer.discovered_at, "2026-06-24T12:00:00Z");
-        assert_eq!(peer.last_advertisement, "2026-06-24T12:00:01Z");
+        // Timestamps are derived from Utc::now() minus the elapsed
+        // durations, so just check they parse as RFC 3339 and are ordered.
+        let discovered_at: DateTime<Utc> = peer.discovered_at.parse().unwrap();
+        let last_advertisement: DateTime<Utc> =
+            peer.last_advertisement.parse().unwrap();
+        assert!(discovered_at < last_advertisement);
         assert_eq!(peer.router_lifetime, 42);
         assert_eq!(peer.reachable_time, 5000);
         assert_eq!(peer.retrans_timer, 1000);
         assert!(!peer.expired);
-        assert_eq!(peer.time_until_expiry.as_deref(), Some("41s"));
+        assert_eq!(peer.time_until_expiry.as_deref(), Some("41s 0ms"));
         let thread_state = legacy.thread_state.unwrap();
         assert!(thread_state.tx_running);
         assert!(!thread_state.rx_running);

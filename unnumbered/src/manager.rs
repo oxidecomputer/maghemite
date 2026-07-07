@@ -13,14 +13,14 @@ use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use slog::{Logger, info, o, warn};
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv6Addr},
     num::NonZeroU32,
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const MOD_UNNUMBERED_MANAGER: &str = "unnumbered manager";
@@ -419,13 +419,6 @@ impl UnnumberedManager {
         Ok(())
     }
 
-    // =========================================================================
-    // Unnumbered/NDP Query Interface
-    // =========================================================================
-    // These methods provide the query interface for BGP session and dispatcher
-    // code to access current unnumbered/NDP state without triggering session
-    // management.
-
     /// Get the currently discovered neighbor for an interface.
     ///
     /// Returns the peer's link-local IPv6 address if a neighbor has been
@@ -468,38 +461,6 @@ impl UnnumberedManager {
         lock!(self.active_interfaces)
             .get_by_scope_id(scope_id)
             .map(|ifx| ifx.name().to_string())
-    }
-
-    /// Validate that a peer address matches the discovered neighbor for an interface.
-    ///
-    /// This is used by SessionRunner to validate incoming connections on
-    /// unnumbered interfaces, ensuring the connection is from the expected
-    /// NDP-discovered neighbor.
-    ///
-    /// # Arguments
-    /// * `interface` - The interface name
-    /// * `peer` - The peer address to validate
-    ///
-    /// # Returns
-    /// * `true` - Peer matches the discovered neighbor for this interface
-    /// * `false` - Peer does not match or no neighbor discovered
-    ///
-    /// Note: Currently unused as validation happens via Dispatcher routing.
-    /// Available for future explicit validation scenarios.
-    #[allow(dead_code)]
-    pub fn validate_peer_for_interface(
-        &self,
-        interface: impl AsRef<str>,
-        peer: SocketAddr,
-    ) -> bool {
-        // Get discovered neighbor for interface
-        if let Ok(Some(discovered)) = self.get_neighbor_by_interface(interface)
-        {
-            // Compare IP addresses (ignore port/flowinfo differences)
-            IpAddr::V6(discovered) == peer.ip()
-        } else {
-            false
-        }
     }
 }
 
@@ -644,31 +605,73 @@ pub struct InterfaceDetail {
     pub runtime_state: ndp::RouterDiscoveryRuntimeState,
 }
 
-/// Detailed discovered router state with full RA information
+/// Detailed discovered router state
 #[derive(Debug, Clone)]
 pub struct DiscoveredRouterState {
     pub address: Ipv6Addr,
-    pub first_seen: std::time::Instant,
-    pub when: std::time::Instant,
+    pub first_seen: Instant,
+    pub last_seen: Instant,
     pub router_lifetime: u16,
     pub reachable_time: u32,
-    pub effective_reachable_time: std::time::Duration,
+    pub effective_reachable_time: Duration,
     pub retrans_timer: u32,
     pub expired: bool,
 }
 
 impl From<ndp::RouterAdvertisementInfo> for DiscoveredRouterState {
     fn from(info: ndp::RouterAdvertisementInfo) -> Self {
+        let ndp::RouterAdvertisementInfo {
+            address,
+            first_seen,
+            last_seen,
+            router_lifetime,
+            reachable_time,
+            effective_reachable_time,
+            retrans_timer,
+            expired,
+        } = info;
         Self {
-            address: info.address,
-            first_seen: info.first_seen,
-            when: info.last_seen,
-            router_lifetime: info.router_lifetime,
-            reachable_time: info.reachable_time,
-            effective_reachable_time: info.effective_reachable_time,
-            retrans_timer: info.retrans_timer,
-            expired: info.expired,
+            address,
+            first_seen,
+            last_seen,
+            router_lifetime,
+            reachable_time,
+            effective_reachable_time,
+            retrans_timer,
+            expired,
         }
+    }
+}
+
+impl From<&DiscoveredRouterState>
+    for Option<mg_api_types::unnumbered::DiscoveredRouter>
+{
+    /// The API represents an expired discovery entry as an absent peer, so
+    /// expired state converts to None.
+    fn from(state: &DiscoveredRouterState) -> Self {
+        let &DiscoveredRouterState {
+            address,
+            first_seen,
+            last_seen,
+            router_lifetime,
+            reachable_time,
+            effective_reachable_time,
+            retrans_timer,
+            expired,
+        } = state;
+        if expired {
+            return None;
+        }
+        let now = Instant::now();
+        Some(mg_api_types::unnumbered::DiscoveredRouter {
+            address,
+            time_since_discovered: now.duration_since(first_seen),
+            time_since_last_rx: now.duration_since(last_seen),
+            effective_reachable_time,
+            router_lifetime,
+            reachable_time,
+            retrans_timer,
+        })
     }
 }
 
@@ -693,6 +696,47 @@ mod tests {
 
     fn link_local(n: u16) -> Ipv6Addr {
         format!("fe80::{n}").parse().unwrap()
+    }
+
+    fn discovered_router_state(expired: bool) -> DiscoveredRouterState {
+        let now = Instant::now();
+        DiscoveredRouterState {
+            address: link_local(1),
+            first_seen: now - Duration::from_secs(60),
+            last_seen: now - Duration::from_secs(1),
+            router_lifetime: 42,
+            reachable_time: 5000,
+            effective_reachable_time: Duration::from_secs(42),
+            retrans_timer: 1000,
+            expired,
+        }
+    }
+
+    #[test]
+    fn expired_discovered_router_converts_to_absent_api_peer() {
+        let state = discovered_router_state(true);
+        let peer: Option<mg_api_types::unnumbered::DiscoveredRouter> =
+            (&state).into();
+        assert!(peer.is_none());
+    }
+
+    #[test]
+    fn live_discovered_router_converts_to_api_peer() {
+        let state = discovered_router_state(false);
+        let peer: Option<mg_api_types::unnumbered::DiscoveredRouter> =
+            (&state).into();
+        let peer = peer.expect("live state should convert to a peer");
+
+        assert_eq!(peer.address, link_local(1));
+        assert_eq!(peer.effective_reachable_time, Duration::from_secs(42));
+        assert_eq!(peer.router_lifetime, 42);
+        assert_eq!(peer.reachable_time, 5000);
+        assert_eq!(peer.retrans_timer, 1000);
+        // Elapsed durations are measured against Instant::now(), so bound
+        // them rather than asserting exact values.
+        assert!(peer.time_since_discovered >= Duration::from_secs(60));
+        assert!(peer.time_since_last_rx >= Duration::from_secs(1));
+        assert!(peer.time_since_discovered > peer.time_since_last_rx);
     }
 
     fn manual_interface(

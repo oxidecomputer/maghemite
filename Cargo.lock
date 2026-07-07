@@ -1464,6 +1464,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "client-common",
  "colored",
  "ddm-admin-client",
  "ddm-api-types-versions",
@@ -3840,6 +3841,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "client-common",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",

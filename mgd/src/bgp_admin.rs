@@ -18,7 +18,6 @@ use bgp::{
         AdminEvent, ConnectionKind, FsmEvent, SessionInfo, SessionRunner,
     },
 };
-use chrono::{DateTime, SecondsFormat, Utc};
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
@@ -43,7 +42,7 @@ use mg_api_types::bgp::session::{
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_api_types::unnumbered::{
-    DiscoveredRouter, PendingUnnumberedInterface, RouterDiscoveryRuntimeState,
+    PendingUnnumberedInterface, RouterDiscoveryRuntimeState,
     UnnumberedInterface, UnnumberedInterfaceSelector, UnnumberedManagerState,
 };
 use mg_api_types_versions::{v1, v2, v4, v5, v8};
@@ -58,8 +57,7 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Sender, channel},
 };
-use std::time::{Duration, Instant, SystemTime};
-use unnumbered::{DiscoveredRouterState, UnnumberedManager};
+use unnumbered::UnnumberedManager;
 
 const UNIT_BGP: &str = "bgp";
 const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
@@ -527,54 +525,6 @@ pub async fn clear_unnumbered_neighbor(
     .await?)
 }
 
-/// Convert an Instant to an ISO 8601 timestamp string
-fn instant_to_iso8601(when: Instant) -> String {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
-    let elapsed = now_instant.duration_since(when);
-    let system_time = now_system - elapsed;
-    DateTime::<Utc>::from(system_time)
-        .to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-/// Convert discovered router state to API type with timestamp formatting
-fn convert_discovered_router_to_api(
-    state: &DiscoveredRouterState,
-) -> DiscoveredRouter {
-    let elapsed_since_when = Instant::now().duration_since(state.when);
-
-    // Format timestamps: first_seen for when peer was discovered,
-    // when for when the most recent RA was received
-    let discovered_at = instant_to_iso8601(state.first_seen);
-    let last_advertisement = instant_to_iso8601(state.when);
-
-    let time_until_expiry = if state.expired {
-        // Calculate time since expiry
-        let time_since_expiry = elapsed_since_when
-            .checked_sub(state.effective_reachable_time)
-            .unwrap_or(Duration::ZERO);
-        Some(mg_common::format_duration_human(time_since_expiry))
-    } else {
-        // Calculate time until expiry
-        let time_until = state
-            .effective_reachable_time
-            .checked_sub(elapsed_since_when)
-            .unwrap_or(Duration::ZERO);
-        Some(mg_common::format_duration_human(time_until))
-    };
-
-    DiscoveredRouter {
-        address: state.address,
-        discovered_at,
-        last_advertisement,
-        router_lifetime: state.router_lifetime,
-        reachable_time: state.reachable_time,
-        retrans_timer: state.retrans_timer,
-        expired: state.expired,
-        time_until_expiry,
-    }
-}
-
 /// Convert router discovery runtime state to API type.
 fn convert_runtime_state_to_api(
     state: &ndp::RouterDiscoveryRuntimeState,
@@ -621,10 +571,7 @@ pub async fn get_bgp_unnumbered_interfaces(
         .list_interfaces()
         .into_iter()
         .map(|ndp| {
-            let discovered_peer = ndp
-                .peer_state
-                .as_ref()
-                .map(convert_discovered_router_to_api);
+            let discovered_peer = ndp.peer_state.as_ref().and_then(Into::into);
             let runtime_state =
                 convert_runtime_state_to_api(&ndp.runtime_state);
 
@@ -669,10 +616,7 @@ pub async fn get_ndp_interfaces_v5(
         .into_iter()
         .filter(|ndp| interfaces.contains(&ndp.interface))
         .map(|ndp| {
-            let discovered_peer = ndp
-                .peer_state
-                .as_ref()
-                .map(convert_discovered_router_to_api);
+            let discovered_peer = ndp.peer_state.as_ref().and_then(Into::into);
             let runtime_state =
                 convert_runtime_state_to_api(&ndp.runtime_state);
 
@@ -715,10 +659,7 @@ pub async fn get_bgp_unnumbered_interface_detail(
             )
         })?;
 
-    let discovered_peer = ndp_detail
-        .peer_state
-        .as_ref()
-        .map(convert_discovered_router_to_api);
+    let discovered_peer = ndp_detail.peer_state.as_ref().and_then(Into::into);
     let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
 
     Ok(HttpResponseOk(UnnumberedInterface {
@@ -764,10 +705,7 @@ pub async fn get_ndp_interface_detail_v5(
             )
         })?;
 
-    let discovered_peer = ndp_detail
-        .peer_state
-        .as_ref()
-        .map(convert_discovered_router_to_api);
+    let discovered_peer = ndp_detail.peer_state.as_ref().and_then(Into::into);
     let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
 
     Ok(HttpResponseOk(

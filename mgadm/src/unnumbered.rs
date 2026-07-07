@@ -105,28 +105,20 @@ async fn ndp_interfaces(c: Client) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}\t{}",
         "Interface".dimmed(),
         "Local Address".dimmed(),
         "Scope".dimmed(),
         "Discovered Peer".dimmed(),
         "TX".dimmed(),
         "RX".dimmed(),
-        "Reachable".dimmed(),
     )?;
 
     for iface in interfaces {
-        let (peer_str, reachable_str) = match &iface.discovered_peer {
-            Some(peer) => {
-                let addr_str = format!("{}", peer.address);
-                let reachable = if peer.expired {
-                    "No".red()
-                } else {
-                    "Yes".green()
-                };
-                (addr_str, reachable)
-            }
-            None => ("None".to_string(), "N/A".dimmed()),
+        // An expired peer is reported as no discovered peer at all.
+        let peer_str = match &iface.discovered_peer {
+            Some(peer) => format!("{}", peer.address),
+            None => "None".to_string(),
         };
 
         let tx_str = if iface.runtime_state.tx_running {
@@ -142,14 +134,13 @@ async fn ndp_interfaces(c: Client) -> Result<()> {
 
         writeln!(
             &mut tw,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             iface.interface,
             iface.local_address,
             iface.scope_id,
             peer_str,
             tx_str,
             rx_str,
-            reachable_str,
         )?;
     }
 
@@ -194,30 +185,27 @@ async fn ndp_interface_detail(interface: String, c: Client) -> Result<()> {
     println_nopipe!();
 
     if let Some(peer) = detail.discovered_peer {
-        if peer.expired {
-            println_nopipe!("{}", "Discovered Peer (EXPIRED):".red());
-        } else {
-            println_nopipe!("Discovered Peer:");
-        }
+        let human = client_common::format_duration_human;
+        let time_until_expiry = peer.time_until_expiration();
 
+        println_nopipe!("Discovered Peer:");
         println_nopipe!("  Address: {}", peer.address);
-        println_nopipe!("  Discovered At: {}", peer.discovered_at);
-        println_nopipe!("  Last Advertisement: {}", peer.last_advertisement);
+        println_nopipe!(
+            "  Time Since Discovered: {}",
+            human(peer.time_since_discovered)
+        );
+        println_nopipe!(
+            "  Time Since Last RX: {}",
+            human(peer.time_since_last_rx)
+        );
         println_nopipe!("  Router Lifetime: {}s", peer.router_lifetime);
         println_nopipe!("  Reachable Time: {}ms", peer.reachable_time);
+        println_nopipe!(
+            "  Effective Reachable Time: {}",
+            human(peer.effective_reachable_time)
+        );
         println_nopipe!("  Retrans Timer: {}ms", peer.retrans_timer);
-
-        if peer.expired {
-            println_nopipe!("  Expired: {}", "Yes".red());
-            if let Some(time_since) = peer.time_until_expiry {
-                println_nopipe!("  Time Since Expiry: {}", time_since);
-            }
-        } else {
-            println_nopipe!("  Expired: {}", "No".green());
-            if let Some(time_until) = peer.time_until_expiry {
-                println_nopipe!("  Time Until Expiry: {}", time_until);
-            }
-        }
+        println_nopipe!("  Time Until Expiry: {}", human(time_until_expiry));
     } else {
         println_nopipe!("Discovered Peer: None");
     }
