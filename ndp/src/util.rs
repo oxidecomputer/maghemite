@@ -248,3 +248,43 @@ fn set_min_hopcount(s: &Socket) -> Result<(), ListeningSocketError> {
 fn set_min_hopcount(_s: &Socket) -> Result<(), ListeningSocketError> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn received_ra(
+        reachable_time: u32,
+        age: Duration,
+    ) -> ReceivedRouterAdvertisement {
+        let now = Instant::now();
+        ReceivedRouterAdvertisement {
+            first_seen: now - age,
+            last_seen: now - age,
+            advertisement: Icmp6RouterAdvertisement {
+                reachable_time,
+                ..Default::default()
+            },
+            source: Ipv6Addr::LOCALHOST,
+        }
+    }
+
+    #[test]
+    fn ra_within_reachable_time_is_not_expired() {
+        // 60s reachable time, last seen just now.
+        assert!(!received_ra(60_000, Duration::ZERO).expired());
+    }
+
+    #[test]
+    fn ra_older_than_reachable_time_is_expired() {
+        // 100ms reachable time, last seen 60s ago.
+        assert!(received_ra(100, Duration::from_secs(60)).expired());
+    }
+
+    #[test]
+    fn zero_reachable_time_expires_after_default() {
+        // reachable_time of 0 falls back to a 10s effective reachable time.
+        assert!(!received_ra(0, Duration::from_secs(5)).expired());
+        assert!(received_ra(0, Duration::from_secs(11)).expired());
+    }
+}

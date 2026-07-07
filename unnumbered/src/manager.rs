@@ -821,6 +821,19 @@ mod tests {
     }
 
     #[test]
+    fn real_manager_runs_monitor_and_drop_joins_it() {
+        // Unlike new_test, this spawns the real monitor thread.
+        let manager = UnnumberedManager::new(Logger::root(slog::Discard, o!()));
+        assert!(manager.get_manager_state().monitor_running);
+
+        // Dropping the manager disconnects the wake channel; the monitor
+        // must observe it and exit so the ManagedThread join completes.
+        // A regression here (e.g. the loop no longer exiting on channel
+        // disconnect) hangs this test rather than passing silently.
+        drop(manager);
+    }
+
+    #[test]
     fn active_interface_drives_manager_queries_and_bgp_trait() {
         let manager = UnnumberedManager::new_test();
         let interface = manual_interface("eth0", link_local(1), 7, 123);
