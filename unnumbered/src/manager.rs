@@ -314,7 +314,16 @@ impl UnnumberedManager {
 
                 match activate(ifx, router_lifetime) {
                     Ok(active) => {
-                        lock!(active_interfaces).insert_overwrite(active);
+                        // Bind any displaced interfaces so their drop (which
+                        // joins router-discovery threads) happens after the
+                        // lock is released. Displacement is believed
+                        // unreachable here (names are pre-filtered and stale
+                        // scope-id holders are deactivated earlier in this
+                        // pass), but joining under the lock would stall
+                        // connection dispatch if that ever changed.
+                        let displaced =
+                            lock!(active_interfaces).insert_overwrite(active);
+                        drop(displaced);
                     }
                     Err(e) => {
                         warn!(
@@ -422,8 +431,13 @@ impl UnnumberedManager {
         lock!(self.configured_interfaces).remove(interface_str);
 
         // Remove from active if it was active. Dropping the interface also
-        // drops its router-discovery thread handles.
-        lock!(self.active_interfaces).remove_by_name(interface_str);
+        // drops its router-discovery thread handles, which joins threads
+        // that sleep in multi-second intervals — bind the removed value so
+        // the drop (and joins) happen after the lock is released, not as a
+        // statement temporary while the guard is still held.
+        let removed =
+            lock!(self.active_interfaces).remove_by_name(interface_str);
+        drop(removed);
 
         info!(
             self.log,
