@@ -6676,6 +6676,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_human_bytes"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/serde_human_bytes?branch=main#8f60acdfe7c6d9e2a01f59be920c1c2b19129322"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8275,15 +8285,17 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tufaceous-artifact"
-version = "0.2.0"
-source = "git+https://github.com/oxidecomputer/tufaceous?branch=main#6e2d1803e273de403848d62781eaec37996fd2ce"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/tufaceous?branch=main#a7d440f5a111c7e3504e8eb125c105d7baf0deab"
 dependencies = [
- "byte-wrapper",
  "daft",
+ "hex",
  "proptest",
  "schemars 0.8.22",
+ "semver 1.0.28",
  "serde",
- "serde_json",
+ "serde_human_bytes",
+ "strum 0.26.3",
  "test-strategy",
  "thiserror 2.0.18",
 ]
