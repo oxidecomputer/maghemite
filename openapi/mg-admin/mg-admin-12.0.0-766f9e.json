@@ -5031,26 +5031,6 @@
           "keepalive"
         ]
       },
-      "PendingUnnumberedInterface": {
-        "description": "Information about a pending unnumbered interface.",
-        "type": "object",
-        "properties": {
-          "interface": {
-            "description": "Interface name",
-            "type": "string"
-          },
-          "router_lifetime": {
-            "description": "Configured router lifetime (seconds)",
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "interface",
-          "router_lifetime"
-        ]
-      },
       "Rib": {
         "type": "object",
         "additionalProperties": {
@@ -5481,33 +5461,109 @@
           "scope_id"
         ]
       },
+      "UnnumberedInterfaceStatus": {
+        "description": "Status of an interface configured for unnumbered operation.",
+        "oneOf": [
+          {
+            "description": "Configured but not yet available on the system.",
+            "type": "object",
+            "properties": {
+              "Pending": {
+                "type": "object",
+                "properties": {
+                  "router_lifetime": {
+                    "description": "Configured router lifetime (seconds)",
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "router_lifetime"
+                ]
+              }
+            },
+            "required": [
+              "Pending"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Active for unnumbered operation.",
+            "type": "object",
+            "properties": {
+              "Active": {
+                "type": "object",
+                "properties": {
+                  "discovered_peer": {
+                    "nullable": true,
+                    "description": "Information about the discovered peer. None if no peer has been discovered or the discovered entry has expired.",
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/DiscoveredRouter"
+                      }
+                    ]
+                  },
+                  "local_address": {
+                    "description": "Local IPv6 link-local address",
+                    "type": "string",
+                    "format": "ipv6"
+                  },
+                  "router_lifetime": {
+                    "description": "Router lifetime advertised by this router (seconds)",
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0
+                  },
+                  "runtime_state": {
+                    "description": "Runtime state for router discovery on this interface",
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/RouterDiscoveryRuntimeState"
+                      }
+                    ]
+                  },
+                  "scope_id": {
+                    "description": "IPv6 scope ID (interface index)",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "local_address",
+                  "router_lifetime",
+                  "runtime_state",
+                  "scope_id"
+                ]
+              }
+            },
+            "required": [
+              "Active"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
       "UnnumberedManagerState": {
         "description": "Unnumbered manager state showing overall health and interface status.",
         "type": "object",
         "properties": {
-          "active_interfaces": {
-            "description": "Interfaces currently active for unnumbered operation",
-            "type": "array",
-            "items": {
-              "type": "string"
+          "interfaces": {
+            "description": "Status of every interface configured for unnumbered operation, keyed by interface name.",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UnnumberedInterfaceStatus"
             }
           },
           "monitor_running": {
             "description": "Whether the interface monitor thread is running",
             "type": "boolean"
-          },
-          "pending_interfaces": {
-            "description": "Interfaces configured but not yet available on the system",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PendingUnnumberedInterface"
-            }
           }
         },
         "required": [
-          "active_interfaces",
-          "monitor_running",
-          "pending_interfaces"
+          "interfaces",
+          "monitor_running"
         ]
       },
       "UnnumberedNeighbor": {

@@ -42,8 +42,9 @@ use mg_api_types::bgp::session::{
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_api_types::unnumbered::{
-    PendingUnnumberedInterface, RouterDiscoveryRuntimeState,
-    UnnumberedInterface, UnnumberedInterfaceSelector, UnnumberedManagerState,
+    RouterDiscoveryRuntimeState, UnnumberedInterface,
+    UnnumberedInterfaceSelector, UnnumberedInterfaceStatus,
+    UnnumberedManagerState,
 };
 use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
@@ -539,24 +540,37 @@ pub async fn get_bgp_unnumbered_manager_state(
     rqctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<UnnumberedManagerState>, HttpError> {
     let ctx = rqctx.context();
+    let manager = &ctx.bgp.unnumbered_manager;
 
-    // Get manager state from unnumbered manager
-    let manager_state = ctx.bgp.unnumbered_manager.get_manager_state();
-
-    // Convert pending interfaces to API type
-    let pending_interfaces = manager_state
-        .pending_interfaces
-        .into_iter()
-        .map(|p| PendingUnnumberedInterface {
-            interface: p.interface,
-            router_lifetime: p.router_lifetime,
-        })
-        .collect();
+    // Active interfaces carry full router-discovery detail; pending
+    // interfaces are configured-but-unavailable. Insert active entries
+    // last so an interface that activates between the two queries is
+    // reported active rather than pending.
+    let mut interfaces = BTreeMap::new();
+    for p in manager.get_pending_interfaces() {
+        interfaces.insert(
+            p.interface,
+            UnnumberedInterfaceStatus::Pending {
+                router_lifetime: p.router_lifetime,
+            },
+        );
+    }
+    for ifx in manager.list_interfaces() {
+        interfaces.insert(
+            ifx.interface,
+            UnnumberedInterfaceStatus::Active {
+                local_address: ifx.local_address,
+                scope_id: ifx.scope_id,
+                router_lifetime: ifx.router_lifetime,
+                discovered_peer: ifx.peer_state.as_ref().and_then(Into::into),
+                runtime_state: convert_runtime_state_to_api(&ifx.runtime_state),
+            },
+        );
+    }
 
     Ok(HttpResponseOk(UnnumberedManagerState {
-        monitor_running: manager_state.monitor_running,
-        pending_interfaces,
-        active_interfaces: manager_state.active_interfaces,
+        monitor_running: manager.get_manager_state().monitor_running,
+        interfaces,
     }))
 }
 

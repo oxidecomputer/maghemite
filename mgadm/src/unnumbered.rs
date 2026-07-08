@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use client_common::println_nopipe;
 use colored::Colorize;
 use mg_admin_client::Client;
+use mg_admin_client::types::UnnumberedInterfaceStatus;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
 
@@ -63,31 +64,38 @@ async fn ndp_manager_status(c: Client) -> Result<()> {
     println_nopipe!("Monitor Thread: {}", monitor_status);
     println_nopipe!();
 
-    // Pending interfaces
-    println_nopipe!(
-        "Pending Interfaces (configured, waiting for system): {}",
-        state.pending_interfaces.len()
-    );
-    if state.pending_interfaces.is_empty() {
+    println_nopipe!("Interfaces: {}", state.interfaces.len());
+    if state.interfaces.is_empty() {
         println_nopipe!("  (none)");
     } else {
-        for pending in &state.pending_interfaces {
-            println_nopipe!(
-                "  {} (router_lifetime: {}s)",
-                pending.interface,
-                pending.router_lifetime
-            );
-        }
-    }
-    println_nopipe!();
-
-    // Active interfaces
-    println_nopipe!("Active Interfaces: {}", state.active_interfaces.len());
-    if state.active_interfaces.is_empty() {
-        println_nopipe!("  (none)");
-    } else {
-        for iface in &state.active_interfaces {
-            println_nopipe!("  {}", iface);
+        for (interface, status) in &state.interfaces {
+            match status {
+                UnnumberedInterfaceStatus::Pending { router_lifetime } => {
+                    println_nopipe!(
+                        "  {} {} (router_lifetime: {}s)",
+                        interface,
+                        "Pending".yellow(),
+                        router_lifetime,
+                    );
+                }
+                UnnumberedInterfaceStatus::Active {
+                    local_address,
+                    discovered_peer,
+                    ..
+                } => {
+                    let peer = match discovered_peer {
+                        Some(peer) => peer.address.to_string(),
+                        None => "None".to_string(),
+                    };
+                    println_nopipe!(
+                        "  {} {} (local: {}, peer: {})",
+                        interface,
+                        "Active".green(),
+                        local_address,
+                        peer,
+                    );
+                }
+            }
         }
     }
 

@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::BTreeMap;
 use std::net::Ipv6Addr;
 use std::time::Duration;
 
@@ -32,19 +33,33 @@ pub struct RouterDiscoveryRuntimeState {
 pub struct UnnumberedManagerState {
     /// Whether the interface monitor thread is running
     pub monitor_running: bool,
-    /// Interfaces configured but not yet available on the system
-    pub pending_interfaces: Vec<PendingUnnumberedInterface>,
-    /// Interfaces currently active for unnumbered operation
-    pub active_interfaces: Vec<String>,
+    /// Status of every interface configured for unnumbered operation,
+    /// keyed by interface name.
+    pub interfaces: BTreeMap<String, UnnumberedInterfaceStatus>,
 }
 
-/// Information about a pending unnumbered interface.
+/// Status of an interface configured for unnumbered operation.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct PendingUnnumberedInterface {
-    /// Interface name
-    pub interface: String,
-    /// Configured router lifetime (seconds)
-    pub router_lifetime: u16,
+pub enum UnnumberedInterfaceStatus {
+    /// Configured but not yet available on the system.
+    Pending {
+        /// Configured router lifetime (seconds)
+        router_lifetime: u16,
+    },
+    /// Active for unnumbered operation.
+    Active {
+        /// Local IPv6 link-local address
+        local_address: Ipv6Addr,
+        /// IPv6 scope ID (interface index)
+        scope_id: u32,
+        /// Router lifetime advertised by this router (seconds)
+        router_lifetime: u16,
+        /// Information about the discovered peer. None if no peer has been
+        /// discovered or the discovered entry has expired.
+        discovered_peer: Option<DiscoveredRouter>,
+        /// Runtime state for router discovery on this interface
+        runtime_state: RouterDiscoveryRuntimeState,
+    },
 }
 
 /// Unnumbered state for an interface.
@@ -84,15 +99,6 @@ pub struct DiscoveredRouter {
     pub retrans_timer: u32,
 }
 
-impl From<PendingUnnumberedInterface> for v5::ndp::NdpPendingInterface {
-    fn from(interface: PendingUnnumberedInterface) -> Self {
-        Self {
-            interface: interface.interface,
-            router_lifetime: interface.router_lifetime,
-        }
-    }
-}
-
 impl From<DiscoveredRouter> for v5::ndp::NdpPeer {
     fn from(router: DiscoveredRouter) -> Self {
         // The legacy API reported wall-clock ISO 8601 timestamps and a
@@ -124,14 +130,27 @@ impl From<DiscoveredRouter> for v5::ndp::NdpPeer {
 
 impl From<UnnumberedManagerState> for v5::ndp::NdpManagerState {
     fn from(state: UnnumberedManagerState) -> Self {
+        // The legacy API split the interface map into separate pending and
+        // active lists.
+        let mut pending_interfaces = Vec::new();
+        let mut active_interfaces = Vec::new();
+        for (interface, status) in state.interfaces {
+            match status {
+                UnnumberedInterfaceStatus::Pending { router_lifetime } => {
+                    pending_interfaces.push(v5::ndp::NdpPendingInterface {
+                        interface,
+                        router_lifetime,
+                    });
+                }
+                UnnumberedInterfaceStatus::Active { .. } => {
+                    active_interfaces.push(interface);
+                }
+            }
+        }
         Self {
             monitor_thread_running: state.monitor_running,
-            pending_interfaces: state
-                .pending_interfaces
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            active_interfaces: state.active_interfaces,
+            pending_interfaces,
+            active_interfaces,
         }
     }
 }
@@ -170,11 +189,27 @@ mod tests {
     fn manager_state_downgrades_to_legacy_ndp_shape() {
         let state = UnnumberedManagerState {
             monitor_running: true,
-            pending_interfaces: vec![PendingUnnumberedInterface {
-                interface: "eth0".into(),
-                router_lifetime: 30,
-            }],
-            active_interfaces: vec!["eth1".into()],
+            interfaces: BTreeMap::from([
+                (
+                    "eth0".to_string(),
+                    UnnumberedInterfaceStatus::Pending {
+                        router_lifetime: 30,
+                    },
+                ),
+                (
+                    "eth1".to_string(),
+                    UnnumberedInterfaceStatus::Active {
+                        local_address: link_local(1),
+                        scope_id: 7,
+                        router_lifetime: 123,
+                        discovered_peer: None,
+                        runtime_state: RouterDiscoveryRuntimeState {
+                            tx_running: true,
+                            rx_running: true,
+                        },
+                    },
+                ),
+            ]),
         };
 
         let legacy: v5::ndp::NdpManagerState = state.into();

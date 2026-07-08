@@ -173,10 +173,10 @@ pub mod rdb {
 
 pub mod unnumbered {
     pub use crate::v12::unnumbered::DiscoveredRouter;
-    pub use crate::v12::unnumbered::PendingUnnumberedInterface;
     pub use crate::v12::unnumbered::RouterDiscoveryRuntimeState;
     pub use crate::v12::unnumbered::UnnumberedInterface;
     pub use crate::v12::unnumbered::UnnumberedInterfaceSelector;
+    pub use crate::v12::unnumbered::UnnumberedInterfaceStatus;
     pub use crate::v12::unnumbered::UnnumberedManagerState;
 }
 
