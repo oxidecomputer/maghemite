@@ -306,6 +306,14 @@ fn start_bgp_routers(
     dlog!(context.log, info, "starting bgp routers: {routers:#?}");
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
+        if rdb::Asn::FourOctet(asn).is_reserved() {
+            dlog!(
+                context.log,
+                warn,
+                "skipping persisted BGP router with reserved AS {asn} (RFC 7607)"
+            );
+            continue;
+        }
         bgp_admin::helpers::add_router(
             context.clone(),
             mg_api_types::bgp::config::Router {
