@@ -124,7 +124,7 @@ http = "1.4.2"
 http-body-util = "0.1"
 rand = "0.10.2"
 backoff = "0.4"
-chrono = { version = "0.4.44", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 oxide-tokio-rt = "0.1.6"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
