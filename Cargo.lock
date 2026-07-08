@@ -1372,6 +1372,7 @@ name = "ddm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "camino",
  "chrono",
  "ddm-api",
  "ddm-api-types",
@@ -1392,12 +1393,14 @@ dependencies = [
  "oximeter",
  "oximeter-producer",
  "oxnet",
+ "port-file",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "sled",
  "slog",
+ "slog-error-chain",
  "socket2",
  "thiserror 2.0.18",
  "tokio",
@@ -1482,6 +1485,7 @@ version = "0.1.0"
 dependencies = [
  "anstyle",
  "anyhow",
+ "camino",
  "clap",
  "ddm",
  "ddm-api-types",
@@ -3970,6 +3974,7 @@ dependencies = [
  "anyhow",
  "bfd",
  "bgp",
+ "camino",
  "chrono",
  "clap",
  "client-common",
@@ -3989,10 +3994,12 @@ dependencies = [
  "oximeter",
  "oximeter-producer",
  "oxnet",
+ "port-file",
  "proptest",
  "rand 0.10.2",
  "rdb",
  "slog",
+ "slog-error-chain",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "socket2",
  "tempfile",
@@ -5311,6 +5318,16 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+]
+
+[[package]]
+name = "port-file"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34fced1ed6fb91e9fa97e7c31a418cc71a9814586af88acefdaa46bc0ebdf712"
+dependencies = [
+ "atomicwrites",
+ "camino",
 ]
 
 [[package]]
