@@ -7,6 +7,7 @@ edition = "2024"
 ddm = { path = "../ddm", default-features = false }
 mg-common = { path = "../mg-common" }
 anyhow.workspace = true
+camino.workspace = true
 clap.workspace = true
 ddm-api-types.workspace = true
 oxide-tokio-rt.workspace = true
