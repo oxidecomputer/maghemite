@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
@@ -114,6 +115,14 @@ struct Arg {
     /// Analogous to `mgd --no-bgp-dispatcher`.
     #[arg(long, default_value_t = false, conflicts_with = "addr")]
     api_only: bool,
+
+    /// Write the socket address to this file, for use with test harnesses that
+    /// tell ddmd to bind to port 0.
+    ///
+    /// This file should not exist at process startup, though its parent
+    /// directory should.
+    #[arg(long)]
+    admin_port_file: Option<Utf8PathBuf>,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -217,8 +226,14 @@ async fn run() {
         error!(log, "send context to signal handler {e}");
     }
 
-    ddm::admin::handler(arg.admin_addr, arg.admin_port, context, log.clone())
-        .unwrap();
+    ddm::admin::handler(
+        arg.admin_addr,
+        arg.admin_port,
+        arg.admin_port_file,
+        context,
+        log.clone(),
+    )
+    .expect("started ddmd admin API server");
 
     std::thread::park();
 }

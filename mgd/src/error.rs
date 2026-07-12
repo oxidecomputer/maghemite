@@ -38,6 +38,12 @@ impl From<Error> for HttpError {
     fn from(value: Error) -> Self {
         match value {
             Error::Db(ref db_err) => match db_err {
+                rdb::error::Error::Conflict(_) => {
+                    Self::for_client_error_with_status(
+                        Some(value.to_string()),
+                        ClientErrorStatusCode::CONFLICT,
+                    )
+                }
                 rdb::error::Error::Validation(msg) => {
                     Self::for_bad_request(None, msg.clone())
                 }
@@ -58,6 +64,12 @@ impl From<Error> for HttpError {
                         ClientErrorStatusCode::CONFLICT,
                     )
                 }
+                bgp::error::Error::Datastore(rdb::error::Error::Conflict(
+                    _,
+                )) => Self::for_client_error_with_status(
+                    Some(err.to_string()),
+                    ClientErrorStatusCode::CONFLICT,
+                ),
                 _ => Self::for_internal_error(value.to_string()),
             },
             Error::AddUnnumberedNeighbor(ref err) => match err {
