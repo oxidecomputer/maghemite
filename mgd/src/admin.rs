@@ -7,6 +7,7 @@
 use crate::{bfd_admin, bgp_admin, mrib_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
+use camino::Utf8PathBuf;
 use dropshot::{
     ApiDescription, ConfigDropshot, HttpError, HttpResponseDeleted,
     HttpResponseOk, HttpResponseUpdatedNoContent, Path, Query, RequestContext,
@@ -43,6 +44,7 @@ use mg_common::stats::MgLowerStats;
 use oxnet::IpNet;
 use rdb::Db;
 use slog::{Logger, error, info, o};
+use slog_error_chain::InlineErrorChain;
 use std::collections::HashMap;
 #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
 use std::net::Ipv6Addr;
@@ -68,6 +70,7 @@ pub fn start_server(
     log: Logger,
     addr: IpAddr,
     port: u16,
+    admin_port_file: Option<Utf8PathBuf>,
     context: Arc<HandlerContext>,
 ) -> Result<JoinHandle<()>, String> {
     let sa = SocketAddr::new(addr, port);
@@ -85,6 +88,8 @@ pub fn start_server(
 
     let api = api_description();
 
+    // Bind the port synchronously, so bind failures propagate to the caller and
+    // (in case of binding to port 0) the OS-assigned port is known.
     let server = dropshot::ServerBuilder::new(api, context, ds_log)
         .config(ds_config)
         .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
@@ -92,23 +97,25 @@ pub fn start_server(
                 omicron_common::api::VERSION_HEADER,
                 mg_api::latest_version(),
             ),
-        )));
+        )))
+        .start()
+        .map_err(|e| format!("admin: server start error: {e:?}"))?;
 
-    info!(log, "listening on {sa}");
+    let bound = server.local_addr();
+    info!(log, "listening on {bound}");
+
+    if let Some(path) = admin_port_file {
+        port_file::write(&path, bound).map_err(|e| {
+            // Render the full error chain.
+            InlineErrorChain::new(&e).to_string()
+        })?;
+    }
 
     Ok(tokio::spawn(async move {
-        match server.start() {
-            Ok(server) => {
-                info!(log, "admin: server started");
-                match server.await {
-                    Ok(()) => info!(log, "admin: server exited"),
-                    Err(e) => error!(log, "admin: server error {e:?}";
-                        "error" => format!("{e}")
-                    ),
-                }
-            }
-            Err(e) => error!(log, "admin: server start error {e:?}";
-                        "error" => format!("{e}")
+        match server.await {
+            Ok(()) => info!(log, "admin: server exited"),
+            Err(e) => error!(log, "admin: server error {e:?}";
+                "error" => format!("{e}")
             ),
         }
     }))

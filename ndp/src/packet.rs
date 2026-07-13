@@ -39,8 +39,13 @@ impl Icmp6RouterAdvertisement {
     const TYPE: u8 = 134;
     const CODE: u8 = 0;
     const DEFAULT_HOPLIMIT: u8 = 255;
+    const MIN_PAYLOAD_LEN: usize = 16;
 
     pub fn from_wire(buf: &[u8]) -> Result<Self, Icmp6RaFromWireError> {
+        // Per RFC 4861 Section 6.1.2: a valid RA has an ICMP payload of >= 16b
+        if buf.len() < Self::MIN_PAYLOAD_LEN {
+            return Err(Icmp6RaFromWireError::TooShort(buf.len()));
+        }
         let s: Self = ispf::from_bytes_be(buf)?;
         if s.typ != Self::TYPE {
             return Err(Icmp6RaFromWireError::WrongType(s.typ));
@@ -85,6 +90,9 @@ impl Default for Icmp6RouterAdvertisement {
 pub enum Icmp6RaFromWireError {
     #[error("deserialization error: {0}")]
     Ispf(#[from] ispf::Error),
+
+    #[error("too short: {0} octets, expected at least 16")]
+    TooShort(usize),
 
     #[error("wrong type: expected {expected}, got {0}", expected = Icmp6RouterAdvertisement::TYPE)]
     WrongType(u8),

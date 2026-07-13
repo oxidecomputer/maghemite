@@ -4,6 +4,7 @@
 
 use crate::db::Db;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
+use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
@@ -24,6 +25,7 @@ use dropshot::TypedBody;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
+use slog_error_chain::InlineErrorChain;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -56,6 +58,7 @@ pub struct HandlerContext {
 pub fn handler(
     addr: IpAddr,
     port: u16,
+    admin_port_file: Option<Utf8PathBuf>,
     context: Arc<Mutex<HandlerContext>>,
     log: Logger,
 ) -> Result<(), String> {
@@ -85,6 +88,8 @@ pub fn handler(
 
     let api = api_description().map_err(|e| e.to_string())?;
 
+    // Bind the port synchronously, so bind failures propagate to the caller and
+    // (in case of binding to port 0) the OS-assigned port is known.
     let server = dropshot::ServerBuilder::new(api, context, ds_log)
         .config(config)
         .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
@@ -92,21 +97,24 @@ pub fn handler(
                 omicron_common::api::VERSION_HEADER,
                 ddm_api::latest_version(),
             ),
-        )));
+        )))
+        .start()
+        .map_err(|e| format!("admin: server start error: {e:?}"))?;
 
-    info!(log, "admin: listening on {}", sa);
+    let bound = server.local_addr();
+    info!(log, "admin: listening on {bound}");
 
-    let log = log.clone();
+    if let Some(path) = admin_port_file {
+        port_file::write(&path, bound).map_err(|e| {
+            // Render the full error chain.
+            InlineErrorChain::new(&e).to_string()
+        })?;
+    }
+
     spawn(async move {
-        match server.start() {
-            Ok(server) => {
-                info!(log, "admin: server started");
-                match server.await {
-                    Ok(()) => info!(log, "admin: server exited"),
-                    Err(e) => error!(log, "admin: server error {:?}", e),
-                }
-            }
-            Err(e) => error!(log, "admin: server start error {:?}", e),
+        match server.await {
+            Ok(()) => info!(log, "admin: server exited"),
+            Err(e) => error!(log, "admin: server error {:?}", e),
         }
     });
 
