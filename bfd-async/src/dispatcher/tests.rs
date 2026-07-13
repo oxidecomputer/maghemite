@@ -68,7 +68,7 @@ impl ListenerBackend for TestBackend {
         listen_addr: SocketAddr,
         sessions: super::SharedSessions,
         log: Logger,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, crate::AddPeerError> {
+    ) -> Result<tokio::task::JoinHandle<()>, crate::AddPeerError> {
         assert_eq!(listen_addr, LISTEN_ADDR);
 
         let mut bound_address = self.bound_address.lock().unwrap();
@@ -103,7 +103,7 @@ impl ListenerBackend for TestBackend {
             }
         });
 
-        Ok(Some(listen_task))
+        Ok(listen_task)
     }
 }
 

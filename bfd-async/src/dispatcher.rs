@@ -191,14 +191,12 @@ struct Listener {
     /// listening for and the channel on which we should send any incoming
     /// packets from that peer.
     sessions: SharedSessions,
-    listen_task: Option<JoinHandle<()>>,
+    listen_task: JoinHandle<()>,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        if let Some(listen_task) = self.listen_task.take() {
-            listen_task.abort();
-        }
+        self.listen_task.abort();
     }
 }
 
@@ -223,12 +221,10 @@ impl Listener {
     }
 
     async fn shutdown(mut self) {
-        if let Some(listen_task) = self.listen_task.take() {
-            listen_task.abort();
-            // Discard the result; this can only fail if the listen task
-            // panicked, but we're shutting it down anyway.
-            let _: Result<_, _> = listen_task.await;
-        }
+        self.listen_task.abort();
+        // Discard the result; this can only fail if the listen task
+        // panicked, but we're shutting it down anyway.
+        let _: Result<_, _> = (&mut self.listen_task).await;
     }
 
     fn remove_peer(&self, peer: IpAddr) -> ListenerRemovePeerResult {
@@ -269,15 +265,13 @@ trait ListenerBackend: Send + Sync + 'static {
     /// Bind a socket at `listen_addr` and spawn a task that reads packets and
     /// dispatches them to the per-peer channels in `sessions`.
     ///
-    /// Returns the spawned task's handle, or `None` for test fakes that don't
-    /// bind a real socket. A `Listener` holding `None` is shut down/dropped as
-    /// a no-op.
+    /// Returns the spawned task's handle.
     fn spawn(
         &self,
         listen_addr: SocketAddr,
         sessions: SharedSessions,
         log: Logger,
-    ) -> Result<Option<JoinHandle<()>>, AddPeerError>;
+    ) -> Result<JoinHandle<()>, AddPeerError>;
 }
 
 /// Production [`ListenerBackend`]: binds a real UDP socket and spawns a
@@ -290,7 +284,7 @@ impl ListenerBackend for TokioUdpBinder {
         listen_addr: SocketAddr,
         sessions: SharedSessions,
         log: Logger,
-    ) -> Result<Option<JoinHandle<()>>, AddPeerError> {
+    ) -> Result<JoinHandle<()>, AddPeerError> {
         // This is pretty spicy: we're using std's `UdpSocket` so we can
         // _synchronously_ bind, even though this function is ultimately called
         // from an async context. The arguments for this are:
@@ -313,7 +307,7 @@ impl ListenerBackend for TokioUdpBinder {
             UdpSocket::from_std(socket).map_err(AddPeerError::StdToTokio)?;
 
         let listen_task = ListenerTask::new(socket, sessions, log);
-        Ok(Some(tokio::spawn(listen_task.run())))
+        Ok(tokio::spawn(listen_task.run()))
     }
 }
 

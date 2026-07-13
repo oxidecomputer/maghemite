@@ -77,7 +77,7 @@ impl ListenerBackend for PreBoundSocketBackend {
         _listen_addr: SocketAddr,
         sessions: SharedSessions,
         log: Logger,
-    ) -> Result<Option<JoinHandle<()>>, AddPeerError> {
+    ) -> Result<JoinHandle<()>, AddPeerError> {
         let socket = self
             .socket
             .lock()
@@ -85,7 +85,7 @@ impl ListenerBackend for PreBoundSocketBackend {
             .take()
             .expect("PreBoundSocketBackend::spawn called more than once");
         let listen_task = ListenerTask::new(socket, sessions, log);
-        Ok(Some(tokio::spawn(listen_task.run())))
+        Ok(tokio::spawn(listen_task.run()))
     }
 }
 

@@ -41,7 +41,7 @@ impl ListenerBackend for FakeBackend {
         listen_addr: SocketAddr,
         _sessions: SharedSessions,
         _log: Logger,
-    ) -> Result<Option<JoinHandle<()>>, AddPeerError> {
+    ) -> Result<JoinHandle<()>, AddPeerError> {
         if self.fail_addrs.contains(&listen_addr) {
             Err(AddPeerError::Bind {
                 addr: listen_addr,
@@ -51,10 +51,9 @@ impl ListenerBackend for FakeBackend {
                 ),
             })
         } else {
-            // No real socket and no task: the dispatcher only needs the
-            // bookkeeping, and a `Listener` holding `None` shuts down as a
-            // no-op.
-            Ok(None)
+            // No real socket and no meaningful task: the dispatcher only needs
+            // the bookkeeping.
+            Ok(tokio::spawn(async {}))
         }
     }
 }
@@ -211,7 +210,11 @@ fn run(ops: Vec<Op>, fail_addrs: HashSet<SocketAddr>) {
 
 #[proptest]
 fn state_machine(#[strategy(vec(any::<Op>(), 0..40))] ops: Vec<Op>) {
-    run(ops, HashSet::new());
+    // `run()` isn't itself async, but it does spawn (no-op) tokio tasks so
+    // needs to execute in the context of a runtime.
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        run(ops, HashSet::new());
+    });
 }
 
 #[proptest]
@@ -220,5 +223,9 @@ fn state_machine_with_bind_failures(
     #[strategy(proptest::collection::hash_set(arb_listen_addr(), 0..=3))]
     fail_addrs: HashSet<SocketAddr>,
 ) {
-    run(ops, fail_addrs);
+    // `run()` isn't itself async, but it does spawn (no-op) tokio tasks so
+    // needs to execute in the context of a runtime.
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        run(ops, fail_addrs);
+    });
 }
