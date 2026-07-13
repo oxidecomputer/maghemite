@@ -68,15 +68,63 @@ impl DendriteNode {
         const BUILDOMAT_URL: &str =
             "https://buildomat.eng.oxide.computer/public/file/oxidecomputer/";
         info!(d.log, "{}: setting up npuvm", self.name(&d));
-        d.exec(
-            self.0,
-            &format!(
-                "curl --retry 5 -OL \
-                {BUILDOMAT_URL}/softnpu/image/{}/npuvm",
-                commits.npuvm,
-            ),
-        )
-        .await?;
+        // The fetch runs inside the guest over the serial console, which
+        // surfaces neither curl's exit status nor a truncated transfer. Rather
+        // than blindly exec a possibly-invalid binary, download it alongside
+        // its published checksum and verify before continuing.
+        const NPUVM_FETCH_ATTEMPTS: u32 = 5;
+        let mut last_err = None;
+        for attempt in 1..=NPUVM_FETCH_ATTEMPTS {
+            let result: Result<()> = async {
+                d.exec(
+                    self.0,
+                    &format!(
+                        "curl --fail --retry 5 --retry-all-errors \
+                        --remote-name-all -L \
+                        {BUILDOMAT_URL}/softnpu/image/{commit}/npuvm \
+                        {BUILDOMAT_URL}/softnpu/image/{commit}/npuvm.sha256.txt",
+                        commit = commits.npuvm,
+                    ),
+                )
+                .await?;
+                let expected = d.exec(self.0, "cat npuvm.sha256.txt").await?;
+                let actual = d.exec(self.0, "digest -a sha256 npuvm").await?;
+                let expected = expected.split_whitespace().next().unwrap_or_default();
+                let actual = actual.split_whitespace().next().unwrap_or_default();
+                if expected.is_empty() || expected != actual {
+                    return Err(anyhow!(
+                        "npuvm checksum mismatch: \
+                         expected {expected:?}, got {actual:?}"
+                    ));
+                }
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    info!(
+                        d.log,
+                        "{}: npuvm downloaded and checksum verified \
+                         (attempt {attempt}/{NPUVM_FETCH_ATTEMPTS})",
+                        self.name(&d)
+                    );
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    slog::warn!(
+                        d.log,
+                        "{}: npuvm fetch/verify attempt \
+                         {attempt}/{NPUVM_FETCH_ATTEMPTS} failed: {e:#}",
+                        self.name(&d)
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e.context("failed to fetch and verify npuvm"));
+        }
         d.exec(self.0, "chmod +x npuvm").await?;
         // Capture install stdout to land in the buildomat log. Without this
         // they're only visible inside the softnpu VM and lost on teardown.

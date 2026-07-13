@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::linux::LinuxNode;
+use crate::{diagnostics::ProtocolDiagnostics, linux::LinuxNode};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
@@ -10,9 +10,13 @@ use oxnet::{Ipv4Net, Ipv6Net};
 use serde::Deserialize;
 use slog::info;
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::sleep;
+
+const CARGO_BAY: &str = "cargo-bay";
 
 #[derive(Copy, Clone)]
 pub struct FrrNode(pub NodeRef);
@@ -35,9 +39,8 @@ impl FrrNode {
             )
             .await?;
         }
-        d.exec(self.0, "systemctl restart frr").await?;
-        // XXX do better than arbitrary wait
-        sleep(Duration::from_secs(5)).await;
+        self.stop_frr(d).await?;
+        self.start_frr(d).await?;
         Ok(())
     }
 
@@ -53,18 +56,48 @@ impl FrrNode {
         LinuxNode(self.0)
     }
 
-    /// Freeze the BFD daemon. Control packets stop flowing without disturbing
-    /// the peer's configuration or interfaces, so `resume_bfdd` restores the
-    /// session without reapplying config.
-    pub async fn pause_bfdd(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: pausing frr bfdd", self.name(d));
-        d.exec(self.0, "pkill -STOP bfdd").await?;
+    pub async fn stop_frr(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: stopping frr", self.name(d));
+        d.exec(self.0, "systemctl stop frr").await?;
         Ok(())
     }
 
-    pub async fn resume_bfdd(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: resuming frr bfdd", self.name(d));
-        d.exec(self.0, "pkill -CONT bfdd").await?;
+    pub async fn start_frr(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: starting frr", self.name(d));
+        d.exec(self.0, "systemctl start frr").await?;
+        // XXX do better than arbitrary wait
+        sleep(Duration::from_secs(5)).await;
+        Ok(())
+    }
+
+    pub fn stage_config(
+        &self,
+        config_name: &str,
+        config: &str,
+    ) -> Result<PathBuf> {
+        let dir = Path::new(CARGO_BAY);
+        fs::create_dir_all(dir)
+            .with_context(|| format!("create {}", dir.display()))?;
+        let path = dir.join(config_name);
+        fs::write(&path, config)
+            .with_context(|| format!("write {}", path.display()))?;
+        Ok(path)
+    }
+
+    pub async fn install_staged_config(
+        &self,
+        d: &Runner,
+        config_name: &str,
+    ) -> Result<()> {
+        info!(d.log, "{}: installing frr startup config", self.name(d));
+        d.exec(
+            self.0,
+            &format!(
+                "cp /opt/cargo-bay/{config_name} /etc/frr/frr.conf && chown frr:frrvty /etc/frr/frr.conf && chmod 640 /etc/frr/frr.conf"
+            ),
+        )
+        .await
+        .context("install frr startup config")?;
         Ok(())
     }
 
@@ -79,19 +112,28 @@ impl FrrNode {
             .any(|p| p.peer == peer && p.status.eq_ignore_ascii_case("up")))
     }
 
-    /// Capture BGP / BFD / routing state via vtysh, plus linux network state
-    pub async fn collect_diagnostics(&self, d: &Runner, topo: &str) {
+    /// Capture protocol-specific FRR state via vtysh, plus Linux network state.
+    pub async fn collect_diagnostics(
+        &self,
+        d: &Runner,
+        topo: &str,
+        protocols: ProtocolDiagnostics,
+    ) {
         let name = self.name(d);
-        const VTYSH: &str = "
-            show running-config
-            show ip bgp summary
-            show ip bgp
-            show ipv6 bgp
-            show ip route
-            show ipv6 route
-            show bfd peers
-        ";
-        match self.shell(d, VTYSH).await {
+        let commands = if protocols.bgp() {
+            "
+                show running-config
+                show ip bgp summary
+                show ip bgp
+                show ipv6 bgp
+            "
+        } else {
+            "
+                show running-config
+                show bfd peers
+            "
+        };
+        match self.shell(d, commands).await {
             Ok(out) => crate::diagnostics::write_artifact(
                 d,
                 topo,
@@ -101,23 +143,7 @@ impl FrrNode {
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {name}-vtysh: {e}"),
         }
-        // Plain `ip` snapshots (not a vtysh command, so issued directly).
-        for (suffix, cmd) in [
-            ("ip-link", "ip -d -s link show"),
-            ("ip-addr", "ip -d -s addr show"),
-            ("ip-neigh", "ip -d -s neigh show"),
-            ("ip-nexthop", "ip -d -s nexthop show"),
-            ("ip-route", "ip -d -s route show table all"),
-        ] {
-            crate::diagnostics::capture(
-                d,
-                self.0,
-                topo,
-                &format!("{name}-{suffix}"),
-                cmd,
-            )
-            .await;
-        }
+        self.linux().collect_diagnostics(d, topo, &name).await;
     }
 
     /// Execute a vtysh command and return the output.
@@ -134,7 +160,7 @@ impl FrrNode {
             .collect::<Vec<_>>()
             .join(" ");
         let output = d
-            .exec(self.0, &format!("vtysh {args}"))
+            .exec(self.0, &format!("/usr/bin/vtysh {args}"))
             .await
             .context("vtysh shell failed")?;
         Ok(output)
