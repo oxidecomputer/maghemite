@@ -5,8 +5,6 @@
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
-const OFFSET_RANGE: u16 = (u16::MAX - EgressSrcPortIter::SOURCE_PORT_BEGIN) + 1;
-
 /// Helper for choosing a source port for egress sockets in BFD.
 ///
 /// Per RFC 5881 §4, BFD control packets MUST have a source port in the range
@@ -22,14 +20,15 @@ pub(crate) struct EgressSrcPortIter {
 
 impl EgressSrcPortIter {
     pub(crate) const SOURCE_PORT_BEGIN: u16 = 49152;
+    const OFFSET_RANGE: u16 = (u16::MAX - Self::SOURCE_PORT_BEGIN) + 1;
 
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     pub(crate) fn next(&self) -> u16 {
-        let offset =
-            self.next_offset.fetch_add(1, Ordering::Relaxed) % OFFSET_RANGE;
+        let offset = self.next_offset.fetch_add(1, Ordering::Relaxed)
+            % Self::OFFSET_RANGE;
         Self::SOURCE_PORT_BEGIN + offset
     }
 }
