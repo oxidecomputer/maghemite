@@ -191,37 +191,38 @@ async fn try_bind_with_max_src_port_tries(
     src_port_iter: &EgressSrcPortIter,
     max_ports_to_try: NonZeroUsize,
 ) -> Result<UdpSocket, BindEgressSocketError> {
-    let mut first_port_tried = None;
-    let mut last_port_tried = None;
-    for _ in 0..max_ports_to_try.get() {
-        let src_port = src_port_iter.next();
+    let first_port_tried = src_port_iter.next();
+    let mut last_port_tried = first_port_tried;
 
-        // Keep track of what ports we tried exclusively for the error we return
-        // if we fail to find a free port.
-        if first_port_tried.is_none() {
-            first_port_tried = Some(src_port);
-        }
-        last_port_tried = Some(src_port);
-
-        let local_addr = SocketAddr::new(local_ip, src_port);
-        match bind_egress_socket(local_addr).await {
+    let mut attempt = 0;
+    loop {
+        // Try to bind; on success we're done.
+        let bind_addr = SocketAddr::new(local_ip, last_port_tried);
+        let err = match bind_egress_socket(bind_addr).await {
             Ok(socket) => return Ok(socket),
-            Err(BindEgressSocketError::Bind(err))
-                if err.kind() == io::ErrorKind::AddrInUse =>
-            {
-                continue;
-            }
-            Err(err) => return Err(err),
+            Err(err) => err,
+        };
+
+        // If we failed for any reason other than "address in use", return that
+        // error.
+        match err {
+            BindEgressSocketError::Bind(err)
+                if err.kind() == io::ErrorKind::AddrInUse => {}
+            _ => return Err(err),
+        }
+
+        // This port is in use. Try the next one (up to our `max_ports_to_try`
+        // limit).
+        attempt += 1;
+        if attempt < max_ports_to_try.get() {
+            last_port_tried = src_port_iter.next();
+        } else {
+            return Err(BindEgressSocketError::SrcPortsInUse {
+                first_port_tried,
+                last_port_tried,
+            });
         }
     }
-
-    Err(BindEgressSocketError::SrcPortsInUse {
-        // We know these must be `Some(_)` becaues `max_ports_to_try` is a
-        // `NonZeroUsize`, so we must have iterated at least once in the for
-        // loop above, and the first iteration sets both these values.
-        first_port_tried: first_port_tried.unwrap(),
-        last_port_tried: last_port_tried.unwrap(),
-    })
 }
 
 async fn bind_egress_socket(
