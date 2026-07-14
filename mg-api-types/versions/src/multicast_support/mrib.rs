@@ -9,9 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use chrono::{DateTime, Utc};
 use client_common::address::{
     IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET,
-    IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET, IPV6_LINK_LOCAL_MULTICAST_SUBNET,
-    IPV6_MULTICAST_RANGE, IPV6_RESERVED_SCOPE_MULTICAST_SUBNET,
-    IPV6_SSM_SUBNET,
+    IPV6_MULTICAST_RANGE,
 };
 use client_common::multicast::UnderlayMulticastError;
 pub use client_common::multicast::UnderlayMulticastIpv6;
@@ -84,23 +82,6 @@ pub struct MribAddStaticRequest {
 pub struct MribDeleteStaticRequest {
     /// List of route keys to delete.
     pub keys: Vec<MulticastRouteKey>,
-}
-
-/// Response containing the current RPF rebuild interval.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct MribRpfRebuildIntervalResponse {
-    /// Minimum interval between RPF cache rebuilds in milliseconds.
-    /// A value of 0 means rate-limiting is disabled.
-    pub interval_ms: u64,
-}
-
-/// Request body for setting the RPF rebuild interval.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct MribRpfRebuildIntervalRequest {
-    /// Minimum interval between RPF cache rebuilds in milliseconds.
-    /// A value of 0 disables rate-limiting.
-    /// Every unicast RIB change triggers an immediate poptrie rebuild.
-    pub interval_ms: u64,
 }
 
 /// Filter for multicast route origin.
@@ -407,31 +388,31 @@ impl MulticastAddrV6 {
             )));
         }
 
-        // Reject reserved scope (ff00::/16) (reserved, not usable)
-        if IPV6_RESERVED_SCOPE_MULTICAST_SUBNET.contains(value) {
-            return Err(MulticastError::Validation(format!(
-                "IPv6 address {value} is in reserved scope \
-                 ({IPV6_RESERVED_SCOPE_MULTICAST_SUBNET}) which is not routable"
-            )));
+        // RFC 4291 section 2.7 splits the second address byte into flags
+        // (high nibble) and scope (low nibble). Classify on the scope
+        // nibble alone: a /16 prefix comparison encodes flags=0 and would
+        // accept, e.g., ff11::1 despite its interface-local scope.
+        let scope = value.segments()[0] & 0x000f;
+        match scope {
+            0x0 => Err(MulticastError::Validation(format!(
+                "IPv6 address {value} has reserved multicast scope 0, \
+                 which is not routable"
+            ))),
+            0x1 => Err(MulticastError::Validation(format!(
+                "IPv6 address {value} has interface-local multicast scope, \
+                 which is not routable"
+            ))),
+            0x2 => Err(MulticastError::Validation(format!(
+                "IPv6 address {value} has link-local multicast scope, \
+                 which is not routable"
+            ))),
+            // RFC 7346 section 2 reserves scope F alongside scope 0.
+            0xf => Err(MulticastError::Validation(format!(
+                "IPv6 address {value} has reserved multicast scope F, \
+                 which is not routable"
+            ))),
+            _ => Ok(Self(value)),
         }
-
-        // Reject interface-local multicast (ff01::/16)
-        if IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET.contains(value) {
-            return Err(MulticastError::Validation(format!(
-                "IPv6 address {value} is interface-local multicast \
-                 ({IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET}) which is not routable"
-            )));
-        }
-
-        // Reject link-local multicast (ff02::/16)
-        if IPV6_LINK_LOCAL_MULTICAST_SUBNET.contains(value) {
-            return Err(MulticastError::Validation(format!(
-                "IPv6 address {value} is link-local multicast \
-                 ({IPV6_LINK_LOCAL_MULTICAST_SUBNET}) which is not routable"
-            )));
-        }
-
-        Ok(Self(value))
     }
 
     /// Returns the underlying IPv6 address.
@@ -822,7 +803,7 @@ impl MulticastRouteKey {
     /// Checks:
     /// - SSM groups require a source address (RFC 4607)
     ///   - IPv4: 232.0.0.0/8
-    ///   - IPv6: ff30::/12 (superset covering all ff3x:: scopes)
+    ///   - IPv6: FF3x::/32 (flags nibble 3, any scope)
     /// - Source address (if present) must be unicast
     /// - (S,G) joins on ASM ranges are permitted, giving source
     ///   filtering outside the SSM range (IGMPv3/MLDv2 semantics)
@@ -841,7 +822,14 @@ impl MulticastRouteKey {
         // together and we can update our policy handling.
         let is_ssm = match self {
             Self::V4(k) => IPV4_SSM_SUBNET.contains(k.group.ip()),
-            Self::V6(k) => IPV6_SSM_SUBNET.contains(k.group.ip()),
+            // RFC 4607 section 1 allocates IPv6 SSM as FF3x::/32 (flags
+            // nibble 3, any scope, remaining prefix bits zero). A broader
+            // ff30::/12 match would also classify RFC 3306 unicast-prefix
+            // based addresses with a nonzero network prefix as SSM.
+            Self::V6(k) => {
+                let segs = k.group.ip().segments();
+                segs[0] & 0xfff0 == 0xff30 && segs[1] == 0
+            }
         };
         if is_ssm && self.source().is_none() {
             return Err(MulticastError::Validation(format!(
@@ -859,7 +847,16 @@ impl MulticastRouteKey {
 pub struct MulticastRoute {
     /// The multicast route key (S,G) or (*,G).
     pub key: MulticastRouteKey,
-    /// Expected RPF neighbor for the source (for RPF checks).
+    /// Upstream neighbor selected for RPF checks.
+    ///
+    /// This records one representative neighbor rather than the full ECMP
+    /// set. When the unicast route has multiple equal-cost paths, any active
+    /// member is valid. `None` means RPF does not apply or no active unicast
+    /// path is available.
+    ///
+    /// Derived from the unicast RIB, never persisted. Listings of static
+    /// route configuration always carry `None` here since they reflect
+    /// stored configuration only.
     pub rpf_neighbor: Option<IpAddr>,
     /// Underlay multicast group address (ff04::/64).
     ///
@@ -903,9 +900,13 @@ impl MulticastRoute {
     /// Validate the multicast route.
     ///
     /// Checks:
-    /// - Key validation (source unicast, AF match, VNI range)
+    /// - Key validation (source unicast, VNI range)
     /// - RPF neighbor (if present) must be unicast
-    /// - RPF neighbor address family must match group address family
+    ///
+    /// A cross-family neighbor is valid: derivation from the unicast RIB
+    /// may resolve v4 routes through v6 nexthops ([RFC 8950] style).
+    ///
+    /// [RFC 8950]: https://www.rfc-editor.org/rfc/rfc8950
     pub fn validate(&self) -> Result<(), MulticastError> {
         self.key.validate()?;
 
@@ -926,25 +927,11 @@ impl MulticastRoute {
                             "RPF neighbor {addr} must be unicast, not broadcast"
                         )));
                     }
-                    // Address family must match group
-                    if !matches!(self.key.group(), MulticastAddr::V4(_)) {
-                        return Err(MulticastError::Validation(format!(
-                            "RPF neighbor {addr} is IPv4 but group {} is IPv6",
-                            self.key.group()
-                        )));
-                    }
                 }
                 IpAddr::V6(addr) => {
                     if addr.is_multicast() {
                         return Err(MulticastError::Validation(format!(
                             "RPF neighbor {addr} must be unicast, not multicast"
-                        )));
-                    }
-                    // AF must match group
-                    if !matches!(self.key.group(), MulticastAddr::V6(_)) {
-                        return Err(MulticastError::Validation(format!(
-                            "RPF neighbor {addr} is IPv6 but group {} is IPv4",
-                            self.key.group()
                         )));
                     }
                 }

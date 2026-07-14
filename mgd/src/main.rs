@@ -188,14 +188,14 @@ async fn run(args: RunArgs) {
             client: mg_lower::new_ddm_client(&log, args.ddm_addr),
         };
 
-        // Unicast lower-half: sync the unicast RIB to Dendrite.
+        // Unicast lower-half: sync the unicast RIB to Dendrite and
+        // advertise tunnel endpoint routes to DDM.
         {
             let rt = Arc::new(tokio::runtime::Handle::current());
             let ctx = context.clone();
             let log = log.clone();
             let db = ctx.db.clone();
             let stats = context.mg_lower_stats.clone();
-            let dpd = dpd.clone();
             let ddm = ddm.clone();
             let sw = mg_lower::ProductionSwitchZone {};
             Builder::new()
@@ -207,7 +207,7 @@ async fn run(args: RunArgs) {
         }
 
         // Multicast lower-half: advertise locally originated MRIB groups to
-        // DDM. Underlay replication membership is reconciled in ddmd.
+        // DDM. Underlay replication membership is reconciled in `ddmd`.
         {
             let rt = Arc::new(tokio::runtime::Handle::current());
             let log = log.clone();

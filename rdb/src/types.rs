@@ -743,24 +743,11 @@ mod test {
         );
     }
 
+    /// A cross-family RPF neighbor is valid: the neighbor comes from the
+    /// unicast RIB, where v4 routes may resolve through v6 nexthops
+    /// (RFC 8950 style).
     #[test]
-    fn rpf_af_mismatch_v4_rpf_v6_group() {
-        let group = MulticastAddrV6::new(TEST_GROUP_V6).unwrap();
-        let key = MulticastRouteKey::any_source(group.into());
-        let mut route = MulticastRoute::new(
-            key,
-            test_underlay(),
-            MulticastSourceProtocol::Static,
-        );
-        route.rpf_neighbor = Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
-        assert!(
-            route.validate().is_err(),
-            "v4 RPF with v6 group should be rejected"
-        );
-    }
-
-    #[test]
-    fn rpf_af_mismatch_v6_rpf_v4_group() {
+    fn rpf_cross_af_v6_neighbor_v4_group_accepted() {
         let group = MulticastAddrV4::new(TEST_GROUP_V4).unwrap();
         let key = MulticastRouteKey::any_source(group.into());
         let mut route = MulticastRoute::new(
@@ -771,8 +758,8 @@ mod test {
         route.rpf_neighbor =
             Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
         assert!(
-            route.validate().is_err(),
-            "v6 RPF with v4 group should be rejected"
+            route.validate().is_ok(),
+            "v6 RPF neighbor with v4 group should be accepted"
         );
     }
 

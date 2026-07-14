@@ -103,17 +103,8 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
-/// Key used in settings tree for MRIB RPF rebuild interval.
-const MRIB_RPF_REBUILD_INTERVAL: &str = "mrib_rpf_rebuild_interval";
-
 /// Key used in settings tree for MRIB RPF revalidation interval.
 const MRIB_RPF_REVALIDATION_INTERVAL: &str = "mrib_rpf_revalidation_interval";
-
-/// Default MRIB RPF rebuild interval in milliseconds.
-///
-/// Multicast route additions can be bursty, and poptrie rebuilds can be
-/// expensive. During rebuilds, RPF verification falls back to linear scan.
-const DEFAULT_MRIB_RPF_REBUILD_INTERVAL_MS: u64 = 1000;
 
 use crate::rib::{Rib, Rib4, Rib6};
 
@@ -263,19 +254,6 @@ impl Db {
             .bestpath_fanout
             .store(fanout.get(), Ordering::Relaxed);
 
-        // Load RPF rebuild interval from settings and apply to `RpfTable`
-        let rebuild_interval = db.get_mrib_rpf_rebuild_interval().unwrap_or_else(|e| {
-            error!(
-                db.log,
-                "failed to load mrib_rpf_rebuild_interval from settings: {e}"
-            );
-            std::time::Duration::from_millis(
-                DEFAULT_MRIB_RPF_REBUILD_INTERVAL_MS,
-            )
-        });
-
-        db.rpf_table.set_rebuild_interval(rebuild_interval);
-
         // Load RPF revalidation interval from settings.
         let revalidation_interval =
             db.get_mrib_rpf_revalidation_interval().unwrap_or_else(|e| {
@@ -332,8 +310,6 @@ impl Db {
     ///
     /// This controls how often the revalidator thread walks the MRIB to
     /// re-check (S,G) routes even without explicit unicast RIB changes.
-    /// This is separate from the poptrie rebuild interval (see
-    /// [`Self::set_mrib_rpf_rebuild_interval`]).
     ///
     /// This is persisted to the settings tree.
     pub fn set_mrib_rpf_revalidation_interval(
@@ -412,6 +388,11 @@ impl Db {
     }
 
     fn notify(&self, n: PrefixChangeNotification) {
+        // The RPF caches are derived from the loc-RIB, so they follow the
+        // same change notifications as external watchers. Centralizing the
+        // trigger here means any batch that ends with a notification keeps
+        // the caches maintained without a separate caller obligation.
+        self.trigger_rpf_rebuild(n.changed.iter());
         for Watcher { tag, sender } in read_lock!(self.watchers).iter() {
             if let Err(e) = sender.send(n.clone()) {
                 rdb_log!(
@@ -919,7 +900,12 @@ impl Db {
         }
     }
 
-    pub fn update_rib4_loc(
+    /// Re-run bestpath selection for a prefix, updating `rib_loc`.
+    ///
+    /// This helper does not trigger RPF cache maintenance. The enclosing
+    /// batch operation covers it by notifying watchers via [`Self::notify`]
+    /// after releasing the RIB locks.
+    fn update_rib4_loc(
         &self,
         rib_in: &Rib4,
         rib_loc: &mut Rib4,
@@ -946,14 +932,14 @@ impl Db {
                 rib_loc.remove(prefix);
             }
         }
-
-        // Request RPF table rebuild (may be rate-limited).
-        // Pass the specific prefix for targeted (S,G) revalidation.
-        self.rpf_table
-            .trigger_rebuild_v4(Arc::clone(&self.rib4_loc), Some(*prefix));
     }
 
-    pub fn update_rib6_loc(
+    /// Re-run bestpath selection for a prefix, updating `rib_loc`.
+    ///
+    /// This helper does not trigger RPF cache maintenance. The enclosing
+    /// batch operation covers it by notifying watchers via [`Self::notify`]
+    /// after releasing the RIB locks.
+    fn update_rib6_loc(
         &self,
         rib_in: &Rib6,
         rib_loc: &mut Rib6,
@@ -980,11 +966,47 @@ impl Db {
                 rib_loc.remove(prefix);
             }
         }
+    }
 
-        // Request RPF table rebuild (may be rate-limited).
-        // Pass the specific prefix for targeted (S,G) revalidation.
-        self.rpf_table
-            .trigger_rebuild_v6(Arc::clone(&self.rib6_loc), Some(*prefix));
+    /// Trigger RPF cache rebuilds for a batch of changed prefixes.
+    ///
+    /// Folds the batch per address family: a single changed prefix keeps
+    /// targeted revalidation, multiple distinct prefixes widen to a full
+    /// sweep. Invoked from [`Self::notify`] for batches that produce a
+    /// change notification. Mutation paths that bypass notification must
+    /// call it directly, after the RIB locks are released.
+    fn trigger_rpf_rebuild<'a, I>(&self, changed: I)
+    where
+        I: IntoIterator<Item = &'a IpNet>,
+    {
+        let mut v4: Option<Option<Ipv4Net>> = None;
+        let mut v6: Option<Option<Ipv6Net>> = None;
+        for prefix in changed {
+            match prefix {
+                IpNet::V4(p) => {
+                    v4 = match v4 {
+                        None => Some(Some(*p)),
+                        Some(Some(prev)) if prev == *p => Some(Some(prev)),
+                        _ => Some(None),
+                    }
+                }
+                IpNet::V6(p) => {
+                    v6 = match v6 {
+                        None => Some(Some(*p)),
+                        Some(Some(prev)) if prev == *p => Some(Some(prev)),
+                        _ => Some(None),
+                    }
+                }
+            }
+        }
+        if let Some(prefix) = v4 {
+            self.rpf_table
+                .trigger_rebuild_v4(Arc::clone(&self.rib4_loc), prefix);
+        }
+        if let Some(prefix) = v6 {
+            self.rpf_table
+                .trigger_rebuild_v6(Arc::clone(&self.rib6_loc), prefix);
+        }
     }
 
     // generic helper function to kick off a bestpath run for some
@@ -1005,6 +1027,8 @@ impl Db {
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
 
+        let mut changed: BTreeSet<IpNet> = BTreeSet::new();
+
         {
             // only grab the lock once, release it once the loop ends
             let rib4_in = lock!(self.rib4_in);
@@ -1017,6 +1041,7 @@ impl Db {
                         &mut rib4_loc,
                         fanout.get().into(),
                     );
+                    changed.insert(IpNet::from(*prefix));
                 }
             }
         }
@@ -1033,9 +1058,14 @@ impl Db {
                         &mut rib6_loc,
                         fanout.get().into(),
                     );
+                    changed.insert(IpNet::from(*prefix));
                 }
             }
         }
+
+        // Bestpath re-runs (e.g., on fanout changes) mutate the loc-RIB,
+        // so the RPF caches must rebuild as well.
+        self.trigger_rpf_rebuild(changed.iter());
     }
 
     fn update_rib_loc<P: Ord + Copy>(
@@ -1090,7 +1120,10 @@ impl Db {
         self.update_rib6_loc(rib_in, rib_loc, p6);
     }
 
-    pub fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
+    /// Insert a path for a prefix into the RIB and refresh the loc-RIB
+    /// entry. RPF cache maintenance rides on the batch's change
+    /// notification via [`Self::notify`].
+    fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
         match prefix {
             IpNet::V4(p4) => {
                 let mut rib_in = lock!(self.rib4_in);
@@ -1430,7 +1463,7 @@ impl Db {
         }
     }
 
-    pub fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
+    fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
     where
         F: Fn(&Path) -> bool,
     {
@@ -1639,92 +1672,63 @@ impl Db {
         Ok(())
     }
 
-    /// Get the minimum interval between poptrie cache rebuilds.
-    ///
-    /// This rate-limits how often the poptrie is rebuilt in response to
-    /// unicast RIB changes. When rate-limited, lookups fall back to linear
-    /// scan. This is separate from the revalidation sweep interval (see
-    /// [`Self::set_mrib_rpf_revalidation_interval`]).
-    pub fn get_mrib_rpf_rebuild_interval(
-        &self,
-    ) -> Result<std::time::Duration, Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let interval_ms = match tree.get(MRIB_RPF_REBUILD_INTERVAL)? {
-            None => DEFAULT_MRIB_RPF_REBUILD_INTERVAL_MS,
-            Some(value) => {
-                let bytes: [u8; 8] = (*value).try_into().map_err(|_| {
-                    Error::DbValue(format!(
-                        "invalid mrib_rpf_rebuild_interval value in db: expected 8 bytes, found {}",
-                        value.len()
-                    ))
-                })?;
-                u64::from_be_bytes(bytes)
-            }
-        };
-        Ok(std::time::Duration::from_millis(interval_ms))
-    }
-
-    /// Set the minimum interval between poptrie cache rebuilds.
-    ///
-    /// This rate-limits how often the poptrie is rebuilt in response to
-    /// unicast RIB changes. When rate-limited, lookups fall back to linear
-    /// scan.
-    ///
-    /// This is persisted to the settings tree.
-    pub fn set_mrib_rpf_rebuild_interval(
-        &self,
-        interval: std::time::Duration,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let interval_ms = u64::try_from(interval.as_millis()).unwrap();
-        tree.insert(MRIB_RPF_REBUILD_INTERVAL, &interval_ms.to_be_bytes())?;
-        tree.flush()?;
-        self.rpf_table.set_rebuild_interval(interval);
-        Ok(())
-    }
-
     pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
-        let mut rib = lock!(self.rib4_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
-            }
-        });
+        {
+            let mut rib = lock!(self.rib4_loc);
+            rib.iter_mut().for_each(|(_prefix, path)| {
+                let targets: Vec<Path> = path
+                    .iter()
+                    .filter_map(|p| {
+                        if let Some(bgp) = p.bgp.as_ref()
+                            && bgp.peer == peer
+                        {
+                            let mut marked = p.clone();
+                            marked.bgp = Some(bgp.as_stale());
+                            return Some(marked);
+                        }
+                        None
+                    })
+                    .collect();
+                for t in targets.into_iter() {
+                    path.replace(t);
+                }
+            });
+        }
+
+        // Staleness affects bestpath selection, so RPF caches derived from
+        // the loc-RIB must rebuild. Any prefix may have been touched, so
+        // request a full sweep.
+        self.rpf_table
+            .trigger_rebuild_v4(Arc::clone(&self.rib4_loc), None);
     }
 
     pub fn mark_bgp_peer_stale6(&self, peer: PeerId) {
-        let mut rib = lock!(self.rib6_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
-            }
-        });
+        {
+            let mut rib = lock!(self.rib6_loc);
+            rib.iter_mut().for_each(|(_prefix, path)| {
+                let targets: Vec<Path> = path
+                    .iter()
+                    .filter_map(|p| {
+                        if let Some(bgp) = p.bgp.as_ref()
+                            && bgp.peer == peer
+                        {
+                            let mut marked = p.clone();
+                            marked.bgp = Some(bgp.as_stale());
+                            return Some(marked);
+                        }
+                        None
+                    })
+                    .collect();
+                for t in targets.into_iter() {
+                    path.replace(t);
+                }
+            });
+        }
+        // Staleness affects bestpath selection, so RPF caches derived from
+        // the loc-RIB must rebuild. Any prefix may have been touched, so
+        // request a full sweep.
+        self.rpf_table
+            .trigger_rebuild_v6(Arc::clone(&self.rib6_loc), None);
     }
 
     // ========================================================================
@@ -1749,25 +1753,64 @@ impl Db {
             return;
         };
 
-        // (S,G): derive rpf_neighbor from unicast RIB
+        // (S,G): derive rpf_neighbor from the unicast RIB.
+        //
+        // Optimistic concurrency: if a cache swap lands between the lookup and
+        // the apply, the revalidator pass it triggers may have already applied
+        // a fresher derivation that ours would override. So, we detect the swap
+        // via the generation check and re-derive accordingly.
+        //
+        // The bound is a latency limit on inline retries, not a convergence
+        // guarantee. Convergence comes from the corrective revalidation pass
+        // queued on exhaustion. If no revalidator is running to take that
+        // pass, inline derivation continues instead.
+        const MAX_INLINE_DERIVE_ATTEMPTS: usize = 3;
         let fanout = self.config.bestpath_fanout.load(Ordering::Relaxed);
-        let rpf_neighbor = self.rpf_table.lookup(
-            source,
-            &self.rib4_loc,
-            &self.rib6_loc,
-            fanout as usize,
-        );
+        loop {
+            let mut converged = false;
+            for _ in 0..MAX_INLINE_DERIVE_ATTEMPTS {
+                let generation = self.rpf_table.generation();
+                let rpf_neighbor = self.rpf_table.lookup(
+                    source,
+                    &self.rib4_loc,
+                    &self.rib6_loc,
+                    fanout as usize,
+                );
 
-        if rpf_neighbor.is_none() {
-            debug!(
-                self.log,
-                "deselecting (S,G) route: no unicast path to source";
-                "key" => %key
-            );
+                if rpf_neighbor.is_none() {
+                    debug!(
+                        self.log,
+                        "deselecting (S,G) route: no unicast path to source";
+                        "key" => %key
+                    );
+                }
+
+                // Atomically update mrib_in and mrib_loc
+                self.mrib.apply_rpf_result(key, rpf_neighbor);
+
+                if self.rpf_table.generation() == generation {
+                    converged = true;
+                    break;
+                }
+            }
+
+            if converged {
+                break;
+            }
+
+            // Inline retry budget exhausted under sustained cache churn. The
+            // last applied derivation may be stale, so hand the key's source
+            // to the revalidator for an explicit corrective pass rather than
+            // relying on an incidental sweep.
+            if self.rpf_table.request_revalidation(source) {
+                debug!(
+                    self.log,
+                    "rpf derivation did not converge, queued revalidation";
+                    "key" => %key
+                );
+                break;
+            }
         }
-
-        // Atomically update mrib_in and mrib_loc
-        self.mrib.apply_rpf_result(key, rpf_neighbor);
     }
 
     /// Revalidate (S,G) routes against the unicast RIB.
@@ -1890,17 +1933,35 @@ impl Db {
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(STATIC_MCAST_ROUTES)?;
 
-        // Pre-serialize keys and values outside the transaction to
-        // keep fallible serde operations out of the closure.
+        // Persist configuration only: `rpf_neighbor` is derived from the
+        // unicast RIB at load and revalidation time, so writing it to disk
+        // would only capture a stale derivation. Timestamps merge against
+        // the previously persisted entry so idempotent upserts do not
+        // rewrite them. Reads happen outside the transaction to keep the
+        // closure infallible.
         let entries: Vec<(Vec<u8>, String)> = routes
             .iter()
             .map(|route| {
-                Ok((route.key.db_key()?, serde_json::to_string(route)?))
+                let key = route.key.db_key()?;
+                let mut normalized = route.clone();
+                normalized.rpf_neighbor = None;
+                if let Some(prev) = tree.get(&key)?.and_then(|v| {
+                    serde_json::from_slice::<MulticastRoute>(&v).ok()
+                }) {
+                    normalized.created = prev.created;
+                    if prev.underlay_group == normalized.underlay_group
+                        && prev.source == normalized.source
+                    {
+                        normalized.updated = prev.updated;
+                    }
+                }
+                Ok((key, serde_json::to_string(&normalized)?))
             })
             .collect::<Result<_, Error>>()?;
 
-        // Persist atomically before updating the in-memory MRIB, so a
-        // partial write never leaves config and state out of sync.
+        // Durability precedes visibility: the transaction and flush complete
+        // before add_route publishes the change to MRIB watchers, so a
+        // notified consumer can never observe state that a crash would lose.
         tree.transaction(|tx_db| {
             for (key, value) in &entries {
                 tx_db.insert(key.as_slice(), value.as_str())?;
@@ -2100,7 +2161,6 @@ mod test {
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
-    use std::time::Duration;
 
     fn test_underlay() -> UnderlayMulticastIpv6 {
         UnderlayMulticastIpv6::new(Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1))
@@ -2507,8 +2567,6 @@ mod test {
         let log = init_file_logger("mrib_reval.log");
         let db =
             crate::test::get_test_db("mrib_reval", log).expect("create db");
-        db.set_mrib_rpf_rebuild_interval(std::time::Duration::ZERO)
-            .unwrap();
 
         // IPv4
         test_af(
@@ -2530,6 +2588,97 @@ mod test {
         );
     }
 
+    /// Static (S,G) re-upserts arrive as fresh constructions, with no derived
+    /// neighbor and new timestamps. The MRIB must treat them as no-ops. The
+    /// persisted entry stores configuration only, so its derived neighbor stays
+    /// `None` and its timestamps survive the replay rather than taking the
+    /// request's fresh ones.
+    #[test]
+    fn test_mrib_static_upsert_preserves_canonical() {
+        let log = init_file_logger("mrib_upsert_canonical.log");
+        let db = crate::test::get_test_db("mrib_upsert_canonical", log)
+            .expect("create db");
+
+        let nexthop = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        let srk = StaticRouteKey {
+            prefix: "192.0.2.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[srk]).unwrap();
+
+        let key = MulticastRouteKey::new(
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
+            MulticastAddr::new_v4(225, 1, 1, 2).expect("valid mcast"),
+            Vni::DEFAULT_MULTICAST,
+        )
+        .expect("AF match");
+
+        let route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(&[route]).unwrap();
+
+        wait_for!(
+            db.get_selected_mcast_route(&key).is_some(),
+            DEFAULT_INTERVAL,
+            TEST_WAIT_ITERATIONS,
+            "(S,G) was not selected"
+        );
+
+        let before = db.get_mcast_route(&key).expect("route in mrib_in");
+        assert_eq!(before.rpf_neighbor, Some(nexthop));
+
+        let persisted_before = db
+            .get_static_mcast_routes()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.key == key)
+            .expect("route persisted");
+
+        let replay = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(&[replay]).unwrap();
+
+        let after = db.get_mcast_route(&key).expect("route in mrib_in");
+        assert_eq!(
+            after.rpf_neighbor,
+            Some(nexthop),
+            "idempotent upsert must not clobber the derived neighbor"
+        );
+        assert_eq!(after.created, before.created);
+        assert_eq!(
+            after.updated, before.updated,
+            "idempotent upsert must not bump updated"
+        );
+
+        let persisted = db
+            .get_static_mcast_routes()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.key == key)
+            .expect("route persisted");
+
+        assert_eq!(
+            persisted.rpf_neighbor, None,
+            "persistence stores configuration only, not derived state"
+        );
+        assert_eq!(persisted.created, persisted_before.created);
+        assert_eq!(
+            persisted.updated, persisted_before.updated,
+            "idempotent replay must not rewrite persisted timestamps"
+        );
+
+        db.remove_static_routes(&[srk]).unwrap();
+        db.remove_static_mcast_routes(&[key]).unwrap();
+    }
+
     /// Test (*,G) vs (S,G) selection behavior.
     ///
     /// - (*,G) routes are always selected (no RPF check needed)
@@ -2539,7 +2688,6 @@ mod test {
         let log = init_file_logger("mrib_asm_ssm.log");
         let db =
             crate::test::get_test_db("mrib_asm_ssm", log).expect("create db");
-        db.set_mrib_rpf_rebuild_interval(Duration::ZERO).unwrap();
 
         // Case: (*,G) with ASM address goes to `mrib_loc` immediately
         // (no unicast route needed)

@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
+use chrono::Utc;
 use slog::{Logger, error, info};
 
 use mg_common::{lock, read_lock, write_lock};
@@ -269,8 +270,12 @@ impl Mrib {
                     mrib_loc.remove(key).is_some()
                 }
                 Some(route) => {
-                    // Update rpf_neighbor in mrib_in
-                    route.rpf_neighbor = neighbor;
+                    // Update rpf_neighbor in mrib_in, bumping `updated` only
+                    // on a semantic change per its documented contract.
+                    if route.rpf_neighbor != neighbor {
+                        route.rpf_neighbor = neighbor;
+                        route.updated = Utc::now();
+                    }
 
                     // Promote or remove from mrib_loc based on RPF result
                     if neighbor.is_some() {
@@ -306,26 +311,38 @@ impl Mrib {
 
     /// Add or update a multicast route in `mrib_in`.
     ///
-    /// The route is added to `mrib_in` only. The caller (`Db`) is responsible
-    /// for calling [`crate::Db::update_mrib_loc()`] to perform RPF verification
-    /// and potentially promote the route to `mrib_loc`.
+    /// [`MulticastRoute::rpf_neighbor`] is derived from the unicast RIB
+    /// rather than configured, so upserts compare only the configured fields
+    /// ([`MulticastRoute::underlay_group`] and [`MulticastRoute::source`])
+    /// and preserve the stored neighbor until revalidation recomputes it.
+    /// An idempotent upsert leaves the entry untouched. A change preserves
+    /// [`MulticastRoute::created`] and bumps [`MulticastRoute::updated`].
     ///
-    /// Accepts a full [MulticastRoute].
-    pub fn add_route(&self, route: MulticastRoute) -> Result<(), Error> {
+    /// The route is added to `mrib_in` only. The caller (`Db`) is responsible
+    /// for calling [`crate::Db::update_mrib_loc()`] to perform RPF
+    /// verification and potentially promote the route to `mrib_loc`.
+    pub(crate) fn add_route(&self, route: MulticastRoute) -> Result<(), Error> {
         let key = route.key;
         let changed = {
             let mut mrib_in = lock!(self.mrib_in);
-            let changed = match mrib_in.get(&key) {
+            match mrib_in.get(&key) {
                 Some(existing) => {
-                    // Check if route actually changed
-                    existing.rpf_neighbor != route.rpf_neighbor
-                        || existing.source != route.source
-                        || existing.underlay_group != route.underlay_group
+                    let changed = existing.source != route.source
+                        || existing.underlay_group != route.underlay_group;
+                    if changed {
+                        let mut route = route;
+                        route.rpf_neighbor = existing.rpf_neighbor;
+                        route.created = existing.created;
+                        route.updated = Utc::now();
+                        mrib_in.insert(key, route);
+                    }
+                    changed
                 }
-                None => true, // New route
-            };
-            mrib_in.insert(key, route);
-            changed
+                None => {
+                    mrib_in.insert(key, route);
+                    true
+                }
+            }
         };
 
         if changed {
@@ -335,7 +352,10 @@ impl Mrib {
     }
 
     /// Remove a multicast route from both `mrib_in` and `mrib_loc`.
-    pub fn remove_route(&self, key: &MulticastRouteKey) -> Result<bool, Error> {
+    pub(crate) fn remove_route(
+        &self,
+        key: &MulticastRouteKey,
+    ) -> Result<bool, Error> {
         // Acquire both locks following documented order to ensure atomicity
         let removed = {
             let mut mrib_in = lock!(self.mrib_in);

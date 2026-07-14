@@ -26,8 +26,11 @@ use crate::latest::mrib::{
 /// at scope 3 (realm-local).
 const MIN_MULTICAST_SCOPE: u8 = 0x3;
 
-/// Maximum IPv6 multicast scope value (4 bits).
-const MAX_MULTICAST_SCOPE: u8 = 0xf;
+/// Maximum valid IPv6 multicast scope for proptest strategies.
+///
+/// Scope F is reserved (RFC 7346) and rejected by `MulticastAddrV6::new`,
+/// so generated addresses stop at scope E (global).
+const MAX_MULTICAST_SCOPE: u8 = 0xe;
 
 /// Maximum IPv6 multicast flags value (4 bits).
 const MAX_MULTICAST_FLAGS: u8 = 0xf;
@@ -191,17 +194,17 @@ pub fn ipv6_asm_group_strategy() -> impl Strategy<Value = MulticastAddrV6> {
         })
 }
 
-/// Generate SSM IPv6 multicast addresses (ff3x::).
+/// Generate SSM IPv6 multicast addresses (FF3x::/32).
 pub fn ipv6_ssm_group_strategy() -> impl Strategy<Value = MulticastAddrV6> {
-    // SSM: ff3<scope>:: where scope in 3-f (link-local and above)
-    // IPV6_SSM_SUBNET is ff30::/12, so base segment is 0xff30
+    // SSM: ff3<scope>:: where scope in 3-e (realm-local through global). The
+    // second segment stays zero per the RFC 4607 FF3x::/32 allocation,
+    // matching the SSM classification in `MulticastRouteKey::validate`.
     let ssm_base = IPV6_SSM_SUBNET.addr().segments()[0];
-    (MIN_MULTICAST_SCOPE..=MAX_MULTICAST_SCOPE, any::<[u16; 7]>()).prop_map(
+    (MIN_MULTICAST_SCOPE..=MAX_MULTICAST_SCOPE, any::<[u16; 6]>()).prop_map(
         move |(scope, segs)| {
             let first = ssm_base | (scope as u16);
             MulticastAddrV6::new(Ipv6Addr::new(
-                first, segs[0], segs[1], segs[2], segs[3], segs[4], segs[5],
-                segs[6],
+                first, 0, segs[0], segs[1], segs[2], segs[3], segs[4], segs[5],
             ))
             .expect("SSM is valid")
         },
@@ -281,7 +284,7 @@ impl Arbitrary for MulticastAddrV6 {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // Generate with all valid flag/scope combinations
         // Format: ff<flags><scope>::
-        // Valid scopes: 3-f (excluding 0=reserved, 1=if-local, 2=link-local)
+        // Valid scopes: 3-e (excluding 0/f=reserved, 1=if-local, 2=link-local)
         // Flags: 0-f (all combinations valid)
         (
             0x0u8..=MAX_MULTICAST_FLAGS,
@@ -303,7 +306,7 @@ impl Arbitrary for MulticastAddrV6 {
                     segs[6],
                 );
                 MulticastAddrV6::new(addr)
-                    .expect("scope 3-f with any flags is valid")
+                    .expect("scope 3-e with any flags is valid")
             })
             .boxed()
     }

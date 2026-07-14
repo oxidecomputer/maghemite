@@ -482,7 +482,7 @@ pub(crate) fn get_routes_for_prefix(
 
 /// Create a new Dendrite (DPD) client.
 ///
-/// In production the lower half runs in the same zone as DPD, so `addr` is
+/// On the rack, the lower half runs in the same zone as DPD, so `addr` is
 /// `None` and the client targets `localhost` on the default DPD port. Tests
 /// pass an explicit `addr` to reach a DPD listening elsewhere (for example a
 /// dynamically assigned port in an integration harness).

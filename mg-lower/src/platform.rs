@@ -271,7 +271,6 @@ pub trait SwitchZone {
 
 /// Production dpd trait that simply passes through calls to a dpd client.
 #[cfg(target_os = "illumos")]
-#[derive(Clone)]
 pub struct ProductionDpd {
     pub client: DpdClient,
 }

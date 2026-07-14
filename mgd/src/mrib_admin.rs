@@ -5,7 +5,6 @@
 // Copyright 2026 Oxide Computer Company
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -13,9 +12,8 @@ use dropshot::{
 };
 
 use mg_api_types::mrib::{
-    MribAddStaticRequest, MribDeleteStaticRequest, MribQuery,
-    MribRpfRebuildIntervalRequest, MribRpfRebuildIntervalResponse,
-    MulticastAddr, MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
+    MribAddStaticRequest, MribDeleteStaticRequest, MribQuery, MulticastAddr,
+    MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
     RouteOriginFilter,
 };
 
@@ -150,30 +148,4 @@ pub async fn static_list_mcast_routes(
     let ctx = rqctx.context();
     let routes = ctx.db.get_static_mcast_routes().map_err(Error::from)?;
     Ok(HttpResponseOk(routes))
-}
-
-pub async fn read_mrib_rpf_rebuild_interval(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError> {
-    let ctx = rqctx.context();
-    let interval = ctx
-        .db
-        .get_mrib_rpf_rebuild_interval()
-        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
-    Ok(HttpResponseOk(MribRpfRebuildIntervalResponse {
-        interval_ms: u64::try_from(interval.as_millis()).unwrap_or(u64::MAX),
-    }))
-}
-
-pub async fn update_mrib_rpf_rebuild_interval(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<MribRpfRebuildIntervalRequest>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = rqctx.context();
-    let body = request.into_inner();
-    let interval = Duration::from_millis(body.interval_ms);
-    ctx.db
-        .set_mrib_rpf_rebuild_interval(interval)
-        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
-    Ok(HttpResponseUpdatedNoContent())
 }

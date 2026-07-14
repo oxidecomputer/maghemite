@@ -1234,55 +1234,6 @@
         }
       }
     },
-    "/mrib/config/rpf/rebuild-interval": {
-      "get": {
-        "summary": "Get the RPF rebuild rate-limit interval.",
-        "operationId": "read_mrib_rpf_rebuild_interval",
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MribRpfRebuildIntervalResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "post": {
-        "summary": "Set the RPF rebuild rate-limit interval.",
-        "operationId": "update_mrib_rpf_rebuild_interval",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MribRpfRebuildIntervalRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/mrib/status/imported": {
       "get": {
         "summary": "Get imported multicast routes from `mrib_in`.",
@@ -4103,36 +4054,6 @@
           "keys"
         ]
       },
-      "MribRpfRebuildIntervalRequest": {
-        "description": "Request body for setting the RPF rebuild interval.",
-        "type": "object",
-        "properties": {
-          "interval_ms": {
-            "description": "Minimum interval between RPF cache rebuilds in milliseconds. A value of 0 disables rate-limiting. Every unicast RIB change triggers an immediate poptrie rebuild.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "interval_ms"
-        ]
-      },
-      "MribRpfRebuildIntervalResponse": {
-        "description": "Response containing the current RPF rebuild interval.",
-        "type": "object",
-        "properties": {
-          "interval_ms": {
-            "description": "Minimum interval between RPF cache rebuilds in milliseconds. A value of 0 means rate-limiting is disabled.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "interval_ms"
-        ]
-      },
       "MulticastRoute": {
         "description": "Multicast route entry containing replication groups and metadata.",
         "type": "object",
@@ -4152,7 +4073,7 @@
           },
           "rpf_neighbor": {
             "nullable": true,
-            "description": "Expected RPF neighbor for the source (for RPF checks).",
+            "description": "Upstream neighbor selected for RPF checks.\n\nThis records one representative neighbor rather than the full ECMP set. When the unicast route has multiple equal-cost paths, any active member is valid. `None` means RPF does not apply or no active unicast path is available.\n\nDerived from the unicast RIB, never persisted. Listings of static route configuration always carry `None` here since they reflect stored configuration only.",
             "type": "string",
             "format": "ip"
           },

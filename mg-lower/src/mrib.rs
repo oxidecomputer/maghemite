@@ -9,8 +9,8 @@
 //! the multicast analog of the unicast lower-half's tunnel-endpoint origination.
 //!
 //! Origination reads the local MRIB (`loc_mrib`) and is watch-driven, with the
-//! periodic resync only as a backstop, the same shape as the unicast
-//! lower-half's crate-level loop [`crate::run`].
+//! periodic resync covering only missed notifications, the same shape as the
+//! unicast lower-half's crate-level loop [`crate::run`].
 //!
 //! The inbound membership half (resolving DDM-imported routes to switch
 //! replication members in DPD) lives in ddmd (`ddm::mcast`), where both inputs,
@@ -22,7 +22,7 @@
 //!   Origination (MRIB -> DDM -> underlay)
 //!     MRIB (loc_mrib changes)
 //!         | [MribChangeNotification]
-//!         v [MulticastOrigin]
+//!         v [MulticastOrigin] (diff vs DDM originated)
 //!     DDM admin API --[DDM exchange]--> other sleds/racks
 //! ```
 //!
@@ -44,7 +44,7 @@ pub(crate) const MG_LOWER_MRIB_TAG: &str = "mg-lower-mrib";
 
 /// Interval between periodic MRIB full syncs.
 ///
-/// Acts as a backstop in case an MRIB change notification is missed. Mirrors the
+/// Covers the case where an MRIB change notification is missed. Mirrors the
 /// unicast lower-half's 1s resync cadence in `crate::run`.
 const MRIB_PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -115,6 +115,12 @@ pub fn run(
                 Err(RecvTimeoutError::Timeout) => {
                     if let Err(e) = full_sync(&mrib, ddm, &log, &rt) {
                         error!(log, "MRIB periodic sync failed: {e}");
+                        info!(log, "restarting MRIB sync loop in one second");
+                        // Same backoff floor as the initial-sync failure, so a
+                        // persistent failure retries at that pace rather than
+                        // every resync interval. The unicast lower-half pauses
+                        // in the same way (see `crate::run`).
+                        sleep(Duration::from_secs(1));
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
@@ -277,6 +283,20 @@ mod tests {
         )
     }
 
+    /// Build an any-source (*,G) static route for an IPv6 group in
+    /// `ff0e::/16`, with a distinct underlay so the 1:1 overlay-to-underlay
+    /// mapping holds alongside `asm_route` entries.
+    fn asm_route_v6(last: u16) -> MulticastRoute {
+        let group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, last])
+            .expect("valid group");
+        let underlay = UnderlayMulticastIpv6::new(Ipv6Addr::new(
+            0xff04, 0, 0, 0, 0, 0, 0x1, last,
+        ))
+        .expect("valid underlay address");
+        let key = MulticastRouteKey::any_source(group);
+        MulticastRoute::new(key, underlay, MulticastSourceProtocol::Static)
+    }
+
     #[test]
     fn full_sync_advertises_groups_missing_from_ddm() {
         let (_rt, handle) = runtime();
@@ -292,6 +312,25 @@ mod tests {
         let originated = ddm.multicast_originated.lock().unwrap();
         assert_eq!(originated.len(), 1);
         assert_eq!(originated[0], ddm_origin(&route));
+    }
+
+    #[test]
+    fn full_sync_advertises_v4_and_v6_overlay_groups() {
+        let (_rt, handle) = runtime();
+        let log = discard_logger();
+        let db = get_test_db("mrib_full_sync_v6", log.clone()).expect("db");
+        let v4 = asm_route(225, 1, 1, 1);
+        let v6 = asm_route_v6(1);
+        db.add_static_mcast_routes(&[v4.clone(), v6.clone()])
+            .expect("add routes");
+
+        let ddm = TestDdm::default();
+        full_sync(db.mrib(), &ddm, &log, &handle).expect("full sync");
+
+        let originated = ddm.multicast_originated.lock().unwrap();
+        assert_eq!(originated.len(), 2);
+        assert!(originated.contains(&ddm_origin(&v4)));
+        assert!(originated.contains(&ddm_origin(&v6)));
     }
 
     #[test]
@@ -432,9 +471,9 @@ mod tests {
         let log = discard_logger();
         let db = get_test_db("mrib_change_selective", log.clone()).expect("db");
 
-        // DDM advertises two groups; only one is named in the change set and is
-        // absent from the MRIB, so only that one must be withdrawn. Exercises
-        // the key-reconstruction match in the removal path.
+        // DDM advertises two groups: only one is named in the change set and is
+        // absent from the MRIB, which means only that one must be withdrawn.
+        // This exercises the key-reconstruction match in the removal path.
         let removed = asm_route(225, 1, 1, 1);
         let other = asm_route(225, 2, 2, 2);
         let ddm = TestDdm::default();
