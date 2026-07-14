@@ -19,8 +19,7 @@ use clap::{Args, Subcommand};
 use client_common::println_nopipe;
 use mg_admin_client::Client;
 use mg_admin_client::types::{
-    MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
-    RouteOriginFilter,
+    MulticastRoute, MulticastRouteKey, RouteOriginFilter,
 };
 use mg_api_types::mrib::DEFAULT_MULTICAST_VNI;
 use mg_api_types::rdb::rib::AddressFamily;
@@ -41,9 +40,6 @@ fn parse_route_origin(s: &str) -> Result<RouteOriginFilter, String> {
 pub enum Commands {
     /// View MRIB state.
     Status(StatusCommand),
-
-    /// RPF (Reverse Path Forwarding) table configuration and lookup.
-    Rpf(RpfCommand),
 }
 
 #[derive(Debug, Args)]
@@ -109,24 +105,6 @@ pub enum StatusCmd {
     },
 }
 
-#[derive(Debug, Args)]
-pub struct RpfCommand {
-    #[command(subcommand)]
-    command: RpfCmd,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum RpfCmd {
-    /// Get RPF rebuild interval.
-    GetInterval,
-
-    /// Set RPF rebuild interval.
-    SetInterval {
-        /// Rebuild interval in milliseconds
-        interval_ms: u64,
-    },
-}
-
 pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
         Commands::Status(status_cmd) => match status_cmd.command {
@@ -155,12 +133,6 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 } else {
                     get_selected(c, address_family, origin).await?
                 }
-            }
-        },
-        Commands::Rpf(rpf_cmd) => match rpf_cmd.command {
-            RpfCmd::GetInterval => get_rpf_interval(c).await?,
-            RpfCmd::SetInterval { interval_ms } => {
-                set_rpf_interval(c, interval_ms).await?
             }
         },
     }
@@ -229,21 +201,6 @@ async fn get_route_selected(
     Ok(())
 }
 
-async fn get_rpf_interval(c: Client) -> Result<()> {
-    let result = c.read_mrib_rpf_rebuild_interval().await?.into_inner();
-    println_nopipe!("RPF rebuild interval: {}ms", result.interval_ms);
-    Ok(())
-}
-
-async fn set_rpf_interval(c: Client, interval_ms: u64) -> Result<()> {
-    c.update_mrib_rpf_rebuild_interval(&MribRpfRebuildIntervalRequest {
-        interval_ms,
-    })
-    .await?;
-    println_nopipe!("Updated RPF rebuild interval to: {interval_ms}ms");
-    Ok(())
-}
-
 fn print_routes(routes: &[MulticastRoute]) {
     if routes.is_empty() {
         println_nopipe!("No multicast routes");
@@ -295,21 +252,19 @@ mod tests {
         ])
         .unwrap();
 
-        match cli.command {
-            Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Imported {
-                    group, source, vni, ..
-                } => {
-                    assert_eq!(
-                        group,
-                        Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
-                    );
-                    assert_eq!(source, None);
-                    assert_eq!(vni, DEFAULT_VNI);
-                }
-                _ => panic!("expected Imported"),
-            },
-            _ => panic!("expected Status command"),
+        let Commands::Status(cmd) = cli.command;
+        match cmd.command {
+            StatusCmd::Imported {
+                group, source, vni, ..
+            } => {
+                assert_eq!(
+                    group,
+                    Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
+                );
+                assert_eq!(source, None);
+                assert_eq!(vni, DEFAULT_VNI);
+            }
+            _ => panic!("expected Imported"),
         }
     }
 
@@ -328,24 +283,22 @@ mod tests {
         ])
         .unwrap();
 
-        match cli.command {
-            Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Imported {
-                    group, source, vni, ..
-                } => {
-                    assert_eq!(
-                        group,
-                        Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
-                    );
-                    assert_eq!(
-                        source,
-                        Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
-                    );
-                    assert_eq!(vni, 100);
-                }
-                _ => panic!("expected Imported"),
-            },
-            _ => panic!("expected Status command"),
+        let Commands::Status(cmd) = cli.command;
+        match cmd.command {
+            StatusCmd::Imported {
+                group, source, vni, ..
+            } => {
+                assert_eq!(
+                    group,
+                    Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
+                );
+                assert_eq!(
+                    source,
+                    Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+                );
+                assert_eq!(vni, 100);
+            }
+            _ => panic!("expected Imported"),
         }
     }
 
@@ -364,28 +317,26 @@ mod tests {
         ])
         .unwrap();
 
-        match cli.command {
-            Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Selected {
-                    group, source, vni, ..
-                } => {
-                    assert_eq!(
-                        group,
-                        Some(IpAddr::V6(Ipv6Addr::new(
-                            0xff0e, 0, 0, 0, 0, 0, 0, 1
-                        )))
-                    );
-                    assert_eq!(
-                        source,
-                        Some(IpAddr::V6(Ipv6Addr::new(
-                            0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
-                        )))
-                    );
-                    assert_eq!(vni, 42);
-                }
-                _ => panic!("expected Selected"),
-            },
-            _ => panic!("expected Status command"),
+        let Commands::Status(cmd) = cli.command;
+        match cmd.command {
+            StatusCmd::Selected {
+                group, source, vni, ..
+            } => {
+                assert_eq!(
+                    group,
+                    Some(IpAddr::V6(Ipv6Addr::new(
+                        0xff0e, 0, 0, 0, 0, 0, 0, 1
+                    )))
+                );
+                assert_eq!(
+                    source,
+                    Some(IpAddr::V6(Ipv6Addr::new(
+                        0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
+                    )))
+                );
+                assert_eq!(vni, 42);
+            }
+            _ => panic!("expected Selected"),
         }
     }
 
@@ -395,19 +346,17 @@ mod tests {
             TestCli::try_parse_from(["test", "status", "imported", "ipv4"])
                 .unwrap();
 
-        match cli.command {
-            Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Imported {
-                    group,
-                    address_family,
-                    ..
-                } => {
-                    assert_eq!(group, None);
-                    assert_eq!(address_family, Some(AddressFamily::Ipv4));
-                }
-                _ => panic!("expected Imported"),
-            },
-            _ => panic!("expected Status command"),
+        let Commands::Status(cmd) = cli.command;
+        match cmd.command {
+            StatusCmd::Imported {
+                group,
+                address_family,
+                ..
+            } => {
+                assert_eq!(group, None);
+                assert_eq!(address_family, Some(AddressFamily::Ipv4));
+            }
+            _ => panic!("expected Imported"),
         }
     }
 
@@ -418,15 +367,13 @@ mod tests {
         ])
         .unwrap();
 
-        match cli.command {
-            Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Imported { group, origin, .. } => {
-                    assert_eq!(group, None);
-                    assert_eq!(origin, Some(RouteOriginFilter::Dynamic));
-                }
-                _ => panic!("expected Imported"),
-            },
-            _ => panic!("expected Status command"),
+        let Commands::Status(cmd) = cli.command;
+        match cmd.command {
+            StatusCmd::Imported { group, origin, .. } => {
+                assert_eq!(group, None);
+                assert_eq!(origin, Some(RouteOriginFilter::Dynamic));
+            }
+            _ => panic!("expected Imported"),
         }
     }
 
@@ -435,38 +382,19 @@ mod tests {
         let cli =
             TestCli::try_parse_from(["test", "status", "selected"]).unwrap();
 
-        match cli.command {
-            Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Selected {
-                    group,
-                    address_family,
-                    origin,
-                    ..
-                } => {
-                    assert_eq!(group, None);
-                    assert_eq!(address_family, None);
-                    assert_eq!(origin, None);
-                }
-                _ => panic!("expected Selected"),
-            },
-            _ => panic!("expected Status command"),
-        }
-    }
-
-    #[test]
-    fn test_rpf_set_interval() {
-        let cli =
-            TestCli::try_parse_from(["test", "rpf", "set-interval", "500"])
-                .unwrap();
-
-        match cli.command {
-            Commands::Rpf(cmd) => match cmd.command {
-                RpfCmd::SetInterval { interval_ms } => {
-                    assert_eq!(interval_ms, 500);
-                }
-                _ => panic!("expected SetInterval"),
-            },
-            _ => panic!("expected Rpf command"),
+        let Commands::Status(cmd) = cli.command;
+        match cmd.command {
+            StatusCmd::Selected {
+                group,
+                address_family,
+                origin,
+                ..
+            } => {
+                assert_eq!(group, None);
+                assert_eq!(address_family, None);
+                assert_eq!(origin, None);
+            }
+            _ => panic!("expected Selected"),
         }
     }
 }

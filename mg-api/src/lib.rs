@@ -1568,20 +1568,4 @@ pub trait MgAdminApi {
     async fn static_list_mcast_routes(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<latest::mrib::MulticastRoute>>, HttpError>;
-
-    /// Get the RPF rebuild rate-limit interval.
-    #[endpoint { method = GET, path = "/mrib/config/rpf/rebuild-interval", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn read_mrib_rpf_rebuild_interval(
-        rqctx: RequestContext<Self::Context>,
-    ) -> Result<
-        HttpResponseOk<latest::mrib::MribRpfRebuildIntervalResponse>,
-        HttpError,
-    >;
-
-    /// Set the RPF rebuild rate-limit interval.
-    #[endpoint { method = POST, path = "/mrib/config/rpf/rebuild-interval", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn update_mrib_rpf_rebuild_interval(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::mrib::MribRpfRebuildIntervalRequest>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 }

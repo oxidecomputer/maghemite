@@ -28,7 +28,6 @@ use mg_api_types::bgp::session::{
 };
 use mg_api_types::mrib::{
     MribAddStaticRequest, MribDeleteStaticRequest, MribQuery,
-    MribRpfRebuildIntervalRequest, MribRpfRebuildIntervalResponse,
 };
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
@@ -718,19 +717,6 @@ impl MgAdminApi for MgAdminApiImpl {
     ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
     {
         mrib_admin::static_list_mcast_routes(rqctx).await
-    }
-
-    async fn read_mrib_rpf_rebuild_interval(
-        rqctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError> {
-        mrib_admin::read_mrib_rpf_rebuild_interval(rqctx).await
-    }
-
-    async fn update_mrib_rpf_rebuild_interval(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<MribRpfRebuildIntervalRequest>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        mrib_admin::update_mrib_rpf_rebuild_interval(rqctx, request).await
     }
 }
 
