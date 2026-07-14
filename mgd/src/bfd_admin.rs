@@ -5,9 +5,7 @@
 use crate::admin::HandlerContext;
 use anyhow::Result;
 use bfd_async::AddPeerError;
-use bfd_async::AddPeerRequest;
 use bfd_async::Daemon;
-use bfd_async::DetectionThresholdZero;
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,
@@ -47,7 +45,7 @@ pub(crate) async fn get_bfd_peers(
             config: BfdPeerConfig {
                 peer: *addr,
                 required_rx: session.required_rx_micros(),
-                detection_threshold: session.detection_threshold().get(),
+                detection_threshold: session.detection_threshold(),
                 listen: daemon
                     .listen_addr_for_peer(addr)
                     .ok_or(HttpError::for_internal_error(format!(
@@ -79,7 +77,7 @@ pub(crate) fn add_peer(
 ) -> Result<(), HttpError> {
     let mut daemon = lock!(ctx.bfd.daemon);
     daemon
-        .add_peer(ctx.db.clone(), rq)
+        .add_peer(ctx.db.clone(), rq.into())
         .map_err(|err| match err {
             AddPeerError::PeerExists(_) => HttpError::for_client_error(
                 None,
