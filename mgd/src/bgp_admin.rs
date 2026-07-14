@@ -3,9 +3,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
-use crate::unnumbered_manager::{
-    NdpPeerState, NdpThreadStateInternal, UnnumberedManagerNdp,
-};
 use crate::validation::{
     validate_prefixes, validate_prefixes_v4, validate_prefixes_v6,
 };
@@ -21,7 +18,6 @@ use bgp::{
         AdminEvent, ConnectionKind, FsmEvent, SessionInfo, SessionRunner,
     },
 };
-use chrono::{DateTime, SecondsFormat, Utc};
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
@@ -43,12 +39,13 @@ use mg_api_types::bgp::session::{
 use mg_api_types::bgp::session::{
     FsmEventRecord, FsmStateKind, MessageHistory,
 };
-use mg_api_types::ndp::{
-    NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
-    NdpPendingInterface, NdpThreadState,
-};
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
+use mg_api_types::unnumbered::{
+    RouterDiscoveryRuntimeState, UnnumberedInterface,
+    UnnumberedInterfaceSelector, UnnumberedInterfaceStatus,
+    UnnumberedManagerState,
+};
 use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
@@ -61,7 +58,7 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Sender, channel},
 };
-use std::time::{Duration, Instant, SystemTime};
+use unnumbered::UnnumberedManager;
 
 const UNIT_BGP: &str = "bgp";
 const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
@@ -75,7 +72,7 @@ const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
 pub struct BgpContext {
     pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     pub(crate) sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
-    pub(crate) unnumbered_manager: Arc<UnnumberedManagerNdp>,
+    pub(crate) unnumbered_manager: Arc<UnnumberedManager>,
 }
 
 impl BgpContext {
@@ -84,7 +81,7 @@ impl BgpContext {
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
-        let unnumbered_manager = UnnumberedManagerNdp::new(log);
+        let unnumbered_manager = UnnumberedManager::new(log);
         Self {
             router,
             sessions,
@@ -529,173 +526,141 @@ pub async fn clear_unnumbered_neighbor(
     .await?)
 }
 
-/// Convert an Instant to an ISO 8601 timestamp string
-fn instant_to_iso8601(when: Instant) -> String {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
-    let elapsed = now_instant.duration_since(when);
-    let system_time = now_system - elapsed;
-    DateTime::<Utc>::from(system_time)
-        .to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-/// Convert NdpPeerState to API type with timestamp formatting
-fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
-    let elapsed_since_when = Instant::now().duration_since(state.when);
-
-    // Format timestamps: first_seen for when peer was discovered,
-    // when for when the most recent RA was received
-    let discovered_at = instant_to_iso8601(state.first_seen);
-    let last_advertisement = instant_to_iso8601(state.when);
-
-    // Calculate time until expiry
-    let effective_lifetime =
-        Duration::from_secs(u64::from(state.router_lifetime));
-    let time_until_expiry = if state.expired {
-        // Calculate time since expiry
-        let time_since_expiry = elapsed_since_when
-            .checked_sub(effective_lifetime)
-            .unwrap_or(Duration::ZERO);
-        Some(mg_common::format_duration_human(time_since_expiry))
-    } else {
-        // Calculate time until expiry
-        let time_until = effective_lifetime
-            .checked_sub(elapsed_since_when)
-            .unwrap_or(Duration::ZERO);
-        Some(mg_common::format_duration_human(time_until))
-    };
-
-    NdpPeer {
-        address: state.address,
-        discovered_at,
-        last_advertisement,
-        router_lifetime: state.router_lifetime,
-        reachable_time: state.reachable_time,
-        retrans_timer: state.retrans_timer,
-        expired: state.expired,
-        time_until_expiry,
+/// Convert router discovery runtime state to API type.
+fn convert_runtime_state_to_api(
+    state: &ndp::RouterDiscoveryRuntimeState,
+) -> RouterDiscoveryRuntimeState {
+    RouterDiscoveryRuntimeState {
+        tx_running: state.tx_running,
+        rx_running: state.rx_running,
     }
 }
 
-/// Convert internal thread state to API type
-fn convert_thread_state_to_api(
-    state: Option<&NdpThreadStateInternal>,
-) -> Option<NdpThreadState> {
-    state.map(|s| NdpThreadState {
-        tx_running: s.tx_running,
-        rx_running: s.rx_running,
-    })
-}
-
-pub async fn get_ndp_manager_state(
+pub async fn get_bgp_unnumbered_manager_state(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    _request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<NdpManagerState>, HttpError> {
+) -> Result<HttpResponseOk<UnnumberedManagerState>, HttpError> {
     let ctx = rqctx.context();
+    let manager = &ctx.bgp.unnumbered_manager;
 
-    // Get manager state from unnumbered manager
-    let manager_state = ctx.bgp.unnumbered_manager.get_manager_state();
+    // Active interfaces carry full router-discovery detail; pending
+    // interfaces are configured-but-unavailable. Insert active entries
+    // last so an interface that activates between the two queries is
+    // reported active rather than pending.
+    let mut interfaces = BTreeMap::new();
+    for p in manager.get_pending_interfaces() {
+        interfaces.insert(
+            p.interface,
+            UnnumberedInterfaceStatus::Pending {
+                router_lifetime: p.router_lifetime,
+            },
+        );
+    }
+    for ifx in manager.list_interfaces() {
+        interfaces.insert(
+            ifx.interface,
+            UnnumberedInterfaceStatus::Active {
+                local_address: ifx.local_address,
+                scope_id: ifx.scope_id,
+                router_lifetime: ifx.router_lifetime,
+                discovered_peer: ifx.peer_state.as_ref().and_then(Into::into),
+                runtime_state: convert_runtime_state_to_api(&ifx.runtime_state),
+            },
+        );
+    }
 
-    // Convert pending interfaces to API type
-    let pending_interfaces = manager_state
-        .pending_interfaces
-        .into_iter()
-        .map(|p| NdpPendingInterface {
-            interface: p.interface,
-            router_lifetime: p.router_lifetime,
-        })
-        .collect();
-
-    Ok(HttpResponseOk(NdpManagerState {
-        monitor_thread_running: manager_state.monitor_thread_running,
-        pending_interfaces,
-        active_interfaces: manager_state.active_interfaces,
+    Ok(HttpResponseOk(UnnumberedManagerState {
+        monitor_running: manager.get_manager_state().monitor_running,
+        interfaces,
     }))
 }
 
-pub async fn get_ndp_interfaces(
+pub async fn get_bgp_unnumbered_interfaces(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
-    let rq = request.into_inner();
+) -> Result<HttpResponseOk<Vec<UnnumberedInterface>>, HttpError> {
     let ctx = rqctx.context();
 
-    // Get all unnumbered neighbors for this ASN
-    let unnumbered_neighbors = ctx
-        .db
-        .get_unnumbered_bgp_neighbors()
-        .map_err(|e| {
-            HttpError::for_internal_error(format!(
-                "failed to get unnumbered neighbors: {e}"
-            ))
-        })?
+    let interfaces = ctx
+        .bgp
+        .unnumbered_manager
+        .list_interfaces()
         .into_iter()
-        .filter(|n| n.asn == rq.asn)
-        .collect::<Vec<_>>();
+        .map(|ndp| {
+            let discovered_peer = ndp.peer_state.as_ref().and_then(Into::into);
+            let runtime_state =
+                convert_runtime_state_to_api(&ndp.runtime_state);
 
-    // Get NDP state for managed interfaces
-    let ndp_state = ctx.bgp.unnumbered_manager.list_ndp_interfaces();
-
-    // Build response by matching neighbors to NDP state
-    let mut result = Vec::new();
-    for neighbor in unnumbered_neighbors {
-        // Find NDP state for this interface
-        if let Some(ndp) = ndp_state
-            .iter()
-            .find(|info| info.interface == neighbor.interface)
-        {
-            let discovered_peer =
-                ndp.peer_state.as_ref().map(convert_ndp_peer_to_api);
-            let thread_state =
-                convert_thread_state_to_api(ndp.thread_state.as_ref());
-
-            result.push(NdpInterface {
-                interface: neighbor.interface.clone(),
+            UnnumberedInterface {
+                interface: ndp.interface,
                 local_address: ndp.local_address,
                 scope_id: ndp.scope_id,
-                router_lifetime: neighbor.router_lifetime,
+                router_lifetime: ndp.router_lifetime,
                 discovered_peer,
-                thread_state,
-            });
-        }
-    }
+                runtime_state,
+            }
+        })
+        .collect();
 
-    Ok(HttpResponseOk(result))
+    Ok(HttpResponseOk(interfaces))
 }
 
-pub async fn get_ndp_interface_detail(
+pub async fn get_ndp_interfaces_v5(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NdpInterfaceSelector>,
-) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
+    request: Query<v1::bgp::config::AsnSelector>,
+) -> Result<HttpResponseOk<Vec<v5::ndp::NdpInterface>>, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
 
-    // Verify this interface has an unnumbered neighbor configured for this ASN
-    let neighbor = ctx
-        .db
-        .get_unnumbered_bgp_neighbors()
-        .map_err(|e| {
-            HttpError::for_internal_error(format!(
-                "failed to get unnumbered neighbors: {e}"
-            ))
-        })?
+    // Legacy NDP endpoints were scoped by ASN, but unnumbered/NDP runtime
+    // state is now global and interface-oriented. Recreate the old
+    // ASN-to-interface view by joining the selected router's unnumbered BGP
+    // sessions with active unnumbered manager interface state.
+    let router = get_router!(ctx, rq.asn)?.clone();
+    let interfaces: HashSet<_> = lock!(router.sessions)
+        .keys()
+        .filter_map(|peer| match peer {
+            PeerId::Interface(interface) => Some(interface.clone()),
+            PeerId::Ip(_) => None,
+        })
+        .collect();
+
+    let interfaces = ctx
+        .bgp
+        .unnumbered_manager
+        .list_interfaces()
         .into_iter()
-        .find(|n| n.asn == rq.asn && n.interface == rq.interface)
-        .ok_or_else(|| {
-            HttpError::for_not_found(
-                None,
-                format!(
-                    "no unnumbered neighbor for ASN {} on interface {}",
-                    rq.asn, rq.interface
-                ),
-            )
-        })?;
+        .filter(|ndp| interfaces.contains(&ndp.interface))
+        .map(|ndp| {
+            let discovered_peer = ndp.peer_state.as_ref().and_then(Into::into);
+            let runtime_state =
+                convert_runtime_state_to_api(&ndp.runtime_state);
+
+            UnnumberedInterface {
+                interface: ndp.interface,
+                local_address: ndp.local_address,
+                scope_id: ndp.scope_id,
+                router_lifetime: ndp.router_lifetime,
+                discovered_peer,
+                runtime_state,
+            }
+            .into()
+        })
+        .collect();
+
+    Ok(HttpResponseOk(interfaces))
+}
+
+pub async fn get_bgp_unnumbered_interface_detail(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<UnnumberedInterfaceSelector>,
+) -> Result<HttpResponseOk<UnnumberedInterface>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
 
     // Get detailed NDP state
     let unnumbered_manager = &ctx.bgp.unnumbered_manager;
 
     let ndp_detail = unnumbered_manager
-        .get_ndp_interface_detail(&rq.interface)
+        .get_interface_detail(&rq.interface)
         .map_err(|e| {
             HttpError::for_internal_error(format!(
                 "failed to get NDP state: {e}"
@@ -708,19 +673,66 @@ pub async fn get_ndp_interface_detail(
             )
         })?;
 
-    let discovered_peer =
-        ndp_detail.peer_state.as_ref().map(convert_ndp_peer_to_api);
-    let thread_state =
-        convert_thread_state_to_api(ndp_detail.thread_state.as_ref());
+    let discovered_peer = ndp_detail.peer_state.as_ref().and_then(Into::into);
+    let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
 
-    Ok(HttpResponseOk(NdpInterface {
+    Ok(HttpResponseOk(UnnumberedInterface {
         interface: rq.interface,
         local_address: ndp_detail.local_address,
         scope_id: ndp_detail.scope_id,
-        router_lifetime: neighbor.router_lifetime,
+        router_lifetime: ndp_detail.router_lifetime,
         discovered_peer,
-        thread_state,
+        runtime_state,
     }))
+}
+
+pub async fn get_ndp_interface_detail_v5(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<v5::ndp::NdpInterfaceSelector>,
+) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    // Legacy NDP detail is scoped by ASN and interface, but unnumbered/NDP
+    // runtime state is now global and interface-oriented. Validate the old
+    // ASN-to-interface mapping through BGP session ownership before returning
+    // runtime state from the unnumbered manager.
+    get_router!(ctx, rq.asn)?
+        .get_session(rq.interface.clone())
+        .ok_or(Error::NotFound(
+            "session for unnumbered neighbor not found".into(),
+        ))?;
+
+    let ndp_detail = ctx
+        .bgp
+        .unnumbered_manager
+        .get_interface_detail(&rq.interface)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!(
+                "failed to get NDP state: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            HttpError::for_not_found(
+                None,
+                format!("interface {} not managed by NDP", rq.interface),
+            )
+        })?;
+
+    let discovered_peer = ndp_detail.peer_state.as_ref().and_then(Into::into);
+    let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
+
+    Ok(HttpResponseOk(
+        UnnumberedInterface {
+            interface: rq.interface,
+            local_address: ndp_detail.local_address,
+            scope_id: ndp_detail.scope_id,
+            router_lifetime: ndp_detail.router_lifetime,
+            discovered_peer,
+            runtime_state,
+        }
+        .into(),
+    ))
 }
 
 // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1274,6 +1286,18 @@ async fn do_bgp_apply(
 
     // Validate originate prefixes before processing
     validate_prefixes(&rq.originate)?;
+    helpers::ensure_unique_bgp_peers(
+        rq.peers
+            .values()
+            .flatten()
+            .map(|peer| PeerId::Ip(peer.host.ip()))
+            .chain(
+                rq.unnumbered_peers
+                    .values()
+                    .flatten()
+                    .map(|peer| PeerId::Interface(peer.interface.clone())),
+            ),
+    )?;
 
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")
@@ -1335,6 +1359,40 @@ async fn do_bgp_apply(
             do_delete_router(ctx, old_asn).await?;
         }
     }
+
+    let mut peer_ids: Vec<_> = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(Error::Db)?
+        .into_iter()
+        .map(|nbr| (nbr.asn, PeerId::Ip(nbr.host.ip())))
+        .collect();
+    peer_ids.extend(
+        ctx.db
+            .get_unnumbered_bgp_neighbors()
+            .map_err(Error::Db)?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Interface(nbr.interface))),
+    );
+
+    // bgp_apply is the desired final state for this ASN. Existing peers under
+    // this ASN are replaced by the request below, so do not count them as
+    // duplicates of their requested updates.
+    peer_ids.retain(|(peer_asn, _)| *peer_asn != rq.asn);
+    helpers::ensure_unique_bgp_peers(
+        peer_ids.into_iter().map(|(_, peer)| peer).chain(
+            rq.peers
+                .values()
+                .flatten()
+                .map(|peer| PeerId::Ip(peer.host.ip()))
+                .chain(
+                    rq.unnumbered_peers
+                        .values()
+                        .flatten()
+                        .map(|peer| PeerId::Interface(peer.interface.clone())),
+                ),
+        ),
+    )?;
 
     helpers::ensure_router(
         ctx.clone(),
@@ -1922,19 +1980,33 @@ pub(crate) mod helpers {
             "remove unnumbered neighbor (interface {interface}, asn {asn})"
         );
 
-        // Delete the BGP session for this unnumbered neighbor.
-        // Unnumbered sessions are keyed by interface name, not IP address.
-        get_router!(&ctx, asn)?
-            .delete_session(PeerId::Interface(interface.to_string()));
-
-        // Unregister the interface from NDP peer discovery
-        ctx.bgp.unnumbered_manager.remove_interface(interface)?;
-
-        // And now clear out the top level database entry
+        let peer = PeerId::Interface(interface.to_string());
+        ctx.db.remove_bgp_prefixes_from_peer(&peer);
         ctx.db
             .remove_unnumbered_bgp_neighbor(asn.into(), interface)?;
+        get_router!(&ctx, asn)?.delete_session(peer);
+
+        // Unregister the interface from NDP peer discovery
+        ctx.bgp
+            .unnumbered_manager
+            .unconfigure_interface(interface)?;
 
         Ok(HttpResponseDeleted())
+    }
+
+    pub(crate) fn ensure_unique_bgp_peers(
+        peers: impl IntoIterator<Item = PeerId>,
+    ) -> Result<(), Error> {
+        let mut seen = HashSet::new();
+        for peer in peers {
+            if !seen.insert(peer.clone()) {
+                return Err(Error::Conflict(format!(
+                    "BGP peer {peer} is already configured",
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) fn add_neighbor_v1(
@@ -1946,6 +2018,21 @@ pub(crate) mod helpers {
         bgp_log!(log, info, "add neighbor {}", rq.host.ip();
             "params" => format!("{rq:#?}")
         );
+
+        let peer = PeerId::Ip(rq.host.ip());
+        let mut peers: Vec<_> = ctx
+            .db
+            .get_bgp_neighbors()?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Ip(nbr.host.ip())))
+            .collect();
+        if ensure {
+            peers.retain(|(asn, existing)| {
+                !(*asn == rq.asn && existing == &peer)
+            });
+        }
+        peers.push((rq.asn, peer));
+        ensure_unique_bgp_peers(peers.into_iter().map(|(_, peer)| peer))?;
 
         let (event_tx, event_rx) = channel();
 
@@ -2045,6 +2132,21 @@ pub(crate) mod helpers {
         // Validate that at least one AF is enabled
         rq.validate_address_families()
             .map_err(Error::InvalidRequest)?;
+
+        let peer = PeerId::Ip(rq.host.ip());
+        let mut peers: Vec<_> = ctx
+            .db
+            .get_bgp_neighbors()?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Ip(nbr.host.ip())))
+            .collect();
+        if ensure {
+            peers.retain(|(asn, existing)| {
+                !(*asn == rq.asn && existing == &peer)
+            });
+        }
+        peers.push((rq.asn, peer));
+        ensure_unique_bgp_peers(peers.into_iter().map(|(_, peer)| peer))?;
 
         let (event_tx, event_rx) = channel();
 
@@ -2162,6 +2264,21 @@ pub(crate) mod helpers {
         rq.validate_address_families()
             .map_err(Error::InvalidRequest)?;
 
+        let peer = PeerId::Interface(rq.interface.clone());
+        let mut peers: Vec<_> = ctx
+            .db
+            .get_unnumbered_bgp_neighbors()?
+            .into_iter()
+            .map(|nbr| (nbr.asn, PeerId::Interface(nbr.interface)))
+            .collect();
+        if ensure {
+            peers.retain(|(asn, existing)| {
+                !(*asn == rq.asn && existing == &peer)
+            });
+        }
+        peers.push((rq.asn, peer));
+        ensure_unique_bgp_peers(peers.into_iter().map(|(_, peer)| peer))?;
+
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
 
@@ -2258,9 +2375,10 @@ pub(crate) mod helpers {
         )?;
 
         // Register interface for NDP peer discovery (NDP-only, no session creation)
-        ctx.bgp
-            .unnumbered_manager
-            .add_interface(&rq.interface, rq.act_as_a_default_ipv6_router)?;
+        ctx.bgp.unnumbered_manager.configure_interface(
+            &rq.interface,
+            rq.act_as_a_default_ipv6_router,
+        )?;
 
         if start_session {
             start_bgp_session(&event_tx)?;
@@ -2641,9 +2759,15 @@ mod tests {
     use client_common::println_nopipe;
     use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
-        Ipv6UnicastConfig, UnnumberedBgpPeerConfig,
+        Ipv6UnicastConfig, Neighbor as BgpNeighborConfig,
+        Router as BgpRouterConfig, UnnumberedBgpPeerConfig,
+        UnnumberedNeighbor as BgpUnnumberedNeighborConfig,
     };
+    use mg_api_types::bgp::peer::PeerId;
     use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+    use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
+    use mg_api_types::rdb::path::{BgpPathProperties, Path};
+    use mg_api_types::rdb::rib::AddressFamily;
     use mg_common::stats::MgLowerStats;
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use rdb::test::get_test_db;
@@ -2651,7 +2775,7 @@ mod tests {
         collections::HashMap,
         env::temp_dir,
         fs::{create_dir_all, remove_dir_all},
-        net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         sync::{Arc, Mutex},
     };
 
@@ -2773,6 +2897,15 @@ fn update(message, asn, addr) {
         apply_req(asn, HashMap::default(), HashMap::default())
     }
 
+    fn router(asn: u32) -> BgpRouterConfig {
+        BgpRouterConfig {
+            asn,
+            id: asn,
+            listen: super::DEFAULT_BGP_LISTEN.to_string(),
+            graceful_shutdown: false,
+        }
+    }
+
     /// Apply request carrying both a numbered and an unnumbered peer under
     /// `asn`, so a single test exercises both code paths at once.
     fn mixed_req(asn: u32, hold_time: u64) -> ApplyRequest {
@@ -2855,6 +2988,63 @@ fn update(message, asn, addr) {
             .expect("create origin6");
     }
 
+    fn learned_path(peer: PeerId, nexthop: IpAddr) -> Path {
+        Path {
+            nexthop,
+            nexthop_interface: match &peer {
+                PeerId::Ip(_) => None,
+                PeerId::Interface(interface) => Some(interface.clone()),
+            },
+            shutdown: false,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            bgp: Some(BgpPathProperties {
+                origin_as: 64512,
+                id: 64512,
+                peer,
+                med: None,
+                local_pref: None,
+                as_path: vec![64512],
+                stale: None,
+            }),
+            vlan_id: None,
+        }
+    }
+
+    fn add_learned_route(
+        ctx: &Arc<HandlerContext>,
+        prefix: IpNet,
+        peer: PeerId,
+        nexthop: IpAddr,
+    ) {
+        ctx.db
+            .add_bgp_prefixes(&[prefix], learned_path(peer, nexthop));
+    }
+
+    fn address_family(prefix: IpNet) -> AddressFamily {
+        match prefix {
+            IpNet::V4(_) => AddressFamily::Ipv4,
+            IpNet::V6(_) => AddressFamily::Ipv6,
+        }
+    }
+
+    fn assert_route_present(ctx: &Arc<HandlerContext>, prefix: IpNet) {
+        assert!(
+            ctx.db
+                .full_rib(Some(address_family(prefix)))
+                .contains_key(&prefix),
+            "expected learned route {prefix} to be present",
+        );
+    }
+
+    fn assert_route_absent(ctx: &Arc<HandlerContext>, prefix: IpNet) {
+        assert!(
+            !ctx.db
+                .full_rib(Some(address_family(prefix)))
+                .contains_key(&prefix),
+            "expected learned route {prefix} to be absent",
+        );
+    }
+
     #[tokio::test]
     async fn apply_remove_entire_group() {
         let ctx = test_ctx("apply_remove_entire_group");
@@ -2924,6 +3114,137 @@ fn update(message, asn, addr) {
         assert!(routers.contains_key(&456));
     }
 
+    #[tokio::test]
+    async fn apply_updates_bgp_peers() {
+        let ctx = test_ctx("apply_updates_bgp_peers");
+
+        do_bgp_apply(&ctx, mixed_req(123, 6))
+            .await
+            .expect("apply initial peers");
+        assert_single_neighbor_state(&ctx, 123, 6);
+
+        do_bgp_apply(&ctx, mixed_req(123, 10))
+            .await
+            .expect("update existing peers");
+        assert_single_neighbor_state(&ctx, 123, 10);
+    }
+
+    #[tokio::test]
+    async fn duplicate_bgp_peer_is_rejected() {
+        let ctx = test_ctx("duplicate_bgp_peer_is_rejected");
+        let numbered_peer = numbered("203.0.113.1", "bob", 6);
+        let unnumbered_peer = unnumbered("tfportqsfp1_0", "alice", 6);
+
+        super::helpers::ensure_router(ctx.clone(), router(123))
+            .await
+            .expect("create asn 123");
+        super::helpers::ensure_router(ctx.clone(), router(456))
+            .await
+            .expect("create asn 456");
+
+        super::helpers::add_neighbor(
+            ctx.clone(),
+            BgpNeighborConfig::from_bgp_peer_config(
+                123,
+                "qsfp0".into(),
+                numbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect("add first numbered peer");
+        super::helpers::add_unnumbered_neighbor(
+            ctx.clone(),
+            BgpUnnumberedNeighborConfig::from_bgp_peer_config(
+                123,
+                "qsfp1".into(),
+                unnumbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect("add first unnumbered peer");
+
+        let err = super::helpers::add_neighbor(
+            ctx.clone(),
+            BgpNeighborConfig::from_bgp_peer_config(
+                456,
+                "qsfp1".into(),
+                numbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect_err("duplicate peer IP should fail");
+        assert!(matches!(err, crate::error::Error::Conflict(_)));
+        let err = super::helpers::add_unnumbered_neighbor(
+            ctx.clone(),
+            BgpUnnumberedNeighborConfig::from_bgp_peer_config(
+                456,
+                "qsfp2".into(),
+                unnumbered_peer.clone(),
+            ),
+            false,
+        )
+        .expect_err("duplicate unnumbered peer should fail");
+        assert!(matches!(err, crate::error::Error::Conflict(_)));
+
+        assert_neighbor_counts(&ctx, 1, 1);
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors")[0].asn,
+            123,
+        );
+        assert_eq!(
+            ctx.db
+                .get_unnumbered_bgp_neighbors()
+                .expect("get unnumbered bgp neighbors")[0]
+                .asn,
+            123,
+        );
+
+        let result = do_bgp_apply(
+            &ctx,
+            apply_req(
+                789,
+                HashMap::from([
+                    ("qsfp0".into(), vec![numbered_peer.clone()]),
+                    ("qsfp1".into(), vec![numbered_peer]),
+                ]),
+                HashMap::default(),
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "duplicate peer IP in apply request should fail",
+        );
+        let result = do_bgp_apply(
+            &ctx,
+            apply_req(
+                789,
+                HashMap::default(),
+                HashMap::from([
+                    ("qsfp0".into(), vec![unnumbered_peer.clone()]),
+                    ("qsfp1".into(), vec![unnumbered_peer]),
+                ]),
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "duplicate unnumbered peer in apply request should fail",
+        );
+        assert_neighbor_counts(&ctx, 1, 1);
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors")[0].asn,
+            123,
+        );
+        assert_eq!(
+            ctx.db
+                .get_unnumbered_bgp_neighbors()
+                .expect("get unnumbered bgp neighbors")[0]
+                .asn,
+            123,
+        );
+    }
+
     /// Regression test for https://github.com/oxidecomputer/maghemite/issues/772
     ///
     /// Applying a config with empty peer maps for an ASN that previously had
@@ -2932,8 +3253,8 @@ fn update(message, asn, addr) {
     /// numbered and unnumbered group sets are tracked independently, so this
     /// exercises both.
     #[tokio::test]
-    async fn apply_empty_removes_peers() {
-        let ctx = test_ctx("apply_empty_removes_peers");
+    async fn apply_empty_removes_bgp_peers() {
+        let ctx = test_ctx("apply_empty_removes_bgp_peers");
 
         do_bgp_apply(&ctx, mixed_req(123, 6))
             .await
@@ -2945,6 +3266,94 @@ fn update(message, asn, addr) {
             .await
             .expect("apply empty");
         assert_neighbor_counts(&ctx, 0, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_bgp_peers_removes_routes() {
+        let ctx = test_ctx("delete_bgp_peers_removes_routes");
+        let numbered_peer: IpAddr = "203.0.113.1".parse().unwrap();
+        let unnumbered_interface = "tfportqsfp1_0";
+        let numbered_prefix = IpNet::V4(Ipv4Net::new_unchecked(
+            Ipv4Addr::new(198, 51, 100, 0),
+            24,
+        ));
+        let unnumbered_prefix = IpNet::V6(Ipv6Net::new_unchecked(
+            "2001:db8:1::".parse::<Ipv6Addr>().unwrap(),
+            64,
+        ));
+
+        do_bgp_apply(&ctx, mixed_req(123, 6))
+            .await
+            .expect("apply with peers");
+        add_learned_route(
+            &ctx,
+            numbered_prefix,
+            PeerId::Ip(numbered_peer),
+            numbered_peer,
+        );
+        add_learned_route(
+            &ctx,
+            unnumbered_prefix,
+            PeerId::Interface(unnumbered_interface.to_string()),
+            "fe80::1".parse().unwrap(),
+        );
+        assert_route_present(&ctx, numbered_prefix);
+        assert_route_present(&ctx, unnumbered_prefix);
+
+        super::helpers::remove_neighbor(ctx.clone(), 123, numbered_peer)
+            .await
+            .expect("remove numbered peer");
+        assert_route_absent(&ctx, numbered_prefix);
+        assert_route_present(&ctx, unnumbered_prefix);
+
+        super::helpers::remove_unnumbered_neighbor(
+            ctx.clone(),
+            123,
+            unnumbered_interface,
+        )
+        .await
+        .expect("remove unnumbered peer");
+        assert_route_absent(&ctx, unnumbered_prefix);
+        assert_neighbor_counts(&ctx, 0, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_router_removes_learned_routes() {
+        let ctx = test_ctx("delete_router_removes_learned_routes");
+        let numbered_peer: IpAddr = "203.0.113.1".parse().unwrap();
+        let unnumbered_interface = "tfportqsfp1_0";
+        let numbered_prefix = IpNet::V4(Ipv4Net::new_unchecked(
+            Ipv4Addr::new(198, 51, 100, 0),
+            24,
+        ));
+        let unnumbered_prefix = IpNet::V6(Ipv6Net::new_unchecked(
+            "2001:db8:1::".parse::<Ipv6Addr>().unwrap(),
+            64,
+        ));
+
+        do_bgp_apply(&ctx, mixed_req(123, 6))
+            .await
+            .expect("apply with peers");
+        add_learned_route(
+            &ctx,
+            numbered_prefix,
+            PeerId::Ip(numbered_peer),
+            numbered_peer,
+        );
+        add_learned_route(
+            &ctx,
+            unnumbered_prefix,
+            PeerId::Interface(unnumbered_interface.to_string()),
+            "fe80::1".parse().unwrap(),
+        );
+
+        do_delete_router(&ctx, 123).await.expect("delete router");
+
+        assert_route_absent(&ctx, numbered_prefix);
+        assert_route_absent(&ctx, unnumbered_prefix);
+        assert_neighbor_counts(&ctx, 0, 0);
+        assert!(ctx.db.get_bgp_routers().expect("get routers").is_empty());
+        assert!(!ctx.bgp.router.lock().unwrap().contains_key(&123));
     }
 
     /// Regression tests for https://github.com/oxidecomputer/maghemite/issues/772

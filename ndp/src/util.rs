@@ -24,18 +24,18 @@ const ICMP6_RA_ULP_LEN: u32 = 16;
 const ICMP6_RS_ULP_LEN: u32 = 8;
 
 #[derive(Debug, Clone)]
-pub struct ReceivedAdvertisement {
+pub struct ReceivedRouterAdvertisement {
     /// When the peer was first discovered
     pub first_seen: Instant,
     /// When the most recent Router Advertisement was received
-    pub when: Instant,
-    pub adv: Icmp6RouterAdvertisement,
-    pub sender: Ipv6Addr,
+    pub last_seen: Instant,
+    pub advertisement: Icmp6RouterAdvertisement,
+    pub source: Ipv6Addr,
 }
 
-impl ReceivedAdvertisement {
+impl ReceivedRouterAdvertisement {
     pub fn expired(&self) -> bool {
-        self.when.elapsed() > self.adv.effective_reachable_time()
+        self.last_seen.elapsed() > self.advertisement.effective_reachable_time()
     }
 }
 
@@ -83,7 +83,7 @@ pub fn send_ra(
     s: &Socket,
     src: Ipv6Addr,
     dst: Option<Ipv6Addr>,
-    ifindex: u32,
+    ifindex: NonZeroU32,
     router_lifetime: u16,
     log: &Logger,
 ) {
@@ -99,17 +99,10 @@ pub fn send_ra(
             return;
         }
     };
-    cksum(src, dst, ICMP6_RA_ULP_LEN, &mut out);
+    let dst_ip = dst.unwrap_or(ALL_NODES_MCAST);
+    cksum(src, Some(dst_ip), ICMP6_RA_ULP_LEN, &mut out);
 
-    let dst = SocketAddrV6::new(
-        match dst {
-            Some(d) => d,
-            None => ALL_NODES_MCAST,
-        },
-        0,
-        0,
-        ifindex,
-    );
+    let dst = SocketAddrV6::new(dst_ip, 0, 0, ifindex.get());
     if let Err(e) = s.send_to(&out, &dst.into()) {
         error!(log, "send_ra: send: {e}");
     }
@@ -119,7 +112,7 @@ pub fn send_rs(
     s: &Socket,
     src: Ipv6Addr,
     dst: Option<Ipv6Addr>,
-    ifindex: u32,
+    ifindex: NonZeroU32,
     log: &Logger,
 ) {
     let pkt = Icmp6RouterSolicitation::default();
@@ -130,17 +123,10 @@ pub fn send_rs(
             return;
         }
     };
-    cksum(src, dst, ICMP6_RS_ULP_LEN, &mut out);
+    let dst_ip = dst.unwrap_or(ALL_ROUTERS_MCAST);
+    cksum(src, Some(dst_ip), ICMP6_RS_ULP_LEN, &mut out);
 
-    let dst = SocketAddrV6::new(
-        match dst {
-            Some(d) => d,
-            None => ALL_ROUTERS_MCAST,
-        },
-        0,
-        0,
-        ifindex,
-    );
+    let dst = SocketAddrV6::new(dst_ip, 0, 0, ifindex.get());
     if let Err(e) = s.send_to(&out, &dst.into()) {
         error!(log, "send_rs: send: {e}");
     }
@@ -185,9 +171,12 @@ impl Drop for DropSleep {
 /// Create a listening socket for solicitations and advertisements. This
 /// socket listens on the unspecified address to pick up both unicast
 /// and multicast solicitations and advertisements.
-pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
+pub fn create_socket(
+    ifindex: NonZeroU32,
+) -> Result<Socket, ListeningSocketError> {
     use ListeningSocketError as E;
     const READ_TIMEOUT: Duration = Duration::from_secs(1);
+    let index = ifindex.get();
 
     let s = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
         .map_err(E::NewSocketError)?;
@@ -258,4 +247,44 @@ fn set_min_hopcount(s: &Socket) -> Result<(), ListeningSocketError> {
 #[cfg(not(any(target_os = "linux", target_os = "illumos")))]
 fn set_min_hopcount(_s: &Socket) -> Result<(), ListeningSocketError> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn received_ra(
+        reachable_time: u32,
+        age: Duration,
+    ) -> ReceivedRouterAdvertisement {
+        let now = Instant::now();
+        ReceivedRouterAdvertisement {
+            first_seen: now - age,
+            last_seen: now - age,
+            advertisement: Icmp6RouterAdvertisement {
+                reachable_time,
+                ..Default::default()
+            },
+            source: Ipv6Addr::LOCALHOST,
+        }
+    }
+
+    #[test]
+    fn ra_within_reachable_time_is_not_expired() {
+        // 60s reachable time, last seen just now.
+        assert!(!received_ra(60_000, Duration::ZERO).expired());
+    }
+
+    #[test]
+    fn ra_older_than_reachable_time_is_expired() {
+        // 100ms reachable time, last seen 60s ago.
+        assert!(received_ra(100, Duration::from_secs(60)).expired());
+    }
+
+    #[test]
+    fn zero_reachable_time_expires_after_default() {
+        // reachable_time of 0 falls back to a 10s effective reachable time.
+        assert!(!received_ra(0, Duration::from_secs(5)).expired());
+        assert!(received_ra(0, Duration::from_secs(11)).expired());
+    }
 }

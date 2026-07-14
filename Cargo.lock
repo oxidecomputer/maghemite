@@ -372,6 +372,7 @@ dependencies = [
  "slog",
  "socket2",
  "thiserror 2.0.18",
+ "unnumbered",
  "uuid",
 ]
 
@@ -1466,6 +1467,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "client-common",
  "colored",
  "ddm-admin-client",
  "ddm-api-types-versions",
@@ -3843,6 +3845,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "client-common",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
@@ -4005,6 +4008,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "unnumbered",
  "uuid",
 ]
 
@@ -8505,6 +8509,20 @@ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common 0.1.7",
  "subtle",
+]
+
+[[package]]
+name = "unnumbered"
+version = "0.1.0"
+dependencies = [
+ "iddqd",
+ "mg-api-types",
+ "mg-common",
+ "ndp",
+ "network-interface",
+ "proptest",
+ "slog",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -33,9 +33,16 @@ impl ThreadState {
         matches!(self, ThreadState::Ready)
     }
 
-    /// Check if the thread is currently running
+    /// Check if the thread is currently running.
+    ///
+    /// A thread that has been started but whose function has since returned
+    /// (or panicked) is not running: liveness comes from the JoinHandle, not
+    /// from the state transition.
     pub fn is_running(&self) -> bool {
-        matches!(self, ThreadState::Running(_))
+        match self {
+            ThreadState::Ready => false,
+            ThreadState::Running(handle) => !handle.is_finished(),
+        }
     }
 
     /// Transition from Ready to Running with the given handle.
@@ -114,5 +121,39 @@ impl Drop for ManagedThread {
 impl Default for ManagedThread {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn is_running_tracks_thread_liveness() {
+        let mt = ManagedThread::new();
+        assert!(mt.is_ready());
+        assert!(!mt.is_running());
+
+        let (release_tx, release_rx) = channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _ = release_rx.recv();
+        });
+        mt.start(handle);
+        assert!(mt.is_running());
+
+        // Let the thread function return, then observe that a started
+        // thread whose function has exited is no longer "running".
+        release_tx.send(()).expect("monitor thread is receiving");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while mt.is_running() {
+            assert!(
+                Instant::now() < deadline,
+                "thread still reported running after exit"
+            );
+            std::thread::yield_now();
+        }
+        assert!(!mt.is_ready());
     }
 }

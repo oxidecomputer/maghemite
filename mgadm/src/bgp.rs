@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
-use client_common::{print_nopipe, println_nopipe};
+use client_common::{format_duration_human, print_nopipe, println_nopipe};
 use colored::*;
 use mg_admin_client::{Client, types};
 use mg_api_types::bgp::config::{
@@ -17,7 +17,6 @@ use std::{
     fs::read_to_string,
     io::{Write, stdout},
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
 };
 use tabwriter::TabWriter;
 
@@ -37,6 +36,10 @@ pub enum Commands {
 
     /// Omicron control plane commands.
     Omicron(OmicronSubcommand),
+
+    /// View BGP unnumbered router-discovery state.
+    #[command(subcommand)]
+    Unnumbered(crate::unnumbered::Commands),
 }
 
 #[derive(Debug, Args)]
@@ -962,6 +965,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Omicron(cmd) => match cmd.command {
             OmicronCmd::Apply { filename } => apply(filename, c).await?,
         },
+        Commands::Unnumbered(cmd) => {
+            crate::unnumbered::commands(cmd, c).await?
+        }
     }
     Ok(())
 }
@@ -1033,10 +1039,6 @@ async fn get_neighbors(
     }
 
     Ok(())
-}
-
-fn format_duration_human(d: Duration) -> String {
-    mg_common::format_duration_human(d)
 }
 
 fn display_neighbors_summary(

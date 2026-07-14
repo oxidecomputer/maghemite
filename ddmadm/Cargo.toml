@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+client-common.workspace = true
 mg-common = { path = "../mg-common" }
 ddm-admin-client = { path = "../ddm-admin-client" }
 ddm-api-types-versions.workspace = true
