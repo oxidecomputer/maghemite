@@ -196,7 +196,7 @@ impl From<v4::bgp::config::Ipv6UnicastConfig> for Ipv6UnicastConfig {
 
 impl From<v8::bgp::config::BgpPeerParameters> for BgpPeerParameters {
     fn from(old: v8::bgp::config::BgpPeerParameters) -> Self {
-        // v8 is schema-stabilized; compile barrier protects against upstream changes.
+        // v8 is frozen.
         let v8::bgp::config::BgpPeerParameters {
             hold_time,
             idle_hold_time,
@@ -324,7 +324,7 @@ impl From<v8::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
 
 impl From<v8::bgp::config::ApplyRequest> for ApplyRequest {
     fn from(old: v8::bgp::config::ApplyRequest) -> Self {
-        // v8 is schema-stabilized; compile barrier protects against upstream changes.
+        // v8 is frozen.
         let v8::bgp::config::ApplyRequest {
             asn,
             originate,
@@ -361,7 +361,7 @@ impl From<v8::bgp::config::ApplyRequest> for ApplyRequest {
 
 impl From<v1::bgp::config::Origin4> for Origin4 {
     fn from(old: v1::bgp::config::Origin4) -> Self {
-        // v1 is frozen; compile barrier protects against upstream field additions.
+        // v1 is frozen.
         let v1::bgp::config::Origin4 { asn, prefixes } = old;
         Self {
             asn,
@@ -582,7 +582,7 @@ impl From<PeerInfo> for v4::bgp::config::PeerInfo {
 
 impl From<Origin4> for v1::bgp::config::Origin4 {
     fn from(new: Origin4) -> Self {
-        // v1 is frozen; compile barrier protects against upstream field additions.
+        // v1 is frozen.
         let Origin4 { asn, prefixes } = new;
         Self {
             asn,

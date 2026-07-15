@@ -4,11 +4,12 @@
 
 use crate::policy::ImportExportPolicy;
 use crate::{
+    BGP_PORT,
     clock::SessionClock,
     clock::TimerConfig,
-    config::PeerConfig,
     connection::{
-        BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
+        BgpConnection, BgpConnector, ConnectTarget, ConnectionDirection,
+        ConnectionId,
     },
     error::{Error, ExpectationMismatch},
     fanout::{Egress, Fanout4, Fanout6},
@@ -26,8 +27,9 @@ use crate::{
     unnumbered::{UnnumberedError, UnnumberedManager},
 };
 use mg_api_types::bgp::config::{
-    BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
-    JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
+    DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
+    Neighbor, NeighborConfig, PeerCounters, PeerInfo, PeerTimers,
+    StaticTimerInfo,
 };
 pub(crate) use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
@@ -37,7 +39,6 @@ pub(crate) use mg_api_types::bgp::session::{
 pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_api_types_versions::{v1, v4};
 use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
@@ -48,7 +49,7 @@ use slog::Logger;
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     num::NonZeroU16,
     sync::{
         Arc, Mutex, RwLock,
@@ -272,18 +273,6 @@ fn derive_nexthop_interface(
         }
         _ => None,
     }
-}
-
-/// Why an outbound connection target could not be resolved for an attempt.
-/// These are all retryable, per-attempt conditions.
-#[derive(Debug, thiserror::Error)]
-enum ResolveTargetError {
-    #[error("no unnumbered manager configured")]
-    NoUnnumberedManager,
-    #[error("no NDP neighbor discovered yet")]
-    NoNeighbor,
-    #[error(transparent)]
-    Unnumbered(#[from] UnnumberedError),
 }
 
 pub fn v4_over_v6_nexthop(
@@ -799,6 +788,102 @@ impl UnusedEvent {
     }
 }
 
+/// Address and port configuration for a session.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq)]
+pub struct SessionAddrInfo {
+    /// TCP port configured on the remote peer. `BGP_PORT` is used when the peer
+    /// config does not specify a port.
+    pub remote_port: NonZeroU16,
+    /// Optional source IP used for outbound connections. None means the source
+    /// IP is derived by the system.
+    pub source_addr: Option<IpAddr>,
+    /// Optional source port used for outbound connections. None means the OS
+    /// picks an ephemeral source port.
+    pub source_port: Option<u16>,
+    /// The local BGP listen port (the dispatcher's bound port). Used on illumos
+    /// to install MD5 security associations for the server direction (a peer
+    /// connecting to us), so they match the actual listener rather than
+    /// assuming the well-known BGP port.
+    pub listen_port: Arc<NonZeroU16>,
+}
+
+impl SessionAddrInfo {
+    /// Resolve the outbound connection target for this attempt.
+    ///
+    /// For numbered peers this is the configured address. For unnumbered peers
+    /// it queries NDP for the neighbor on the peer's interface.
+    fn resolve_peer_socket_addr(
+        &self,
+        peer: &PeerId,
+        unnumbered_manager: Option<&dyn UnnumberedManager>,
+    ) -> Result<SocketAddr, ConnectTargetResolutionError> {
+        match peer {
+            PeerId::Interface(iface) => {
+                let mgr = unnumbered_manager
+                    .ok_or(ConnectTargetResolutionError::NoUnnumberedManager)?;
+                let neighbor = mgr
+                    .get_neighbor_by_interface(iface)?
+                    .ok_or(ConnectTargetResolutionError::NoNeighbor)?;
+                Ok(neighbor.to_socket_addr(self.remote_port.get()))
+            }
+            PeerId::Ip(ip) => Ok(SocketAddr::new(*ip, self.remote_port.get())),
+        }
+    }
+
+    /// Resolve the source and destination socket addresses for an outbound
+    /// connection attempt.
+    pub(crate) fn resolve_connect_addrs(
+        &self,
+        peer: &PeerId,
+        unnumbered_manager: Option<&dyn UnnumberedManager>,
+    ) -> Result<ConnectTarget, ConnectTargetResolutionError> {
+        let destination =
+            self.resolve_peer_socket_addr(peer, unnumbered_manager)?;
+
+        let source = if let Some(addr) = self.source_addr {
+            let port = self.source_port.unwrap_or(0);
+            match (addr, destination) {
+                (IpAddr::V6(addr), SocketAddr::V6(dst))
+                    if addr.is_unicast_link_local() =>
+                {
+                    Some(SocketAddr::V6(SocketAddrV6::new(
+                        addr,
+                        port,
+                        0,
+                        dst.scope_id(),
+                    )))
+                }
+                _ => Some(SocketAddr::new(addr, port)),
+            }
+        } else if let Some(port) = self.source_port {
+            let addr = match destination {
+                SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                SocketAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            };
+            Some(SocketAddr::new(addr, port))
+        } else {
+            None
+        };
+
+        Ok(ConnectTarget {
+            destination,
+            source,
+        })
+    }
+}
+
+/// Why an outbound connection target could not be resolved for an attempt.
+/// These are all retryable, per-attempt conditions.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConnectTargetResolutionError {
+    #[error("no unnumbered manager configured")]
+    NoUnnumberedManager,
+    #[error("no NDP neighbor discovered yet")]
+    NoNeighbor,
+    #[error(transparent)]
+    Unnumbered(#[from] UnnumberedError),
+}
+
 /// Information about a session.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct SessionInfo {
@@ -810,9 +895,8 @@ pub struct SessionInfo {
     /// Expected Router-ID of the remote peer (for validation). None means any
     /// remote BGP-ID is acceptable.
     pub remote_id: Option<u32>,
-    /// Optional Source IP used for connection. None means the Source IP is
-    /// derived by the system.
-    pub bind_addr: Option<SocketAddr>,
+    /// Address and port configuration for this session.
+    pub addr: SessionAddrInfo,
     /// Minimum acceptable TTL value for incomming BGP packets.
     pub min_ttl: Option<u8>,
     /// Md5 peer authentication key
@@ -864,50 +948,19 @@ pub struct SessionInfo {
 }
 
 impl SessionInfo {
-    /// Create a SessionInfo from a PeerConfig with minimal defaults for policy fields.
-    /// This is used when only timer configuration is available (e.g., in tests).
-    pub fn from_peer_config(peer_config: &PeerConfig) -> Self {
-        Self {
-            passive_tcp_establishment: false,
-            remote_asn: None,
-            remote_id: None,
-            bind_addr: None,
-            min_ttl: None,
-            md5_auth_key: None,
-            multi_exit_discriminator: None,
-            communities: BTreeSet::new(),
-            local_pref: None,
-            enforce_first_as: false,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: ImportExportPolicy4::default(),
-                export_policy: ImportExportPolicy4::default(),
-            }),
-            ipv6_unicast: None,
-            vlan_id: None,
-            connect_retry_time: Duration::from_secs(peer_config.connect_retry),
-            keepalive_time: Duration::from_secs(peer_config.keepalive),
-            hold_time: Duration::from_secs(peer_config.hold_time),
-            idle_hold_time: Duration::from_secs(peer_config.idle_hold_time),
-            delay_open_time: Duration::from_secs(peer_config.delay_open),
-            resolution: Duration::from_millis(peer_config.resolution),
-            idle_hold_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            connect_retry_jitter: None,
-            deterministic_collision_resolution: false,
-        }
-    }
-}
-
-impl From<&BgpPeerParameters> for SessionInfo {
-    fn from(value: &BgpPeerParameters) -> Self {
-        // Destructure exists as a compile barrier: adding a
-        // BgpPeerParameters field will fail to bind here, forcing a
-        // deliberate decision about how (or whether) to thread it
-        // through to runtime SessionInfo.
-        let BgpPeerParameters {
+    pub fn from_neighbor_config(
+        value: &NeighborConfig,
+        listen_port: Arc<NonZeroU16>,
+    ) -> Self {
+        // Identity/name/group go to NeighborInfo; the connection-affecting
+        // address fields belong in SessionInfo so update_session_info can
+        // decide whether a config change requires reset. The full destructure
+        // forces new NeighborConfig fields to be handled here.
+        let NeighborConfig {
+            name: _,
+            peer: _,
+            port,
+            act_as_a_default_ipv6_router: _,
             hold_time,
             idle_hold_time,
             delay_open,
@@ -943,8 +996,12 @@ impl From<&BgpPeerParameters> for SessionInfo {
             enforce_first_as,
             vlan_id,
             remote_id: None,
-            bind_addr: src_addr
-                .map(|addr| SocketAddr::new(addr, src_port.unwrap_or(0))),
+            addr: SessionAddrInfo {
+                remote_port: port.unwrap_or(BGP_PORT),
+                source_addr: src_addr,
+                source_port: src_port,
+                listen_port,
+            },
             connect_retry_time: Duration::from_secs(connect_retry),
             keepalive_time: Duration::from_secs(keepalive),
             hold_time: Duration::from_secs(hold_time),
@@ -960,78 +1017,22 @@ impl From<&BgpPeerParameters> for SessionInfo {
     }
 }
 
-impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
-    fn from(value: &v1::bgp::config::BgpPeerParameters) -> Self {
-        // v1 is schema-stabilized; new schema fields cannot land here.
-        // If this destructure stops compiling, either the addition is
-        // a runtime-only field (#[serde(skip)] / #[schemars(skip)] —
-        // add it to the destructure with `_:`) or the v1 contract has
-        // been violated upstream.
-        let v1::bgp::config::BgpPeerParameters {
-            hold_time,
-            idle_hold_time,
-            delay_open,
-            connect_retry,
-            keepalive,
-            resolution,
-            passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities,
-            local_pref,
-            enforce_first_as,
-            allow_import,
-            allow_export,
-            vlan_id,
-        } = value.clone();
-
-        SessionInfo {
-            passive_tcp_establishment: passive,
-            remote_asn,
-            min_ttl,
-            md5_auth_key,
-            multi_exit_discriminator,
-            communities: communities.into_iter().collect(),
-            local_pref,
-            enforce_first_as,
-            vlan_id,
-            remote_id: None,
-            bind_addr: None,
-            connect_retry_time: Duration::from_secs(connect_retry),
-            keepalive_time: Duration::from_secs(keepalive),
-            hold_time: Duration::from_secs(hold_time),
-            idle_hold_time: Duration::from_secs(idle_hold_time),
-            delay_open_time: Duration::from_secs(delay_open),
-            resolution: Duration::from_millis(resolution),
-            idle_hold_jitter: None,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            deterministic_collision_resolution: false,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: ImportExportPolicy4::from(
-                    v4::bgp::policy::ImportExportPolicy4::from(allow_import),
-                ),
-                export_policy: ImportExportPolicy4::from(
-                    v4::bgp::policy::ImportExportPolicy4::from(allow_export),
-                ),
-            }),
-            ipv6_unicast: None,
-        }
-    }
-}
-
 /// Information about a neighbor (peer).
 #[derive(Debug, Clone)]
 pub struct NeighborInfo {
     pub name: Arc<Mutex<String>>,
-    pub peer_group: String,
+    pub peer_group: Arc<Mutex<String>>,
     pub peer: PeerId,
-    pub port: NonZeroU16,
+}
+
+impl From<&Neighbor> for NeighborInfo {
+    fn from(rq: &Neighbor) -> Self {
+        Self {
+            name: Arc::new(Mutex::new(rq.config.name.clone())),
+            peer_group: Arc::new(Mutex::new(rq.group.clone())),
+            peer: rq.config.peer.clone(),
+        }
+    }
 }
 
 pub const MAX_FSM_HISTORY_ALL: usize = 1024;
@@ -1748,61 +1749,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         runner
     }
 
-    /// Get the current peer address for this session.
-    ///
-    /// For numbered peers, returns the configured address.
-    /// For unnumbered peers, queries the NDP neighbor.
-    pub fn get_peer_socket_addr(&self) -> Option<SocketAddr> {
-        match &self.neighbor.peer {
-            PeerId::Interface(iface) => {
-                // Unnumbered: query UnnumberedManager for NDP neighbor
-                let mgr = self.unnumbered_manager.as_ref()?;
-                match mgr.get_neighbor_by_interface(iface) {
-                    Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port.get()))
-                    }
-                    Ok(None) => None, // No neighbor discovered yet - expected
-                    Err(e) => {
-                        session_log_lite!(
-                            self,
-                            debug,
-                            "failed to query neighbor for interface";
-                            "interface" => iface,
-                            "error" => e.to_string()
-                        );
-                        None
-                    }
-                }
-            }
-            PeerId::Ip(ip) => {
-                // Numbered: construct from NeighborInfo
-                Some(SocketAddr::new(*ip, self.neighbor.port.get()))
-            }
-        }
-    }
-
-    /// Resolve the target for an outbound connection attempt.
+    /// Resolve the outbound connection addresses for this attempt.
     ///
     /// For numbered peers this is the configured address. For unnumbered peers
     /// it queries NDP for the neighbor on the peer's interface.
-    fn try_resolve_connect_addr(
+    fn try_resolve_connect_addrs(
         &self,
-    ) -> Result<SocketAddr, ResolveTargetError> {
-        match &self.neighbor.peer {
-            PeerId::Interface(iface) => {
-                let mgr = self
-                    .unnumbered_manager
-                    .as_ref()
-                    .ok_or(ResolveTargetError::NoUnnumberedManager)?;
-                let neighbor = mgr
-                    .get_neighbor_by_interface(iface)?
-                    .ok_or(ResolveTargetError::NoNeighbor)?;
-                Ok(neighbor.to_socket_addr(self.neighbor.port.get()))
-            }
-            PeerId::Ip(ip) => {
-                Ok(SocketAddr::new(*ip, self.neighbor.port.get()))
-            }
-        }
+    ) -> Result<ConnectTarget, ConnectTargetResolutionError> {
+        let addr = lock!(self.session).addr.clone();
+        addr.resolve_connect_addrs(
+            &self.neighbor.peer,
+            self.unnumbered_manager.as_deref(),
+        )
     }
 
     /// Check if this is an unnumbered session.
@@ -1903,10 +1861,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // release lock before calling connect
         }
 
-        // Resolve the peer address. For unnumbered peers this queries NDP for
-        // the neighbor on the peer's interface.
-        let peer_addr = match self.try_resolve_connect_addr() {
-            Ok(peer_addr) => peer_addr,
+        // Resolve the peer address. For unnumbered peers this queries the NDP
+        // manager's cache for the neighbor on the peer's interface.
+        let connect_addrs = match self.try_resolve_connect_addrs() {
+            Ok(addrs) => addrs,
             Err(e) => {
                 session_log_lite!(
                     self,
@@ -1920,7 +1878,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         let handle = match Cnx::Connector::connect(
-            peer_addr,
+            connect_addrs,
             timeout,
             self.log.clone(),
             self.event_tx.clone(),
@@ -8788,6 +8746,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         None
     }
 
+    /// Return the local ASN this session runner belongs to.
+    pub(crate) fn local_asn(&self) -> Asn {
+        self.asn
+    }
+
     /// Return the learned remote BGP-ID of the peer (if any).
     pub fn remote_id(&self) -> Option<u32> {
         // Query the registry's primary connection
@@ -8807,11 +8770,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     pub fn update_session_parameters(
         &self,
-        cfg: PeerConfig,
+        neighbor: NeighborInfo,
         info: SessionInfo,
     ) -> Result<(), Error> {
-        let mut reset_needed = self.update_session_config(cfg)?;
-        reset_needed |= self.update_session_info(info)?;
+        // Identity is enforced by the lookup mechanism (we only update a
+        // session found via its PeerId); name and group are mutable metadata.
+        // All other parameters live in SessionInfo.
+        let name = lock!(neighbor.name).clone();
+        let peer_group = lock!(neighbor.peer_group).clone();
+        *lock!(self.neighbor.name) = name;
+        *lock!(self.neighbor.peer_group) = peer_group;
+
+        let reset_needed = self.update_session_info(info)?;
 
         if reset_needed {
             self.event_tx
@@ -8822,47 +8792,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
-    pub fn update_session_config(
-        &self,
-        cfg: PeerConfig,
-    ) -> Result<bool, Error> {
-        *lock!(self.neighbor.name) = cfg.name;
-        let mut reset_needed = false;
-
-        // We don't validate that cfg.peer matches self.neighbor.peer here.
-        // Session identity is enforced by the lookup mechanism - you can only
-        // update a session you found via its PeerId.
-
-        if cfg.keepalive >= cfg.hold_time {
-            return Err(Error::KeepaliveLargerThanHoldTime);
-        }
-
-        {
-            let mut guard = lock!(self.session);
-            if guard.hold_time.as_secs() != cfg.hold_time {
-                guard.hold_time = Duration::from_secs(cfg.hold_time);
-                reset_needed = true;
-            }
-
-            if guard.keepalive_time.as_secs() != cfg.keepalive {
-                guard.keepalive_time = Duration::from_secs(cfg.keepalive);
-                reset_needed = true;
-            }
-
-            session_timer!(self, idle_hold).interval =
-                Duration::from_secs(cfg.idle_hold_time);
-
-            guard.delay_open_time = Duration::from_secs(cfg.delay_open);
-            guard.connect_retry_time = Duration::from_secs(cfg.connect_retry);
-        }
-
-        Ok(reset_needed)
-    }
-
     pub fn update_session_info(
         &self,
         info: SessionInfo,
     ) -> Result<bool, Error> {
+        if info.keepalive_time >= info.hold_time {
+            return Err(Error::KeepaliveLargerThanHoldTime);
+        }
+
         let mut reset_needed = false;
         let mut readvertise_needed4 = false;
         let mut readvertise_needed6 = false;
@@ -8870,7 +8807,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut refresh_needed6 = false;
         let mut current = lock!(self.session);
 
+        // Timers (carried on SessionInfo).
+        if current.hold_time != info.hold_time {
+            current.hold_time = info.hold_time;
+            reset_needed = true;
+        }
+        if current.keepalive_time != info.keepalive_time {
+            current.keepalive_time = info.keepalive_time;
+            reset_needed = true;
+        }
+        session_timer!(self, idle_hold).interval = info.idle_hold_time;
+        current.delay_open_time = info.delay_open_time;
+        current.connect_retry_time = info.connect_retry_time;
+
         current.passive_tcp_establishment = info.passive_tcp_establishment;
+
+        if current.addr != info.addr {
+            current.addr = info.addr;
+            reset_needed = true;
+        }
 
         if current.remote_asn != info.remote_asn {
             current.remote_asn = info.remote_asn;
@@ -9061,15 +9016,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let fsm_state_duration = self.current_state_duration();
         let counters = self.get_counters();
         let name = lock!(self.neighbor.name).clone();
-        let peer_group = self.neighbor.peer_group.clone();
+        let peer_group = lock!(self.neighbor.peer_group).clone();
 
         // Extract config and runtime state WITHOUT holding any locks long-term
-        let (ipv4_unicast, ipv6_unicast, timer_config) = {
+        let (ipv4_unicast, ipv6_unicast, timer_config, remote_port) = {
             let session_conf = lock!(self.session);
             let ipv4 = session_conf.ipv4_unicast.clone().unwrap_or_default();
             let ipv6 = session_conf.ipv6_unicast.clone().unwrap_or_default();
             let timers = TimerConfig::from(&*session_conf);
-            (ipv4, ipv6, timers)
+            (ipv4, ipv6, timers, session_conf.addr.remote_port)
         }; // Lock dropped here!
 
         // Get timer runtime state from clocks (no SessionInfo lock needed)
@@ -9207,7 +9162,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_ip,
                     remote_ip,
                     local_tcp_port: 0u16,
-                    remote_tcp_port: self.neighbor.port.get(),
+                    remote_tcp_port: remote_port.get(),
                     received_capabilities: vec![],
                     timers,
                     counters,
