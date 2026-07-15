@@ -151,7 +151,7 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
     // Drop B's peer: this aborts B's session (so it stops sending) and shuts
     // down B's listener socket.
     let handle = daemon_b
-        .remove_peer(LOCALHOST)
+        .remove_peer(addr_a.ip())
         .expect("removing the only peer yields a shutdown handle");
     handle.shutdown().await;
 

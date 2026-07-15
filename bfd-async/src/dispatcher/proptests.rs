@@ -106,9 +106,8 @@ impl Model {
         if self.peer_to_addr.contains_key(&peer) {
             return EnsureOutcome::PeerExists;
         }
-        // A bind only happens when this address has no listener yet.
-        let listener_exists = self.peer_to_addr.values().any(|a| *a == addr);
-        if !listener_exists && fail_addrs.contains(&addr) {
+        // Are we supposed to report failures for this listening addr?
+        if fail_addrs.contains(&addr) {
             return EnsureOutcome::BindFailed;
         }
         self.peer_to_addr.insert(peer, addr);
