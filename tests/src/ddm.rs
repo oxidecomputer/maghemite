@@ -192,6 +192,32 @@ impl<'a> RouterZone<'a> {
         self.zone.zexec("pkill ddmd")
     }
 
+    /// Wait for an SMF service in this zone to come online, failing fast if
+    /// it lands in maintenance. A service that silently fails here otherwise
+    /// surfaces much later as an opaque peering assertion failure.
+    fn wait_for_service_online(&self, fmri: &str) -> Result<()> {
+        for _ in 0..30 {
+            let state = self
+                .zone
+                .zexec(&format!("svcs -Ho state {fmri}"))
+                .unwrap_or_default();
+            match state.trim() {
+                "online" => return Ok(()),
+                "maintenance" => {
+                    return Err(anyhow!(
+                        "{fmri} entered maintenance in zone {}",
+                        self.zone.name,
+                    ));
+                }
+                _ => sleep(Duration::from_secs(1)),
+            }
+        }
+        Err(anyhow!(
+            "timed out waiting for {fmri} to come online in zone {}",
+            self.zone.name,
+        ))
+    }
+
     fn start_router(&self, restart_dpd: bool) -> Result<()> {
         let addrs = self.ifx[1..]
             .iter()
@@ -226,9 +252,8 @@ impl<'a> RouterZone<'a> {
                 ))?;
                 self.zone.zexec("svcadm refresh dendrite:default")?;
                 self.zone.zexec("svcadm enable dendrite:default")?;
-                // wait for dendrite to come up
-                println_nopipe!("wait 10s for dendrite to come up ...");
-                sleep(Duration::from_secs(10));
+                println_nopipe!("waiting for dendrite to come online ...");
+                self.wait_for_service_online("dendrite:default")?;
                 self.zone.zexec(
                     "svccfg -s tfport setprop config/pkt_source = none",
                 )?;
@@ -237,6 +262,8 @@ impl<'a> RouterZone<'a> {
                 )?;
                 self.zone.zexec("svcadm refresh tfport:default")?;
                 self.zone.zexec("svcadm enable tfport")?;
+                println_nopipe!("waiting for tfport to come online ...");
+                self.wait_for_service_online("tfport:default")?;
             }
             self.zone.zexec(&format!(
                 "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",
