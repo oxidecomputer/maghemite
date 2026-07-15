@@ -12,24 +12,6 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
-#[tokio::test]
-async fn egress_socket_sets_ttl_v4() {
-    let sk = bind_egress_socket(sockaddr!("127.0.0.1:0"))
-        .await
-        .expect("created v4 egress socket");
-    let sock = Socket::from(sk.into_std().expect("converted socket"));
-    assert_eq!(sock.ttl_v4().unwrap(), DEFAULT_BFD_TTL);
-}
-
-#[tokio::test]
-async fn egress_socket_sets_hop_limit_v6() {
-    let sk = bind_egress_socket(sockaddr!("[::1]:0"))
-        .await
-        .expect("created v6 egress socket");
-    let sock = Socket::from(sk.into_std().expect("converted socket"));
-    assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);
-}
-
 fn test_logger() -> Logger {
     Logger::root(Discard, o!())
 }
@@ -56,6 +38,24 @@ fn spawn_egress(
     );
     let handle = tokio::spawn(task.run());
     (tx, counters, handle)
+}
+
+#[tokio::test]
+async fn egress_socket_sets_ttl_v4() {
+    let sk = bind_egress_socket(sockaddr!("127.0.0.1:0"))
+        .await
+        .expect("created v4 egress socket");
+    let sock = Socket::from(sk.into_std().expect("converted socket"));
+    assert_eq!(sock.ttl_v4().unwrap(), DEFAULT_BFD_TTL);
+}
+
+#[tokio::test]
+async fn egress_socket_sets_hop_limit_v6() {
+    let sk = bind_egress_socket(sockaddr!("[::1]:0"))
+        .await
+        .expect("created v6 egress socket");
+    let sock = Socket::from(sk.into_std().expect("converted socket"));
+    assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);
 }
 
 #[tokio::test(flavor = "multi_thread")]
