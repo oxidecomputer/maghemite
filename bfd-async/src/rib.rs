@@ -100,6 +100,7 @@ impl RibTask {
 mod tests {
     use super::*;
     use crate::wait_for_condition;
+    use mg_common::lock;
     use std::net::Ipv4Addr;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -115,13 +116,13 @@ mod tests {
 
     impl NexthopSink for RecordingSink {
         fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
-            self.0.lock().unwrap().push((nexthop, shutdown));
+            lock!(self.0).push((nexthop, shutdown));
         }
     }
 
     impl RecordingSink {
         fn writes(&self) -> Vec<(IpAddr, bool)> {
-            self.0.lock().unwrap().clone()
+            lock!(self.0).clone()
         }
     }
 

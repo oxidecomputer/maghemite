@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use super::*;
+use mg_common::parse;
+use mg_common::sockaddr;
 use slog::Discard;
 use slog::o;
 use std::net::Ipv4Addr;
@@ -12,7 +14,7 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn egress_socket_sets_ttl_v4() {
-    let sk = bind_egress_socket("127.0.0.1:0".parse().unwrap())
+    let sk = bind_egress_socket(sockaddr!("127.0.0.1:0"))
         .await
         .expect("created v4 egress socket");
     let sock = Socket::from(sk.into_std().expect("converted socket"));
@@ -21,7 +23,7 @@ async fn egress_socket_sets_ttl_v4() {
 
 #[tokio::test]
 async fn egress_socket_sets_hop_limit_v6() {
-    let sk = bind_egress_socket("[::1]:0".parse().unwrap())
+    let sk = bind_egress_socket(sockaddr!("[::1]:0"))
         .await
         .expect("created v6 egress socket");
     let sock = Socket::from(sk.into_std().expect("converted socket"));
@@ -145,7 +147,7 @@ async fn binds_ports_in_expected_range() {
 #[tokio::test(flavor = "multi_thread")]
 async fn exits_when_channel_closed() {
     let (tx, _counters, handle) =
-        spawn_egress("127.0.0.1:1".parse().unwrap(), Arc::default());
+        spawn_egress(sockaddr!("127.0.0.1:1"), Arc::default());
     drop(tx);
     timeout(Duration::from_secs(5), handle)
         .await

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bfd.workspace = true
+mg-common.workspace = true
 mg-api-types.workspace = true
 rdb.workspace = true
 slog.workspace = true

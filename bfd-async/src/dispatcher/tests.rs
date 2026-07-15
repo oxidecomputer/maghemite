@@ -10,6 +10,9 @@ use super::ListenerBackend;
 use super::ListenerTask;
 use bfd::SessionCounters;
 use bfd::packet::Control;
+use mg_common::ip;
+use mg_common::lock;
+use mg_common::parse;
 use slog::Discard;
 use slog::Logger;
 use slog::o;
@@ -51,10 +54,7 @@ impl TestBackend {
     }
 
     fn expect_bound_address(&self) -> SocketAddr {
-        self.bound_address
-            .lock()
-            .unwrap()
-            .expect("socket has been bound")
+        lock!(self.bound_address).expect("socket has been bound")
     }
 
     fn was_listener_task_dropped(&self) -> bool {
@@ -71,7 +71,7 @@ impl ListenerBackend for TestBackend {
     ) -> Result<tokio::task::JoinHandle<()>, crate::AddPeerError> {
         assert_eq!(listen_addr, LISTEN_ADDR);
 
-        let mut bound_address = self.bound_address.lock().unwrap();
+        let mut bound_address = lock!(self.bound_address);
         assert!(
             bound_address.is_none(),
             "TestBackend can only spawn one listening socket"
@@ -154,7 +154,7 @@ async fn drops_packet_from_unregistered_peer() {
 
     // Register a peer that is *not* the loopback source address our client
     // sends from, so the listener sees a mismatched source IP.
-    let peer: IpAddr = "192.0.2.1".parse().unwrap();
+    let peer = ip!("192.0.2.1");
 
     let mut rx = dispatcher
         .ensure(LISTEN_ADDR, peer, Arc::default(), &log)

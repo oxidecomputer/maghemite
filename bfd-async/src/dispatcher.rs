@@ -5,6 +5,8 @@
 use crate::AddPeerError;
 use bfd::SessionCounters;
 use bfd::packet;
+use mg_common::read_lock;
+use mg_common::write_lock;
 use slog::Logger;
 use slog::warn;
 use slog_error_chain::InlineErrorChain;
@@ -228,7 +230,7 @@ impl Listener {
     }
 
     fn remove_peer(&self, peer: IpAddr) -> ListenerRemovePeerResult {
-        let mut sessions = self.sessions.write().unwrap();
+        let mut sessions = write_lock!(self.sessions);
         if sessions.remove(&peer).is_some() {
             if sessions.is_empty() {
                 ListenerRemovePeerResult::RemovedNowEmpty
@@ -245,7 +247,7 @@ impl Listener {
         peer: IpAddr,
         session: SessionHandle,
     ) -> Result<(), AddPeerError> {
-        let mut sessions = self.sessions.write().unwrap();
+        let mut sessions = write_lock!(self.sessions);
         match sessions.entry(peer) {
             hash_map::Entry::Occupied(_) => Err(AddPeerError::PeerExists(peer)),
             hash_map::Entry::Vacant(entry) => {
@@ -346,7 +348,7 @@ impl ListenerTask {
 
             // Do we expect traffic from this peer address?
             let Some(session) =
-                self.sessions.read().unwrap().get(&peer.ip()).cloned()
+                read_lock!(self.sessions).get(&peer.ip()).cloned()
             else {
                 warn!(
                     self.log, "unknown peer; dropping";

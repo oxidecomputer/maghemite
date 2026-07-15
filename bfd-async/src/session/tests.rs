@@ -14,6 +14,8 @@ use super::*;
 use crate::wait_for_condition;
 use bfd::DEFAULT_DETECT_MULTIPLIER;
 use bfd::packet::Control;
+use mg_common::parse;
+use mg_common::sockaddr;
 use slog::Discard;
 use slog::o;
 use tokio::time::timeout;
@@ -49,7 +51,7 @@ fn spawn_driver(required_rx: Duration) -> Harness {
         DriverTask {
             sm,
             counters: Arc::clone(&counters),
-            remote_addr: "127.0.0.1:3784".parse().unwrap(),
+            remote_addr: sockaddr!("127.0.0.1:3784"),
             listener_rx,
             egress_tx,
             state_tx,

@@ -13,6 +13,9 @@ use super::Dispatcher;
 use super::ListenerBackend;
 use super::SharedSessions;
 use crate::AddPeerError;
+use mg_common::parse;
+use mg_common::read_lock;
+use mg_common::sockaddr;
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -63,9 +66,9 @@ impl ListenerBackend for FakeBackend {
 // IPs/ports are arbitrary.
 fn arb_listen_addr() -> impl Strategy<Value = SocketAddr> {
     let addrs = vec![
-        "127.0.0.1:3784".parse().unwrap(),
-        "127.0.0.1:4784".parse().unwrap(),
-        "192.0.2.1:3784".parse().unwrap(),
+        sockaddr!("127.0.0.1:3784"),
+        sockaddr!("127.0.0.1:4784"),
+        sockaddr!("192.0.2.1:3784"),
     ];
     select(addrs)
 }
@@ -146,7 +149,7 @@ fn check_invariants(dispatcher: &Dispatcher, model: &Model) {
     // that address, and no listener is empty.
     for (addr, listener) in &dispatcher.listeners {
         let actual: BTreeSet<IpAddr> =
-            listener.sessions.read().unwrap().keys().copied().collect();
+            read_lock!(listener.sessions).keys().copied().collect();
         let expected: BTreeSet<IpAddr> = model
             .peer_to_addr
             .iter()

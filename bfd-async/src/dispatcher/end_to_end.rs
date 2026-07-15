@@ -23,6 +23,7 @@ use crate::wait_for_condition;
 use bfd::DEFAULT_DETECT_MULTIPLIER;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
+use mg_common::lock;
 use slog::Logger;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -78,10 +79,7 @@ impl ListenerBackend for PreBoundSocketBackend {
         sessions: SharedSessions,
         log: Logger,
     ) -> Result<JoinHandle<()>, AddPeerError> {
-        let socket = self
-            .socket
-            .lock()
-            .unwrap()
+        let socket = lock!(self.socket)
             .take()
             .expect("PreBoundSocketBackend::spawn called more than once");
         let listen_task = ListenerTask::new(socket, sessions, log);
