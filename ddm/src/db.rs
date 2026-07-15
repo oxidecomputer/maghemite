@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types::db::TunnelRoute;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::db::{MulticastRoute, TunnelRoute};
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
@@ -20,6 +20,10 @@ const ORIGINATE: &str = "originate";
 /// The handle used to open a persistent key-value tree for originated
 /// tunnel endpoints.
 const TUNNEL_ORIGINATE: &str = "tunnel_originate";
+
+/// The handle used to open a persistent key-value tree for originated
+/// multicast groups.
+const MCAST_ORIGINATE: &str = "mcast_originate";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -43,10 +47,27 @@ pub struct Db {
     log: Logger,
 }
 
+/// The realized change to the imported multicast set after applying an update.
+///
+/// This holds the routes that actually became present or absent, computed as
+/// the set difference between the pre- and post-update state rather than the
+/// raw request. Downstream consumers reconcile only these groups, so an update
+/// that re-imports an existing route or withdraws an absent one yields an empty
+/// delta and triggers no work.
+#[derive(Debug, Default, Clone)]
+pub struct McastRibDelta {
+    /// Routes newly present after the update.
+    pub added: HashSet<MulticastRoute>,
+
+    /// Routes no longer present after the update.
+    pub removed: HashSet<MulticastRoute>,
+}
+
 #[derive(Default, Clone)]
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
+    pub imported_mcast: HashSet<MulticastRoute>,
 }
 
 unsafe impl Sync for Db {}
@@ -60,6 +81,7 @@ impl Db {
             log,
         })
     }
+
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
     }
@@ -78,6 +100,30 @@ impl Db {
 
     pub fn imported_tunnel_count(&self) -> usize {
         lock!(self.data).imported_tunnel.len()
+    }
+
+    pub fn imported_mcast(&self) -> HashSet<MulticastRoute> {
+        lock!(self.data).imported_mcast.clone()
+    }
+
+    pub fn imported_mcast_count(&self) -> usize {
+        lock!(self.data).imported_mcast.len()
+    }
+
+    /// Underlay groups imported via `nexthop`, deduplicated.
+    pub fn mcast_groups_for_nexthop(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> HashSet<Ipv6Addr> {
+        // Filter under the lock so the caller never clones the full imported
+        // set just to keep one peer's routes. Non-destructive analog of the
+        // next-hop filter in `remove_nexthop_routes`.
+        lock!(self.data)
+            .imported_mcast
+            .iter()
+            .filter(|route| route.nexthop == nexthop)
+            .map(|route| route.origin.underlay_group.ip())
+            .collect()
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
@@ -102,6 +148,73 @@ impl Db {
         }
     }
 
+    /// Atomically import and delete multicast routes under a single lock,
+    /// returning the effective [`McastRibDelta`] against the state before
+    /// any modification.
+    ///
+    /// The single lock avoids a TOCTOU race where concurrent modifications
+    /// between separate lock acquisitions could produce an incorrect delta.
+    /// Callers that redistribute the update also need post-modification
+    /// reachability and use
+    /// [`Db::update_imported_mcast_with_reachability`] instead.
+    pub fn update_imported_mcast(
+        &self,
+        import: &HashSet<MulticastRoute>,
+        remove: &HashSet<MulticastRoute>,
+    ) -> McastRibDelta {
+        Self::apply_imported_mcast(&mut lock!(self.data), import, remove)
+    }
+
+    /// [`Db::update_imported_mcast`] variant that also captures a
+    /// [`MulticastReachability`] snapshot of post-modification reachability.
+    ///
+    /// The imported set is captured under the same lock as the modification,
+    /// so downstream withdrawal reconciliation cannot observe imported state
+    /// older than the modification that produced it. Callers that do not
+    /// redistribute have no reconciliation to feed and skip this variant's
+    /// imported-set clone and persistent origin read.
+    pub fn update_imported_mcast_with_reachability(
+        &self,
+        import: &HashSet<MulticastRoute>,
+        remove: &HashSet<MulticastRoute>,
+    ) -> (McastRibDelta, MulticastReachability) {
+        let (delta, imported) = {
+            let mut data = lock!(self.data);
+            let delta = Self::apply_imported_mcast(&mut data, import, remove);
+            (delta, data.imported_mcast.clone())
+        };
+
+        // Persistent origins are not touched by this method, so reading them
+        // outside the lock still yields a post-modification snapshot. The
+        // added tree scan is acceptable, sled caches the tree and it stays
+        // small.
+        (delta, self.reachability_snapshot(imported))
+    }
+
+    /// Apply `import` and `remove` to the imported multicast set under the
+    /// caller-held lock, returning the effective delta.
+    fn apply_imported_mcast(
+        data: &mut DbData,
+        import: &HashSet<MulticastRoute>,
+        remove: &HashSet<MulticastRoute>,
+    ) -> McastRibDelta {
+        let before = data.imported_mcast.clone();
+        // Route identity excludes the path, so `insert` would keep a stale
+        // path on re-import. `replace` lets the newest path win.
+        for x in import {
+            data.imported_mcast.replace(x.clone());
+        }
+
+        for x in remove {
+            data.imported_mcast.remove(x);
+        }
+
+        let added = data.imported_mcast.difference(&before).cloned().collect();
+        let removed =
+            before.difference(&data.imported_mcast).cloned().collect();
+        McastRibDelta { added, removed }
+    }
+
     pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
         let tree = self.persistent_data.open_tree(ORIGINATE)?;
         for p in prefixes {
@@ -124,34 +237,68 @@ impl Db {
         Ok(())
     }
 
-    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
+    /// Persist multicast origins for advertisement to peers.
+    pub fn originate_mcast(
+        &self,
+        origins: &HashSet<MulticastOrigin>,
+    ) -> Result<(), Error> {
+        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+        for o in origins {
+            // Key by the metric-excluded identity, storing the full origin as
+            // the value. `MulticastOrigin` equality ignores `metric`, so keying
+            // by identity lets a re-origination with a changed metric overwrite
+            // the stored entry instead of leaving a stale one under the old
+            // metric.
+            tree.insert(
+                o.identity_key()?.as_str(),
+                serde_json::to_string(o)?.as_str(),
+            )?;
+        }
+        tree.flush()?;
+        Ok(())
+    }
+
+    /// Scan a persistent origin tree with `parse`, skipping entries that
+    /// fail to read or parse. `kind` names the entry kind for log context.
+    fn scan_origin_tree<T>(
+        &self,
+        tree: &str,
+        kind: &str,
+        parse: impl Fn(&[u8], &[u8]) -> Result<T, Error>,
+    ) -> Result<HashSet<T>, Error>
+    where
+        T: Eq + std::hash::Hash,
+    {
+        let tree = self.persistent_data.open_tree(tree)?;
         let result = tree
-            .scan_prefix(vec![])
+            .iter()
             .filter_map(|item| {
-                let (key, _value) = match item {
+                let (key, value) = match item {
                     Ok(item) => item,
                     Err(e) => {
                         error!(
                             self.log,
-                            "db: error ddm originated prefix: {e}"
+                            "db: error fetching ddm {kind} entry: {e}"
                         );
                         return None;
                     }
                 };
-                Some(match Ipv6Net::from_db_key(&key) {
-                    Ok(item) => item,
+                match parse(key.as_ref(), value.as_ref()) {
+                    Ok(item) => Some(item),
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing ddm origin entry value: {e}"
-                        );
-                        return None;
+                        error!(self.log, "db: error parsing ddm {kind}: {e}");
+                        None
                     }
-                })
+                }
             })
             .collect();
         Ok(result)
+    }
+
+    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
+        self.scan_origin_tree(ORIGINATE, "origin prefix", |key, _value| {
+            Ipv6Net::from_db_key(key).map_err(|e| Error::DbKey(e.to_string()))
+        })
     }
 
     pub fn originated_count(&self) -> Result<usize, Error> {
@@ -159,39 +306,46 @@ impl Db {
     }
 
     pub fn originated_tunnel(&self) -> Result<HashSet<TunnelOrigin>, Error> {
-        let tree = self.persistent_data.open_tree(TUNNEL_ORIGINATE)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching ddm tunnel origin entry: {e}"
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&key);
-                let value: TunnelOrigin = match serde_json::from_str(&value) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing ddm tunnel origin: {e}"
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
+        self.scan_origin_tree(TUNNEL_ORIGINATE, "tunnel origin", |key, _v| {
+            Ok(serde_json::from_slice(key)?)
+        })
     }
 
     pub fn originated_tunnel_count(&self) -> Result<usize, Error> {
         Ok(self.originated_tunnel()?.len())
+    }
+
+    /// Multicast origins originated locally.
+    ///
+    /// Each origin is keyed by its metric-excluded identity and stored as the
+    /// value, so the current metric is read back from the value rather than the
+    /// key.
+    ///
+    /// This iterates the tree directly rather than going through
+    /// [`Db::scan_origin_tree`], which skips entries that fail to read or
+    /// parse. Withdrawal reconciliation treats the result as the complete
+    /// origin set, so a silently skipped entry could become a false final
+    /// withdrawal. Here any per-entry failure fails the whole read. The
+    /// caller surfaces that by degrading the snapshot's origin set, and
+    /// reconciliation then drops the withdrawal rather than treating the
+    /// missing origins as truly gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tree cannot be opened or any entry fails to
+    /// read or parse.
+    pub fn originated_mcast(&self) -> Result<HashSet<MulticastOrigin>, Error> {
+        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+        tree.iter()
+            .map(|item| {
+                let (_key, value) = item?;
+                Ok(serde_json::from_slice(&value)?)
+            })
+            .collect()
+    }
+
+    pub fn originated_mcast_count(&self) -> Result<usize, Error> {
+        Ok(self.originated_mcast()?.len())
     }
 
     pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
@@ -216,33 +370,116 @@ impl Db {
         Ok(())
     }
 
+    /// Remove persisted multicast origins.
+    ///
+    /// State machines revalidate reachability at processing time via
+    /// [`Db::multicast_reachability`] rather than from a snapshot captured
+    /// here.
+    ///
+    /// The modification lands before any event is enqueued, so the
+    /// processing-time snapshot is guaranteed to reflect this removal.
+    pub fn withdraw_mcast(
+        &self,
+        origins: &HashSet<MulticastOrigin>,
+    ) -> Result<(), Error> {
+        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+        for o in origins {
+            // Remove by identity so a withdraw matches regardless of the metric
+            // the origin was advertised with (e.g. the CLI's default metric).
+            tree.remove(o.identity_key()?.as_str())?;
+        }
+        tree.flush()?;
+        Ok(())
+    }
+
+    /// Capture current multicast reachability for processing-time
+    /// revalidation. An event is enqueued only after its modification completes,
+    /// so a snapshot taken while processing that event is post-modification. It
+    /// also observes any later modification, which lets a state machine avoid
+    /// acting on reachability that has since been restored.
+    pub fn multicast_reachability(&self) -> MulticastReachability {
+        // Same lock-ordering discipline as `update_imported_mcast`: clone
+        // `imported_mcast` under the data lock and read persistent origins
+        // after dropping it, since the two sources are not co-modified.
+        let imported = lock!(self.data).imported_mcast.clone();
+        self.reachability_snapshot(imported)
+    }
+
     pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
-    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
-        let mut data = lock!(self.data);
-        // Routes are generally held in sets to prevent duplication and provide
-        // handy set-algebra operations.
-        let mut removed = HashSet::new();
-        for x in &data.imported {
-            if x.nexthop == nexthop {
-                removed.insert(x.clone());
+    ) -> RemovedNexthopRoutes {
+        let (removed, tnl_removed, mcast_removed, imported_mcast) = {
+            let mut data = lock!(self.data);
+            let mut removed = HashSet::new();
+            for x in &data.imported {
+                if x.nexthop == nexthop {
+                    removed.insert(x.clone());
+                }
             }
-        }
-        for x in &removed {
-            data.imported.remove(x);
-        }
+            for x in &removed {
+                data.imported.remove(x);
+            }
 
-        let mut tnl_removed = HashSet::new();
-        for x in &data.imported_tunnel {
-            if x.nexthop == nexthop {
-                tnl_removed.insert(*x);
+            let mut tnl_removed = HashSet::new();
+            for x in &data.imported_tunnel {
+                if x.nexthop == nexthop {
+                    tnl_removed.insert(*x);
+                }
+            }
+            for x in &tnl_removed {
+                data.imported_tunnel.remove(x);
+            }
+
+            let mut mcast_removed = HashSet::new();
+            for x in &data.imported_mcast {
+                if x.nexthop == nexthop {
+                    mcast_removed.insert(x.clone());
+                }
+            }
+            for x in &mcast_removed {
+                data.imported_mcast.remove(x);
+            }
+
+            let imported_mcast = data.imported_mcast.clone();
+            (removed, tnl_removed, mcast_removed, imported_mcast)
+        };
+
+        // Persistent origins are not touched by this method, so reading them
+        // outside the lock still yields a post-modification snapshot.
+        RemovedNexthopRoutes {
+            underlay: removed,
+            tunnel: tnl_removed,
+            multicast: mcast_removed,
+            mcast_reachability: self.reachability_snapshot(imported_mcast),
+        }
+    }
+
+    /// Build a post-modification reachability snapshot around an imported
+    /// set captured under the data lock, taking ownership so no further
+    /// clone is needed. A persistent origin read failure degrades
+    /// `originated` to the empty set and marks the snapshot, so consumers
+    /// know the empty origin set is a read failure rather than a real
+    /// absence.
+    fn reachability_snapshot(
+        &self,
+        imported: HashSet<MulticastRoute>,
+    ) -> MulticastReachability {
+        match self.originated_mcast() {
+            Ok(originated) => MulticastReachability {
+                imported,
+                originated,
+                origins_degraded: false,
+            },
+            Err(e) => {
+                error!(self.log, "read remaining multicast origins: {e}");
+                MulticastReachability {
+                    imported,
+                    originated: HashSet::new(),
+                    origins_degraded: true,
+                }
             }
         }
-        for x in &tnl_removed {
-            data.imported_tunnel.remove(x);
-        }
-        (removed, tnl_removed)
     }
 
     pub fn routes_by_vector(
@@ -258,6 +495,48 @@ impl Db {
             }
         }
         result
+    }
+}
+
+/// Routes withdrawn for a next hop, grouped by route family.
+pub struct RemovedNexthopRoutes {
+    pub underlay: HashSet<Route>,
+    pub tunnel: HashSet<TunnelRoute>,
+    pub multicast: HashSet<MulticastRoute>,
+    /// Post-modification multicast reachability snapshot captured under the same
+    /// removal that produced `multicast`. Downstream reconciliation reads
+    /// viable paths from here rather than reading the database again.
+    pub mcast_reachability: MulticastReachability,
+}
+
+/// A snapshot of multicast reachability: imported routes and local origins.
+///
+/// Only `Db` methods construct this. A snapshot is either captured by the
+/// modification that produced a set of withdrawals or read at processing time
+/// via [`Db::multicast_reachability`]. In both cases, it describes state no
+/// older than that modification, since the event that triggers a
+/// processing-time read is enqueued only after the modification completes.
+#[derive(Debug, Clone)]
+pub struct MulticastReachability {
+    imported: HashSet<MulticastRoute>,
+    originated: HashSet<MulticastOrigin>,
+    origins_degraded: bool,
+}
+
+impl MulticastReachability {
+    pub fn imported(&self) -> &HashSet<MulticastRoute> {
+        &self.imported
+    }
+
+    pub fn originated(&self) -> &HashSet<MulticastOrigin> {
+        &self.originated
+    }
+
+    /// Whether the persistent origin read failed, degrading `originated` to
+    /// the empty set. A degraded snapshot cannot distinguish a withdrawn
+    /// origin from an unread one.
+    pub fn origins_degraded(&self) -> bool {
+        self.origins_degraded
     }
 }
 

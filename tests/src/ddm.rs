@@ -5,7 +5,9 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::net::{
+    MulticastOrigin, TunnelOrigin, UnderlayMulticastIpv6, Vni,
+};
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;
@@ -190,6 +192,32 @@ impl<'a> RouterZone<'a> {
         self.zone.zexec("pkill ddmd")
     }
 
+    /// Wait for an SMF service in this zone to come online, failing fast if
+    /// it lands in maintenance. A service that silently fails here otherwise
+    /// surfaces much later as an opaque peering assertion failure.
+    fn wait_for_service_online(&self, fmri: &str) -> Result<()> {
+        for _ in 0..30 {
+            let state = self
+                .zone
+                .zexec(&format!("svcs -Ho state {fmri}"))
+                .unwrap_or_default();
+            match state.trim() {
+                "online" => return Ok(()),
+                "maintenance" => {
+                    return Err(anyhow!(
+                        "{fmri} entered maintenance in zone {}",
+                        self.zone.name,
+                    ));
+                }
+                _ => sleep(Duration::from_secs(1)),
+            }
+        }
+        Err(anyhow!(
+            "timed out waiting for {fmri} to come online in zone {}",
+            self.zone.name,
+        ))
+    }
+
     fn start_router(&self, restart_dpd: bool) -> Result<()> {
         let addrs = self.ifx[1..]
             .iter()
@@ -224,9 +252,8 @@ impl<'a> RouterZone<'a> {
                 ))?;
                 self.zone.zexec("svcadm refresh dendrite:default")?;
                 self.zone.zexec("svcadm enable dendrite:default")?;
-                // wait for dendrite to come up
-                println_nopipe!("wait 10s for dendrite to come up ...");
-                sleep(Duration::from_secs(10));
+                println_nopipe!("waiting for dendrite to come online ...");
+                self.wait_for_service_online("dendrite:default")?;
                 self.zone.zexec(
                     "svccfg -s tfport setprop config/pkt_source = none",
                 )?;
@@ -235,6 +262,8 @@ impl<'a> RouterZone<'a> {
                 )?;
                 self.zone.zexec("svcadm refresh tfport:default")?;
                 self.zone.zexec("svcadm enable tfport")?;
+                println_nopipe!("waiting for tfport to come online ...");
+                self.wait_for_service_online("tfport:default")?;
             }
             self.zone.zexec(&format!(
                 "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",
@@ -648,6 +677,69 @@ async fn run_trio_tests(
 
     println_nopipe!("tunnel endpoint withdraw passed");
 
+    // Multicast group advertise/withdraw across the trio. Mirrors how
+    // mg-lower in the switch zone publishes overlay→underlay multicast
+    // bindings: the transit router originates an advertisement, and the
+    // server routers learn it via DDM exchange.
+    wait_for_eq!(multicast_originated_count(&t1).await?, 0);
+
+    // One origin per overlay address family: the overlay group is opaque to
+    // ddm (any multicast IpAddr), but both families must survive the
+    // advertise/exchange/withdraw round trip.
+    let mcast_origin_v4 = MulticastOrigin {
+        overlay_group: "233.252.0.1".parse().unwrap(),
+        underlay_group: UnderlayMulticastIpv6::new(
+            "ff04::100".parse().unwrap(),
+        )
+        .unwrap(),
+        vni: Vni::try_from(77u32).unwrap(),
+        source: None,
+        metric: 0,
+    };
+    let mcast_origin_v6 = MulticastOrigin {
+        overlay_group: "ff0e::1".parse().unwrap(),
+        underlay_group: UnderlayMulticastIpv6::new(
+            "ff04::101".parse().unwrap(),
+        )
+        .unwrap(),
+        vni: Vni::try_from(77u32).unwrap(),
+        source: None,
+        metric: 0,
+    };
+
+    t1.advertise_multicast_groups(&vec![
+        mcast_origin_v4.clone(),
+        mcast_origin_v6.clone(),
+    ])
+    .await?;
+
+    wait_for_eq!(multicast_originated_count(&t1).await?, 2);
+    wait_for_eq!(multicast_group_count(&t1).await?, 0);
+    wait_for_eq!(multicast_group_count(&s1).await?, 2);
+    wait_for_eq!(multicast_group_count(&s2).await?, 2);
+
+    println_nopipe!("multicast group advertise passed");
+
+    // Server router restart: s1's view of the multicast group must
+    // converge again after ddmd restarts. wait_for_eq tolerates the
+    // restart window via unwrap_or sentinel.
+    zs1.stop_router()?;
+    zs1.start_router(false)?;
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 2);
+
+    println_nopipe!("multicast router restart passed");
+
+    t1.withdraw_multicast_groups(&vec![mcast_origin_v4, mcast_origin_v6])
+        .await?;
+
+    wait_for_eq!(multicast_originated_count(&t1).await?, 0);
+    wait_for_eq!(multicast_group_count(&t1).await?, 0);
+    wait_for_eq!(multicast_group_count(&s1).await?, 0);
+    wait_for_eq!(multicast_group_count(&s2).await?, 0);
+
+    println_nopipe!("multicast group withdraw passed");
+
     Ok(())
 }
 
@@ -816,6 +908,14 @@ async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
 
 async fn tunnel_originated_endpoint_count(c: &Client) -> Result<usize> {
     Ok(c.get_originated_tunnel_endpoints().await?.len())
+}
+
+async fn multicast_group_count(c: &Client) -> Result<usize> {
+    Ok(c.get_multicast_groups().await?.len())
+}
+
+async fn multicast_originated_count(c: &Client) -> Result<usize> {
+    Ok(c.get_originated_multicast_groups().await?.len())
 }
 
 fn init_logger() -> Logger {

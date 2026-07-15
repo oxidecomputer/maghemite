@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Version `PEER_DURATIONS` of the DDM Admin API.
+//! Types from API version 2 (PEER_DURATIONS) that changed in version 3
+//! (MULTICAST_SUPPORT).
 //!
 //! Tracks how long each DDM peer has been in its current state and exposes
 //! that through the `/peers` endpoint with duration information.

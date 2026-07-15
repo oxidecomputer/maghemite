@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod address;
+pub mod multicast;
+pub mod vni;
 
 /// Like `println!`, but silently exits on broken pipe (EPIPE) instead of
 /// panicking. Other I/O errors still panic.

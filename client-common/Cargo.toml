@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 oxnet.workspace = true
+schemars.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 omicron-common.workspace = true
+serde_json.workspace = true

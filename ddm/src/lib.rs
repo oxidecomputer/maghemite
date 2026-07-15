@@ -6,6 +6,8 @@ pub mod admin;
 pub mod db;
 pub mod discovery;
 pub mod exchange;
+#[cfg(feature = "backend")]
+pub mod mcast;
 pub mod oxstats;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -14,6 +16,29 @@ pub mod sys;
 pub const COMPONENT_DDM: &str = "ddm";
 pub const MOD_ADMIN: &str = "admin";
 pub const MOD_EXCHANGE: &str = "exchange";
+
+/// Capacity of the channel carrying wake hints to the multicast sweep.
+///
+/// Wake messages are best-effort: senders drop a hint when the channel is full,
+/// and the sweep's periodic reconciliation of its full tracked set repairs the
+/// omission. A depth of one would suffice semantically, while this small buffer
+/// absorbs routine bursts.
+///
+/// This constant lives outside the `backend`-feature-gated `mcast` module
+/// because `ddmd` wires the channel in every supported feature configuration.
+pub const MCAST_NOTIFY_CHANNEL_DEPTH: usize = 8;
+
+/// Wrap a set in `Some`, treating an empty set as absence.
+///
+/// # Returns
+///
+/// `None` if `set` is empty, otherwise `Some(set)`.
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub(crate) fn non_empty<T>(
+    set: std::collections::HashSet<T>,
+) -> Option<std::collections::HashSet<T>> {
+    (!set.is_empty()).then_some(set)
+}
 
 #[macro_export]
 macro_rules! err {

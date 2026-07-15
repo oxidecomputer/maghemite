@@ -97,6 +97,7 @@ dropshot-api-manager-types = "0.7.2"
 expectorate = "1.2.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.52.1", features = ["full"] }
+futures = "0.3"
 serde_repr = "0.1"
 anyhow = "1.0.103"
 port-file = "0.1.0"
@@ -158,4 +159,4 @@ rev = "dfcf0663cfb90ea75e8ee5591b033d68ba6d9fcc"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "4871abc13ca21ee97c684f1d5ed363e8a86f3441"
+rev = "ab6c1a4326abbcb9f98a459ae74da4995e6b41af"
