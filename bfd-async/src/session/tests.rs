@@ -28,44 +28,46 @@ struct Harness {
     counters: Arc<SessionCounters>,
 }
 
-// Spawn a driver task and wrap the extra bits we need in a test harness.
-//
-// Most tests pass a very large `required_rx` to avoid any flakiness introduced
-// by spurious recv timeouts. Only tests exercising recv timeouts specifically
-// pass a "reasoanble" value here.
-fn spawn_driver(required_rx: Duration) -> Harness {
-    let (listener_tx, listener_rx) = mpsc::channel(8);
-    let (egress_tx, egress_rx) = mpsc::channel(EGRESS_CHANNEL_DEPTH);
+impl Harness {
+    // Spawn a driver task and wrap the extra bits we need in a test harness.
+    //
+    // Most tests pass a very large `required_rx` to avoid any flakiness
+    // introduced by spurious recv timeouts. Only tests exercising recv timeouts
+    // specifically pass a "reasoanble" value here.
+    fn spawn(required_rx: Duration) -> Self {
+        let (listener_tx, listener_rx) = mpsc::channel(8);
+        let (egress_tx, egress_rx) = mpsc::channel(EGRESS_CHANNEL_DEPTH);
 
-    let sm = StateMachine::start(
-        PeerInfo::with_random_discriminator(
-            required_rx,
-            DEFAULT_DETECT_MULTIPLIER,
-        ),
-        Instant::now(),
-    );
-    let (state_tx, state_rx) = watch::channel(sm.state());
-    let counters = Arc::new(SessionCounters::default());
+        let sm = StateMachine::start(
+            PeerInfo::with_random_discriminator(
+                required_rx,
+                DEFAULT_DETECT_MULTIPLIER,
+            ),
+            Instant::now(),
+        );
+        let (state_tx, state_rx) = watch::channel(sm.state());
+        let counters = Arc::new(SessionCounters::default());
 
-    let driver = tokio::spawn(
-        DriverTask {
-            sm,
-            counters: Arc::clone(&counters),
-            remote_addr: sockaddr!("127.0.0.1:3784"),
-            listener_rx,
-            egress_tx,
-            state_tx,
-            log: Logger::root(Discard, o!()),
+        let driver = tokio::spawn(
+            DriverTask {
+                sm,
+                counters: Arc::clone(&counters),
+                remote_addr: sockaddr!("127.0.0.1:3784"),
+                listener_rx,
+                egress_tx,
+                state_tx,
+                log: Logger::root(Discard, o!()),
+            }
+            .run(),
+        );
+
+        Self {
+            driver,
+            listener_tx,
+            egress_rx,
+            state_rx,
+            counters,
         }
-        .run(),
-    );
-
-    Harness {
-        driver,
-        listener_tx,
-        egress_rx,
-        state_rx,
-        counters,
     }
 }
 
@@ -105,7 +107,7 @@ async fn bring_to_up(h: &Harness) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn exits_when_listener_channel_closes() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
     drop(h.listener_tx);
     timeout(Duration::from_secs(5), h.driver)
         .await
@@ -115,7 +117,7 @@ async fn exits_when_listener_channel_closes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn emits_outgoing_control_packet() {
-    let mut h = spawn_driver(Duration::from_secs(3600));
+    let mut h = Harness::spawn(Duration::from_secs(3600));
     // A freshly-started session has a packet to send immediately, so the driver
     // should hand a valid control packet to the egress channel.
     let bytes = timeout(Duration::from_secs(5), h.egress_rx.recv())
@@ -127,7 +129,7 @@ async fn emits_outgoing_control_packet() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn counts_incoming_packets() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
 
     // `Control::default()` carries the peer's `Down` state.
     h.listener_tx.send(Control::default()).await.unwrap();
@@ -142,7 +144,7 @@ async fn counts_incoming_packets() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn handshake_down_init_up_publishes_each_state() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
 
     // Down: peer Down -> we go Init.
     h.listener_tx
@@ -163,7 +165,7 @@ async fn handshake_down_init_up_publishes_each_state() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn down_to_up_directly() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
 
     // From Down, a peer advertising Init takes us straight to Up.
     h.listener_tx
@@ -177,7 +179,7 @@ async fn down_to_up_directly() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn up_to_down_on_peer_down() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
     bring_to_up(&h).await;
 
     h.listener_tx
@@ -190,7 +192,7 @@ async fn up_to_down_on_peer_down() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn up_to_down_on_peer_admin_down() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
     bring_to_up(&h).await;
 
     h.listener_tx
@@ -202,7 +204,7 @@ async fn up_to_down_on_peer_admin_down() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn init_to_down_on_peer_admin_down() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
 
     h.listener_tx
         .send(peer_packet(BfdPeerState::Down))
@@ -219,7 +221,7 @@ async fn init_to_down_on_peer_admin_down() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn peer_state_that_does_not_advance_is_a_no_op() {
-    let h = spawn_driver(Duration::from_secs(3600));
+    let h = Harness::spawn(Duration::from_secs(3600));
 
     // From Down, a peer advertising Up is not a valid advance; we stay Down.
     h.listener_tx
@@ -242,7 +244,7 @@ async fn peer_state_that_does_not_advance_is_a_no_op() {
 async fn recv_timeout_drives_session_down() {
     // ~1.5s detection time (500ms * 3): long enough not to fire during the
     // sub-100ms bring-up, short enough to fire well within the 5s wait below.
-    let h = spawn_driver(Duration::from_millis(500));
+    let h = Harness::spawn(Duration::from_millis(500));
     bring_to_up(&h).await;
 
     // Stop sending; the driver's recv deadline should elapse and transition
@@ -254,7 +256,7 @@ async fn recv_timeout_drives_session_down() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn poll_packet_elicits_final_response_on_egress() {
-    let mut h = spawn_driver(Duration::from_secs(3600));
+    let mut h = Harness::spawn(Duration::from_secs(3600));
 
     let mut pkt = peer_packet(BfdPeerState::Down);
     pkt.set_poll();
