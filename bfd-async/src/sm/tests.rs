@@ -85,6 +85,23 @@ fn poll_triggers_immediate_final_response() {
 }
 
 #[test]
+fn poll_response_remains_queued_past_tx_interval() {
+    let now = Instant::now();
+    let mut sm = StateMachine::start(local_info(), now);
+
+    let mut pkt = packet_with(BfdPeerState::Down);
+    pkt.set_poll();
+    sm.packet_received(pkt, now);
+
+    // A final-flagged response must be queued and available even if we don't
+    // ask for a packet to send for a very long time.
+    let later = now + Duration::from_secs(60);
+    let out = sm.packet_to_send(later).expect("a response is queued");
+    assert!(out.r#final(), "poll response must set the final flag");
+    assert!(!out.poll(), "poll response must not itself set poll");
+}
+
+#[test]
 fn demand_mode_suppresses_unsolicited_sends() {
     let now = Instant::now();
     let mut sm = StateMachine::start(local_info(), now);
