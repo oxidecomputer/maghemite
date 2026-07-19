@@ -98,7 +98,7 @@ expectorate = "1.2.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
-anyhow = "1.0.103"
+anyhow = "1.0.104"
 port-file = "0.1.0"
 hyper = "1.10.1"
 hyper-util = { version = "0.1", features = ["full"] }
