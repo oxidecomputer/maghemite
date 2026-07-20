@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 //! The routing database (rdb).
 //!
 //! This is the maghemite routing database. The routing database holds both
@@ -9,9 +11,27 @@
 //! in a sled key-value store that is persisted to disk via flush operations.
 //! Volatile information is stored in in-memory data structures such as hash
 //! sets.
+//!
+//! ## Lock Ordering
+//!
+//! The Db struct contains multiple locks, which we acquire
+//! in this ordering:
+//!
+//! 1. Unicast RIB locks (`rib4_in`, `rib4_loc`, `rib6_in`, `rib6_loc`)
+//! 2. MRIB locks (see [`mrib`] module: `mrib_in` → `mrib_loc` → `watchers`)
+//! 3. RpfTable poptrie caches (`cache_v4`, `cache_v6`)
+//!
+//! **RPF lookup exception**: RPF lookups (`mrib::rpf::RpfTable::lookup`) hold
+//! at most one lock at a time. They first try the poptrie cache (read lock),
+//! release it, then fall back to linear scan (RIB lock) if needed. This avoids
+//! deadlocks since no path holds cache + RIB locks simultaneously.
+
 use crate::bestpath::bestpaths;
 use crate::error::Error;
 use crate::log::rdb_log;
+use crate::mrib;
+use crate::mrib::rpf::RpfTable;
+use crate::mrib::{Mrib, spawn_rpf_revalidator};
 use crate::types::*;
 use chrono::Utc;
 use mg_api_types::bfd::BfdPeerConfig;
@@ -23,12 +43,12 @@ use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use sled::Tree;
-use slog::{Logger, error};
+use slog::{Logger, debug, error};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU8;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{sleep, spawn};
@@ -66,6 +86,10 @@ const STATIC4_ROUTES: &str = "static4_routes";
 /// The handle used to open a persistent key-value tree for IPv6 static routes.
 const STATIC6_ROUTES: &str = "static6_routes";
 
+/// The handle used to open a persistent key-value tree for multicast static
+/// routes.
+const STATIC_MCAST_ROUTES: &str = "static_mcast_routes";
+
 /// Key used in settings tree for tunnel endpoint setting
 const TEP_KEY: &str = "tep";
 
@@ -79,7 +103,27 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
+/// Key used in settings tree for MRIB RPF revalidation interval.
+const MRIB_RPF_REVALIDATION_INTERVAL: &str = "mrib_rpf_revalidation_interval";
+
 use crate::rib::{Rib, Rib4, Rib6};
+
+/// Cached configuration values for low-overhead reads.
+///
+/// These atomic values are read frequently by hot paths (bestpath selection,
+/// RPF revalidation) and cached here to avoid locking the persistent store.
+#[derive(Debug, Clone)]
+struct CachedConfig {
+    /// Bestpath fanout for ECMP.
+    ///
+    /// This controls how many equal-cost paths are selected for unicast routing
+    /// and considered for multicast RPF lookup.
+    bestpath_fanout: Arc<AtomicU8>,
+
+    /// Periodic RPF revalidation sweep interval in milliseconds.
+    /// 0 means use [`mrib::DEFAULT_REVALIDATION_INTERVAL`].
+    rpf_revalidation_interval_ms: Arc<AtomicU64>,
+}
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -104,6 +148,17 @@ pub struct Db {
     /// added to the lower half forwarding plane.
     rib6_loc: Arc<Mutex<Rib6>>,
 
+    /// Multicast routing information base (MRIB).
+    mrib: Mrib,
+
+    /// [RPF] (Reverse Path Forwarding) table for multicast route verification.
+    ///
+    /// [RPF]: https://datatracker.ietf.org/doc/html/rfc5110
+    rpf_table: RpfTable,
+
+    /// Cached configuration for low-overhead reads on (possibly) hot paths.
+    config: CachedConfig,
+
     /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
 
@@ -119,6 +174,7 @@ pub struct Db {
 
     log: Logger,
 }
+
 unsafe impl Sync for Db {}
 unsafe impl Send for Db {}
 
@@ -155,23 +211,72 @@ struct Watcher {
     sender: Sender<PrefixChangeNotification>,
 }
 
-//TODO we need bulk operations with atomic semantics here.
+// TODO we need bulk operations with atomic semantics here.
 impl Db {
     /// Create a new routing database that stores persistent data at `path`.
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
         let rib_loc = Arc::new(Mutex::new(Rib::new()));
-        Ok(Self {
-            persistent: sled::open(path)?,
+        let persistent = sled::open(path)?;
+
+        let config = CachedConfig {
+            bestpath_fanout: Arc::new(AtomicU8::new(DEFAULT_BESTPATH_FANOUT)),
+            rpf_revalidation_interval_ms: Arc::new(AtomicU64::new(
+                u64::try_from(mrib::DEFAULT_REVALIDATION_INTERVAL.as_millis())
+                    .unwrap(),
+            )),
+        };
+
+        let db = Self {
+            persistent,
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
+            mrib: Mrib::new(log.clone()),
+            rpf_table: RpfTable::new(log.clone()),
+            config,
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
             slot: Arc::new(RwLock::new(None)),
             log,
-        })
+        };
+
+        // Load persisted static multicast routes into `mrib_in`
+        db.load_mcast_static_routes();
+
+        // Load bestpath fanout from settings.
+        let fanout = db.get_bestpath_fanout().unwrap_or_else(|e| {
+            error!(db.log, "failed to load bestpath_fanout from settings: {e}");
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+        db.config
+            .bestpath_fanout
+            .store(fanout.get(), Ordering::Relaxed);
+
+        // Load RPF revalidation interval from settings.
+        let revalidation_interval =
+            db.get_mrib_rpf_revalidation_interval().unwrap_or_else(|e| {
+                error!(
+                    db.log,
+                    "failed to load mrib_rpf_revalidation_interval \
+                     from settings: {e}"
+                );
+                mrib::DEFAULT_REVALIDATION_INTERVAL
+            });
+
+        db.config.rpf_revalidation_interval_ms.store(
+            u64::try_from(revalidation_interval.as_millis()).unwrap(),
+            Ordering::Relaxed,
+        );
+
+        // Start RPF revalidator to handle unicast route changes.
+        // When the poptrie cache rebuilds, revalidate all (S,G) multicast routes.
+        if let Some(tx) = spawn_rpf_revalidator(db.clone()) {
+            db.rpf_table.set_rebuild_notifier(tx);
+        }
+
+        Ok(db)
     }
 
     pub fn set_reaper_interval(&self, interval: std::time::Duration) {
@@ -182,12 +287,112 @@ impl Db {
         *lock!(self.reaper.stale_max) = stale_max;
     }
 
+    pub fn slot(&self) -> Option<u16> {
+        match self.slot.read() {
+            Ok(v) => *v,
+            Err(e) => {
+                error!(self.log, "unable to read switch slot"; "error" => %e);
+                None
+            }
+        }
+    }
+
+    pub fn set_slot(&mut self, slot: Option<u16>) {
+        let mut value = self.slot.write().unwrap();
+        *value = slot;
+    }
+
+    // ------------------------------------------------------------------------
+    // MRIB / RPF revalidator gettings/setters
+    // ------------------------------------------------------------------------
+
+    /// Set the interval for periodic RPF revalidation sweeps.
+    ///
+    /// This controls how often the revalidator thread walks the MRIB to
+    /// re-check (S,G) routes even without explicit unicast RIB changes.
+    ///
+    /// This is persisted to the settings tree.
+    pub fn set_mrib_rpf_revalidation_interval(
+        &self,
+        interval: std::time::Duration,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let interval_ms = u64::try_from(interval.as_millis()).unwrap();
+        tree.insert(
+            MRIB_RPF_REVALIDATION_INTERVAL,
+            &interval_ms.to_be_bytes(),
+        )?;
+        tree.flush()?;
+        self.config
+            .rpf_revalidation_interval_ms
+            .store(interval_ms, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Get the RPF revalidation sweep interval from the persistent store.
+    pub fn get_mrib_rpf_revalidation_interval(
+        &self,
+    ) -> Result<std::time::Duration, Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let interval_ms = match tree.get(MRIB_RPF_REVALIDATION_INTERVAL)? {
+            None => {
+                u64::try_from(mrib::DEFAULT_REVALIDATION_INTERVAL.as_millis())
+                    .unwrap()
+            }
+            Some(value) => {
+                let bytes: [u8; 8] = (*value).try_into().map_err(|_| {
+                    Error::DbValue(format!(
+                        "invalid mrib_rpf_revalidation_interval \
+                             value in db: expected 8 bytes, found {}",
+                        value.len()
+                    ))
+                })?;
+                u64::from_be_bytes(bytes)
+            }
+        };
+        Ok(std::time::Duration::from_millis(interval_ms))
+    }
+
+    /// Get the RPF revalidation sweep interval (atomic, for the
+    /// revalidator thread).
+    pub fn get_mrib_rpf_revalidation_interval_ms(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.config.rpf_revalidation_interval_ms)
+    }
+
+    /// Get the IPv4 loc-rib mutex (for revalidation).
+    pub fn rib4_loc(&self) -> Arc<Mutex<Rib4>> {
+        Arc::clone(&self.rib4_loc)
+    }
+
+    /// Get the IPv6 loc-rib mutex (for revalidation).
+    pub fn rib6_loc(&self) -> Arc<Mutex<Rib6>> {
+        Arc::clone(&self.rib6_loc)
+    }
+
+    /// Get the bestpath fanout atomic (for revalidation).
+    pub fn bestpath_fanout_atomic(&self) -> Arc<AtomicU8> {
+        Arc::clone(&self.config.bestpath_fanout)
+    }
+
+    pub fn mrib(&self) -> &Mrib {
+        &self.mrib
+    }
+
+    pub fn log(&self) -> &Logger {
+        &self.log
+    }
+
     /// Register a routing databse watcher.
     pub fn watch(&self, tag: String, sender: Sender<PrefixChangeNotification>) {
         write_lock!(self.watchers).push(Watcher { tag, sender });
     }
 
     fn notify(&self, n: PrefixChangeNotification) {
+        // The RPF caches are derived from the loc-RIB, so they follow the
+        // same change notifications as external watchers. Centralizing the
+        // trigger here means any batch that ends with a notification keeps
+        // the caches maintained without a separate caller obligation.
+        self.trigger_rpf_rebuild(n.changed.iter());
         for Watcher { tag, sender } in read_lock!(self.watchers).iter() {
             if let Err(e) = sender.send(n.clone()) {
                 rdb_log!(
@@ -695,26 +900,23 @@ impl Db {
         }
     }
 
-    pub fn update_rib4_loc(
+    /// Re-run bestpath selection for a prefix, updating `rib_loc`.
+    ///
+    /// This helper does not trigger RPF cache maintenance. The enclosing
+    /// batch operation covers it by notifying watchers via [`Self::notify`]
+    /// after releasing the RIB locks.
+    fn update_rib4_loc(
         &self,
         rib_in: &Rib4,
         rib_loc: &mut Rib4,
         prefix: &Ipv4Net,
     ) {
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_PERSISTENT
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
+        let fanout = self.config.bestpath_fanout.load(Ordering::Relaxed);
 
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
-                match bestpaths(paths, fanout.get().into()) {
+                match bestpaths(paths, fanout as usize) {
                     // bestpath found at least 1 path for loc-rib
                     Some(bp) => {
                         rib_loc.insert(*prefix, bp.clone());
@@ -732,26 +934,23 @@ impl Db {
         }
     }
 
-    pub fn update_rib6_loc(
+    /// Re-run bestpath selection for a prefix, updating `rib_loc`.
+    ///
+    /// This helper does not trigger RPF cache maintenance. The enclosing
+    /// batch operation covers it by notifying watchers via [`Self::notify`]
+    /// after releasing the RIB locks.
+    fn update_rib6_loc(
         &self,
         rib_in: &Rib6,
         rib_loc: &mut Rib6,
         prefix: &Ipv6Net,
     ) {
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_PERSISTENT
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
+        let fanout = self.config.bestpath_fanout.load(Ordering::Relaxed);
 
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
-                match bestpaths(paths, fanout.get().into()) {
+                match bestpaths(paths, fanout as usize) {
                     // bestpath found at least 1 path for loc-rib
                     Some(bp) => {
                         rib_loc.insert(*prefix, bp.clone());
@@ -766,6 +965,47 @@ impl Db {
             None => {
                 rib_loc.remove(prefix);
             }
+        }
+    }
+
+    /// Trigger RPF cache rebuilds for a batch of changed prefixes.
+    ///
+    /// Folds the batch per address family: a single changed prefix keeps
+    /// targeted revalidation, multiple distinct prefixes widen to a full
+    /// sweep. Invoked from [`Self::notify`] for batches that produce a
+    /// change notification. Mutation paths that bypass notification must
+    /// call it directly, after the RIB locks are released.
+    fn trigger_rpf_rebuild<'a, I>(&self, changed: I)
+    where
+        I: IntoIterator<Item = &'a IpNet>,
+    {
+        let mut v4: Option<Option<Ipv4Net>> = None;
+        let mut v6: Option<Option<Ipv6Net>> = None;
+        for prefix in changed {
+            match prefix {
+                IpNet::V4(p) => {
+                    v4 = match v4 {
+                        None => Some(Some(*p)),
+                        Some(Some(prev)) if prev == *p => Some(Some(prev)),
+                        _ => Some(None),
+                    }
+                }
+                IpNet::V6(p) => {
+                    v6 = match v6 {
+                        None => Some(Some(*p)),
+                        Some(Some(prev)) if prev == *p => Some(Some(prev)),
+                        _ => Some(None),
+                    }
+                }
+            }
+        }
+        if let Some(prefix) = v4 {
+            self.rpf_table
+                .trigger_rebuild_v4(Arc::clone(&self.rib4_loc), prefix);
+        }
+        if let Some(prefix) = v6 {
+            self.rpf_table
+                .trigger_rebuild_v6(Arc::clone(&self.rib6_loc), prefix);
         }
     }
 
@@ -787,6 +1027,8 @@ impl Db {
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
 
+        let mut changed: BTreeSet<IpNet> = BTreeSet::new();
+
         {
             // only grab the lock once, release it once the loop ends
             let rib4_in = lock!(self.rib4_in);
@@ -799,6 +1041,7 @@ impl Db {
                         &mut rib4_loc,
                         fanout.get().into(),
                     );
+                    changed.insert(IpNet::from(*prefix));
                 }
             }
         }
@@ -815,9 +1058,14 @@ impl Db {
                         &mut rib6_loc,
                         fanout.get().into(),
                     );
+                    changed.insert(IpNet::from(*prefix));
                 }
             }
         }
+
+        // Bestpath re-runs (e.g., on fanout changes) mutate the loc-RIB,
+        // so the RPF caches must rebuild as well.
+        self.trigger_rpf_rebuild(changed.iter());
     }
 
     fn update_rib_loc<P: Ord + Copy>(
@@ -872,7 +1120,10 @@ impl Db {
         self.update_rib6_loc(rib_in, rib_loc, p6);
     }
 
-    pub fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
+    /// Insert a path for a prefix into the RIB and refresh the loc-RIB
+    /// entry. RPF cache maintenance rides on the batch's change
+    /// notification via [`Self::notify`].
+    fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
         match prefix {
             IpNet::V4(p4) => {
                 let mut rib_in = lock!(self.rib4_in);
@@ -1212,7 +1463,7 @@ impl Db {
         }
     }
 
-    pub fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
+    fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
     where
         F: Fn(&Path) -> bool,
     {
@@ -1398,67 +1649,426 @@ impl Db {
         let tree = self.persistent.open_tree(SETTINGS)?;
         tree.insert(BESTPATH_FANOUT, &[fanout.get()])?;
         tree.flush()?;
+
+        // Update cached atomic for RPF revalidator
+        self.config
+            .bestpath_fanout
+            .store(fanout.get(), Ordering::Relaxed);
+
         self.trigger_bestpath_when(|_pfx, _paths| true);
         Ok(())
     }
 
     pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
-        let mut rib = lock!(self.rib4_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
-            }
-        });
+        {
+            let mut rib = lock!(self.rib4_loc);
+            rib.iter_mut().for_each(|(_prefix, path)| {
+                let targets: Vec<Path> = path
+                    .iter()
+                    .filter_map(|p| {
+                        if let Some(bgp) = p.bgp.as_ref()
+                            && bgp.peer == peer
+                        {
+                            let mut marked = p.clone();
+                            marked.bgp = Some(bgp.as_stale());
+                            return Some(marked);
+                        }
+                        None
+                    })
+                    .collect();
+                for t in targets.into_iter() {
+                    path.replace(t);
+                }
+            });
+        }
+
+        // Staleness affects bestpath selection, so RPF caches derived from
+        // the loc-RIB must rebuild. Any prefix may have been touched, so
+        // request a full sweep.
+        self.rpf_table
+            .trigger_rebuild_v4(Arc::clone(&self.rib4_loc), None);
     }
 
     pub fn mark_bgp_peer_stale6(&self, peer: PeerId) {
-        let mut rib = lock!(self.rib6_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
-            }
-        });
+        {
+            let mut rib = lock!(self.rib6_loc);
+            rib.iter_mut().for_each(|(_prefix, path)| {
+                let targets: Vec<Path> = path
+                    .iter()
+                    .filter_map(|p| {
+                        if let Some(bgp) = p.bgp.as_ref()
+                            && bgp.peer == peer
+                        {
+                            let mut marked = p.clone();
+                            marked.bgp = Some(bgp.as_stale());
+                            return Some(marked);
+                        }
+                        None
+                    })
+                    .collect();
+                for t in targets.into_iter() {
+                    path.replace(t);
+                }
+            });
+        }
+        // Staleness affects bestpath selection, so RPF caches derived from
+        // the loc-RIB must rebuild. Any prefix may have been touched, so
+        // request a full sweep.
+        self.rpf_table
+            .trigger_rebuild_v6(Arc::clone(&self.rib6_loc), None);
     }
 
-    pub fn slot(&self) -> Option<u16> {
-        match self.slot.read() {
-            Ok(v) => *v,
-            Err(e) => {
-                error!(self.log, "unable to read switch slot"; "error" => %e);
-                None
+    // ========================================================================
+    // MRIB (Multicast RIB) functionality
+    // ========================================================================
+
+    /// Update `mrib_loc` by performing RPF verification for a multicast route.
+    ///
+    /// For a route to be promoted from `mrib_in` to `mrib_loc`, it must pass
+    /// Reverse Path Forwarding (RPF) checks:
+    /// - For (*,G) routes: always promoted (no source to verify)
+    /// - For (S,G) routes: derive the RPF neighbor from the unicast RIB.
+    ///   If a route to the source exists, install with the derived neighbor.
+    ///   Otherwise, remove from `mrib_loc`.
+    ///
+    /// Both cases use atomic operations to avoid races with concurrent route
+    /// updates (e.g., adding replication targets).
+    pub fn update_mrib_loc(&self, key: &MulticastRouteKey) {
+        // (*,G) always installs - no RPF check needed
+        let Some(source) = key.source() else {
+            self.mrib.promote_any_source(key);
+            return;
+        };
+
+        // (S,G): derive rpf_neighbor from the unicast RIB.
+        //
+        // Optimistic concurrency: if a cache swap lands between the lookup and
+        // the apply, the revalidator pass it triggers may have already applied
+        // a fresher derivation that ours would override. So, we detect the swap
+        // via the generation check and re-derive accordingly.
+        //
+        // The bound is a latency limit on inline retries, not a convergence
+        // guarantee. Convergence comes from the corrective revalidation pass
+        // queued on exhaustion. If no revalidator is running to take that
+        // pass, inline derivation continues instead.
+        const MAX_INLINE_DERIVE_ATTEMPTS: usize = 3;
+        let fanout = self.config.bestpath_fanout.load(Ordering::Relaxed);
+        loop {
+            let mut converged = false;
+            for _ in 0..MAX_INLINE_DERIVE_ATTEMPTS {
+                let generation = self.rpf_table.generation();
+                let rpf_neighbor = self.rpf_table.lookup(
+                    source,
+                    &self.rib4_loc,
+                    &self.rib6_loc,
+                    fanout as usize,
+                );
+
+                if rpf_neighbor.is_none() {
+                    debug!(
+                        self.log,
+                        "deselecting (S,G) route: no unicast path to source";
+                        "key" => %key
+                    );
+                }
+
+                // Atomically update mrib_in and mrib_loc
+                self.mrib.apply_rpf_result(key, rpf_neighbor);
+
+                if self.rpf_table.generation() == generation {
+                    converged = true;
+                    break;
+                }
+            }
+
+            if converged {
+                break;
+            }
+
+            // Inline retry budget exhausted under sustained cache churn. The
+            // last applied derivation may be stale, so hand the key's source
+            // to the revalidator for an explicit corrective pass rather than
+            // relying on an incidental sweep.
+            if self.rpf_table.request_revalidation(source) {
+                debug!(
+                    self.log,
+                    "rpf derivation did not converge, queued revalidation";
+                    "key" => %key
+                );
+                break;
             }
         }
     }
 
-    pub fn set_slot(&mut self, slot: Option<u16>) {
-        let mut value = self.slot.write().unwrap();
-        *value = slot;
+    /// Revalidate (S,G) routes against the unicast RIB.
+    ///
+    /// When the unicast RIB changes, re-derive `rpf_neighbor` for affected
+    /// routes. If `event` is provided with a specific prefix, only routes
+    /// whose source falls within that prefix are revalidated (targeted
+    /// revalidation). Otherwise, all (S,G) routes are revalidated (full
+    /// sweep).
+    ///
+    /// Uses atomic operations to avoid races with concurrent route updates.
+    pub(crate) fn revalidate_mrib(
+        &self,
+        event: Option<crate::mrib::rpf::RebuildEvent>,
+    ) {
+        let fanout = self.bestpath_fanout_atomic().load(Ordering::Relaxed);
+        let rib4_loc = self.rib4_loc();
+        let rib6_loc = self.rib6_loc();
+
+        // Get all (S,G) route keys for revalidation
+        let keys: Vec<_> = self
+            .mrib
+            .get_source_specific_keys()
+            .into_iter()
+            .filter_map(|key| {
+                let source = key.source()?;
+                // Targeted revalidation (skip routes not affected)
+                if let Some(ref evt) = event
+                    && !evt.matches_source(source)
+                {
+                    return None;
+                }
+                Some((key, source))
+            })
+            .collect();
+
+        for (key, source) in keys {
+            // Re-derive rpf_neighbor from current unicast RIB
+            let rpf_neighbor = self.rpf_table.lookup(
+                source,
+                &rib4_loc,
+                &rib6_loc,
+                fanout as usize,
+            );
+
+            if rpf_neighbor.is_none() {
+                debug!(
+                    self.log,
+                    "revalidation: deselecting (S,G) route, no unicast path";
+                    "key" => %key
+                );
+            }
+
+            // Atomically update mrib_in and mrib_loc
+            self.mrib.apply_rpf_result(&key, rpf_neighbor);
+        }
+    }
+
+    /// Load persisted static multicast routes into `mrib_in` at startup.
+    ///
+    /// After loading each route, we perform RPF verification to promote
+    /// eligible routes to `mrib_loc`. This ensures routes are installed
+    /// immediately at startup rather than waiting for the next periodic sweep.
+    fn load_mcast_static_routes(&self) {
+        let tree = match self.persistent.open_tree(STATIC_MCAST_ROUTES) {
+            Ok(t) => t,
+            Err(e) => {
+                error!(
+                    self.log,
+                    "failed to open static mcast routes tree: {e}"
+                );
+                return;
+            }
+        };
+
+        for result in tree.iter() {
+            let (_, value) = match result {
+                Ok(kv) => kv,
+                Err(e) => {
+                    error!(self.log, "failed to read mcast route: {e}");
+                    continue;
+                }
+            };
+
+            let value = String::from_utf8_lossy(&value);
+            let route = match serde_json::from_str::<MulticastRoute>(&value) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!(self.log, "failed to deserialize mcast route: {e}");
+                    continue;
+                }
+            };
+
+            let key = route.key;
+            if let Err(e) = self.mrib.add_route(route) {
+                error!(
+                    self.log,
+                    "failed to load mcast route: {e}";
+                    "key" => %key
+                );
+                continue;
+            }
+
+            // Perform RPF verification and promote to mrib_loc if eligible
+            self.update_mrib_loc(&key);
+        }
+    }
+
+    /// Add static multicast routes to the MRIB.
+    ///
+    /// Routes are persisted to disk and added to `mrib_in`. Then
+    /// `update_mrib_loc` derives `rpf_neighbor` from the unicast RIB and
+    /// promotes routes to `mrib_loc` if a valid path exists.
+    ///
+    /// Uses upsert semantics: existing routes with the same key are updated.
+    /// This enables idempotent calls from Nexus RPWs.
+    pub fn add_static_mcast_routes(
+        &self,
+        routes: &[MulticastRoute],
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(STATIC_MCAST_ROUTES)?;
+
+        // Persist configuration only: `rpf_neighbor` is derived from the
+        // unicast RIB at load and revalidation time, so writing it to disk
+        // would only capture a stale derivation. Timestamps merge against
+        // the previously persisted entry so idempotent upserts do not
+        // rewrite them. Reads happen outside the transaction to keep the
+        // closure infallible.
+        let entries: Vec<(Vec<u8>, String)> = routes
+            .iter()
+            .map(|route| {
+                let key = route.key.db_key()?;
+                let mut normalized = route.clone();
+                normalized.rpf_neighbor = None;
+                if let Some(prev) = tree.get(&key)?.and_then(|v| {
+                    serde_json::from_slice::<MulticastRoute>(&v).ok()
+                }) {
+                    normalized.created = prev.created;
+                    if prev.underlay_group == normalized.underlay_group
+                        && prev.source == normalized.source
+                    {
+                        normalized.updated = prev.updated;
+                    }
+                }
+                Ok((key, serde_json::to_string(&normalized)?))
+            })
+            .collect::<Result<_, Error>>()?;
+
+        // Durability precedes visibility: the transaction and flush complete
+        // before add_route publishes the change to MRIB watchers, so a
+        // notified consumer can never observe state that a crash would lose.
+        tree.transaction(|tx_db| {
+            for (key, value) in &entries {
+                tx_db.insert(key.as_slice(), value.as_str())?;
+            }
+            Ok(())
+        })?;
+
+        tree.flush()?;
+
+        for route in routes {
+            self.mrib.add_route(route.clone())?;
+        }
+
+        // Derive rpf_neighbor and promote to `mrib_loc`
+        for route in routes {
+            self.update_mrib_loc(&route.key);
+        }
+
+        Ok(())
+    }
+
+    /// Remove static multicast routes from the MRIB.
+    ///
+    /// Routes are removed from persistence and both `mrib_in` and `mrib_loc`.
+    pub fn remove_static_mcast_routes(
+        &self,
+        keys: &[MulticastRouteKey],
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(STATIC_MCAST_ROUTES)?;
+
+        let key_bytes: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|key| key.db_key().map_err(Error::from))
+            .collect::<Result<_, Error>>()?;
+
+        // Remove from persistence atomically first.
+        tree.transaction(|tx_db| {
+            for kb in &key_bytes {
+                tx_db.remove(kb.as_slice())?;
+            }
+            Ok(())
+        })?;
+
+        tree.flush()?;
+
+        for key in keys {
+            self.mrib.remove_route(key)?;
+        }
+        Ok(())
+    }
+
+    /// Get all static multicast routes from persistence.
+    pub fn get_static_mcast_routes(
+        &self,
+    ) -> Result<Vec<MulticastRoute>, Error> {
+        let tree = self.persistent.open_tree(STATIC_MCAST_ROUTES)?;
+        let mut routes = Vec::new();
+
+        for result in tree.iter() {
+            let (_, value) = result?;
+            let value = String::from_utf8_lossy(&value);
+            let route: MulticastRoute = serde_json::from_str(&value)?;
+            routes.push(route);
+        }
+
+        Ok(routes)
+    }
+
+    /// Get a specific multicast route.
+    pub fn get_mcast_route(
+        &self,
+        key: &MulticastRouteKey,
+    ) -> Option<MulticastRoute> {
+        self.mrib.get_route(key)
+    }
+
+    /// Get the full MRIB input table (all routes from all sources).
+    pub fn full_mrib(&self) -> crate::mrib::MribTable {
+        self.mrib.full_mrib()
+    }
+
+    /// Get the local MRIB table (selected/installed routes).
+    pub fn loc_mrib(&self) -> crate::mrib::MribTable {
+        self.mrib.loc_mrib()
+    }
+
+    /// List MRIB routes with filtering, cloning only matching entries.
+    ///
+    /// This is more efficient than `full_mrib()`/`loc_mrib()` when filtering
+    /// is needed, as it clones only the routes that match the filter.
+    ///
+    /// Parameters:
+    /// - `af`: Filter by address family (`None = all`)
+    /// - `static_only`: Filter by origin (`None = all`, `Some(true) = static`,
+    ///   `Some(false) = dynamic`)
+    /// - `installed`: If true, query `mrib_loc`; otherwise `mrib_in`
+    pub fn mrib_list(
+        &self,
+        af: Option<AddressFamily>,
+        static_only: Option<bool>,
+        installed: bool,
+    ) -> Vec<MulticastRoute> {
+        self.mrib.list_routes(af, static_only, installed)
+    }
+
+    /// Get a specific multicast route from `mrib_loc` (selected/installed).
+    pub fn get_selected_mcast_route(
+        &self,
+        key: &MulticastRouteKey,
+    ) -> Option<MulticastRoute> {
+        self.mrib.get_selected_route(key)
+    }
+
+    /// Register a watcher for MRIB changes.
+    pub fn watch_mrib(
+        &self,
+        tag: String,
+        sender: Sender<MribChangeNotification>,
+    ) {
+        self.mrib.watch(tag, sender);
     }
 
     pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
@@ -1497,42 +2107,52 @@ impl Reaper {
     }
 
     fn reap(self: &Arc<Self>) {
-        self.rib
-            .lock()
-            .unwrap()
-            .iter_mut()
-            .for_each(|(_prefix, paths)| {
-                paths.retain(|p| {
-                    p.bgp
-                        .as_ref()
-                        .map(|b| {
-                            b.stale
-                                .map(|s| {
-                                    Utc::now().signed_duration_since(s)
-                                        < *lock!(self.stale_max)
-                                })
-                                .unwrap_or(true)
-                        })
-                        .unwrap_or(true)
-                })
-            });
+        lock!(self.rib).iter_mut().for_each(|(_prefix, paths)| {
+            paths.retain(|p| {
+                p.bgp
+                    .as_ref()
+                    .map(|b| {
+                        b.stale
+                            .map(|s| {
+                                Utc::now().signed_duration_since(s)
+                                    < *lock!(self.stale_max)
+                            })
+                            .unwrap_or(true)
+                    })
+                    .unwrap_or(true)
+            })
+        });
     }
 }
 
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
-        types::test_helpers::path_vecs_equal,
+        StaticRouteKey,
+        db::Db,
+        test::{TEST_WAIT_ITERATIONS, TestDb},
+        types::{
+            Asn, MulticastAddr, MulticastAddrV4, MulticastAddrV6,
+            MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
+            PrefixDbKey, UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
+            Vni, test_helpers::path_vecs_equal,
+        },
     };
     use client_common::eprintln_nopipe;
     use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
     use mg_api_types::rdb::path::Path;
     use mg_api_types::rdb::rib::AddressFamily;
     use mg_common::log::*;
+    use mg_common::test::DEFAULT_INTERVAL;
+    use mg_common::wait_for;
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
+
+    fn test_underlay() -> UnderlayMulticastIpv6 {
+        UnderlayMulticastIpv6::new(Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1))
+            .expect("valid test underlay address")
+    }
 
     fn get_test_db() -> TestDb {
         let log = init_file_logger("rib.log");
@@ -1853,6 +2473,385 @@ mod test {
         // rib should be empty again
         assert!(db.full_rib(None).is_empty());
         assert!(db.loc_rib(None).is_empty());
+    }
+
+    #[test]
+    fn test_mrib_revalidation_on_rib_change() {
+        // Inlined helper to test revalidation for a given address family.
+        // `rpf_neighbor` is derived from the unicast RIB. A route is
+        // selected when the unicast path exists and deselected when
+        // a unicast path is removed
+        fn test_af<P: Into<IpNet> + Copy>(
+            db: &Db,
+            s_ip: IpAddr,
+            prefix: P,
+            nexthop: IpAddr,
+            group: MulticastAddr,
+        ) {
+            let srk = StaticRouteKey {
+                prefix: prefix.into(),
+                nexthop,
+                vlan_id: None,
+                rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+            };
+            db.add_static_routes(&[srk]).unwrap();
+
+            let key = MulticastRouteKey::new(
+                Some(s_ip),
+                group,
+                Vni::DEFAULT_MULTICAST,
+            )
+            .expect("AF match");
+            let route = MulticastRoute::new(
+                key,
+                test_underlay(),
+                MulticastSourceProtocol::Static,
+            );
+            db.add_static_mcast_routes(&[route]).unwrap();
+
+            // Initially should be selected
+            wait_for!(
+                db.get_selected_mcast_route(&key).is_some(),
+                DEFAULT_INTERVAL,
+                TEST_WAIT_ITERATIONS,
+                "(S,G) was not selected initially"
+            );
+
+            // Verify `rpf_neighbor` was derived
+            let selected = db.get_selected_mcast_route(&key).unwrap();
+            assert_eq!(
+                selected.rpf_neighbor,
+                Some(nexthop),
+                "rpf_neighbor should be derived from unicast RIB"
+            );
+
+            // Remove unicast route; MRIB should be de-selected
+            db.remove_static_routes(&[srk]).unwrap();
+
+            wait_for!(
+                db.get_selected_mcast_route(&key).is_none(),
+                DEFAULT_INTERVAL,
+                TEST_WAIT_ITERATIONS,
+                "(S,G) remained selected after unicast route removed"
+            );
+
+            // Re-add unicast route
+            db.add_static_routes(&[srk]).unwrap();
+
+            // MRIB should be selected again
+            wait_for!(
+                db.get_selected_mcast_route(&key).is_some(),
+                DEFAULT_INTERVAL,
+                TEST_WAIT_ITERATIONS,
+                "(S,G) not re-selected after unicast route restored"
+            );
+
+            // Cleanup
+            db.remove_static_routes(&[srk]).unwrap();
+            db.remove_static_mcast_routes(&[key]).unwrap();
+        }
+
+        let log = init_file_logger("mrib_reval.log");
+        let db =
+            crate::test::get_test_db("mrib_reval", log).expect("create db");
+
+        // IPv4
+        test_af(
+            &db,
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+            "192.0.2.0/24".parse::<Ipv4Net>().unwrap(),
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
+        );
+
+        // IPv6
+        test_af(
+            &db,
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)),
+            "2001:db8::/32".parse::<Ipv6Net>().unwrap(),
+            IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
+        );
+    }
+
+    /// Static (S,G) re-upserts arrive as fresh constructions, with no derived
+    /// neighbor and new timestamps. The MRIB must treat them as no-ops. The
+    /// persisted entry stores configuration only, so its derived neighbor stays
+    /// `None` and its timestamps survive the replay rather than taking the
+    /// request's fresh ones.
+    #[test]
+    fn test_mrib_static_upsert_preserves_canonical() {
+        let log = init_file_logger("mrib_upsert_canonical.log");
+        let db = crate::test::get_test_db("mrib_upsert_canonical", log)
+            .expect("create db");
+
+        let nexthop = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        let srk = StaticRouteKey {
+            prefix: "192.0.2.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[srk]).unwrap();
+
+        let key = MulticastRouteKey::new(
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
+            MulticastAddr::new_v4(225, 1, 1, 2).expect("valid mcast"),
+            Vni::DEFAULT_MULTICAST,
+        )
+        .expect("AF match");
+
+        let route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(&[route]).unwrap();
+
+        wait_for!(
+            db.get_selected_mcast_route(&key).is_some(),
+            DEFAULT_INTERVAL,
+            TEST_WAIT_ITERATIONS,
+            "(S,G) was not selected"
+        );
+
+        let before = db.get_mcast_route(&key).expect("route in mrib_in");
+        assert_eq!(before.rpf_neighbor, Some(nexthop));
+
+        let persisted_before = db
+            .get_static_mcast_routes()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.key == key)
+            .expect("route persisted");
+
+        let replay = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(&[replay]).unwrap();
+
+        let after = db.get_mcast_route(&key).expect("route in mrib_in");
+        assert_eq!(
+            after.rpf_neighbor,
+            Some(nexthop),
+            "idempotent upsert must not clobber the derived neighbor"
+        );
+        assert_eq!(after.created, before.created);
+        assert_eq!(
+            after.updated, before.updated,
+            "idempotent upsert must not bump updated"
+        );
+
+        let persisted = db
+            .get_static_mcast_routes()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.key == key)
+            .expect("route persisted");
+
+        assert_eq!(
+            persisted.rpf_neighbor, None,
+            "persistence stores configuration only, not derived state"
+        );
+        assert_eq!(persisted.created, persisted_before.created);
+        assert_eq!(
+            persisted.updated, persisted_before.updated,
+            "idempotent replay must not rewrite persisted timestamps"
+        );
+
+        db.remove_static_routes(&[srk]).unwrap();
+        db.remove_static_mcast_routes(&[key]).unwrap();
+    }
+
+    /// Test (*,G) vs (S,G) selection behavior.
+    ///
+    /// - (*,G) routes are always selected (no RPF check needed)
+    /// - (S,G) routes require a unicast route to the source for RPF
+    #[test]
+    fn test_mrib_any_source_vs_source_specific() {
+        let log = init_file_logger("mrib_asm_ssm.log");
+        let db =
+            crate::test::get_test_db("mrib_asm_ssm", log).expect("create db");
+
+        // Case: (*,G) with ASM address goes to `mrib_loc` immediately
+        // (no unicast route needed)
+        let asm_group =
+            MulticastAddr::new_v4(225, 5, 5, 5).expect("valid mcast");
+        let star_g_key = MulticastRouteKey::any_source(asm_group);
+        let star_g_route = MulticastRoute::new(
+            star_g_key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[star_g_route]).unwrap();
+
+        // (*,G) should be in both `mrib_in` AND `mrib_loc` immediately
+        wait_for!(
+            db.get_selected_mcast_route(&star_g_key).is_some(),
+            DEFAULT_INTERVAL,
+            TEST_WAIT_ITERATIONS,
+            "(*,G) should be in mrib_loc immediately"
+        );
+        assert!(
+            db.get_mcast_route(&star_g_key).is_some(),
+            "(*,G) should also be in mrib_in"
+        );
+
+        // Case: (S,G) with SSM address (232.x) - requires unicast route
+        let ssm_group = MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, 1))
+            .expect("valid mcast"); // SSM range
+        let source = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 100))
+            .expect("valid unicast");
+        let sg_key = MulticastRouteKey::source_specific_v4(source, ssm_group);
+        let sg_route = MulticastRoute::new(
+            sg_key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[sg_route]).unwrap();
+
+        // (S,G) should be in `mrib_in` but NOT in `mrib_loc` yet
+        assert!(
+            db.get_mcast_route(&sg_key).is_some(),
+            "(S,G) should be in mrib_in"
+        );
+        assert!(
+            db.get_selected_mcast_route(&sg_key).is_none(),
+            "(S,G) should NOT be in mrib_loc without unicast route"
+        );
+
+        // Add unicast route to source, now (S,G) should be selected
+        let srk = StaticRouteKey {
+            prefix: "10.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[srk]).unwrap();
+
+        wait_for!(
+            db.get_selected_mcast_route(&sg_key).is_some(),
+            DEFAULT_INTERVAL,
+            TEST_WAIT_ITERATIONS,
+            "(S,G) should be selected after adding unicast route"
+        );
+
+        // Case: IPv6 (*,G) with global scope - goes to `mrib_loc` immediately
+        let v6_group =
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 0x5555])
+                .expect("valid mcast");
+        let v6_star_g_key = MulticastRouteKey::any_source(v6_group);
+        let v6_star_g_route = MulticastRoute::new(
+            v6_star_g_key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[v6_star_g_route]).unwrap();
+
+        wait_for!(
+            db.get_selected_mcast_route(&v6_star_g_key).is_some(),
+            DEFAULT_INTERVAL,
+            TEST_WAIT_ITERATIONS,
+            "IPv6 (*,G) should be selected immediately"
+        );
+
+        // Case: IPv6 (S,G) with SSM address (ff3e::)
+        let v6_ssm_group = MulticastAddrV6::new(Ipv6Addr::new(
+            0xff3e, 0, 0, 0, 0, 0, 0, 0x1234,
+        ))
+        .expect("valid mcast");
+        let v6_source = UnicastAddrV6::new(Ipv6Addr::new(
+            0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100,
+        ))
+        .expect("valid unicast");
+        let v6_sg_key =
+            MulticastRouteKey::source_specific_v6(v6_source, v6_ssm_group);
+        let v6_sg_route = MulticastRoute::new(
+            v6_sg_key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[v6_sg_route]).unwrap();
+
+        // IPv6 (S,G) should be in `mrib_in` but NOT in `mrib_loc` yet
+        // (operations are synchronous, no sleep needed)
+        assert!(
+            db.get_mcast_route(&v6_sg_key).is_some(),
+            "IPv6 (S,G) should be in mrib_in"
+        );
+        assert!(
+            db.get_selected_mcast_route(&v6_sg_key).is_none(),
+            "IPv6 (S,G) should NOT be in mrib_loc without unicast route"
+        );
+
+        // Add unicast route
+        let v6_srk = StaticRouteKey {
+            prefix: "2001:db8::/32".parse::<Ipv6Net>().unwrap().into(),
+            nexthop: IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[v6_srk]).unwrap();
+
+        wait_for!(
+            db.get_selected_mcast_route(&v6_sg_key).is_some(),
+            DEFAULT_INTERVAL,
+            TEST_WAIT_ITERATIONS,
+            "IPv6 (S,G) should be selected after adding unicast route"
+        );
+
+        // Cleanup
+        db.remove_static_routes(&[srk, v6_srk]).unwrap();
+        db.remove_static_mcast_routes(&[
+            star_g_key,
+            sg_key,
+            v6_star_g_key,
+            v6_sg_key,
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn test_mrib_static_persistence() {
+        let db_path = "/tmp/mrib_persist_test.db";
+        let _ = std::fs::remove_dir_all(db_path);
+
+        let group = MulticastAddr::new_v4(225, 2, 2, 2).expect("valid mcast");
+        let key = MulticastRouteKey::any_source(group);
+        let route = MulticastRoute::new(
+            key,
+            test_underlay(),
+            MulticastSourceProtocol::Static,
+        );
+
+        // Create Db and add static multicast route
+        {
+            let log = init_file_logger("mrib_persist1.log");
+            let db = Db::new(db_path, log).expect("create db");
+            db.add_static_mcast_routes(std::slice::from_ref(&route))
+                .expect("add static mcast route");
+            assert_eq!(db.get_static_mcast_routes().unwrap().len(), 1);
+            assert!(db.get_mcast_route(&key).is_some());
+        }
+
+        // Reopen Db and verify route was loaded from persistence
+        {
+            let log = init_file_logger("mrib_persist2.log");
+            let db = Db::new(db_path, log).expect("reopen db");
+            assert_eq!(db.full_mrib().len(), 1);
+            assert!(db.get_mcast_route(&key).is_some());
+            assert_eq!(db.get_static_mcast_routes().unwrap().len(), 1);
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(db_path);
     }
 
     #[test]
