@@ -8,3 +8,4 @@ dropshot.workspace = true
 dropshot-api-manager-types.workspace = true
 mg-api-types-versions.workspace = true
 oxnet.workspace = true
+slog-error-chain.workspace = true

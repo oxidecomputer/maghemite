@@ -36,6 +36,7 @@ use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    num::NonZeroU8,
     sync::Arc,
     time::Duration,
 };
@@ -91,7 +92,7 @@ const TEST_PREFIX_V6: &str = "fd01::/64";
 /// 1s so peers that honor mgd's advertised desired transmit interval do not
 /// send too slowly for mgd's detection time.
 const BFD_REQUIRED_RX_US: u64 = 1_000_000;
-const BFD_DETECTION_MULT: u8 = 3;
+const BFD_DETECTION_MULT: NonZeroU8 = NonZeroU8::new(3).unwrap();
 
 /// Output of `boot_quartet`: the running topology plus clients ready for
 /// test-specific configuration.

@@ -13,6 +13,7 @@ default-members = [
     "ddm-protocol",
     "dropshot-apis",
     "bfd",
+    "bfd-async",
     "util",
     "mg-ddm-verify",
     "tests",
@@ -44,6 +45,7 @@ members = [
     "ddm-protocol",
     "dropshot-apis",
     "bfd",
+    "bfd-async",
     "package",
     "util",
     "mg-ddm-verify",
@@ -140,6 +142,7 @@ itertools = "0.15"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
 proptest = "1.10"
+test-strategy = "0.4"
 serial_test = "3.3"
 internet-checksum = "0.2.1"
 network-interface = { git = "https://github.com/oxidecomputer/network-interface", branch = "illumos" }

@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow};
 use mg_common::lock;
 use slog::Logger;
 use std::net::IpAddr;
+use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -47,7 +48,7 @@ pub struct StateMachine {
     state: Arc<RwLock<Box<dyn State>>>,
     peer: IpAddr,
     required_rx: Duration,
-    detection_multiplier: u8,
+    detection_multiplier: NonZeroU8,
     kill_switch: Arc<AtomicBool>,
     counters: Arc<SessionCounters>,
     log: Logger,
@@ -68,7 +69,7 @@ impl StateMachine {
     pub fn new(
         peer: IpAddr,
         required_rx: Duration,
-        detection_multiplier: u8,
+        detection_multiplier: NonZeroU8,
         counters: Arc<SessionCounters>,
         log: Logger,
     ) -> Self {
@@ -255,7 +256,7 @@ impl StateMachine {
         self.required_rx
     }
 
-    pub fn detection_multiplier(&self) -> u8 {
+    pub fn detection_multiplier(&self) -> NonZeroU8 {
         self.detection_multiplier
     }
 }
@@ -341,7 +342,7 @@ pub(crate) trait State: Sync + Send {
         counters: Arc<SessionCounters>,
     ) -> Result<RecvResult> {
         match endpoint.rx.recv_timeout(
-            local.required_min_rx * local.detection_multiplier.into(),
+            local.required_min_rx * local.detection_multiplier.get().into(),
         ) {
             Ok((addr, msg)) => {
                 sm_log!(

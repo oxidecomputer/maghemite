@@ -342,6 +342,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bfd-async"
+version = "0.1.0"
+dependencies = [
+ "bfd",
+ "mg-api-types",
+ "mg-common",
+ "proptest",
+ "rdb",
+ "slog",
+ "slog-error-chain",
+ "socket2",
+ "test-strategy",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "bgp"
 version = "0.1.0"
 dependencies = [
@@ -3828,6 +3845,7 @@ dependencies = [
  "dropshot-api-manager-types",
  "mg-api-types-versions",
  "oxnet",
+ "slog-error-chain",
 ]
 
 [[package]]
