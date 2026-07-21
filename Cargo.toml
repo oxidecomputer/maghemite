@@ -90,7 +90,7 @@ slog-bunyan = "2.5"
 slog-error-chain = { git = "https://github.com/oxidecomputer/slog-error-chain", branch = "main" }
 socket2 = { version = "0.6", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 hostname = "0.4"
 thiserror = "2.0"
 dropshot = { version = "0.17.1", features = [ "usdt-probes" ] }
