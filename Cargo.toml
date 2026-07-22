@@ -73,6 +73,7 @@ mg-common = { path = "mg-common" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
 bfd = { path = "bfd" }
+bfd-async = { path = "bfd-async" }
 mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }
 rdb = { path = "rdb", features = ["clap"] }
