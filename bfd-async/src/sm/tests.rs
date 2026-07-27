@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use super::*;
-use bfd::DEFAULT_DETECT_MULTIPLIER;
+use crate::DEFAULT_DETECT_MULTIPLIER;
 use proptest::prelude::*;
 use std::num::NonZeroU8;
 use test_strategy::Arbitrary;

@@ -350,6 +350,7 @@ dependencies = [
  "mg-api-types",
  "mg-common",
  "proptest",
+ "rand 0.10.2",
  "rdb",
  "slog",
  "slog-error-chain",
