@@ -1,0 +1,49 @@
+= Bidirectional Forwarding Detection (BFD)
+
+This directory contains a BFD implementation. BFD is defined in <<RFC5880>>.
+This implementation only implements layer-3 BFD over UDP for multihop paths as
+described in <<RFC5883>>.
+
+This BFD implementation is a multisession daemon with an <<OpenAPI3>> management
+interface. The daemon is managed entirely through its management API, there is
+no static configuration.
+
+Peers are defined as IP addresses (IPv4 or IPv6). A session is created for each
+peer. Session status may be queried through the management API. The well known
+BFD multihop UDP port 4784 is used for all communications.
+
+A default transmission rate of one control message per second is used. This
+value may be modified on a per-session basis through the management API.
+
+A management CLI is also included in this implementation. It is simply a client
+of the management API. By default the management API listens on TCP port 0xbfdd
+(49117).
+
+A Rust client library is provided for implementing management API clients.
+
+----
+        ,------,
+      ,------, |
+      | peer |-'
+      '------'  
+  ,---------------,
+  |   ,---------, |
+  | ,---------, | |
+  | | session |-' |
+  | '---------'   | bfdd
+  | ,-----------, |
+  | |   admin   | |
+  | '-----------' |
+  '---------------'
+      ,--------,
+    ,--------, |
+    | client |-'
+    '--------'  
+----
+
+[bibliography]
+== External References
+
+* [[[RFC5880]]] https://datatracker.ietf.org/doc/html/rfc5880[Bidirectional Forwarding Detection (BFD)]
+* [[[RFC5883]]] https://datatracker.ietf.org/doc/html/rfc5883[Bidirectional Forwarding Detection (BFD) for Multihop Paths]
+* [[[OpenAPI3]]] https://spec.openapis.org/oas/v3.0.0[OpenAPI Specification v3.0.0]

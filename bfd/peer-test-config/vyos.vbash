@@ -1,0 +1,38 @@
+#!/bin/vbash
+# This is a testing configuration for the open source firewall platform vyos.
+# It's included here as simple example of an external BFD implementation that
+# should interoperate with ours out of the box.
+#
+# https://vyos.io/
+#
+# Note that vyos uses FRR under the hood for its BFD implementation.
+
+source /opt/vyatta/etc/functions/script-template
+
+configure
+
+# wipe
+load /opt/vyatta/etc/config.boot.default
+commit
+save
+
+# addressing
+set interfaces ethernet eth0 address 10.10.0.1/24
+set interfaces ethernet eth1 address 10.10.0.2/24
+commit
+
+# bfd
+set protocols bfd peer 10.10.0.253 # sidecar 0
+set protocols bfd peer 10.10.0.253 multihop
+set protocols bfd peer 10.10.0.253 source address 10.10.0.1
+
+set protocols bfd peer 10.10.0.254 # sidecar 1
+set protocols bfd peer 10.10.0.254 multihop
+set protocols bfd peer 10.10.0.254 source address 10.10.0.2
+commit
+
+# TODO vyos seems unable to handle this in the config system, it just says "set
+# failed" so do it manually here
+
+route add 10.10.0.253/32 dev eth0
+route add 10.10.0.254/32 dev eth1
