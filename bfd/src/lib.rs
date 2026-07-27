@@ -171,7 +171,8 @@ impl PeerInfo {
         Self {
             required_min_rx,
             detection_multiplier,
-            discriminator: rand::random(), ..Default::default()
+            discriminator: rand::random(),
+            ..Default::default()
         }
     }
 }
