@@ -11,9 +11,9 @@
 //! their own separate unit tests.
 
 use super::*;
+use crate::DEFAULT_DETECT_MULTIPLIER;
+use crate::packet::Control;
 use crate::wait_for_condition;
-use bfd::DEFAULT_DETECT_MULTIPLIER;
-use bfd::packet::Control;
 use mg_common::parse;
 use mg_common::sockaddr;
 use slog::Discard;

@@ -8,8 +8,8 @@
 use super::Dispatcher;
 use super::ListenerBackend;
 use super::ListenerTask;
+use crate::packet::Control;
 use bfd::SessionCounters;
-use bfd::packet::Control;
 use mg_common::ip;
 use mg_common::lock;
 use mg_common::parse;

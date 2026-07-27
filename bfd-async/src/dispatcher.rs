@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::AddPeerError;
+use crate::packet;
 use bfd::SessionCounters;
-use bfd::packet;
 use mg_common::read_lock;
 use mg_common::write_lock;
 use slog::Logger;

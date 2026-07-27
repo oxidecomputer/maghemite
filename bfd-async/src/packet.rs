@@ -2,8 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{BfdPeerState, DEFAULT_DETECT_MULTIPLIER};
+use crate::DEFAULT_DETECT_MULTIPLIER;
 use anyhow::{Context, Result, anyhow};
+use mg_api_types::bfd::BfdPeerState;
 use std::{
     fmt::{Display, Formatter},
     num::NonZeroU8,

@@ -2,10 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use mg_api_types::bfd::BfdPeerState;
 use std::{num::NonZeroU8, sync::atomic::AtomicU64, time::Duration};
-
-pub mod packet;
 
 pub const COMPONENT_BFD: &str = "bfd";
 pub const MOD_DAEMON: &str = "daemon";

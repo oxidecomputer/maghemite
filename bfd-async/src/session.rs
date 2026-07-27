@@ -25,12 +25,12 @@
 use crate::AddPeerRequest;
 use crate::egress::EgressTask;
 use crate::egress_src_port_iter::EgressSrcPortIter;
+use crate::packet;
 use crate::rib::RibTask;
 use crate::sm::CheckRecvDeadlineResult;
 use crate::sm::StateMachine;
 use bfd::PeerInfo;
 use bfd::SessionCounters;
-use bfd::packet;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
 use slog::Logger;

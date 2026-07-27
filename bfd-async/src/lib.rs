@@ -17,9 +17,16 @@ mod rib;
 mod session;
 mod sm;
 
+pub mod packet;
 pub use daemon::Daemon;
 pub use dispatcher::ListenerShutdownHandle;
 pub use session::Session;
+
+/// Default detection threshold multiplier.
+///
+/// Three seems to be a common choice for other implementations. Without
+/// intuition for or against this default, follow suit.
+pub const DEFAULT_DETECT_MULTIPLIER: NonZeroU8 = NonZeroU8::new(3).unwrap();
 
 /// Errors from attempting to add a new BFD peer.
 #[derive(Debug, thiserror::Error)]
