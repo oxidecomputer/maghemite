@@ -12,7 +12,6 @@ default-members = [
     "ddm-api-types/versions",
     "ddm-protocol",
     "dropshot-apis",
-    "bfd",
     "bfd-async",
     "util",
     "mg-ddm-verify",
@@ -44,7 +43,6 @@ members = [
     "ddm-api-types/versions",
     "ddm-protocol",
     "dropshot-apis",
-    "bfd",
     "bfd-async",
     "package",
     "util",
@@ -72,7 +70,6 @@ mg-api-types-versions = { path = "mg-api-types/versions" }
 mg-common = { path = "mg-common" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
-bfd = { path = "bfd" }
 bfd-async = { path = "bfd-async" }
 mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }

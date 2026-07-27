@@ -322,31 +322,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bfd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "client-common",
- "mg-api-types",
- "mg-common",
- "num_enum 0.7.6",
- "pretty_assertions",
- "rand 0.10.2",
- "rdb",
- "schemars 0.8.22",
- "serde",
- "slog",
- "slog-async",
- "slog-bunyan",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "bfd-async"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd",
  "mg-api-types",
  "mg-common",
  "proptest",
