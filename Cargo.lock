@@ -326,29 +326,10 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "client-common",
- "mg-api-types",
- "mg-common",
- "num_enum 0.7.6",
- "pretty_assertions",
- "rand 0.10.2",
- "rdb",
- "schemars 0.8.22",
- "serde",
- "slog",
- "slog-async",
- "slog-bunyan",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "bfd-async"
-version = "0.1.0"
-dependencies = [
- "bfd",
  "mg-api-types",
  "mg-common",
  "proptest",
+ "rand 0.10.2",
  "rdb",
  "slog",
  "slog-error-chain",
@@ -3993,7 +3974,7 @@ name = "mgd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd-async",
+ "bfd",
  "bgp",
  "camino",
  "chrono",
@@ -6872,7 +6853,7 @@ checksum = "a22144e767da4ddd8416dbf383700542ffd8a5dc493dfecedfe1fe3ad03c98ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.3",
 ]
 
 [[package]]

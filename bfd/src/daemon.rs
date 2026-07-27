@@ -6,9 +6,9 @@ use crate::AddPeerError;
 use crate::AddPeerRequest;
 use crate::ListenerShutdownHandle;
 use crate::Session;
+use crate::SessionCounters;
 use crate::dispatcher::Dispatcher;
 use crate::egress_src_port_iter::EgressSrcPortIter;
-use bfd::SessionCounters;
 use slog::Logger;
 use slog::warn;
 use std::collections::HashMap;
@@ -64,9 +64,9 @@ impl Daemon {
                 // <https://github.com/oxidecomputer/omicron/issues/4921>
                 warn!(
                     self.log, "attempt to add peer that already exists";
-                    "component" => bfd::COMPONENT_BFD,
-                    "module" => bfd::MOD_DAEMON,
-                    "unit" => bfd::UNIT_PEER,
+                    "component" => crate::COMPONENT_BFD,
+                    "module" => crate::MOD_DAEMON,
+                    "unit" => crate::UNIT_PEER,
                     "peer" => %peer,
                 );
                 Err(AddPeerError::PeerExists(peer))

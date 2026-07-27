@@ -4,8 +4,8 @@
 
 use crate::admin::HandlerContext;
 use anyhow::Result;
-use bfd_async::AddPeerError;
-use bfd_async::Daemon;
+use bfd::AddPeerError;
+use bfd::Daemon;
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,

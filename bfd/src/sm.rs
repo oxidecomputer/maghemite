@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use bfd::PeerInfo;
-use bfd::packet;
+use crate::PeerInfo;
+use crate::packet;
 use mg_api_types::bfd::BfdPeerState;
 use std::collections::VecDeque;
 use std::time::Duration;
