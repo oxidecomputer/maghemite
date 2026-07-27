@@ -322,7 +322,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bfd-async"
+name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3974,7 +3974,7 @@ name = "mgd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd-async",
+ "bfd",
  "bgp",
  "camino",
  "chrono",
