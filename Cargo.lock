@@ -3993,7 +3993,7 @@ name = "mgd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bfd",
+ "bfd-async",
  "bgp",
  "camino",
  "chrono",
