@@ -2,82 +2,99 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use anyhow::Result;
-use mg_api_types::bfd::{BfdPeerState, SessionMode};
-use mg_common::thread::ManagedThread;
-use slog::{Logger, warn};
-use sm::StateMachine;
-use std::{
-    collections::HashMap,
-    net::IpAddr,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
-};
+use mg_api_types::bfd::BfdPeerConfig;
+use mg_api_types::bfd::SessionMode;
+use std::io;
+use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::num::NonZeroU8;
+use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
-pub mod bidi;
-pub mod log;
-pub mod packet;
+mod daemon;
+mod dispatcher;
+mod egress;
+mod egress_src_port_iter;
+mod rib;
+mod session;
 mod sm;
-mod util;
 
-pub const COMPONENT_BFD: &str = "bfd";
-pub const MOD_DAEMON: &str = "daemon";
-pub const MOD_SM: &str = "state_machine";
+pub mod packet;
+pub use daemon::Daemon;
+pub use dispatcher::ListenerShutdownHandle;
+pub use session::Session;
 
-pub const UNIT_PEER: &str = "peer";
+const COMPONENT_BFD: &str = "bfd";
+const MOD_DAEMON: &str = "daemon";
+const UNIT_PEER: &str = "peer";
 
-pub const DEFAULT_BFD_TTL: u32 = 255;
+const DEFAULT_BFD_TTL: u32 = 255;
 
-/// A type alias for a bidirectional endpoint transporting BFD control messages
-/// and target IP addresses.
-pub type BfdEndpoint = bidi::Endpoint<(IpAddr, packet::Control)>;
+/// Default detection threshold multiplier.
+///
+/// Three seems to be a common choice for other implementations. Without
+/// intuition for or against this default, follow suit.
+const DEFAULT_DETECT_MULTIPLIER: NonZeroU8 = NonZeroU8::new(3).unwrap();
 
-/// A `Daemon` is a collection of BFD sessions.
-pub struct Daemon {
-    /// Sessions keyed by peer IP address.
-    pub sessions: HashMap<IpAddr, Session>,
+/// Errors from attempting to add a new BFD peer.
+#[derive(Debug, thiserror::Error)]
+pub enum AddPeerError {
+    #[error("BFD peer {0} already exists")]
+    PeerExists(IpAddr),
 
-    log: Logger,
+    #[error("failed to bind to {addr}")]
+    Bind {
+        addr: SocketAddr,
+        #[source]
+        err: io::Error,
+    },
+
+    #[error("failed to set socket to nonblocking")]
+    SetSocketNonBlocking(#[source] io::Error),
+
+    #[error("failed to convert std socket to tokio socket")]
+    StdToTokio(#[source] io::Error),
 }
 
-impl Daemon {
-    /// Create a new Daemon with no sessions.
-    pub fn new(log: Logger) -> Self {
+#[derive(Debug, thiserror::Error)]
+#[error("BFD detection threshold must be nonzero")]
+pub struct DetectionThresholdZero;
+
+pub struct AddPeerRequest {
+    remote_addr: SocketAddr,
+    listen_addr: SocketAddr,
+    required_rx_micros: u64,
+    detection_threshold: NonZeroU8,
+    mode: SessionMode,
+}
+
+impl From<BfdPeerConfig> for AddPeerRequest {
+    fn from(value: BfdPeerConfig) -> Self {
+        /// Port to be used for BFD multihop per RFC 5883.
+        const BFD_MULTIHOP_PORT: u16 = 4784;
+        /// Port to be used for BFD single per RFC 5881.
+        const BFD_SINGLEHOP_PORT: u16 = 3784;
+
+        let BfdPeerConfig {
+            peer,
+            listen,
+            required_rx: required_rx_micros,
+            detection_threshold,
+            mode,
+        } = value;
+
+        let mode_port = match mode {
+            SessionMode::SingleHop => BFD_SINGLEHOP_PORT,
+            SessionMode::MultiHop => BFD_MULTIHOP_PORT,
+        };
+
         Self {
-            sessions: HashMap::new(),
-            log,
+            remote_addr: SocketAddr::new(peer, mode_port),
+            listen_addr: SocketAddr::new(listen, mode_port),
+            required_rx_micros,
+            detection_threshold,
+            mode,
         }
-    }
-
-    /// Add a peer session to the daemon.
-    /// Peer sessions are started immediately when added.
-    pub fn add_peer(
-        &mut self,
-        peer: IpAddr,
-        rq: AddPeerRequest,
-    ) -> Result<(), AddPeerError> {
-        if self.sessions.contains_key(&peer) {
-            warn!(self.log, "attempt to add peer that already exists";
-                "component" => COMPONENT_BFD,
-                "module" => MOD_DAEMON,
-                "unit" => UNIT_PEER,
-                "peer" => format!("{peer}")
-            );
-            return Err(AddPeerError::PeerExists(peer));
-        }
-        self.sessions
-            .insert(peer, Session::new(peer, rq, self.log.clone())?);
-        Ok(())
-    }
-
-    /// Remove a peer from the daemon. The peer will be immediately shut down.
-    pub fn remove_peer(&mut self, addr: IpAddr) {
-        self.sessions.remove(&addr);
-    }
-
-    /// Get the state for a peer identified by its IP address.
-    pub fn peer_state(&self, addr: IpAddr) -> Option<BfdPeerState> {
-        self.sessions.get(&addr).map(|s| s.sm.current())
     }
 }
 
@@ -99,77 +116,36 @@ pub struct SessionCounters {
     pub unexpected_message: AtomicU64,
 }
 
-/// Parameters for adding a new BFD peer session.
-pub struct AddPeerRequest {
-    pub required_rx: Duration,
-    pub detection_multiplier: u8,
-    pub mode: SessionMode,
-    pub endpoint: BfdEndpoint,
-    pub egress_thread: Option<Arc<ManagedThread>>,
-    pub db: rdb::Db,
-}
-
-/// A session holds a BFD state machine for a particular peer.
-pub struct Session {
-    pub sm: StateMachine,
-    pub mode: SessionMode,
-    pub counters: Arc<SessionCounters>,
-    /// Managed egress thread for UDP packet transmission. Stored here to
-    /// ensure automatic cleanup on drop — the ManagedThread's Drop impl
-    /// will signal shutdown and join the thread. None in test contexts
-    /// where egress is handled differently.
-    _egress_thread: Option<Arc<ManagedThread>>,
-}
-
-impl Session {
-    /// Create a new session and start running the underlying BFD state machine
-    /// immediately.
-    fn new(addr: IpAddr, rq: AddPeerRequest, log: Logger) -> Result<Self> {
-        let counters = Arc::new(SessionCounters::default());
-        let mut sm = StateMachine::new(
-            addr,
-            rq.required_rx,
-            rq.detection_multiplier,
-            counters.clone(),
-            log,
-        );
-        sm.run(rq.endpoint, rq.db)?;
-        Ok(Session {
-            sm,
-            mode: rq.mode,
-            counters,
-            _egress_thread: rq.egress_thread,
-        })
-    }
-}
-
 /// Information about a BFD peer.
-#[derive(Clone, Copy)]
-pub struct PeerInfo {
+#[derive(Debug, Clone, Copy)]
+struct PeerInfo {
     /// The interval at which the peer would _like_ to receive BFD control
     /// packets.
-    pub desired_min_tx: Duration,
+    desired_min_tx: Duration,
 
     /// This is the minimum interval between received BFD Control packets that
     /// this system is capable of supporting.
-    pub required_min_rx: Duration,
+    required_min_rx: Duration,
 
     /// A unique identifer for the peer. This structure is used to keep track
     /// of remote peer information as well as our own. The remote peer
     /// generates their own discriminator. When a peer state machine is first
     /// started, we generate our discriminator with
     /// `PeerInfo::with_random_discriminator`
-    pub discriminator: u32,
+    discriminator: u32,
 
     /// Whether or not the peer is requesting demand mode. This means
     /// unsolicited BFD control packets will not be sent. The only control
     /// packets sent will be in response to control packets received with the
     /// poll flag set.
-    pub demand_mode: bool,
+    demand_mode: bool,
 
     /// When multiplied against required_min_rx, defines the detection threshold
     /// connectivity status.
-    pub detection_multiplier: u8,
+    ///
+    /// RFC 5880 §6.8.6, a packet with a detect mult of 0 MUST be discarded; we
+    /// encode that here via a `NonZero` type.
+    detection_multiplier: NonZeroU8,
 }
 
 impl Default for PeerInfo {
@@ -181,9 +157,7 @@ impl Default for PeerInfo {
             required_min_rx: Duration::from_secs(1),
             discriminator: 0,
             demand_mode: false,
-            // Three seems to be a common choice for other implementations.
-            // Without intuition for or against this default, follow suit.
-            detection_multiplier: 3,
+            detection_multiplier: DEFAULT_DETECT_MULTIPLIER,
         }
     }
 }
@@ -192,7 +166,7 @@ impl PeerInfo {
     /// Initialize a peer info object with a random discriminator.
     fn with_random_discriminator(
         required_min_rx: Duration,
-        detection_multiplier: u8,
+        detection_multiplier: NonZeroU8,
     ) -> Self {
         Self {
             required_min_rx,
@@ -203,238 +177,27 @@ impl PeerInfo {
     }
 }
 
-pub struct Admin {}
-
-#[derive(Debug, thiserror::Error)]
-pub enum AddPeerError {
-    #[error("BFD peer {0} already exists")]
-    PeerExists(IpAddr),
-
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
+// Small helper used by multiple unit tests.
+//
+// This is a simpler version of omicron's `wait_for_condition()` - we don't
+// accept a retry interval or any detailed status, which is fine for this crate.
 #[cfg(test)]
-mod test {
-    use super::*;
-    use client_common::eprintln_nopipe;
-    use pretty_assertions::assert_eq;
-    use slog::Drain;
-    use std::net::IpAddr;
-    use std::sync::mpsc::Sender;
-    use std::thread::{sleep, spawn};
-
-    struct Network {
-        endpoints: Option<HashMap<IpAddr, BfdEndpoint>>,
-    }
-
-    impl Default for Network {
-        fn default() -> Self {
-            Self {
-                endpoints: Some(HashMap::new()),
-            }
-        }
-    }
-
-    impl Network {
-        fn register(&mut self, addr: IpAddr, endpoint: BfdEndpoint) {
-            self.endpoints
-                .as_mut()
-                .expect("network already running, cannot register endpoint")
-                .insert(addr, endpoint);
+async fn wait_for_condition(
+    timeout: std::time::Duration,
+    predicate: impl Fn() -> bool,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    loop {
+        if predicate() {
+            return Ok(());
         }
 
-        fn run(&mut self) {
-            let mut endpoints: Vec<(IpAddr, BfdEndpoint)> = self
-                .endpoints
-                .take()
-                .expect("network running")
-                .into_iter()
-                .collect();
-
-            // Construct a map of senders handlers to forward to
-            let egress: HashMap<IpAddr, Sender<(IpAddr, packet::Control)>> =
-                endpoints.iter().map(|(a, e)| (*a, e.tx.clone())).collect();
-
-            while let Some((addr, ep)) = endpoints.pop() {
-                let egress = egress
-                    .clone()
-                    .into_iter()
-                    .filter(|(a, _)| *a != addr)
-                    .collect();
-                Self::run_message_handler(ep, egress);
-            }
+        if start.elapsed() >= timeout {
+            return Err(format!(
+                "timed out waiting for condition ({timeout:?})"
+            ));
         }
 
-        fn run_message_handler(
-            ep: BfdEndpoint,
-            egress: HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>,
-        ) {
-            spawn(move || {
-                loop {
-                    match ep.rx.recv() {
-                        Ok((addr, msg)) => match egress.get(&addr) {
-                            Some(tx) => {
-                                tx.send((addr, msg)).unwrap();
-                            }
-                            None => {
-                                eprintln_nopipe!("no egress for {}", addr);
-                            }
-                        },
-                        Err(e) => {
-                            eprintln_nopipe!("recv: {}", e);
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    fn ip(addr: &str) -> IpAddr {
-        addr.parse().unwrap()
-    }
-
-    #[test]
-    fn test_new_daemon() -> anyhow::Result<()> {
-        let log = test_logger();
-        let db = rdb::test::get_test_db("bfd_new_daemon", log.clone()).unwrap();
-
-        let mut daemon = Daemon::new(log);
-        assert_eq!(daemon.sessions.len(), 0);
-
-        // Add an IPv4 peer.
-        let (a, _b) = bidi::channel();
-        let v4_addr = ip("203.0.113.10");
-        daemon.add_peer(
-            v4_addr,
-            AddPeerRequest {
-                required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
-                mode: SessionMode::MultiHop,
-                endpoint: a,
-                egress_thread: None,
-                db: db.db().clone(),
-            },
-        )?;
-        assert_eq!(daemon.peer_state(v4_addr), Some(BfdPeerState::Down));
-
-        // Add an IPv6 peer to the same daemon.
-        let (a, _b) = bidi::channel();
-        let v6_addr = ip("2001:db8::10");
-        daemon.add_peer(
-            v6_addr,
-            AddPeerRequest {
-                required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
-                mode: SessionMode::MultiHop,
-                endpoint: a,
-                egress_thread: None,
-                db: db.db().clone(),
-            },
-        )?;
-        assert_eq!(daemon.peer_state(v6_addr), Some(BfdPeerState::Down));
-
-        // Both peers coexist.
-        assert_eq!(daemon.sessions.len(), 2);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_protocol_basics() -> anyhow::Result<()> {
-        let log = test_logger();
-        let db =
-            rdb::test::get_test_db("bfd_protocol_basics", log.clone()).unwrap();
-
-        let mut net = Network::default();
-
-        // IPv4 peer pair.
-        let v4_addr1 = ip("203.0.113.10");
-        let v4_addr2 = ip("203.0.113.20");
-
-        // IPv6 peer pair.
-        let v6_addr1 = ip("2001:db8::10");
-        let v6_addr2 = ip("2001:db8::20");
-
-        // Daemon 1 peers with both v4 and v6 counterparts.
-        let mut d1 = Daemon::new(test_logger());
-        let (a, b) = bidi::channel();
-        d1.add_peer(
-            v4_addr1,
-            AddPeerRequest {
-                required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
-                mode: SessionMode::MultiHop,
-                endpoint: a,
-                egress_thread: None,
-                db: db.db().clone(),
-            },
-        )?;
-        net.register(v4_addr2, b);
-
-        let (a, b) = bidi::channel();
-        d1.add_peer(
-            v6_addr1,
-            AddPeerRequest {
-                required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
-                mode: SessionMode::MultiHop,
-                endpoint: a,
-                egress_thread: None,
-                db: db.db().clone(),
-            },
-        )?;
-        net.register(v6_addr2, b);
-
-        // Daemon 2 peers with both v4 and v6 counterparts.
-        let mut d2 = Daemon::new(test_logger());
-        let (a, b) = bidi::channel();
-        d2.add_peer(
-            v4_addr2,
-            AddPeerRequest {
-                required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
-                mode: SessionMode::MultiHop,
-                endpoint: a,
-                egress_thread: None,
-                db: db.db().clone(),
-            },
-        )?;
-        net.register(v4_addr1, b);
-
-        let (a, b) = bidi::channel();
-        d2.add_peer(
-            v6_addr2,
-            AddPeerRequest {
-                required_rx: Duration::from_secs(5),
-                detection_multiplier: 3,
-                mode: SessionMode::MultiHop,
-                endpoint: a,
-                egress_thread: None,
-                db: db.db().clone(),
-            },
-        )?;
-        net.register(v6_addr1, b);
-
-        net.run();
-
-        sleep(Duration::from_secs(10));
-
-        // All four sessions should reach Up.
-        assert_eq!(d1.peer_state(v4_addr1), Some(BfdPeerState::Up),);
-        assert_eq!(d1.peer_state(v6_addr1), Some(BfdPeerState::Up),);
-        assert_eq!(d2.peer_state(v4_addr2), Some(BfdPeerState::Up),);
-        assert_eq!(d2.peer_state(v6_addr2), Some(BfdPeerState::Up),);
-
-        Ok(())
-    }
-
-    fn test_logger() -> Logger {
-        let drain = slog_bunyan::new(std::io::stdout()).build().fuse();
-        let drain = slog_async::Async::new(drain)
-            .chan_size(0x8000)
-            .build()
-            .fuse();
-        slog::Logger::root(drain, slog::o!())
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }

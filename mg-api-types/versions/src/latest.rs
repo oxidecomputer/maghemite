@@ -10,11 +10,16 @@
 //! `vN` with `latest` leaves the rest of the path unchanged.
 
 pub mod bfd {
-    pub use crate::v1::bfd::BfdPeerConfig;
-    pub use crate::v1::bfd::BfdPeerInfo;
     pub use crate::v1::bfd::BfdPeerState;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
     pub use crate::v1::bfd::SessionMode;
+
+    pub use crate::v12::bfd::BfdPeerConfig;
+    pub use crate::v12::bfd::BfdPeerInfo;
+
+    pub mod error {
+        pub use crate::impls::bfd::error::BfdRequestError;
+    }
 }
 
 pub mod bgp {
@@ -181,7 +186,7 @@ pub mod ndp {
 }
 
 pub mod mrib {
-    pub use crate::v12::mrib::*;
+    pub use crate::v13::mrib::*;
 }
 
 pub mod rib {
