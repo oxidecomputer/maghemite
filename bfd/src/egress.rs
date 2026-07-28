@@ -28,9 +28,9 @@
 //! * If we fail a `send_to()`, we close our current socket and will rebind on
 //!   the next packet from the driver.
 
+use crate::DEFAULT_BFD_TTL;
+use crate::SessionCounters;
 use crate::egress_src_port_iter::EgressSrcPortIter;
-use bfd::DEFAULT_BFD_TTL;
-use bfd::SessionCounters;
 use slog::Logger;
 use slog::warn;
 use slog_error_chain::InlineErrorChain;

@@ -23,14 +23,14 @@
 //! update will run to completion.
 
 use crate::AddPeerRequest;
+use crate::PeerInfo;
+use crate::SessionCounters;
 use crate::egress::EgressTask;
 use crate::egress_src_port_iter::EgressSrcPortIter;
+use crate::packet;
 use crate::rib::RibTask;
 use crate::sm::CheckRecvDeadlineResult;
 use crate::sm::StateMachine;
-use bfd::PeerInfo;
-use bfd::SessionCounters;
-use bfd::packet;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
 use slog::Logger;
@@ -100,9 +100,9 @@ impl Session {
         let log = log.new(slog::o!(
             "local-addr" => listen_addr.to_string(),
             "remote-addr" => remote_addr.to_string(),
-            "component" => bfd::COMPONENT_BFD,
-            "module" => bfd::MOD_DAEMON,
-            "unit" => bfd::UNIT_PEER,
+            "component" => crate::COMPONENT_BFD,
+            "module" => crate::MOD_DAEMON,
+            "unit" => crate::UNIT_PEER,
         ));
 
         // Spawn the three primary tasks for this session.

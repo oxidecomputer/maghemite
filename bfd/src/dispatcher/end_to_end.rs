@@ -18,9 +18,9 @@ use super::ListenerTask;
 use super::SharedSessions;
 use crate::AddPeerError;
 use crate::AddPeerRequest;
+use crate::DEFAULT_DETECT_MULTIPLIER;
 use crate::Daemon;
 use crate::wait_for_condition;
-use bfd::DEFAULT_DETECT_MULTIPLIER;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
 use mg_common::lock;
@@ -109,8 +109,8 @@ async fn build_daemon(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_sessions_converge_then_peer_loss_drives_down() {
-    let (mut daemon_a, addr_a, db_a) = build_daemon("bfd_async_e2e_a").await;
-    let (mut daemon_b, addr_b, db_b) = build_daemon("bfd_async_e2e_b").await;
+    let (mut daemon_a, addr_a, db_a) = build_daemon("bfd_e2e_a").await;
+    let (mut daemon_b, addr_b, db_b) = build_daemon("bfd_e2e_b").await;
 
     // A's egress targets B's listener and vice versa.
     daemon_a

@@ -13,7 +13,6 @@ default-members = [
     "ddm-protocol",
     "dropshot-apis",
     "bfd",
-    "bfd-async",
     "util",
     "mg-ddm-verify",
     "tests",
@@ -46,7 +45,6 @@ members = [
     "ddm-protocol",
     "dropshot-apis",
     "bfd",
-    "bfd-async",
     "package",
     "util",
     "mg-ddm-verify",
@@ -75,7 +73,6 @@ mg-common = { path = "mg-common" }
 ndp = { path = "ndp" }
 bgp = { path = "bgp" }
 bfd = { path = "bfd" }
-bfd-async = { path = "bfd-async" }
 mg-admin-client = { path = "mg-admin-client" }
 ddm-admin-client = { path = "ddm-admin-client" }
 rdb = { path = "rdb", features = ["clap"] }
@@ -126,7 +123,7 @@ pretty-hex = "0.4"
 pretty_assertions = "1.4"
 lazy_static = "1.5"
 sled = "0.34"
-camino = "1.2.4"
+camino = "1.2.5"
 ciborium = "0.2.2"
 http = "1.4.2"
 http-body-util = "0.1"
