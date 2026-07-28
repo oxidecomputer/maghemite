@@ -64,6 +64,10 @@ impl RouterDiscoveryThreads {
     }
 
     /// Start router discovery for a given interface.
+    ///
+    /// `ifx.ip` must be a unicast link-local address; it is used as the
+    /// source of transmitted RAs and this is not validated here. Callers
+    /// (e.g. `UnnumberedInterface::new`) are expected to validate first.
     pub fn start(
         ifx: Ipv6NetworkInterface,
         state: Arc<RouterDiscoveryState>,
@@ -426,8 +430,10 @@ mod test {
             0xcc, 0xdd, 0xee, 0xff,
         ];
 
-        Icmp6RouterAdvertisement::from_wire(&data)
-            .expect_err("RS should not parse as RA");
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&data),
+            Err(crate::packet::Icmp6RaFromWireError::WrongType(133)),
+        ));
         Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
         Icmp6RouterSolicitation::from_wire_with_source(
             &data,
@@ -585,9 +591,25 @@ mod test {
         // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
         let data: [u8; 8] = [133, 0, 11, 22, 0, 0, 0, 0];
-        Icmp6RouterAdvertisement::from_wire(&data)
-            .expect_err("RS should not parse as RA");
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&data),
+            Err(crate::packet::Icmp6RaFromWireError::TooShort(8)),
+        ));
         Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+
+    #[test]
+    fn router_advertisement_rejects_nonzero_code() {
+        let data: [u8; 16] = [
+            134, 1, 11, 22, // type, nonzero code, checksum
+            255, 0, 0, 30, // hop limit, flags, lifetime
+            0, 0, 0, 0, // reachable time
+            0, 0, 0, 0, // retrans timer
+        ];
+        assert!(matches!(
+            Icmp6RouterAdvertisement::from_wire(&data),
+            Err(crate::packet::Icmp6RaFromWireError::WrongCode(1)),
+        ));
     }
 
     #[test]

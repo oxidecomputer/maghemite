@@ -68,6 +68,10 @@ pub struct UnnumberedManager {
 }
 
 impl UnnumberedManager {
+    /// # Panics
+    ///
+    /// Panics if the OS refuses to spawn the interface monitor thread
+    /// (e.g. process thread limit reached).
     pub fn new(log: Logger) -> Arc<Self> {
         let log = log.new(o!(
             "module" => MOD_UNNUMBERED_MANAGER,
@@ -774,6 +778,7 @@ mod tests {
         scope_id: u32,
         router_lifetime: u16,
     ) -> UnnumberedInterface {
+        let scope_id = NonZeroU32::new(scope_id).unwrap();
         UnnumberedInterface::new_manual(name, addr, scope_id, router_lifetime)
             .unwrap()
     }
@@ -803,7 +808,7 @@ mod tests {
                 UnnumberedInterface::new_manual(
                     ifx.name.clone(),
                     ifx.ip,
-                    ifx.scope_id.get(),
+                    ifx.scope_id,
                     router_lifetime,
                 )
             },

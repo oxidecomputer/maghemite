@@ -102,9 +102,6 @@ pub enum NewUnnumberedInterfaceError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UnnumberedInterfaceError {
-    #[error("interface scope ID must be non-zero")]
-    InvalidScopeId,
-
     #[error(
         "interface {interface} address {address} is not unicast link-local"
     )]
@@ -147,29 +144,17 @@ impl UnnumberedInterface {
     pub fn new_manual(
         name: impl Into<String>,
         local_address: Ipv6Addr,
-        scope_id: u32,
+        scope_id: NonZeroU32,
         tx_router_lifetime: u16,
     ) -> Result<Self, UnnumberedInterfaceError> {
-        let (name, scope_id) = Self::validate(name, local_address, scope_id)?;
+        let name = name.into();
+        Self::validate_address(&name, local_address)?;
         Ok(Self::from_validated_parts(
             name,
             local_address,
             scope_id,
             RouterDiscoveryRuntime::new_manual(tx_router_lifetime),
         ))
-    }
-
-    #[cfg(test)]
-    fn validate(
-        name: impl Into<String>,
-        local_address: Ipv6Addr,
-        scope_id: u32,
-    ) -> Result<(String, NonZeroU32), UnnumberedInterfaceError> {
-        let name = name.into();
-        let scope_id = NonZeroU32::new(scope_id)
-            .ok_or(UnnumberedInterfaceError::InvalidScopeId)?;
-        Self::validate_address(&name, local_address)?;
-        Ok((name, scope_id))
     }
 
     fn validate_address(
@@ -360,6 +345,7 @@ mod tests {
         addr: Ipv6Addr,
         scope_id: u32,
     ) -> UnnumberedInterface {
+        let scope_id = NonZeroU32::new(scope_id).unwrap();
         UnnumberedInterface::new_manual(name, addr, scope_id, 30).unwrap()
     }
 
@@ -441,19 +427,13 @@ mod tests {
     }
 
     #[test]
-    fn new_manual_rejects_zero_scope_id() {
-        let result =
-            UnnumberedInterface::new_manual("eth0", link_local(1), 0, 30);
-
-        assert!(matches!(
-            result,
-            Err(UnnumberedInterfaceError::InvalidScopeId)
-        ));
-    }
-
-    #[test]
     fn new_manual_rejects_non_link_local_address() {
-        let result = UnnumberedInterface::new_manual("eth0", global(1), 1, 30);
+        let result = UnnumberedInterface::new_manual(
+            "eth0",
+            global(1),
+            NonZeroU32::new(1).unwrap(),
+            30,
+        );
 
         assert!(matches!(
             result,
