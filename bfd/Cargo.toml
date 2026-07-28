@@ -4,20 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-client-common.workspace = true
-rdb = { path = "../rdb" }
-mg-api-types.workspace = true
-mg-common.workspace = true
-slog.workspace = true
-slog-bunyan.workspace = true
-slog-async.workspace = true
-num_enum.workspace = true
 anyhow.workspace = true
-schemars.workspace = true
-serde.workspace = true
+mg-common.workspace = true
+mg-api-types.workspace = true
 rand.workspace = true
+rdb.workspace = true
+slog.workspace = true
+slog-error-chain.workspace = true
+socket2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
-pretty_assertions.workspace = true
-anyhow.workspace = true
+proptest.workspace = true
+test-strategy.workspace = true

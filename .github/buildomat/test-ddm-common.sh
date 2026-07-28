@@ -3,7 +3,7 @@
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=284c6830722548714128e63ea04bcca78ee27154
 export SIDECAR_LITE_VERSION=6f3311e8acd7e7e95c167aab61188355a93afe72
-export DENDRITE_VERSION=ab6c1a4326abbcb9f98a459ae74da4995e6b41af
+export DENDRITE_VERSION=96483d0c52f0cfc4e22e70229466798254a99b6c
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
