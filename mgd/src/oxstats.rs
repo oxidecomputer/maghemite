@@ -598,8 +598,8 @@ impl Stats {
     fn bfd_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let daemon = lock!(self.bfd.daemon);
         let mut counters = BTreeMap::new();
-        for (addr, session) in &daemon.sessions {
-            counters.insert(*addr, session.counters.clone());
+        for (addr, session) in daemon.sessions_iter() {
+            counters.insert(*addr, Arc::clone(session.counters()));
         }
         drop(daemon);
 
