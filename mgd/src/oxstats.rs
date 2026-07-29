@@ -728,7 +728,7 @@ impl Stats {
         let mut samples = Vec::new();
 
         let mut count = 0usize;
-        for (_prefix, paths) in self.db.full_rib(None).iter() {
+        for paths in self.db.full_rib(None).values() {
             count += paths.len();
         }
         samples.push(rib_quantity!(
