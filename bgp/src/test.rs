@@ -1130,6 +1130,7 @@ fn three_router_chain_helper<
 // Channel-based tests
 //
 #[test]
+#[serial_test::parallel]
 fn test_basic_update() {
     basic_update_helper::<BgpConnectionChannel, BgpListenerChannel>(
         RouteExchange::Ipv4 { nexthop: None },
@@ -1139,6 +1140,7 @@ fn test_basic_update() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_basic_peering_passive() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         true,
@@ -1149,6 +1151,7 @@ fn test_basic_peering_passive() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_basic_peering_active() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         false,
@@ -1162,6 +1165,7 @@ fn test_basic_peering_active() {
 // TCP-based tests
 //
 #[test]
+#[serial_test::parallel]
 fn test_basic_peering_passive_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         true,
@@ -1172,6 +1176,7 @@ fn test_basic_peering_passive_tcp() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_basic_peering_active_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         false,
@@ -1182,6 +1187,7 @@ fn test_basic_peering_active_tcp() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_basic_update_tcp() {
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
         RouteExchange::Ipv4 { nexthop: None },
@@ -1191,6 +1197,7 @@ fn test_basic_update_tcp() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_three_router_chain_tcp() {
     let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.7:{TEST_BGP_PORT}"));
     let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.8:{TEST_BGP_PORT}"));
@@ -1206,6 +1213,7 @@ fn test_three_router_chain_tcp() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_three_router_chain_tcp_ipv6() {
     let r1_addr: SocketAddr = sockaddr!(&format!("[3fff::c]:{TEST_BGP_PORT}"));
     let r2_addr: SocketAddr = sockaddr!(&format!("[3fff::d]:{TEST_BGP_PORT}"));
@@ -1221,6 +1229,12 @@ fn test_three_router_chain_tcp_ipv6() {
 /// 1. A neighbor is created and established
 /// 2. The neighbor is reset (hard) and re-established
 /// 3. The neighbor is deleted
+///
+/// This test counts every `bgp-` thread in the process and so must run with no
+/// other router-spawning test in flight. `#[serial]` only excludes tests that
+/// themselves take the serial_test lock, which is why every other test in this
+/// file is `#[serial_test::parallel]` — a new test that spawns routers without
+/// that attribute will race this one and flake its baseline.
 #[test]
 #[serial_test::serial]
 fn test_neighbor_thread_lifecycle_no_leaks() {
@@ -1398,6 +1412,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
 /// 4. Removing import policy allows filtered prefixes through
 /// 5. Path attributes are correctly preserved through filtering
 #[test]
+#[serial_test::parallel]
 fn test_import_export_policy_filtering() {
     use mg_api_types::bgp::policy::ImportExportPolicy4;
     use std::collections::BTreeSet;
@@ -1673,6 +1688,7 @@ fn test_import_export_policy_filtering() {
 // Tests with IPv6 addresses will have IPv6-only config automatically applied
 
 #[test]
+#[serial_test::parallel]
 fn test_basic_update_ipv6() {
     basic_update_helper::<BgpConnectionChannel, BgpListenerChannel>(
         RouteExchange::Ipv6 { nexthop: None },
@@ -1682,6 +1698,7 @@ fn test_basic_update_ipv6() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_basic_update_ipv6_tcp() {
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
         RouteExchange::Ipv6 { nexthop: None },
@@ -1691,6 +1708,7 @@ fn test_basic_update_ipv6_tcp() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_ipv6_basic_peering_passive() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         true,
@@ -1701,6 +1719,7 @@ fn test_ipv6_basic_peering_passive() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_ipv6_basic_peering_active() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         false,
@@ -1711,6 +1730,7 @@ fn test_ipv6_basic_peering_active() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_ipv6_basic_peering_passive_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         true,
@@ -1721,6 +1741,7 @@ fn test_ipv6_basic_peering_passive_tcp() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_ipv6_basic_peering_active_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         false,
@@ -1737,6 +1758,7 @@ fn test_ipv6_basic_peering_active_tcp() {
 // nexthops for cross-AF scenarios (e.g., IPv4 routes over IPv6 connections).
 
 #[test]
+#[serial_test::parallel]
 fn test_dual_stack_routes_ipv4_peer_success() {
     // IPv4 connection with dual-stack routes
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
@@ -1750,6 +1772,7 @@ fn test_dual_stack_routes_ipv4_peer_success() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_dual_stack_routes_ipv6_peer_success() {
     // IPv6 connection with dual-stack routes
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
@@ -1763,6 +1786,7 @@ fn test_dual_stack_routes_ipv6_peer_success() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_ipv4_routes_ipv6_peer_success() {
     // IPv6 connection with IPv4-only routes
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
@@ -1775,6 +1799,7 @@ fn test_ipv4_routes_ipv6_peer_success() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn test_ipv6_routes_ipv4_peer_success() {
     // IPv4 connection with IPv6-only routes
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
@@ -2064,6 +2089,7 @@ fn unnumbered_peering_helper(
 /// - Session STAYS Established (NDP change doesn't affect FSM)
 /// - After AdminEvent::Reset, session reconnects using new NDP neighbor
 #[test]
+#[serial_test::parallel]
 fn test_unnumbered_session_survives_peer_change() {
     let scope_id = next_scope_id();
     let (
@@ -2169,6 +2195,7 @@ fn test_unnumbered_session_survives_peer_change() {
 /// - Peer rediscovered
 /// - Session remains Established throughout
 #[test]
+#[serial_test::parallel]
 fn test_unnumbered_peer_expiry_and_rediscovery() {
     let scope_id = next_scope_id();
     let (
@@ -2248,6 +2275,7 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
 /// - NDP changes on eth0 don't affect eth1
 /// - Both sessions stay Established when eth0's NDP changes
 #[test]
+#[serial_test::parallel]
 fn test_multiple_unnumbered_sessions() {
     let scope_eth0 = next_scope_id();
     let scope_eth1 = next_scope_id();
@@ -2368,6 +2396,7 @@ fn test_multiple_unnumbered_sessions() {
 /// This tests that when NDP discovers the same IP on multiple interfaces,
 /// each interface's scope_id correctly identifies which physical link to use.
 #[test]
+#[serial_test::parallel]
 fn test_same_linklocal_multiple_interfaces() {
     let scope_eth0 = next_scope_id();
     let scope_eth1 = next_scope_id();
@@ -3168,6 +3197,7 @@ fn unnumbered_three_router_chain(
 /// 5. Expiring NDP neighbor (get_peer_addr() -> None) doesn't affect FSM
 /// 6. Rediscovering original peer works correctly
 #[test]
+#[serial_test::parallel]
 fn test_unnumbered_unaffected_by_ndp() {
     let scope_id = next_scope_id();
     let topo = unnumbered_pair(
@@ -3322,6 +3352,7 @@ fn test_unnumbered_unaffected_by_ndp() {
 /// 3. After AdminEvent::Reset, session tears down and re-establishes
 /// 4. Reconnection uses the current NDP neighbor (new IP), not the original
 #[test]
+#[serial_test::parallel]
 fn test_unnumbered_ndp_change() {
     let scope_id = next_scope_id();
     let topo = unnumbered_pair(
@@ -3443,6 +3474,7 @@ fn test_unnumbered_ndp_change() {
 /// 4. Sessions remain Established despite NDP changes on one interface
 /// 5. scope_id properly isolates sessions
 #[test]
+#[serial_test::parallel]
 fn test_three_router_chain_unnumbered() {
     let r1_r2_scope_id = next_scope_id();
     let r2_r3_scope_id = next_scope_id();
@@ -3686,6 +3718,7 @@ fn test_three_router_chain_unnumbered() {
 /// 3. Nexthops are set to the peer's link-local IPv6 address
 /// 4. Routes are properly withdrawn when session goes down
 #[test]
+#[serial_test::parallel]
 fn test_unnumbered_dualstack_route_exchange() {
     let scope_id = next_scope_id();
     let topo = unnumbered_pair(
@@ -3836,6 +3869,7 @@ fn test_unnumbered_dualstack_route_exchange() {
 /// - Stage 3: Interface removed on one side, sessions stay Established
 /// - Stage 4: Sessions reset while interfaces inactive, cannot establish until interfaces return
 #[test]
+#[serial_test::parallel]
 fn test_unnumbered_interface_lifecycle() {
     let log = init_file_logger("unnumbered_interface_lifecycle.log");
 
