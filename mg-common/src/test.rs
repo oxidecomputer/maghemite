@@ -666,6 +666,13 @@ pub fn count_threads_with_prefix(
         for entry in fs::read_dir(task_dir)? {
             let entry = entry?;
             let tid = entry.file_name();
+
+            // On Linux we need to ignore the main thread. The binary cargo builds
+            // is named `<prefix>-<hash>`, producing thread names like `bgp-<hash>`.
+            if tid.to_string_lossy() == pid.to_string() {
+                continue;
+            }
+
             let comm_path =
                 format!("/proc/{}/task/{}/comm", pid, tid.to_string_lossy());
 
