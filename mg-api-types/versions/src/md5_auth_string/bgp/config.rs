@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{v1, v4, v8, v11};
+use crate::{v1, v4, v11};
 use oxnet::{IpNet, SocketAddrJson};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,11 +11,17 @@ use std::net::IpAddr;
 
 #[derive(Clone, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct Md5AuthString(String);
+pub struct Md5AuthString(
+    #[schemars(
+        length(min = 1, max = "Md5AuthString::MAX_LEN"),
+        regex(pattern = r"^[ -~]+$")
+    )]
+    String,
+);
 
 impl Md5AuthString {
-    // max length in bytes
-    const MAX_LEN: usize = 80;
+    /// Maximum key length in bytes.
+    pub const MAX_LEN: usize = 80;
 
     pub fn new(source: String) -> Result<Self, Md5AuthStringError> {
         if source.is_empty() {
@@ -526,16 +532,6 @@ impl TryFrom<v11::bgp::config::ApplyRequest> for ApplyRequest {
     }
 }
 
-impl TryFrom<v8::bgp::config::ApplyRequest> for ApplyRequest {
-    type Error = Md5AuthStringError;
-
-    fn try_from(
-        old: v8::bgp::config::ApplyRequest,
-    ) -> Result<Self, Self::Error> {
-        Self::try_from(v11::bgp::config::ApplyRequest::from(old))
-    }
-}
-
 impl From<ApplyRequest> for v11::bgp::config::ApplyRequest {
     fn from(new: ApplyRequest) -> Self {
         let ApplyRequest {
@@ -571,6 +567,15 @@ impl From<ApplyRequest> for v11::bgp::config::ApplyRequest {
 mod proptests {
     use super::*;
     use proptest::prelude::*;
+
+    fn v11_parameters(
+        md5_auth_key: impl Into<String>,
+    ) -> v11::bgp::config::BgpPeerParameters {
+        let mut parameters: v11::bgp::config::BgpPeerParameters =
+            BgpPeerParameters::default().into();
+        parameters.md5_auth_key = Some(md5_auth_key.into());
+        parameters
+    }
 
     fn is_valid_md5_auth_string(source: &str) -> bool {
         !source.is_empty()
@@ -651,5 +656,92 @@ mod proptests {
         let key = Md5AuthString::new("super secret".to_string()).unwrap();
 
         assert_eq!(format!("{key:?}"), "Md5AuthString(<redacted>)");
+    }
+
+    #[test]
+    fn json_schema_matches_md5_auth_string_invariants() {
+        let schema = schemars::schema_for!(Md5AuthString);
+        let validation = schema.schema.string.expect("string validation");
+
+        assert_eq!(validation.min_length, Some(1));
+        assert_eq!(validation.max_length, Some(Md5AuthString::MAX_LEN as u32));
+        assert_eq!(validation.pattern.as_deref(), Some(r"^[ -~]+$"));
+    }
+
+    #[test]
+    fn v11_neighbor_conversions_round_trip() {
+        let numbered = v11::bgp::config::Neighbor {
+            asn: 64512,
+            name: "numbered".into(),
+            group: "test".into(),
+            host: "192.0.2.1:179"
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
+            parameters: v11_parameters("numbered secret"),
+        };
+        let unnumbered = v11::bgp::config::UnnumberedNeighbor {
+            asn: 64512,
+            name: "unnumbered".into(),
+            group: "test".into(),
+            interface: "tfportqsfp0_0".into(),
+            act_as_a_default_ipv6_router: 1800,
+            parameters: v11_parameters("unnumbered secret"),
+        };
+
+        let numbered_round_trip = v11::bgp::config::Neighbor::from(
+            Neighbor::try_from(numbered.clone()).unwrap(),
+        );
+        let unnumbered_round_trip = v11::bgp::config::UnnumberedNeighbor::from(
+            UnnumberedNeighbor::try_from(unnumbered.clone()).unwrap(),
+        );
+
+        assert_eq!(numbered_round_trip, numbered);
+        assert_eq!(unnumbered_round_trip, unnumbered);
+    }
+
+    #[test]
+    fn v11_apply_request_conversion_preserves_peer_maps() {
+        let request = v11::bgp::config::ApplyRequest {
+            asn: 64512,
+            originate: vec!["192.0.2.0/24".parse().unwrap()],
+            checker: None,
+            shaper: None,
+            peers: HashMap::from([(
+                "numbered".into(),
+                vec![v11::bgp::config::BgpPeerConfig {
+                    host: "192.0.2.1:179"
+                        .parse::<std::net::SocketAddr>()
+                        .unwrap()
+                        .into(),
+                    name: "numbered".into(),
+                    parameters: v11_parameters("numbered secret"),
+                }],
+            )]),
+            unnumbered_peers: HashMap::from([(
+                "unnumbered".into(),
+                vec![v11::bgp::config::UnnumberedBgpPeerConfig {
+                    interface: "tfportqsfp0_0".into(),
+                    name: "unnumbered".into(),
+                    router_lifetime: 1800,
+                    parameters: v11_parameters("unnumbered secret"),
+                }],
+            )]),
+        };
+        let expected = serde_json::to_value(&request).unwrap();
+
+        let round_trip = v11::bgp::config::ApplyRequest::from(
+            ApplyRequest::try_from(request).unwrap(),
+        );
+
+        assert_eq!(serde_json::to_value(round_trip).unwrap(), expected);
+    }
+
+    #[test]
+    fn v11_conversion_rejects_invalid_md5_auth_key() {
+        assert_eq!(
+            BgpPeerParameters::try_from(v11_parameters("")),
+            Err(Md5AuthStringError::Empty),
+        );
     }
 }

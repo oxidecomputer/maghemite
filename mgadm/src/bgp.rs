@@ -668,33 +668,37 @@ fn parse_peer_type(peer: &str) -> PeerType {
 
 impl Neighbor {
     /// Convert to either numbered or unnumbered neighbor type based on peer detection
-    fn into_api_types(self) -> Result<ApiNeighborType> {
+    fn into_api_types(mut self) -> Result<ApiNeighborType> {
+        let md5_auth_key = self
+            .md5_auth_key
+            .take()
+            .map(Md5AuthString::new)
+            .transpose()?;
+
         match parse_peer_type(&self.peer) {
-            PeerType::Numbered(addr) => {
-                Ok(ApiNeighborType::Numbered(self.into_numbered(addr)?))
-            }
+            PeerType::Numbered(addr) => Ok(ApiNeighborType::Numbered(
+                self.into_numbered(addr, md5_auth_key),
+            )),
             PeerType::Unnumbered(interface) => Ok(ApiNeighborType::Unnumbered(
-                self.into_unnumbered(interface)?,
+                self.into_unnumbered(interface, md5_auth_key),
             )),
         }
     }
 
-    fn into_numbered(self, addr: IpAddr) -> Result<types::Neighbor> {
-        let md5_auth_key = self
-            .md5_auth_key
-            .clone()
-            .map(Md5AuthString::new)
-            .transpose()?;
-
+    fn into_numbered(
+        self,
+        addr: IpAddr,
+        md5_auth_key: Option<Md5AuthString>,
+    ) -> types::Neighbor {
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if self.enable_ipv4 {
-            let import_policy = match self.allow_import4.clone() {
+            let import_policy = match self.allow_import4 {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match self.allow_export4.clone() {
+            let export_policy = match self.allow_export4 {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
@@ -711,13 +715,13 @@ impl Neighbor {
 
         // Build IPv6 unicast config if enabled
         let ipv6_unicast = if self.enable_ipv6 {
-            let import_policy = match self.allow_import6.clone() {
+            let import_policy = match self.allow_import6 {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match self.allow_export6.clone() {
+            let export_policy = match self.allow_export6 {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
@@ -732,11 +736,11 @@ impl Neighbor {
             None
         };
 
-        Ok(types::Neighbor {
+        types::Neighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
-            name: self.name.clone(),
+            name: self.name,
             host: SocketAddr::new(addr, self.port),
             hold_time: self.hold_time,
             idle_hold_time: self.idle_hold_time,
@@ -744,11 +748,11 @@ impl Neighbor {
             keepalive: self.keepalive_time,
             delay_open: self.delay_open_time,
             resolution: self.clock_resolution,
-            group: self.group.clone(),
+            group: self.group,
             passive: self.passive_connection,
             md5_auth_key,
             multi_exit_discriminator: self.med,
-            communities: self.communities.clone(),
+            communities: self.communities,
             local_pref: self.local_pref,
             enforce_first_as: self.enforce_first_as,
             ipv4_unicast,
@@ -760,28 +764,23 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
-        })
+        }
     }
 
     fn into_unnumbered(
         self,
         interface: String,
-    ) -> Result<types::UnnumberedNeighbor> {
-        let md5_auth_key = self
-            .md5_auth_key
-            .clone()
-            .map(Md5AuthString::new)
-            .transpose()?;
-
+        md5_auth_key: Option<Md5AuthString>,
+    ) -> types::UnnumberedNeighbor {
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if self.enable_ipv4 {
-            let import_policy = match self.allow_import4.clone() {
+            let import_policy = match self.allow_import4 {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match self.allow_export4.clone() {
+            let export_policy = match self.allow_export4 {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
@@ -798,13 +797,13 @@ impl Neighbor {
 
         // Build IPv6 unicast config if enabled
         let ipv6_unicast = if self.enable_ipv6 {
-            let import_policy = match self.allow_import6.clone() {
+            let import_policy = match self.allow_import6 {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match self.allow_export6.clone() {
+            let export_policy = match self.allow_export6 {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
@@ -819,7 +818,7 @@ impl Neighbor {
             None
         };
 
-        Ok(types::UnnumberedNeighbor {
+        types::UnnumberedNeighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
@@ -828,7 +827,7 @@ impl Neighbor {
             } else {
                 0
             },
-            name: self.name.clone(),
+            name: self.name,
             interface,
             hold_time: self.hold_time,
             idle_hold_time: self.idle_hold_time,
@@ -836,11 +835,11 @@ impl Neighbor {
             keepalive: self.keepalive_time,
             delay_open: self.delay_open_time,
             resolution: self.clock_resolution,
-            group: self.group.clone(),
+            group: self.group,
             passive: self.passive_connection,
             md5_auth_key,
             multi_exit_discriminator: self.med,
-            communities: self.communities.clone(),
+            communities: self.communities,
             local_pref: self.local_pref,
             enforce_first_as: self.enforce_first_as,
             ipv4_unicast,
@@ -852,7 +851,7 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
-        })
+        }
     }
 }
 

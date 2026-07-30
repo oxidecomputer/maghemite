@@ -3476,7 +3476,10 @@
         ]
       },
       "Md5AuthString": {
-        "type": "string"
+        "type": "string",
+        "pattern": "^[ -~]+$",
+        "minLength": 1,
+        "maxLength": 80
       },
       "Message": {
         "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
