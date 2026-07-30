@@ -7,6 +7,7 @@ use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
+use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use client_common::eprintln_nopipe;
 use mg_api_types::bfd::BfdPeerConfig;
@@ -64,6 +65,14 @@ struct RunArgs {
     /// Port to listen on for the admin API.
     #[arg(long, default_value_t = 4676)]
     admin_port: u16,
+
+    /// Write the socket address to this file, for use with test harnesses that
+    /// tell mgd to bind to port 0.
+    ///
+    /// This file should not exist at process startup, though its parent
+    /// directory should.
+    #[arg(long)]
+    admin_port_file: Option<Utf8PathBuf>,
 
     /// Do not run a BGP connection dispatcher.
     #[arg(long, default_value_t = false)]
@@ -227,6 +236,7 @@ async fn run(args: RunArgs) -> Result<(), String> {
         log.clone(),
         args.admin_addr,
         args.admin_port,
+        args.admin_port_file,
         context.clone(),
     )
     .expect("start API server");

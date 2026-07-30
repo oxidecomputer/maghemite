@@ -100,7 +100,7 @@ pub struct ApplyRequest {
     pub peers: HashMap<String, Vec<NeighborConfig>>,
 }
 
-// ===== upgrade conversions (v11 split -> v12 unified), total =====
+// ===== upgrade conversions (v11 split -> v13 unified), total =====
 
 impl From<crate::v11::bgp::config::Neighbor> for Neighbor {
     fn from(old: crate::v11::bgp::config::Neighbor) -> Self {
@@ -162,7 +162,7 @@ impl std::fmt::Display for PeerKindMismatch {
 
 impl std::error::Error for PeerKindMismatch {}
 
-// ===== downgrade conversions (v12 unified -> v11 split), partial =====
+// ===== downgrade conversions (v13 unified -> v11 split), partial =====
 
 impl TryFrom<Neighbor> for crate::v11::bgp::config::Neighbor {
     type Error = PeerKindMismatch;
@@ -235,7 +235,7 @@ impl From<crate::v5::bgp::config::UnnumberedNeighborResetRequest>
     }
 }
 
-// ===== NeighborConfig conversions (v11 BgpPeerConfig <-> v12) =====
+// ===== NeighborConfig conversions (v11 BgpPeerConfig <-> v13) =====
 
 impl From<crate::v11::bgp::config::BgpPeerConfig> for NeighborConfig {
     fn from(old: crate::v11::bgp::config::BgpPeerConfig) -> Self {
@@ -381,7 +381,7 @@ impl From<ApplyRequest> for crate::v11::bgp::config::ApplyRequest {
     }
 }
 
-// Build a v12 `NeighborConfig` from a v11 `BgpPeerParameters` plus the bits
+// Build a v13 `NeighborConfig` from a v11 `BgpPeerParameters` plus the bits
 // that live outside `parameters` in v11.
 fn neighbor_config_from_v11(
     peer: PeerId,
@@ -421,7 +421,7 @@ fn neighbor_config_from_v11(
     }
 }
 
-// Rebuild a v11 `BgpPeerParameters` from a v12 `NeighborConfig`.
+// Rebuild a v11 `BgpPeerParameters` from a v13 `NeighborConfig`.
 fn params_v11_from_config(
     c: &NeighborConfig,
 ) -> crate::v11::bgp::config::BgpPeerParameters {

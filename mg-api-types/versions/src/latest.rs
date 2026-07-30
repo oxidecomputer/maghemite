@@ -10,11 +10,16 @@
 //! `vN` with `latest` leaves the rest of the path unchanged.
 
 pub mod bfd {
-    pub use crate::v1::bfd::BfdPeerConfig;
-    pub use crate::v1::bfd::BfdPeerInfo;
     pub use crate::v1::bfd::BfdPeerState;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
     pub use crate::v1::bfd::SessionMode;
+
+    pub use crate::v12::bfd::BfdPeerConfig;
+    pub use crate::v12::bfd::BfdPeerInfo;
+
+    pub mod error {
+        pub use crate::impls::bfd::error::BfdRequestError;
+    }
 }
 
 pub mod bgp {
@@ -42,10 +47,10 @@ pub mod bgp {
         pub use crate::v11::bgp::config::Origin4;
         pub use crate::v11::bgp::config::PeerInfo;
 
-        pub use crate::v12::bgp::config::ApplyRequest;
-        pub use crate::v12::bgp::config::Neighbor;
-        pub use crate::v12::bgp::config::NeighborConfig;
-        pub use crate::v12::bgp::config::NeighborResetRequest;
+        pub use crate::v13::bgp::config::ApplyRequest;
+        pub use crate::v13::bgp::config::Neighbor;
+        pub use crate::v13::bgp::config::NeighborConfig;
+        pub use crate::v13::bgp::config::NeighborResetRequest;
     }
 
     pub mod peer {
@@ -151,7 +156,7 @@ pub mod rdb {
     }
 
     pub mod neighbor {
-        pub use crate::v12::bgp::config::PeerKindMismatch;
+        pub use crate::v13::bgp::config::PeerKindMismatch;
     }
 
     pub mod path {

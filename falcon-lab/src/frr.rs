@@ -10,9 +10,13 @@ use oxnet::{Ipv4Net, Ipv6Net};
 use serde::Deserialize;
 use slog::info;
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::sleep;
+
+const CARGO_BAY: &str = "cargo-bay";
 
 #[derive(Copy, Clone)]
 pub struct FrrNode(pub NodeRef);
@@ -35,9 +39,8 @@ impl FrrNode {
             )
             .await?;
         }
-        d.exec(self.0, "systemctl restart frr").await?;
-        // XXX do better than arbitrary wait
-        sleep(Duration::from_secs(5)).await;
+        self.stop_frr(d).await?;
+        self.start_frr(d).await?;
         Ok(())
     }
 
@@ -53,18 +56,48 @@ impl FrrNode {
         LinuxNode(self.0)
     }
 
-    /// Freeze the BFD daemon. Control packets stop flowing without disturbing
-    /// the peer's configuration or interfaces, so `resume_bfdd` restores the
-    /// session without reapplying config.
-    pub async fn pause_bfdd(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: pausing frr bfdd", self.name(d));
-        d.exec(self.0, "pkill -STOP bfdd").await?;
+    pub async fn stop_frr(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: stopping frr", self.name(d));
+        d.exec(self.0, "systemctl stop frr").await?;
         Ok(())
     }
 
-    pub async fn resume_bfdd(&self, d: &Runner) -> Result<()> {
-        info!(d.log, "{}: resuming frr bfdd", self.name(d));
-        d.exec(self.0, "pkill -CONT bfdd").await?;
+    pub async fn start_frr(&self, d: &Runner) -> Result<()> {
+        info!(d.log, "{}: starting frr", self.name(d));
+        d.exec(self.0, "systemctl start frr").await?;
+        // XXX do better than arbitrary wait
+        sleep(Duration::from_secs(5)).await;
+        Ok(())
+    }
+
+    pub fn stage_config(
+        &self,
+        config_name: &str,
+        config: &str,
+    ) -> Result<PathBuf> {
+        let dir = Path::new(CARGO_BAY);
+        fs::create_dir_all(dir)
+            .with_context(|| format!("create {}", dir.display()))?;
+        let path = dir.join(config_name);
+        fs::write(&path, config)
+            .with_context(|| format!("write {}", path.display()))?;
+        Ok(path)
+    }
+
+    pub async fn install_staged_config(
+        &self,
+        d: &Runner,
+        config_name: &str,
+    ) -> Result<()> {
+        info!(d.log, "{}: installing frr startup config", self.name(d));
+        d.exec(
+            self.0,
+            &format!(
+                "cp /opt/cargo-bay/{config_name} /etc/frr/frr.conf && chown frr:frrvty /etc/frr/frr.conf && chmod 640 /etc/frr/frr.conf"
+            ),
+        )
+        .await
+        .context("install frr startup config")?;
         Ok(())
     }
 

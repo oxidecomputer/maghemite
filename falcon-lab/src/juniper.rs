@@ -9,11 +9,15 @@ use slog::info;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const CRPD_CONTAINER: &str = "crpd1";
 const CARGO_BAY: &str = "cargo-bay";
 const LICENSE_PATH: &str = "falcon-juniper-license.key";
 const CONFIG_SUFFIX: &str = "-junos.set";
+const APPLY_STATUS_PATH: &str = "/run/falcon-junos-apply.status";
+const APPLY_STATUS_READY: &str = "applied";
+const APPLY_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Copy, Clone)]
 pub struct JuniperNode(pub NodeRef);
@@ -100,13 +104,63 @@ impl JuniperNode {
         // guest-side systemd services that mount cargo-bay, install the
         // license, and apply `<node>-junos.set`; see falcon-lab/README.md.
         self.stage_routing_config(d, routing_config)?;
-        self.verify_license_available()?;
+        self.stage_license()?;
         info!(
             d.log,
-            "{}: staged Juniper config and verified license for guest systemd services",
+            "{}: staged Juniper config and license for guest systemd services",
             self.name(d)
         );
+        self.wait_for_apply(d).await?;
         Ok(())
+    }
+
+    async fn wait_for_apply(&self, d: &Runner) -> Result<()> {
+        info!(
+            d.log,
+            "{}: waiting for Juniper guest config apply",
+            self.name(d)
+        );
+        let start = std::time::Instant::now();
+        let mut last_status = String::new();
+        loop {
+            let status = self
+                .exec_step(
+                    d,
+                    "read Juniper apply status",
+                    &format!("cat {APPLY_STATUS_PATH} 2>/dev/null || true"),
+                )
+                .await?
+                .trim()
+                .to_owned();
+            if status == APPLY_STATUS_READY {
+                info!(d.log, "{}: Juniper guest config applied", self.name(d));
+                return Ok(());
+            }
+            if status != last_status {
+                info!(
+                    d.log,
+                    "{}: Juniper apply status: {}",
+                    self.name(d),
+                    if status.is_empty() {
+                        "<empty>"
+                    } else {
+                        &status
+                    }
+                );
+                last_status = status;
+            }
+            if start.elapsed() >= APPLY_STATUS_TIMEOUT {
+                return Err(anyhow!(
+                    "timed out waiting for Juniper guest config apply; last status: {}",
+                    if last_status.is_empty() {
+                        "<empty>"
+                    } else {
+                        &last_status
+                    }
+                ));
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     fn stage_routing_config(
@@ -130,7 +184,7 @@ impl JuniperNode {
         Ok(path)
     }
 
-    fn verify_license_available(&self) -> Result<PathBuf> {
+    fn stage_license(&self) -> Result<PathBuf> {
         let path = Path::new(CARGO_BAY).join(LICENSE_PATH);
         let metadata = fs::metadata(&path).with_context(|| {
             format!(
