@@ -1589,50 +1589,92 @@
       },
       "ApplyRequest": {
         "description": "Apply configuration changes to an ASN.",
-        "type": "object",
-        "properties": {
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "checker": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CheckerSource"
+        "oneOf": [
+          {
+            "description": "Make this configuration the complete desired state for the router.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "apply"
+                ]
+              },
+              "asn": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "checker": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CheckerSource"
+                  }
+                ]
+              },
+              "originate": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/IpNet"
+                }
+              },
+              "peers": {
+                "title": "IdOrdMap",
+                "description": "Peers keyed by the `PeerId` embedded in each configuration. Each `peer` must be unique; duplicate peer identities are rejected.",
+                "x-rust-type": {
+                  "crate": "iddqd",
+                  "parameters": [
+                    {
+                      "$ref": "#/components/schemas/NeighborConfig"
+                    }
+                  ],
+                  "path": "iddqd::IdOrdMap",
+                  "version": "*"
+                },
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/NeighborConfig"
+                },
+                "uniqueItems": true
+              },
+              "shaper": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ShaperSource"
+                  }
+                ]
               }
+            },
+            "required": [
+              "action",
+              "asn",
+              "originate",
+              "peers"
             ]
           },
-          "originate": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/IpNet"
-            }
-          },
-          "peers": {
-            "description": "Lists of peers indexed by peer group.",
+          {
+            "description": "Delete the router and all state owned by it.",
             "type": "object",
-            "additionalProperties": {
-              "type": "array",
-              "items": {
-                "$ref": "#/components/schemas/NeighborConfig"
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "delete"
+                ]
+              },
+              "asn": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               }
-            }
-          },
-          "shaper": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ShaperSource"
-              }
+            },
+            "required": [
+              "action",
+              "asn"
             ]
           }
-        },
-        "required": [
-          "asn",
-          "originate",
-          "peers"
         ]
       },
       "As4Aggregator": {
@@ -3599,7 +3641,7 @@
         ]
       },
       "Neighbor": {
-        "description": "A BGP neighbor as read from / stored in the database: the bare `NeighborConfig` composed with the `asn` router it belongs to and the peer `group` it is a member of.",
+        "description": "A BGP neighbor as read from / stored in the database: the bare `NeighborConfig` composed with the `asn` router it belongs to.",
         "type": "object",
         "properties": {
           "asn": {
@@ -3609,19 +3651,15 @@
           },
           "config": {
             "$ref": "#/components/schemas/NeighborConfig"
-          },
-          "group": {
-            "type": "string"
           }
         },
         "required": [
           "asn",
-          "config",
-          "group"
+          "config"
         ]
       },
       "NeighborConfig": {
-        "description": "Bare BGP neighbor configuration: everything about a peer except the `asn` router it belongs to and the peer `group` it is a member of.",
+        "description": "BGP neighbor configuration: everything about a peer except the `asn` router it belongs to.",
         "type": "object",
         "properties": {
           "act_as_a_default_ipv6_router": {
@@ -3661,6 +3699,9 @@
           },
           "enforce_first_as": {
             "type": "boolean"
+          },
+          "group": {
+            "type": "string"
           },
           "hold_time": {
             "type": "integer",
@@ -3780,6 +3821,7 @@
           "delay_open",
           "deterministic_collision_resolution",
           "enforce_first_as",
+          "group",
           "hold_time",
           "idle_hold_time",
           "keepalive",

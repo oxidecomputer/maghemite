@@ -48,6 +48,7 @@ pub mod bgp {
         pub use crate::v11::bgp::config::PeerInfo;
 
         pub use crate::v13::bgp::config::ApplyRequest;
+        pub use crate::v13::bgp::config::ApplyRequestConversionError;
         pub use crate::v13::bgp::config::Neighbor;
         pub use crate::v13::bgp::config::NeighborConfig;
         pub use crate::v13::bgp::config::NeighborResetRequest;

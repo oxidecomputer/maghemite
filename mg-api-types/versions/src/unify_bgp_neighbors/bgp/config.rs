@@ -11,16 +11,17 @@
 //!
 //! `NeighborConfig` is the shared peer config payload used by `Neighbor` and
 //! `ApplyRequest`. Single-neighbor create/update endpoints keep the existing
-//! `/bgp/config/neighbor` route and carry `asn`/`group` in the `Neighbor`
-//! envelope; `ApplyRequest` carries `asn` in its envelope and `group` as the
-//! `peers` map key. The read/stored `Neighbor` type composes `NeighborConfig`
-//! together with its `asn`/`group` (nested, no `#[serde(flatten)]`).
+//! `/bgp/config/neighbor` route and carry `asn` in the `Neighbor` envelope.
+//! `ApplyRequest` stores peers in an identity-derived map that rejects duplicate
+//! `PeerId`s. The read/stored `Neighbor` type composes `NeighborConfig` together
+//! with its `asn` (nested, no `#[serde(flatten)]`).
 
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::num::NonZeroU16;
 
+use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
 use oxnet::IpNet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,8 +34,8 @@ use crate::v11::bgp::config::{Ipv4UnicastConfig, Ipv6UnicastConfig};
 /// Default TCP port used for BGP connections.
 const BGP_PORT: u16 = 179;
 
-/// Bare BGP neighbor configuration: everything about a peer except the `asn`
-/// router it belongs to and the peer `group` it is a member of.
+/// BGP neighbor configuration: everything about a peer except the `asn` router
+/// it belongs to.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct NeighborConfig {
     /// Peer identity: `Ip` for numbered peers, `Interface` for unnumbered.
@@ -42,6 +43,7 @@ pub struct NeighborConfig {
     /// TCP port of the peer. `None` means the well-known BGP port.
     pub port: Option<NonZeroU16>,
     pub name: String,
+    pub group: String,
     /// Advertised IPv6 router lifetime (RA). Only meaningful for unnumbered
     /// peers; ignored for numbered peers.
     pub act_as_a_default_ipv6_router: u16,
@@ -69,13 +71,21 @@ pub struct NeighborConfig {
     pub src_port: Option<u16>,
 }
 
+impl IdOrdItem for NeighborConfig {
+    type Key<'a> = &'a PeerId;
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.peer
+    }
+
+    id_upcast!();
+}
+
 /// A BGP neighbor as read from / stored in the database: the bare
-/// `NeighborConfig` composed with the `asn` router it belongs to and the peer
-/// `group` it is a member of.
+/// `NeighborConfig` composed with the `asn` router it belongs to.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct Neighbor {
     pub asn: u32,
-    pub group: String,
     pub config: NeighborConfig,
 }
 
@@ -91,13 +101,20 @@ pub struct NeighborResetRequest {
 
 /// Apply configuration changes to an ASN.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct ApplyRequest {
-    pub asn: u32,
-    pub originate: Vec<IpNet>,
-    pub checker: Option<v1::bgp::config::CheckerSource>,
-    pub shaper: Option<v1::bgp::config::ShaperSource>,
-    /// Lists of peers indexed by peer group.
-    pub peers: HashMap<String, Vec<NeighborConfig>>,
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ApplyRequest {
+    /// Make this configuration the complete desired state for the router.
+    Apply {
+        asn: u32,
+        originate: Vec<IpNet>,
+        checker: Option<v1::bgp::config::CheckerSource>,
+        shaper: Option<v1::bgp::config::ShaperSource>,
+        /// Peers keyed by the `PeerId` embedded in each configuration. Each
+        /// `peer` must be unique; duplicate peer identities are rejected.
+        peers: IdOrdMap<NeighborConfig>,
+    },
+    /// Delete the router and all state owned by it.
+    Delete { asn: u32 },
 }
 
 // ===== upgrade conversions (v11 split -> v13 unified), total =====
@@ -113,11 +130,11 @@ impl From<crate::v11::bgp::config::Neighbor> for Neighbor {
         } = old;
         Self {
             asn,
-            group,
             config: neighbor_config_from_v11(
                 PeerId::Ip(host.ip()),
                 NonZeroU16::new(host.port()),
                 name,
+                group,
                 0,
                 parameters,
             ),
@@ -137,11 +154,11 @@ impl From<crate::v11::bgp::config::UnnumberedNeighbor> for Neighbor {
         } = old;
         Self {
             asn,
-            group,
             config: neighbor_config_from_v11(
                 PeerId::Interface(interface),
                 None,
                 name,
+                group,
                 act_as_a_default_ipv6_router,
                 parameters,
             ),
@@ -167,7 +184,7 @@ impl std::error::Error for PeerKindMismatch {}
 impl TryFrom<Neighbor> for crate::v11::bgp::config::Neighbor {
     type Error = PeerKindMismatch;
     fn try_from(n: Neighbor) -> Result<Self, Self::Error> {
-        let Neighbor { asn, group, config } = n;
+        let Neighbor { asn, config } = n;
         let PeerId::Ip(ip) = config.peer else {
             return Err(PeerKindMismatch);
         };
@@ -175,7 +192,7 @@ impl TryFrom<Neighbor> for crate::v11::bgp::config::Neighbor {
         Ok(Self {
             asn,
             name: config.name.clone(),
-            group,
+            group: config.group.clone(),
             host: SocketAddr::new(ip, port).into(),
             parameters: params_v11_from_config(&config),
         })
@@ -185,14 +202,14 @@ impl TryFrom<Neighbor> for crate::v11::bgp::config::Neighbor {
 impl TryFrom<Neighbor> for crate::v11::bgp::config::UnnumberedNeighbor {
     type Error = PeerKindMismatch;
     fn try_from(n: Neighbor) -> Result<Self, Self::Error> {
-        let Neighbor { asn, group, config } = n;
+        let Neighbor { asn, config } = n;
         let PeerId::Interface(ref interface) = config.peer else {
             return Err(PeerKindMismatch);
         };
         Ok(Self {
             asn,
             name: config.name.clone(),
-            group,
+            group: config.group.clone(),
             interface: interface.clone(),
             act_as_a_default_ipv6_router: config.act_as_a_default_ipv6_router,
             parameters: params_v11_from_config(&config),
@@ -235,42 +252,7 @@ impl From<crate::v5::bgp::config::UnnumberedNeighborResetRequest>
     }
 }
 
-// ===== NeighborConfig conversions (v11 BgpPeerConfig <-> v13) =====
-
-impl From<crate::v11::bgp::config::BgpPeerConfig> for NeighborConfig {
-    fn from(old: crate::v11::bgp::config::BgpPeerConfig) -> Self {
-        let crate::v11::bgp::config::BgpPeerConfig {
-            host,
-            name,
-            parameters,
-        } = old;
-        neighbor_config_from_v11(
-            PeerId::Ip(host.ip()),
-            NonZeroU16::new(host.port()),
-            name,
-            0,
-            parameters,
-        )
-    }
-}
-
-impl From<crate::v11::bgp::config::UnnumberedBgpPeerConfig> for NeighborConfig {
-    fn from(old: crate::v11::bgp::config::UnnumberedBgpPeerConfig) -> Self {
-        let crate::v11::bgp::config::UnnumberedBgpPeerConfig {
-            interface,
-            name,
-            router_lifetime,
-            parameters,
-        } = old;
-        neighbor_config_from_v11(
-            PeerId::Interface(interface),
-            None,
-            name,
-            router_lifetime,
-            parameters,
-        )
-    }
-}
+// ===== NeighborConfig conversions (v13 -> v11 split types) =====
 
 impl TryFrom<NeighborConfig> for crate::v11::bgp::config::BgpPeerConfig {
     type Error = PeerKindMismatch;
@@ -306,8 +288,21 @@ impl TryFrom<NeighborConfig>
 
 // ===== ApplyRequest conversions =====
 
-impl From<crate::v11::bgp::config::ApplyRequest> for ApplyRequest {
-    fn from(old: crate::v11::bgp::config::ApplyRequest) -> Self {
+/// Error returned when converting apply requests between API versions.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyRequestConversionError {
+    #[error("peer {0} appears in more than one BGP peer group")]
+    DuplicatePeer(PeerId),
+    #[error("the older BGP apply API cannot represent router deletion")]
+    DeleteUnsupported,
+}
+
+impl TryFrom<crate::v11::bgp::config::ApplyRequest> for ApplyRequest {
+    type Error = ApplyRequestConversionError;
+
+    fn try_from(
+        old: crate::v11::bgp::config::ApplyRequest,
+    ) -> Result<Self, Self::Error> {
         let crate::v11::bgp::config::ApplyRequest {
             asn,
             originate,
@@ -316,38 +311,74 @@ impl From<crate::v11::bgp::config::ApplyRequest> for ApplyRequest {
             peers,
             unnumbered_peers,
         } = old;
-        let mut merged: HashMap<String, Vec<NeighborConfig>> = HashMap::new();
+        let mut merged = IdOrdMap::new();
         for (group, list) in peers {
-            merged
-                .entry(group)
-                .or_default()
-                .extend(list.into_iter().map(NeighborConfig::from));
+            for old in list {
+                let crate::v11::bgp::config::BgpPeerConfig {
+                    host,
+                    name,
+                    parameters,
+                } = old;
+                let config = neighbor_config_from_v11(
+                    PeerId::Ip(host.ip()),
+                    NonZeroU16::new(host.port()),
+                    name,
+                    group.clone(),
+                    0,
+                    parameters,
+                );
+                let peer = config.peer.clone();
+                merged.insert_unique(config).map_err(|_| {
+                    ApplyRequestConversionError::DuplicatePeer(peer)
+                })?;
+            }
         }
         for (group, list) in unnumbered_peers {
-            merged
-                .entry(group)
-                .or_default()
-                .extend(list.into_iter().map(NeighborConfig::from));
+            for old in list {
+                let crate::v11::bgp::config::UnnumberedBgpPeerConfig {
+                    interface,
+                    name,
+                    router_lifetime,
+                    parameters,
+                } = old;
+                let config = neighbor_config_from_v11(
+                    PeerId::Interface(interface),
+                    None,
+                    name,
+                    group.clone(),
+                    router_lifetime,
+                    parameters,
+                );
+                let peer = config.peer.clone();
+                merged.insert_unique(config).map_err(|_| {
+                    ApplyRequestConversionError::DuplicatePeer(peer)
+                })?;
+            }
         }
-        Self {
+        Ok(Self::Apply {
             asn,
             originate,
             checker,
             shaper,
             peers: merged,
-        }
+        })
     }
 }
 
-impl From<ApplyRequest> for crate::v11::bgp::config::ApplyRequest {
-    fn from(new: ApplyRequest) -> Self {
-        let ApplyRequest {
+impl TryFrom<ApplyRequest> for crate::v11::bgp::config::ApplyRequest {
+    type Error = ApplyRequestConversionError;
+
+    fn try_from(new: ApplyRequest) -> Result<Self, Self::Error> {
+        let ApplyRequest::Apply {
             asn,
             originate,
             checker,
             shaper,
             peers,
-        } = new;
+        } = new
+        else {
+            return Err(ApplyRequestConversionError::DeleteUnsupported);
+        };
         let mut numbered: HashMap<
             String,
             Vec<crate::v11::bgp::config::BgpPeerConfig>,
@@ -356,28 +387,40 @@ impl From<ApplyRequest> for crate::v11::bgp::config::ApplyRequest {
             String,
             Vec<crate::v11::bgp::config::UnnumberedBgpPeerConfig>,
         > = HashMap::new();
-        for (group, list) in peers {
-            for cfg in list {
-                match crate::v11::bgp::config::BgpPeerConfig::try_from(
-                    cfg.clone(),
-                ) {
-                    Ok(c) => numbered.entry(group.clone()).or_default().push(c),
-                    Err(_) => {
-                        if let Ok(u) = crate::v11::bgp::config::UnnumberedBgpPeerConfig::try_from(cfg) {
-                            unnumbered.entry(group.clone()).or_default().push(u);
-                        }
-                    }
+        for cfg in peers {
+            let parameters = params_v11_from_config(&cfg);
+            match cfg.peer {
+                PeerId::Ip(ip) => {
+                    let port =
+                        cfg.port.map(NonZeroU16::get).unwrap_or(BGP_PORT);
+                    numbered.entry(cfg.group).or_default().push(
+                        crate::v11::bgp::config::BgpPeerConfig {
+                            host: SocketAddr::new(ip, port).into(),
+                            name: cfg.name,
+                            parameters,
+                        },
+                    );
+                }
+                PeerId::Interface(interface) => {
+                    unnumbered.entry(cfg.group).or_default().push(
+                        crate::v11::bgp::config::UnnumberedBgpPeerConfig {
+                            interface,
+                            name: cfg.name,
+                            router_lifetime: cfg.act_as_a_default_ipv6_router,
+                            parameters,
+                        },
+                    );
                 }
             }
         }
-        Self {
+        Ok(Self {
             asn,
             originate,
             checker,
             shaper,
             peers: numbered,
             unnumbered_peers: unnumbered,
-        }
+        })
     }
 }
 
@@ -387,6 +430,7 @@ fn neighbor_config_from_v11(
     peer: PeerId,
     port: Option<NonZeroU16>,
     name: String,
+    group: String,
     act_as_a_default_ipv6_router: u16,
     p: crate::v11::bgp::config::BgpPeerParameters,
 ) -> NeighborConfig {
@@ -394,6 +438,7 @@ fn neighbor_config_from_v11(
         peer,
         port,
         name,
+        group,
         act_as_a_default_ipv6_router,
         hold_time: p.hold_time,
         idle_hold_time: p.idle_hold_time,
@@ -449,5 +494,139 @@ fn params_v11_from_config(
         connect_retry_jitter: c.connect_retry_jitter,
         src_addr: c.src_addr,
         src_port: c.src_port,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn neighbor(peer: PeerId, group: &str) -> NeighborConfig {
+        NeighborConfig {
+            peer,
+            port: None,
+            name: "test-peer".into(),
+            group: group.into(),
+            act_as_a_default_ipv6_router: 0,
+            hold_time: 6,
+            idle_hold_time: 0,
+            delay_open: 0,
+            connect_retry: 5,
+            keepalive: 2,
+            resolution: 100,
+            passive: false,
+            remote_asn: None,
+            min_ttl: None,
+            md5_auth_key: None,
+            multi_exit_discriminator: None,
+            communities: Vec::new(),
+            local_pref: None,
+            enforce_first_as: false,
+            vlan_id: None,
+            ipv4_unicast: None,
+            ipv6_unicast: None,
+            deterministic_collision_resolution: false,
+            idle_hold_jitter: None,
+            connect_retry_jitter: None,
+            src_addr: None,
+            src_port: None,
+        }
+    }
+
+    #[test]
+    fn apply_request_serde_uses_peer_array() {
+        let peer = PeerId::Ip("192.0.2.1".parse().unwrap());
+        let mut peers = IdOrdMap::new();
+        peers.insert_unique(neighbor(peer, "rack-a")).unwrap();
+        let request = ApplyRequest::Apply {
+            asn: 47,
+            originate: Vec::new(),
+            checker: None,
+            shaper: None,
+            peers,
+        };
+
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["action"], "apply");
+        assert!(value["peers"].is_array());
+        serde_json::from_value::<ApplyRequest>(value.clone()).unwrap();
+    }
+
+    #[test]
+    fn id_ord_map_deserialization_rejects_duplicate_peer_ids() {
+        let peer = PeerId::Ip("192.0.2.1".parse().unwrap());
+        let peers = serde_json::json!([
+            neighbor(peer.clone(), "rack-a"),
+            neighbor(peer, "rack-b"),
+        ]);
+
+        assert!(
+            serde_json::from_value::<IdOrdMap<NeighborConfig>>(peers).is_err()
+        );
+    }
+
+    #[test]
+    fn delete_request_serde_is_explicit() {
+        let request = ApplyRequest::Delete { asn: 47 };
+
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value, serde_json::json!({ "asn": 47, "action": "delete" }));
+        let decoded: ApplyRequest = serde_json::from_value(value).unwrap();
+        assert!(matches!(decoded, ApplyRequest::Delete { asn: 47 }));
+    }
+
+    #[test]
+    fn v11_apply_upgrade_rejects_peer_in_multiple_groups() {
+        let peer = PeerId::Ip("192.0.2.1".parse().unwrap());
+        let old_peer = crate::v11::bgp::config::BgpPeerConfig::try_from(
+            neighbor(peer.clone(), "ignored"),
+        )
+        .unwrap();
+        let request = crate::v11::bgp::config::ApplyRequest {
+            asn: 47,
+            originate: Vec::new(),
+            checker: None,
+            shaper: None,
+            peers: HashMap::from([
+                ("rack-a".into(), vec![old_peer.clone()]),
+                ("rack-b".into(), vec![old_peer]),
+            ]),
+            unnumbered_peers: HashMap::new(),
+        };
+
+        let error = ApplyRequest::try_from(request).unwrap_err();
+        assert!(matches!(
+            error,
+            ApplyRequestConversionError::DuplicatePeer(actual) if actual == peer
+        ));
+    }
+
+    #[test]
+    fn apply_downgrade_preserves_both_peer_kinds() {
+        let mut peers = IdOrdMap::new();
+        peers
+            .insert_unique(neighbor(
+                PeerId::Ip("192.0.2.1".parse().unwrap()),
+                "numbered",
+            ))
+            .unwrap();
+        peers
+            .insert_unique(neighbor(
+                PeerId::Interface("tfportqsfp0_0".into()),
+                "unnumbered",
+            ))
+            .unwrap();
+        let request = ApplyRequest::Apply {
+            asn: 47,
+            originate: Vec::new(),
+            checker: None,
+            shaper: None,
+            peers,
+        };
+
+        let old =
+            crate::v11::bgp::config::ApplyRequest::try_from(request).unwrap();
+        assert_eq!(old.peers["numbered"].len(), 1);
+        assert_eq!(old.unnumbered_peers["unnumbered"].len(), 1);
     }
 }

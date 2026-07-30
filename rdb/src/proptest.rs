@@ -176,9 +176,9 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = Neighbor> {
             )| {
                 Neighbor {
                     asn,
-                    group: "test".into(),
                     config: NeighborConfig {
                         name,
+                        group: "test".into(),
                         peer: mg_api_types::bgp::peer::PeerId::Ip(host.ip()),
                         port: None,
                         act_as_a_default_ipv6_router: 0,

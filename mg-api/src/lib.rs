@@ -13,7 +13,10 @@ use dropshot::{
 };
 use dropshot_api_manager_types::api_versions;
 use mg_api_types_versions::{
-    latest::{self, bfd::error::BfdRequestError},
+    latest::{
+        self, bfd::error::BfdRequestError,
+        bgp::config::ApplyRequestConversionError,
+    },
     v1, v2, v4, v5, v8, v10, v11,
 };
 
@@ -257,10 +260,10 @@ pub trait MgAdminApi {
         path: Path<latest::bgp::config::NeighborSelector>,
     ) -> Result<HttpResponseOk<v11::bgp::config::Neighbor>, HttpError> {
         let r = Self::read_neighbor(rqctx, path).await?.0;
-        // The selector keys this lookup by IP, so the result is always a
-        // numbered peer; the kind-mismatch arm is unreachable.
+        // The unified lookup may find an unnumbered peer. It does not exist as
+        // a numbered peer from the perspective of this older endpoint.
         let n = v11::bgp::config::Neighbor::try_from(r)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+            .map_err(|e| HttpError::for_not_found(None, e.to_string()))?;
         Ok(HttpResponseOk(n))
     }
 
@@ -650,10 +653,10 @@ pub trait MgAdminApi {
         )
         .await?
         .0;
-        // Keyed by interface, so the result is always an unnumbered peer;
-        // the kind-mismatch arm is unreachable.
+        // The unified lookup may find a numbered peer. It does not exist as an
+        // unnumbered peer from the perspective of this older endpoint.
         let u = v11::bgp::config::UnnumberedNeighbor::try_from(n)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+            .map_err(|e| HttpError::for_not_found(None, e.to_string()))?;
         Ok(HttpResponseOk(u))
     }
 
@@ -1260,7 +1263,15 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<v11::bgp::config::ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        Self::bgp_apply(rqctx, request.map(Into::into)).await
+        let request = request.try_map(TryFrom::try_from).map_err(
+            |err: ApplyRequestConversionError| {
+                HttpError::for_bad_request(
+                    None,
+                    InlineErrorChain::new(&err).to_string(),
+                )
+            },
+        )?;
+        Self::bgp_apply(rqctx, request).await
     }
 
     // V8 API - ApplyRequest with per-AF policies and src_addr/src_port but Prefix4/6 not oxnet.

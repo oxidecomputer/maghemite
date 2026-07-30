@@ -722,6 +722,7 @@ impl Neighbor {
             remote_asn: self.remote_asn,
             min_ttl: self.min_ttl,
             name: self.name.clone(),
+            group: self.group.clone(),
             peer,
             port: std::num::NonZeroU16::new(self.port),
             act_as_a_default_ipv6_router: if self.act_as_default_router {
@@ -754,7 +755,6 @@ impl Neighbor {
 
         types::Neighbor {
             asn: self.asn,
-            group: self.group.clone(),
             config,
         }
     }
@@ -1256,7 +1256,7 @@ async fn list_nbr(asn: u32, c: Client) -> Result<()> {
         writeln!(
             &mut tw,
             "{:?}\t{}\t{}\t{}",
-            nbr.config.peer, nbr.asn, nbr.group, nbr.config.name,
+            nbr.config.peer, nbr.asn, nbr.config.group, nbr.config.name,
         )?;
     }
 

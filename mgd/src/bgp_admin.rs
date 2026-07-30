@@ -28,9 +28,8 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api_types::bgp::config::{
-    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborConfig,
-    NeighborResetOp, NeighborResetRequest, NeighborSelector, Origin4, PeerInfo,
-    ShaperSource,
+    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetOp,
+    NeighborResetRequest, NeighborSelector, Origin4, PeerInfo, ShaperSource,
 };
 use mg_api_types::bgp::history::{FsmEventBuffer, MessageDirection, Origin6};
 use mg_api_types::bgp::messages::Afi;
@@ -54,8 +53,7 @@ use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
 use slog::Logger;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::num::NonZeroU16;
 use std::sync::{
@@ -1078,51 +1076,25 @@ async fn do_bgp_apply(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.log.clone();
 
-    // Validate originate prefixes before processing
-    validate_prefixes(&rq.originate)?;
-
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")
     );
 
-    // Neighbors (numbered and unnumbered) are keyed uniformly by PeerId.
-    #[derive(Debug, Eq)]
-    struct Nbr {
-        peer: PeerId,
-        asn: u32,
-    }
-
-    impl Hash for Nbr {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.asn.hash(state);
-            self.peer.hash(state);
+    let (asn, originate, peers) = match rq {
+        ApplyRequest::Apply {
+            asn,
+            originate,
+            peers,
+            ..
+        } => (asn, originate, peers),
+        ApplyRequest::Delete { asn } => {
+            do_delete_router(ctx, asn).await?;
+            return Ok(HttpResponseUpdatedNoContent());
         }
-    }
+    };
 
-    impl PartialEq for Nbr {
-        fn eq(&self, other: &Nbr) -> bool {
-            self.asn == other.asn && self.peer.eq(&other.peer)
-        }
-    }
-
-    let groups = ctx
-        .db
-        .get_bgp_neighbors()
-        .map_err(Error::Db)?
-        .into_iter()
-        .filter(|x| x.asn == rq.asn)
-        .map(|x| x.group)
-        .collect::<HashSet<_>>();
-
-    // Turn any peer groups that are resident in the db but not in the apply
-    // request into empty groups so the difference functions below remove
-    // any peers from entire groups that have been removed.
-    let mut peers = rq.peers.clone();
-    for g in &groups {
-        if !peers.contains_key(g) {
-            peers.insert(g.clone(), Vec::default());
-        }
-    }
+    // Validate originate prefixes before modifying router state.
+    validate_prefixes(&originate)?;
 
     // Treat bgp_apply as authoritative for a single ASN: any other router and
     // its neighbors are stale and must be torn down completely. Routing through
@@ -1132,117 +1104,73 @@ async fn do_bgp_apply(
         .db
         .get_bgp_routers()
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
-    for (old_asn, _router) in routers {
-        if rq.asn != old_asn {
-            do_delete_router(ctx, old_asn).await?;
+    for old_asn in routers.keys() {
+        if asn != *old_asn {
+            do_delete_router(ctx, *old_asn).await?;
         }
     }
 
     helpers::ensure_router(
         ctx.clone(),
         mg_api_types::bgp::config::Router {
-            asn: rq.asn,
-            id: rq.asn,
+            asn,
+            id: asn,
             listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
             graceful_shutdown: false,               // TODO as parameter
         },
     )
     .await?;
 
-    for (group, peers) in &peers {
-        let current: Vec<Neighbor> = ctx
-            .db
-            .get_bgp_neighbors()
-            .map_err(Error::Db)?
-            .into_iter()
-            .filter(|x| x.asn == rq.asn && &x.group == group)
-            .collect();
+    let current: Vec<Neighbor> = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(Error::Db)?
+        .into_iter()
+        .filter(|neighbor| neighbor.asn == asn)
+        .collect();
 
-        let current_peers: HashSet<Nbr> = current
-            .iter()
-            .map(|x| Nbr {
-                peer: x.config.peer.clone(),
-                asn: x.asn,
-            })
-            .collect();
-
-        let specified_peers: HashSet<Nbr> = peers
-            .iter()
-            .map(|x| Nbr {
-                peer: x.peer.clone(),
-                asn: rq.asn,
-            })
-            .collect();
-
-        let to_delete = current_peers.difference(&specified_peers);
-        let to_add = specified_peers.difference(&current_peers);
-        let to_modify = current_peers.intersection(&specified_peers);
-
-        bgp_log!(log, info, "nbr: current {current:#?}");
-        bgp_log!(log, info, "nbr: adding {to_add:#?}");
-        bgp_log!(log, info, "nbr: removing {to_delete:#?}");
-
-        let mut nbr_config: Vec<(&Nbr, &NeighborConfig)> = Vec::new();
-        for nbr in to_add {
-            let cfg = peers
+    let to_configure: Vec<_> = peers
+        .iter()
+        .filter(|config| {
+            current
                 .iter()
-                .find(|x| x.peer == nbr.peer)
-                .ok_or(Error::NotFound(nbr.peer.to_string()))?;
-            nbr_config.push((nbr, cfg));
-        }
+                .find(|neighbor| neighbor.config.peer == config.peer)
+                .is_none_or(|neighbor| neighbor.config != **config)
+        })
+        .collect();
+    let to_delete: Vec<_> = current
+        .iter()
+        .filter(|neighbor| !peers.contains_key(&neighbor.config.peer))
+        .collect();
 
-        for nbr in to_modify {
-            let spec = peers
-                .iter()
-                .find(|x| x.peer == nbr.peer)
-                .ok_or(Error::NotFound(nbr.peer.to_string()))?;
+    bgp_log!(log, info, "nbr: current {current:#?}");
+    bgp_log!(log, info, "nbr: configuring {to_configure:#?}");
+    bgp_log!(log, info, "nbr: removing {to_delete:#?}");
 
-            let curr = &current
-                .iter()
-                .find(|x| x.config.peer == nbr.peer)
-                .ok_or(Error::NotFound(nbr.peer.to_string()))?
-                .config;
-
-            if spec != curr {
-                nbr_config.push((nbr, spec));
-            }
-        }
-
-        // TODO all the db modification that happens below needs to happen in a
-        // transaction.
-
-        for (nbr, cfg) in nbr_config {
-            helpers::add_neighbor(
-                ctx.clone(),
-                Neighbor {
-                    asn: nbr.asn,
-                    group: group.clone(),
-                    config: cfg.clone(),
-                },
-                true,
-            )?;
-        }
-
-        for nbr in to_delete {
-            helpers::remove_neighbor(ctx.clone(), nbr.asn, &nbr.peer).await?;
-
-            let mut routers = lock!(ctx.bgp.router);
-            let mut remove = false;
-            if let Some(r) = routers.get(&nbr.asn) {
-                remove = lock!(r.sessions).is_empty();
-            }
-            if remove && let Some(r) = routers.remove(&nbr.asn) {
-                r.shutdown()
-            };
-        }
+    // TODO all the db modification that happens below needs to happen in a
+    // transaction.
+    for config in to_configure {
+        helpers::add_neighbor(
+            ctx.clone(),
+            Neighbor {
+                asn,
+                config: config.clone(),
+            },
+            true,
+        )?;
     }
 
-    get_router!(ctx, rq.asn)?
-        .set_origin4(rq.originate.clone().into_iter().collect())
+    for neighbor in to_delete {
+        helpers::remove_neighbor(ctx.clone(), asn, &neighbor.config.peer)
+            .await?;
+    }
+
+    get_router!(ctx, asn)?
+        .set_origin4(originate.clone())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-    get_router!(ctx, rq.asn)?
-        .set_origin6(rq.originate.clone().into_iter().collect())
+    get_router!(ctx, asn)?
+        .set_origin6(originate)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -2062,6 +1990,7 @@ mod tests {
     use bgp::BGP_PORT;
     use bgp::router::SessionMap;
     use client_common::println_nopipe;
+    use mg_api_types::bgp::config::ApplyRequest as LatestApplyRequest;
     use mg_api_types::bgp::peer::PeerId;
     use mg_api_types_versions::v1::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
@@ -2139,12 +2068,12 @@ mod tests {
     }
 
     async fn apply(ctx: &Arc<HandlerContext>, req: ApplyRequest) {
+        let request = v11::bgp::config::ApplyRequest::from(
+            v8::bgp::config::ApplyRequest::from(req),
+        );
         do_bgp_apply(
             ctx,
-            v11::bgp::config::ApplyRequest::from(
-                v8::bgp::config::ApplyRequest::from(req),
-            )
-            .into(),
+            request.try_into().expect("convert v11 BGP apply request"),
         )
         .await
         .expect("bgp apply request");
@@ -2243,7 +2172,7 @@ mod tests {
         let neighbors = ctx.db.get_bgp_neighbors().expect("get bgp neighbors");
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].asn, 48);
-        assert_eq!(neighbors[0].group, "qsfp1");
+        assert_eq!(neighbors[0].config.group, "qsfp1");
 
         let sessions = ctx.bgp.sessions.lock().expect("lock bgp sessions");
         assert!(sessions.get(&old_peer).is_none());
@@ -2253,5 +2182,75 @@ mod tests {
         let routers = ctx.bgp.router.lock().expect("lock bgp routers");
         assert!(routers.contains_key(&48));
         assert!(!routers.contains_key(&47));
+    }
+
+    #[tokio::test]
+    async fn empty_apply_retains_router_until_explicit_delete() {
+        let ctx =
+            test_context("empty_apply_retains_router_until_explicit_delete");
+        let peer = peer_id("203.0.113.1");
+        let mut req = ApplyRequest {
+            asn: 47,
+            originate: Vec::default(),
+            checker: None,
+            shaper: None,
+            peers: HashMap::from([(
+                String::from("qsfp0"),
+                vec![test_peer("203.0.113.1", "bob")],
+            )]),
+        };
+
+        apply(&ctx, req.clone()).await;
+        req.peers.clear();
+        apply(&ctx, req).await;
+
+        assert!(
+            ctx.db
+                .get_bgp_routers()
+                .expect("get routers")
+                .contains_key(&47)
+        );
+        assert!(
+            ctx.bgp
+                .router
+                .lock()
+                .expect("lock routers")
+                .contains_key(&47)
+        );
+        assert!(
+            ctx.db
+                .get_bgp_neighbors()
+                .expect("get neighbors")
+                .is_empty()
+        );
+        assert!(
+            ctx.bgp
+                .sessions
+                .lock()
+                .expect("lock sessions")
+                .get(&peer)
+                .is_none()
+        );
+
+        do_bgp_apply(&ctx, LatestApplyRequest::Delete { asn: 47 })
+            .await
+            .expect("delete final BGP router");
+
+        assert!(ctx.db.get_bgp_routers().expect("get routers").is_empty());
+        assert!(
+            ctx.db
+                .get_bgp_neighbors()
+                .expect("get neighbors")
+                .is_empty()
+        );
+        assert!(ctx.bgp.router.lock().expect("lock routers").is_empty());
+        assert!(
+            ctx.bgp
+                .sessions
+                .lock()
+                .expect("lock sessions")
+                .get(&peer)
+                .is_none()
+        );
     }
 }

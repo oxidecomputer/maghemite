@@ -958,6 +958,7 @@ impl SessionInfo {
         // forces new NeighborConfig fields to be handled here.
         let NeighborConfig {
             name: _,
+            group: _,
             peer: _,
             port,
             act_as_a_default_ipv6_router: _,
@@ -1029,7 +1030,7 @@ impl From<&Neighbor> for NeighborInfo {
     fn from(rq: &Neighbor) -> Self {
         Self {
             name: Arc::new(Mutex::new(rq.config.name.clone())),
-            peer_group: Arc::new(Mutex::new(rq.group.clone())),
+            peer_group: Arc::new(Mutex::new(rq.config.group.clone())),
             peer: rq.config.peer.clone(),
         }
     }
@@ -8773,6 +8774,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         neighbor: NeighborInfo,
         info: SessionInfo,
     ) -> Result<(), Error> {
+        let reset_needed = self.update_session_info(info)?;
+        if reset_needed {
+            self.event_tx
+                .send(FsmEvent::Admin(AdminEvent::Reset))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
         // Identity is enforced by the lookup mechanism (we only update a
         // session found via its PeerId); name and group are mutable metadata.
         // All other parameters live in SessionInfo.
@@ -8780,14 +8788,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let peer_group = lock!(neighbor.peer_group).clone();
         *lock!(self.neighbor.name) = name;
         *lock!(self.neighbor.peer_group) = peer_group;
-
-        let reset_needed = self.update_session_info(info)?;
-
-        if reset_needed {
-            self.event_tx
-                .send(FsmEvent::Admin(AdminEvent::Reset))
-                .map_err(|e| Error::EventSend(e.to_string()))?;
-        }
 
         Ok(())
     }

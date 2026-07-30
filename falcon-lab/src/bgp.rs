@@ -14,7 +14,6 @@ pub fn basic_unnumbered_neighbor(
 ) -> Neighbor {
     Neighbor {
         asn: local_asn,
-        group: group.to_owned(),
         config: NeighborConfig {
             peer: PeerId::Interface(interface.to_string()),
             port: None,
@@ -31,6 +30,7 @@ pub fn basic_unnumbered_neighbor(
             min_ttl: None,
             multi_exit_discriminator: None,
             name: name.to_string(),
+            group: group.to_owned(),
             passive: false,
             remote_asn: None,
             resolution: 100,
