@@ -35,13 +35,10 @@ async fn run() -> Result<()> {
 
     for sled in &all_sleds {
         let response: HashMap<String, Vec<PathVector>> = serde_json::from_str(
-            &reqwest::get(format!(
-                "http://{}:8000/prefixes",
-                &sled_to_ip[sled]
-            ))
-            .await?
-            .text()
-            .await?,
+            &reqwest::get(format!("http://{}:8000/prefixes", sled_to_ip[sled]))
+                .await?
+                .text()
+                .await?,
         )?;
 
         // expect only one next hop, I'm querying sleds that only have one
@@ -54,7 +51,7 @@ async fn run() -> Result<()> {
         let originated: Vec<Ipv6Net> = serde_json::from_str(
             &reqwest::get(format!(
                 "http://{}:8000/originated",
-                &sled_to_ip[sled]
+                sled_to_ip[sled]
             ))
             .await?
             .text()
