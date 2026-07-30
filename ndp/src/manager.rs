@@ -11,7 +11,7 @@ use crate::util::{
 };
 use mg_common::thread::ManagedThread;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{Logger, error};
+use slog::{Logger, debug, error};
 use socket2::Socket;
 use std::mem::MaybeUninit;
 use std::net::Ipv6Addr;
@@ -340,6 +340,16 @@ impl InterfaceNdpManagerInner {
     /// is updated as well as the time of reception and the stored advertisement
     /// containing the reachable time.
     fn handle_ra(&self, ra: Icmp6RouterAdvertisement, src: Ipv6Addr) {
+        // Per RFC 4861 Section 6.1.2: a valid RA's source is always link-local
+        if !src.is_unicast_link_local() {
+            debug!(
+                self.log,
+                "ignoring RA from non-link-local source {src} on {}",
+                self.ifx.name,
+            );
+            return;
+        }
+
         let mut guard = lock!(self.neighbor_router);
         let now = Instant::now();
 
@@ -429,4 +439,89 @@ pub struct InterfaceAdvertisementInfo {
     pub discovered_peer: Option<PeerAdvertisementInfo>,
     /// Thread state for rx/tx loops (None if interface not active)
     pub thread_state: Option<InterfaceThreadState>,
+}
+
+#[cfg(test)]
+mod test {
+    use crate::packet::{Icmp6RouterAdvertisement, Icmp6RouterSolicitation};
+
+    #[test]
+    fn router_solicitation_with_link_layer_addr() {
+        // Attempt to parse an ICMPv6 router solicitation with a link-layer
+        // address as a router advertisement. This should produce an error. It
+        // should not successfully parse, and it should not panic.
+        //
+        //     0                   1                   2                   3
+        //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |     Code      |          Checksum             |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                            Reserved                           |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |    Length     |    Link-Layer Address ...
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        //           .... Link-Layer address                               |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        let data: [u8; 16] = [
+            133, 0, 11, 22, // type, code checksum
+            0, 0, 0, 0, // reserved
+            1, 1, 0xab, 0xbb, // Link layer addr
+            0xcc, 0xdd, 0xee, 0xff,
+        ];
+
+        Icmp6RouterAdvertisement::from_wire(&data)
+            .expect_err("RS should not parse as RA");
+        Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+
+    #[test]
+    fn minimum_router_solicitation() {
+        // Attempt to parse a minimal ICMPv6 router solicitation as a
+        // router advertisement. This should produce an error. It should not
+        // successfully parse, and it should not panic.
+        //
+        //     0                   1                   2                   3
+        //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |     Code      |          Checksum             |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                            Reserved                           |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        let data: [u8; 8] = [133, 0, 11, 22, 0, 0, 0, 0];
+        Icmp6RouterAdvertisement::from_wire(&data)
+            .expect_err("RS should not parse as RA");
+        Icmp6RouterSolicitation::from_wire(&data).expect("parsed solicitation");
+    }
+
+    #[test]
+    fn minimum_router_advertisement() {
+        // Attempt to parse a minimal ICMPv6 router advertisement as a
+        // router solicitation. This should produce an error. It should not
+        // successfully parse, and it should not panic.
+        //
+        //     0                   1                   2                   3
+        //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |     Type      |     Code      |          Checksum             |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // | Cur Hop Limit |M|O|  Reserved |       Router Lifetime         |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                         Reachable Time                        |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        // |                          Retrans Timer                        |
+        // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        let data: [u8; 16] = [
+            134, 0, 11, 22, // type, code, checksum
+            255, 0, 0, 30, // hop limit, flags, lifetime
+            0, 0, 0, 0, // reachable time
+            0, 0, 0, 0, // retrans timer
+        ];
+        Icmp6RouterSolicitation::from_wire(&data)
+            .expect_err("RA should not parse as RS");
+        Icmp6RouterAdvertisement::from_wire(&data)
+            .expect("parsed advertisement");
+    }
 }

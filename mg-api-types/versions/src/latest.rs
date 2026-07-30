@@ -10,11 +10,16 @@
 //! `vN` with `latest` leaves the rest of the path unchanged.
 
 pub mod bfd {
-    pub use crate::v1::bfd::BfdPeerConfig;
-    pub use crate::v1::bfd::BfdPeerInfo;
     pub use crate::v1::bfd::BfdPeerState;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
     pub use crate::v1::bfd::SessionMode;
+
+    pub use crate::v12::bfd::BfdPeerConfig;
+    pub use crate::v12::bfd::BfdPeerInfo;
+
+    pub mod error {
+        pub use crate::impls::bfd::error::BfdRequestError;
+    }
 }
 
 pub mod bgp {
@@ -43,14 +48,14 @@ pub mod bgp {
         pub use crate::v11::bgp::config::Origin4;
         pub use crate::v11::bgp::config::PeerInfo;
 
-        pub use crate::v12::bgp::config::ApplyRequest;
-        pub use crate::v12::bgp::config::BgpPeerConfig;
-        pub use crate::v12::bgp::config::BgpPeerParameters;
-        pub use crate::v12::bgp::config::Md5AuthString;
-        pub use crate::v12::bgp::config::Md5AuthStringError;
-        pub use crate::v12::bgp::config::Neighbor;
-        pub use crate::v12::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v12::bgp::config::UnnumberedNeighbor;
+        pub use crate::v13::bgp::config::ApplyRequest;
+        pub use crate::v13::bgp::config::BgpPeerConfig;
+        pub use crate::v13::bgp::config::BgpPeerParameters;
+        pub use crate::v13::bgp::config::Md5AuthString;
+        pub use crate::v13::bgp::config::Md5AuthStringError;
+        pub use crate::v13::bgp::config::Neighbor;
+        pub use crate::v13::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v13::bgp::config::UnnumberedNeighbor;
     }
 
     pub mod peer {
@@ -156,9 +161,9 @@ pub mod rdb {
     }
 
     pub mod neighbor {
-        pub use crate::v12::rdb::neighbor::BgpNeighborInfo;
-        pub use crate::v12::rdb::neighbor::BgpNeighborParameters;
-        pub use crate::v12::rdb::neighbor::BgpUnnumberedNeighborInfo;
+        pub use crate::v13::rdb::neighbor::BgpNeighborInfo;
+        pub use crate::v13::rdb::neighbor::BgpNeighborParameters;
+        pub use crate::v13::rdb::neighbor::BgpUnnumberedNeighborInfo;
     }
 
     pub mod path {

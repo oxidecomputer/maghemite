@@ -2,19 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use bgp::{
-    connection_tcp::BgpConnectionTcp,
-    router::Router,
-    session::SessionRunner,
-    unnumbered::{NdpNeighbor, ScopeMap},
-};
+use bgp::unnumbered::{NdpNeighbor, ScopeMap};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
 use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use slog::{Logger, o, warn};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{
         Arc, Condvar, Mutex,
@@ -36,7 +31,6 @@ struct PendingInterfaceConfig {
 }
 
 pub struct UnnumberedManagerNdp {
-    routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     ndp_mgr: Arc<NdpManager>,
     /// Bidirectional scope_id ↔ interface name mapping for Dispatcher routing
     interface_scope_map: Mutex<ScopeMap>,
@@ -84,10 +78,7 @@ pub enum AddNeighborError {
 }
 
 impl UnnumberedManagerNdp {
-    pub fn new(
-        routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
-        log: Logger,
-    ) -> Arc<Self> {
+    pub fn new(log: Logger) -> Arc<Self> {
         let log = log.new(o!(
             "component" => crate::COMPONENT_MGD,
             "unit" => crate::UNIT_DAEMON,
@@ -100,7 +91,6 @@ impl UnnumberedManagerNdp {
         let dropped = monitor_thread.dropped_flag();
 
         let manager = Arc::new(Self {
-            routers,
             interface_scope_map: Mutex::new(ScopeMap::new()),
             ndp_mgr: NdpManager::new(log.clone()),
             log,
@@ -432,22 +422,6 @@ impl UnnumberedManagerNdp {
         );
 
         Ok(())
-    }
-
-    pub fn get_neighbor_session(
-        self: &Arc<Self>,
-        asn: u32,
-        interface: impl AsRef<str>,
-    ) -> Result<
-        Option<Arc<SessionRunner<BgpConnectionTcp>>>,
-        ResolveNeighborError,
-    > {
-        if let Some(rtr) = lock!(self.routers).get(&asn)
-            && let Some(session) = rtr.get_session(interface.as_ref())
-        {
-            return Ok(Some(session));
-        };
-        Ok(None)
     }
 
     // =========================================================================

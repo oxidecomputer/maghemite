@@ -2,21 +2,23 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{
-    BfdEndpoint, BfdPeerState, PeerInfo, SessionCounters, log::*, packet,
-    util::update_peer_info,
-};
-use anyhow::{Result, anyhow};
-use mg_common::lock;
-use slog::Logger;
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread::{Builder, sleep};
+use crate::PeerInfo;
+use crate::packet;
+use mg_api_types::bfd::BfdPeerState;
+use std::collections::VecDeque;
 use std::time::Duration;
+use std::time::Instant;
 
-pub const UNIT_SESSION: &str = "session";
+/// Return value of [`StateMachine::check_recv_deadline_expired()`].
+///
+/// If [`CheckRecvDeadlineResult::Expired`] is returned, the state machine
+/// transitioned to the down state (unless it was already down, which is visible
+/// via the inner `was_already_down` value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckRecvDeadlineResult {
+    Expired { was_already_down: bool },
+    NotExpired,
+}
 
 /// This state machine implements the BFD state machine. The following is taken
 /// directly from RFC 5880. The arrows indicate the state machine transition
@@ -44,623 +46,242 @@ pub const UNIT_SESSION: &str = "session";
 ///            +------+                      +------+
 /// ```
 pub struct StateMachine {
-    state: Arc<RwLock<Box<dyn State>>>,
-    peer: IpAddr,
-    required_rx: Duration,
-    detection_multiplier: u8,
-    kill_switch: Arc<AtomicBool>,
-    counters: Arc<SessionCounters>,
-    log: Logger,
-}
-
-impl Drop for StateMachine {
-    fn drop(&mut self) {
-        sm_log!(self,
-            warn,
-            "dropping SM for {}", self.peer;
-        );
-        self.kill_switch.store(true, Ordering::Relaxed);
-    }
+    state: State,
+    local: PeerInfo,
+    remote: PeerInfo,
+    last_unsolicited_send: Option<Instant>,
+    recv_deadline: Instant,
+    poll_responses: VecDeque<packet::Control>,
 }
 
 impl StateMachine {
-    /// Create a new state machine, but do not start it.
-    pub fn new(
-        peer: IpAddr,
-        required_rx: Duration,
-        detection_multiplier: u8,
-        counters: Arc<SessionCounters>,
-        log: Logger,
-    ) -> Self {
-        let state = Down::new(peer, log.clone());
+    /// Start the state machine.
+    ///
+    /// `now` must be the current time; it's used to calculate the initial recv
+    /// timeout.
+    pub fn start(local_peer_info: PeerInfo, now: Instant) -> Self {
+        let recv_deadline = next_recv_deadline(&local_peer_info, now);
         Self {
-            state: Arc::new(RwLock::new(Box::new(state))),
-            peer,
-            required_rx,
-            detection_multiplier,
-            kill_switch: Arc::new(AtomicBool::new(false)),
-            counters,
-            log,
+            state: State::Down,
+            local: local_peer_info,
+            remote: PeerInfo::default(),
+            last_unsolicited_send: None,
+            recv_deadline,
+            poll_responses: VecDeque::new(),
         }
     }
 
-    /// Run the state machine, transitioning from state to state based on
-    /// incoming control packets. Endpoint is a channel from a connection
-    /// dispatcher that sends control packets to this state machine based
-    /// on peer address and BFD discriminator.
-    pub fn run(&mut self, endpoint: BfdEndpoint, db: rdb::Db) -> Result<()> {
-        let local = PeerInfo::with_random_discriminator(
-            self.required_rx,
-            self.detection_multiplier,
-        );
-        let remote = Arc::new(Mutex::new(PeerInfo::default()));
-
-        // Spawn a thread that runs the send loop for this state machine. This
-        // loop is responsible for sending out unsolicited periodic control
-        // packets.
-        self.send_loop(endpoint.tx.clone(), local, remote.clone())?;
-
-        // Spawn a thread that runs the receive loop. This loop is responsible
-        // for handling packets from the connection dispatcher.
-        self.recv_loop(endpoint, db, local, remote.clone())?;
-
-        Ok(())
+    /// Current session state.
+    pub fn state(&self) -> BfdPeerState {
+        self.state.into()
     }
 
-    /// Get the current state of this state machine.
-    pub fn current(&self) -> BfdPeerState {
-        self.state.read().unwrap().state()
+    /// Get the next deadline; this will be the sooner of the recv deadline
+    /// timeout and when [`Self::packet_to_send()`] could have a packet to send.
+    ///
+    /// If we currently have a pending packet to send, returns `now`.
+    pub fn next_deadline(&self, now: Instant) -> Instant {
+        if let Some(next_send_at) = self.next_send_at(now) {
+            Instant::min(self.recv_deadline, next_send_at)
+        } else {
+            self.recv_deadline
+        }
     }
 
-    /// Spawn a thread that runs the receive loop. This loop is responsible
-    /// for handling packets from the connection dispatcher. This handler
-    /// determines what BFD state we are in and delegates handling of the
-    /// packet to that state's handler.
-    fn recv_loop(
-        &self,
-        mut endpoint: BfdEndpoint,
-        db: rdb::Db,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-    ) -> Result<()> {
-        let state = self.state.clone();
-        let peer = self.peer;
-        let kill_switch = self.kill_switch.clone();
-        let log = self.log.clone();
-        let counters = self.counters.clone();
-        Builder::new()
-            .name(format!("bfd-recv-{peer}"))
-            .spawn(move || {
-            loop {
-                let prev = state.read().unwrap().state();
-                let (st, ep) = match state.read().unwrap().run(
-                    endpoint,
-                    local,
-                    remote.clone(),
-                    kill_switch.clone(),
-                    db.clone(),
-                    counters.clone(),
-                ) {
-                    Ok(result) => result,
-                    Err(_) => break,
-                };
-                *state.write().unwrap() = st;
-                endpoint = ep;
-                let new = state.read().unwrap().state();
+    fn next_send_at(&self, now: Instant) -> Option<Instant> {
+        // If we have a poll response to send, we're ready now.
+        if !self.poll_responses.is_empty() {
+            return Some(now);
+        }
 
-                if kill_switch.load(Ordering::Relaxed) {
-                    break;
-                }
+        if self.remote.demand_mode {
+            // Unsolicited packets are not sent in demand mode.
+            return None;
+        }
 
-                if prev != new {
-                    match new {
-                        BfdPeerState::AdminDown | BfdPeerState::Down => {
-                            counters
-                                .transition_to_down
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        BfdPeerState::Init => {
-                            counters
-                                .transition_to_init
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        BfdPeerState::Up => {
-                            counters
-                                .transition_to_up
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    sm_log!(log, info, "transition -> {:?}", new; prev, peer);
-                }
+        // RFC 5880 §6.8.3: a Required Min RX Interval of zero means the remote
+        // does not want us to send any periodic control packets. Without this
+        // guard the `last_unsolicited_send + 0` below is always in the past and
+        // we'd transmit as fast as we're polled.
+        if self.remote.required_min_rx.is_zero() {
+            return None;
+        }
+
+        // If we've never sent a packet, we should start!
+        let Some(last_unsolicited_send) = self.last_unsolicited_send else {
+            return Some(now);
+        };
+
+        // TODO-correctness Several issues with this, I think, per RFC 5880:
+        //
+        // * §6.8.3: MUST set `DesiredMinTxInterval` to at least 1sec if the
+        //   session state is not `Up`
+        // * §6.8.7: MUST take larger of `DesiredMinTxInterval` and
+        //   `RemoteMinRxInterval`
+        // * §6.8.7: MUST apply per-packet jitter of 0-25%
+        Some(last_unsolicited_send + self.remote.required_min_rx)
+    }
+
+    /// Get the next packet to send.
+    ///
+    /// If this method returns `Some(_)`, the state machine discards this packet
+    /// under the assumption that the caller is responsible for sending it (or
+    /// enqueueing it to be sent).
+    pub fn packet_to_send(&mut self, now: Instant) -> Option<packet::Control> {
+        // Do we need to respond to a poll?
+        if let Some(packet) = self.poll_responses.pop_front() {
+            return Some(packet);
+        }
+
+        // We only have a packet of our own to send if time has advanced past
+        // our `next_send`.
+        match self.next_send_at(now) {
+            Some(t) if now >= t => {
+                self.last_unsolicited_send = Some(now);
+                Some(self.make_packet_to_send())
             }
-        })?;
-        Ok(())
+            Some(_) | None => None,
+        }
     }
 
-    /// This is a send loop for a BFD peer. It takes care of sending out
-    /// unsolicited periodic control packets. Synchronization betwen this send
-    /// loop and the trait implementors receive loop happens through the
-    /// `remote` peer info mutex.
-    fn send_loop(
-        &self,
-        sender: Sender<(IpAddr, packet::Control)>,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-    ) -> Result<()> {
-        let state = self.state.clone();
-        let peer = self.peer;
-        let stop = self.kill_switch.clone();
-        let log = self.log.clone();
-        let counters = self.counters.clone();
-        // State does not change for the lifetime of the trait so it's safe to
-        // just copy it out of self for sending into the spawned thread. The
-        // reason this is a dynamic method at all is to get runtime polymorphic
-        // behavior over `State` trait implementors.
-        Builder::new()
-            .name(format!("bfd-send-{peer}"))
-            .spawn(move || {
-                loop {
-                    if stop.load(Ordering::Relaxed) {
-                        break;
-                    };
-
-                    // Get what we need from peer info, holding the lock a
-                    // briefly as possible.
-                    let (_delay, demand_mode, your_discriminator) = {
-                        let r = lock!(remote);
-                        (
-                            DeferredDelay(r.required_min_rx),
-                            r.demand_mode,
-                            r.discriminator,
-                        )
-                    };
-
-                    // Unsolicited packets are not sent in demand mode.
-                    //
-                    // TODO we could probably just park this thread on a signal
-                    // waiting to leave demand mode instead of continuing to
-                    // iterate.
-                    if demand_mode {
-                        continue;
-                    }
-
-                    let mut pkt = packet::Control {
-                        desired_min_tx: local.desired_min_tx.as_micros() as u32,
-                        required_min_rx: local.required_min_rx.as_micros()
-                            as u32,
-                        my_discriminator: local.discriminator,
-                        your_discriminator,
-                        ..Default::default()
-                    };
-
-                    let st = state.read().unwrap().state();
-                    pkt.set_state(st);
-
-                    if let Err(e) = sender.send((peer, pkt)) {
-                        sm_log!(log, warn, "send error: {e}"; st, peer);
-                        counters
-                            .control_packet_send_failures
-                            .fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        counters
-                            .control_packets_sent
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            })?;
-        Ok(())
+    /// Check whether the deadline for receiving packets from our peer has
+    /// passed.
+    pub fn check_recv_deadline_expired(
+        &mut self,
+        now: Instant,
+    ) -> CheckRecvDeadlineResult {
+        if now >= self.recv_deadline {
+            self.recv_deadline = next_recv_deadline(&self.local, now);
+            let was_already_down = if self.state == State::Down {
+                true
+            } else {
+                self.state = State::Down;
+                false
+            };
+            CheckRecvDeadlineResult::Expired { was_already_down }
+        } else {
+            CheckRecvDeadlineResult::NotExpired
+        }
     }
 
-    pub fn required_rx(&self) -> Duration {
-        self.required_rx
+    /// Handle an incoming packet from our peer.
+    pub fn packet_received(&mut self, packet: packet::Control, now: Instant) {
+        self.update_remote_peer_info(&packet);
+        self.recv_deadline = next_recv_deadline(&self.local, now);
+
+        if packet.poll() {
+            let mut pkt = self.make_packet_to_send();
+            pkt.set_final();
+            self.poll_responses.push_back(pkt);
+        }
+
+        match packet.state() {
+            packet::State::Peer(remote_peer_state) => {
+                self.update_peer_state(remote_peer_state);
+            }
+            packet::State::Unknown(_) => {
+                // We don't know how to update the remote peer state, so we do
+                // nothing other than bump our "we received a packet" bits
+                // above.
+            }
+        }
     }
 
-    pub fn detection_multiplier(&self) -> u8 {
-        self.detection_multiplier
+    fn update_remote_peer_info(&mut self, packet: &packet::Control) {
+        self.remote = PeerInfo {
+            desired_min_tx: Duration::from_micros(packet.desired_min_tx.into()),
+            required_min_rx: Duration::from_micros(
+                packet.required_min_rx.into(),
+            ),
+            discriminator: packet.my_discriminator,
+            demand_mode: packet.demand(),
+            detection_multiplier: packet.detect_mult,
+        };
     }
-}
 
-/// A helper object to make delayed loop implementations less error prone.
-struct DeferredDelay(Duration);
+    fn update_peer_state(&mut self, remote_peer_state: BfdPeerState) {
+        self.state = match (self.state, remote_peer_state) {
+            (State::Down, BfdPeerState::Down) => State::Init,
+            (State::Down, BfdPeerState::Init) => State::Up,
+            (State::Down, BfdPeerState::AdminDown | BfdPeerState::Up) => {
+                State::Down
+            }
 
-impl Drop for DeferredDelay {
-    /// On drop, delay for the specified duration. Use this in a loop to
-    /// implement a delay loop.
-    fn drop(&mut self) {
-        sleep(self.0);
+            (State::Init, BfdPeerState::AdminDown) => State::Down,
+            (State::Init, BfdPeerState::Down) => State::Init,
+            (State::Init, BfdPeerState::Init | BfdPeerState::Up) => State::Up,
+
+            (State::Up, BfdPeerState::AdminDown | BfdPeerState::Down) => {
+                State::Down
+            }
+            (State::Up, BfdPeerState::Init | BfdPeerState::Up) => State::Up,
+        };
     }
-}
 
-pub enum RecvResult {
-    MessageFrom((IpAddr, packet::Control)),
-    TransitionTo(Box<dyn State>),
-}
-
-//TODO consider using a `State` enum instead of identical structs that
-//     implement a `State` trait. This could be similar to how BGP is
-//     implemented or we could even look into a unified state machine
-//     framework for Maghemite protocol implementations in general.
-//
-//     https://github.com/oxidecomputer/maghemite/issues/153
-
-/// All BFD states must implement the state trait.
-pub(crate) trait State: Sync + Send {
-    /// Run the BFD state. This involves listening for messages on the provide
-    /// endpoint, responding to peers accordingly and making the appropriate
-    /// state transition when necessary by returning a new State implementation.
-    fn run(
-        &self,
-        endpoint: BfdEndpoint,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-        kill_switch: Arc<AtomicBool>,
-        db: rdb::Db,
-        counters: Arc<SessionCounters>,
-    ) -> Result<(Box<dyn State>, BfdEndpoint)>;
-
-    /// Return the `BfdPeerState` associated with the implementor of this trait.
-    fn state(&self) -> BfdPeerState;
-
-    fn peer(&self) -> IpAddr;
-
-    /// State trait implementors should call this fuction in response to poll
-    /// packets. It will send an appropriate BFD control packet in response with
-    /// the final flag set.
-    fn send_poll_response(
-        &self,
-        peer: IpAddr,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-        sender: Sender<(IpAddr, packet::Control)>,
-        log: Logger,
-    ) {
-        let state = self.state();
-        let your_discriminator = lock!(remote).discriminator;
-
+    fn make_packet_to_send(&self) -> packet::Control {
         let mut pkt = packet::Control {
-            desired_min_tx: local.desired_min_tx.as_micros() as u32,
-            required_min_rx: local.required_min_rx.as_micros() as u32,
-            my_discriminator: local.discriminator,
-            your_discriminator,
+            detect_mult: self.local.detection_multiplier,
+            // The wire fields are u32 microseconds. Saturate rather than let
+            // the cast silently wrap for intervals above ~71.6 minutes.
+            desired_min_tx: micros_u32(self.local.desired_min_tx),
+            required_min_rx: micros_u32(self.local.required_min_rx),
+            my_discriminator: self.local.discriminator,
+            your_discriminator: self.remote.discriminator,
             ..Default::default()
         };
-        pkt.set_state(state);
-        pkt.set_final();
-
-        if let Err(e) = sender.send((peer, pkt)) {
-            sm_log!(log, warn, "send error: {e}"; state, peer);
-        }
+        pkt.set_state(self.state.into());
+        pkt
     }
+}
 
-    fn recv(
-        &self,
-        endpoint: &BfdEndpoint,
-        local: PeerInfo,
-        remote: &Arc<Mutex<PeerInfo>>,
-        log: Logger,
-        counters: Arc<SessionCounters>,
-    ) -> Result<RecvResult> {
-        match endpoint.rx.recv_timeout(
-            local.required_min_rx * local.detection_multiplier.into(),
-        ) {
-            Ok((addr, msg)) => {
-                sm_log!(
-                    log,
-                    trace,
-                    "recv msg: {msg:?}";
-                    self.state(),
-                    self.peer()
-                );
+/// Convert a duration to microseconds as a `u32` wire field, saturating
+/// instead of wrapping for durations beyond `u32::MAX` microseconds.
+fn micros_u32(d: Duration) -> u32 {
+    u32::try_from(d.as_micros()).unwrap_or(u32::MAX)
+}
 
-                match msg.state() {
-                    packet::State::Peer(BfdPeerState::AdminDown) => {
-                        counters
-                            .admin_down_status_received
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    packet::State::Peer(BfdPeerState::Down) => {
-                        counters
-                            .down_status_received
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    packet::State::Peer(BfdPeerState::Init) => {
-                        counters
-                            .init_status_received
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    packet::State::Peer(BfdPeerState::Up) => {
-                        counters
-                            .up_status_received
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    packet::State::Unknown(_) => {
-                        counters
-                            .unknown_status_received
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+fn next_recv_deadline(local: &PeerInfo, last_recv: Instant) -> Instant {
+    // TODO-correctness Similar issues here as the next send timer per RFC 5880
+    // §6.8.4:
+    //
+    // * in async mode, calculation should be max(local min rx, remote min tx) *
+    //   remote detection multiplier
+    // * in demand mode calculation should be max(local min tx, remote min rx) *
+    //   local detection multiplier
+    //
+    // I don't think we support demand mode? But that means this calculation is
+    // wrong for async (wrong multiplier, isn't considering remote min tx)?
+    let recv_timeout = local
+        .required_min_rx
+        .saturating_mul(u32::from(local.detection_multiplier.get()));
 
-                update_peer_info(remote, &msg);
+    // TODO-correctness What should we do on "overflows an Instant"? That should
+    // be _very_ impossible given any reasonable values for `last_recv` (which
+    // are always from `Instant::now()` and `recv_timeout`, but someone passing
+    // a truly absurdly large `required_min_rx` could maybe cause problems? For
+    // now, we'll fall back to a hardcoded, large recv deadline if this addition
+    // overflows, but the actual value we pick is a total WAG.
+    last_recv
+        .checked_add(recv_timeout)
+        .unwrap_or_else(|| last_recv + Duration::from_secs(60))
+}
 
-                if msg.poll() {
-                    self.send_poll_response(
-                        self.peer(),
-                        local,
-                        remote.clone(),
-                        endpoint.tx.clone(),
-                        log.clone(),
-                    );
-                }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Down,
+    Init,
+    Up,
+}
 
-                Ok(RecvResult::MessageFrom((addr, msg)))
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                sm_log!(
-                    log,
-                    warn,
-                    "recv timeout expired";
-                    self.state(),
-                    self.peer()
-                );
-                counters.timeout_expired.fetch_add(1, Ordering::Relaxed);
-                let next = Down::new(self.peer(), log.clone());
-                Ok(RecvResult::TransitionTo(Box::new(next)))
-            }
-            Err(e) => {
-                sm_log!(
-                    log,
-                    error,
-                    "exiting receive loop on error: {e}";
-                    self.state(),
-                    self.peer(),
-                    "error" => format!("{e}")
-                );
-                counters
-                    .message_receive_error
-                    .fetch_add(1, Ordering::Relaxed);
-                Err(anyhow::anyhow!("recv channel closed"))
-            }
+impl From<State> for BfdPeerState {
+    fn from(state: State) -> Self {
+        match state {
+            State::Down => Self::Down,
+            State::Init => Self::Init,
+            State::Up => Self::Up,
         }
     }
 }
 
-/// The BFD down state. The following is taken verbatim from the RFC.
-///
-/// > Down state means that the session is down (or has just been created).
-/// > A session remains in Down state until the remote system indicates
-/// > that it agrees that the session is down by sending a BFD Control
-/// > packet with the State field set to anything other than Up.  If that
-/// > packet signals Down state, the session advances to Init state; if
-/// > that packet signals Init state, the session advances to Up state.
-/// > Semantically, Down state indicates that the forwarding path is
-/// > unavailable, and that appropriate actions should be taken by the
-/// > applications monitoring the state of the BFD session.  A system MAY
-/// > hold a session in Down state indefinitely (by simply refusing to
-/// > advance the session state).  This may be done for operational or
-/// > administrative reasons, among others.
-///
-pub struct Down {
-    peer: IpAddr,
-    log: Logger,
-}
-
-impl Down {
-    pub(crate) fn new(peer: IpAddr, log: Logger) -> Self {
-        Self { peer, log }
-    }
-}
-
-impl State for Down {
-    /// Run the send and receive functions for the BFD down state.
-    fn run(
-        &self,
-        endpoint: BfdEndpoint,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-        kill_switch: Arc<AtomicBool>,
-        db: rdb::Db,
-        counters: Arc<SessionCounters>,
-    ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        db.set_nexthop_shutdown(self.peer, true);
-        loop {
-            // Get an incoming message
-            let (_addr, msg) = match self.recv(
-                &endpoint,
-                local,
-                &remote,
-                self.log.clone(),
-                counters.clone(),
-            )? {
-                RecvResult::MessageFrom((addr, control)) => (addr, control),
-                RecvResult::TransitionTo(state) => {
-                    return Ok((state, endpoint));
-                }
-            };
-
-            if kill_switch.load(Ordering::Relaxed) {
-                return Err(anyhow!("killed"));
-            }
-
-            // Transition to the appropriate next state.
-            use packet::State;
-            match msg.state() {
-                State::Peer(BfdPeerState::Down) => {
-                    let next = Init::new(self.peer, self.log.clone());
-                    return Ok((Box::new(next), endpoint));
-                }
-                State::Peer(BfdPeerState::Init) => {
-                    let next = Up::new(self.peer, self.log.clone());
-                    return Ok((Box::new(next), endpoint));
-                }
-                State::Peer(_) => {}
-                State::Unknown(value) => {
-                    state_log!(self, warn, "ignoring unknown state: {value}");
-                }
-            }
-        }
-    }
-
-    fn state(&self) -> BfdPeerState {
-        BfdPeerState::Down
-    }
-
-    fn peer(&self) -> IpAddr {
-        self.peer
-    }
-}
-
-/// The BFD init state. The following is taken verbatim from the RFC.
-///
-/// > Init state means that the remote system is communicating, and the
-/// > local system desires to bring the session up, but the remote system
-/// > does not yet realize it.  A session will remain in Init state until
-/// > either a BFD Control Packet is received that is signaling Init or Up
-/// > state (in which case the session advances to Up state) or the
-/// > Detection Time expires, meaning that communication with the remote
-/// > system has been lost (in which case the session advances to Down
-/// > state).
-///
-pub struct Init {
-    peer: IpAddr,
-    log: Logger,
-}
-
-impl Init {
-    fn new(peer: IpAddr, log: Logger) -> Self {
-        Self { peer, log }
-    }
-}
-
-impl State for Init {
-    /// Run the send and receive functions for the BFD init state.
-    fn run(
-        &self,
-        endpoint: BfdEndpoint,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-        kill_switch: Arc<AtomicBool>,
-        _db: rdb::Db,
-        counters: Arc<SessionCounters>,
-    ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        loop {
-            // Get an incoming message
-            let (_addr, msg) = match self.recv(
-                &endpoint,
-                local,
-                &remote,
-                self.log.clone(),
-                counters.clone(),
-            )? {
-                RecvResult::MessageFrom((addr, control)) => (addr, control),
-                RecvResult::TransitionTo(state) => {
-                    return Ok((state, endpoint));
-                }
-            };
-
-            if kill_switch.load(Ordering::Relaxed) {
-                return Err(anyhow!("killed"));
-            }
-
-            // Transition to the appropriate next state.
-            use packet::State;
-            match msg.state() {
-                State::Peer(BfdPeerState::AdminDown) => {
-                    let next = Down::new(self.peer, self.log.clone());
-                    return Ok((Box::new(next), endpoint));
-                }
-                State::Peer(BfdPeerState::Down) => {}
-                State::Peer(_) => {
-                    let next = Up::new(self.peer, self.log.clone());
-                    return Ok((Box::new(next), endpoint));
-                }
-                State::Unknown(value) => {
-                    state_log!(self, warn, "ignoring unknown state: {value}");
-                }
-            }
-        }
-    }
-
-    fn state(&self) -> BfdPeerState {
-        BfdPeerState::Init
-    }
-
-    fn peer(&self) -> IpAddr {
-        self.peer
-    }
-}
-
-/// The BFD up state. The following is taken verbatim from the RFC.
-///
-/// > Up state means that the BFD session has successfully been
-/// > established, and implies that connectivity between the systems is
-/// > working.  The session will remain in the Up state until either
-/// > connectivity fails or the session is taken down administratively.  If
-/// > either the remote system signals Down state or the Detection Time
-/// > expires, the session advances to Down state.
-///
-pub struct Up {
-    peer: IpAddr,
-    log: Logger,
-}
-
-impl Up {
-    fn new(peer: IpAddr, log: Logger) -> Self {
-        Self { peer, log }
-    }
-}
-
-impl State for Up {
-    /// Run the send and receive functions for the BFD up state.
-    fn run(
-        &self,
-        endpoint: BfdEndpoint,
-        local: PeerInfo,
-        remote: Arc<Mutex<PeerInfo>>,
-        kill_switch: Arc<AtomicBool>,
-        db: rdb::Db,
-        counters: Arc<SessionCounters>,
-    ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        db.set_nexthop_shutdown(self.peer, false);
-        loop {
-            // Get an incoming message
-            let (_addr, msg) = match self.recv(
-                &endpoint,
-                local,
-                &remote,
-                self.log.clone(),
-                counters.clone(),
-            )? {
-                RecvResult::MessageFrom((addr, control)) => (addr, control),
-                RecvResult::TransitionTo(state) => {
-                    return Ok((state, endpoint));
-                }
-            };
-
-            if kill_switch.load(Ordering::Relaxed) {
-                return Err(anyhow!("killed"));
-            }
-
-            // Transition to the appropriate next state.
-            use packet::State;
-            match msg.state() {
-                State::Peer(BfdPeerState::AdminDown)
-                | State::Peer(BfdPeerState::Down) => {
-                    let next = Down::new(self.peer, self.log.clone());
-                    return Ok((Box::new(next), endpoint));
-                }
-                State::Peer(_) => {}
-                State::Unknown(value) => {
-                    state_log!(self, warn, "ignoring unknown state: {value}");
-                }
-            }
-        }
-    }
-
-    fn state(&self) -> BfdPeerState {
-        BfdPeerState::Up
-    }
-
-    fn peer(&self) -> IpAddr {
-        self.peer
-    }
-}
+#[cfg(test)]
+mod tests;
