@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
-libc.workspace = true
 mg-common.workspace = true
 mg-api-types.workspace = true
 rand.workspace = true

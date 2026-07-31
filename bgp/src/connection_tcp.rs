@@ -44,12 +44,14 @@ use std::{
 };
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{IPPROTO_TCP, c_int};
+use libc::{IPPROTO_TCP, c_int, socklen_t};
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{IP_MINTTL, IPV6_MINHOPCOUNT};
 #[cfg(target_os = "linux")]
-use libc::{IP_MINTTL, IPV6_MINHOPCOUNT, TCP_MD5SIG, sockaddr_storage};
+use libc::{TCP_MD5SIG, sockaddr_storage};
 
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
@@ -58,12 +60,6 @@ use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
-// XXX: drop these local constants once libc 0.2.187 is released.
-// rust-lang/libc#5089 adds IP_MINTTL/IPV6_MINHOPCOUNT bindings for solarish.
-#[cfg(target_os = "illumos")]
-const IP_MINTTL: i32 = 0x1c;
-#[cfg(target_os = "illumos")]
-const IPV6_MINHOPCOUNT: i32 = 0x2f;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
 #[cfg(target_os = "illumos")]
@@ -1222,12 +1218,7 @@ fn create_outbound_socket(
     })
 }
 
-/// Apply DSCP marking to a BGP TCP connection.
-///
-/// Sets the DSCP field in the IP header via IP_TOS (IPv4) or
-/// IPV6_TCLASS (IPv6) using socket2 wrappers where available,
-/// falling back to raw libc::setsockopt on illumos where socket2
-/// lacks bindings.
+/// Apply IPv4 DSCP or IPv6 Traffic Class marking to a BGP TCP connection.
 fn apply_dscp(
     sock: &impl AsFd,
     dscp: Dscp,
@@ -1236,60 +1227,10 @@ fn apply_dscp(
     let tos = u32::from(dscp.as_tos_byte());
     let sock = SockRef::from(sock);
     if peer.is_ipv4() {
-        set_dscp_v4(&sock, tos)
+        sock.set_tos_v4(tos).map_err(Error::Io)
     } else {
-        traffic_class_v6(&sock, tos)
+        sock.set_tclass_v6(tos).map_err(Error::Io)
     }
-}
-
-/// Set IPv4 DSCP/TOS. Uses socket2 on platforms that support it,
-/// raw libc on illumos.
-#[cfg(not(target_os = "illumos"))]
-fn set_dscp_v4(sock: &SockRef, tos: u32) -> Result<(), Error> {
-    sock.set_tos_v4(tos).map_err(Error::Io)
-}
-
-#[cfg(target_os = "illumos")]
-fn set_dscp_v4(sock: &SockRef, tos: u32) -> Result<(), Error> {
-    unsafe {
-        let fd = sock.as_raw_fd();
-        if libc::setsockopt(
-            fd,
-            IPPROTO_IP,
-            libc::IP_TOS,
-            &tos as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-    }
-    Ok(())
-}
-
-/// Set IPv6 DSCP/Traffic Class. Uses socket2 on platforms that
-/// support it, raw libc on illumos.
-#[cfg(not(target_os = "illumos"))]
-fn traffic_class_v6(sock: &SockRef, tos: u32) -> Result<(), Error> {
-    sock.set_tclass_v6(tos).map_err(Error::Io)
-}
-
-#[cfg(target_os = "illumos")]
-fn traffic_class_v6(sock: &SockRef, tos: u32) -> Result<(), Error> {
-    unsafe {
-        let fd = sock.as_raw_fd();
-        if libc::setsockopt(
-            fd,
-            IPPROTO_IPV6,
-            libc::IPV6_TCLASS,
-            &tos as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-    }
-    Ok(())
 }
 
 fn apply_socket_options(
@@ -1389,14 +1330,14 @@ fn set_ip_minttl(
         } else {
             (IPPROTO_IPV6, IPV6_MINHOPCOUNT)
         };
-        let min_ttl = ttl as u32;
+        let min_ttl = c_int::from(ttl);
         let rc = unsafe {
             libc::setsockopt(
                 sock.as_raw_fd(),
                 proto,
                 optname,
-                &min_ttl as *const u32 as *const c_void,
-                std::mem::size_of::<u32>() as u32,
+                &min_ttl as *const c_int as *const c_void,
+                std::mem::size_of_val(&min_ttl) as socklen_t,
             )
         };
         if rc != 0 {
@@ -1663,6 +1604,7 @@ mod tests {
     use super::*;
     use mg_api_types::common::headers::Dscp;
     use std::net::{TcpListener, TcpStream};
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
     use std::os::fd::AsRawFd;
 
     #[test]
@@ -1674,18 +1616,7 @@ mod tests {
         let dscp = Dscp::from_dscp_value(48).unwrap();
         apply_dscp(&stream, dscp, addr).unwrap();
 
-        let mut readback: u32 = 0;
-        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
-        let rc = unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::IPPROTO_IP,
-                libc::IP_TOS,
-                &mut readback as *mut u32 as *mut libc::c_void,
-                &mut len,
-            )
-        };
-        assert_eq!(rc, 0, "getsockopt failed");
+        let readback = SockRef::from(&stream).tos_v4().unwrap();
         // DSCP 48 → TOS byte = 48 << 2 = 192
         assert_eq!(readback, u32::from(dscp.as_tos_byte()));
     }
@@ -1699,18 +1630,7 @@ mod tests {
         let dscp = Dscp::from_dscp_value(46).unwrap(); // EF
         apply_dscp(&stream, dscp, addr).unwrap();
 
-        let mut readback: u32 = 0;
-        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
-        let rc = unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::IPPROTO_IPV6,
-                libc::IPV6_TCLASS,
-                &mut readback as *mut u32 as *mut libc::c_void,
-                &mut len,
-            )
-        };
-        assert_eq!(rc, 0, "getsockopt failed");
+        let readback = SockRef::from(&stream).tclass_v6().unwrap();
         // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
         assert_eq!(readback, u32::from(dscp.as_tos_byte()));
     }
@@ -1749,14 +1669,14 @@ mod tests {
 
         apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
 
-        let mut readback: u32 = 0;
-        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let mut readback: c_int = 0;
+        let mut len = std::mem::size_of_val(&readback) as socklen_t;
         let rc = unsafe {
             libc::getsockopt(
                 stream.as_raw_fd(),
                 IPPROTO_IP,
                 IP_MINTTL,
-                &mut readback as *mut u32 as *mut c_void,
+                &mut readback as *mut c_int as *mut c_void,
                 &mut len,
             )
         };
@@ -1773,14 +1693,14 @@ mod tests {
 
         apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
 
-        let mut readback: u32 = 0;
-        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let mut readback: c_int = 0;
+        let mut len = std::mem::size_of_val(&readback) as socklen_t;
         let rc = unsafe {
             libc::getsockopt(
                 stream.as_raw_fd(),
                 IPPROTO_IPV6,
                 IPV6_MINHOPCOUNT,
-                &mut readback as *mut u32 as *mut c_void,
+                &mut readback as *mut c_int as *mut c_void,
                 &mut len,
             )
         };

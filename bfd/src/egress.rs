@@ -256,36 +256,10 @@ async fn bind_egress_socket(
     UdpSocket::from_std(sock.into()).map_err(BindEgressSocketError::StdToTokio)
 }
 
-#[cfg(not(target_os = "illumos"))]
 fn set_dscp(sock: &Socket, addr: IpAddr, tos: u32) -> io::Result<()> {
     match addr {
         IpAddr::V4(_) => sock.set_tos_v4(tos),
         IpAddr::V6(_) => sock.set_tclass_v6(tos),
-    }
-}
-
-#[cfg(target_os = "illumos")]
-fn set_dscp(sock: &Socket, addr: IpAddr, tos: u32) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    let (level, option) = match addr {
-        IpAddr::V4(_) => (libc::IPPROTO_IP, libc::IP_TOS),
-        IpAddr::V6(_) => (libc::IPPROTO_IPV6, libc::IPV6_TCLASS),
-    };
-    // SAFETY: `sock` is a valid socket and the option value points to a
-    // correctly sized integer for IP_TOS/IPV6_TCLASS.
-    let result = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            level,
-            option,
-            &tos as *const u32 as *const libc::c_void,
-            std::mem::size_of::<u32>() as libc::socklen_t,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
     }
 }
 

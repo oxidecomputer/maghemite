@@ -14,13 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "linux")]
-use libc::IPV6_MINHOPCOUNT;
-
-// TODO: drop this local once libc 0.2.187 is released — rust-lang/libc#5089
-// adds IPV6_MINHOPCOUNT to the solarish bindings.
-#[cfg(target_os = "illumos")]
-const IPV6_MINHOPCOUNT: libc::c_int = 0x2f;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{IPV6_MINHOPCOUNT, c_int, socklen_t};
 
 pub const ALL_NODES_MCAST: Ipv6Addr =
     Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
@@ -237,14 +232,7 @@ pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
 fn set_min_hopcount(s: &Socket) -> Result<(), ListeningSocketError> {
     use std::os::fd::AsRawFd;
 
-    // illumos does not export IPV6_MINHOPCOUNT via libc; value from
-    // <netinet/in.h>. Linux provides it.
-    #[cfg(target_os = "illumos")]
-    const IPV6_MINHOPCOUNT: libc::c_int = 0x2f;
-    #[cfg(target_os = "linux")]
-    use libc::IPV6_MINHOPCOUNT;
-
-    let min_hops: libc::c_int = 255;
+    let min_hops: c_int = 255;
     // SAFETY: setsockopt with a correctly-sized pointer to an integer option.
     let rc = unsafe {
         libc::setsockopt(
@@ -252,7 +240,7 @@ fn set_min_hopcount(s: &Socket) -> Result<(), ListeningSocketError> {
             libc::IPPROTO_IPV6,
             IPV6_MINHOPCOUNT,
             &min_hops as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            std::mem::size_of::<c_int>() as socklen_t,
         )
     };
     if rc < 0 {
