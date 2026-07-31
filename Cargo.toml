@@ -88,7 +88,7 @@ slog-bunyan = "2.5"
 slog-error-chain = { git = "https://github.com/oxidecomputer/slog-error-chain", branch = "main" }
 socket2 = { version = "0.6", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 hostname = "0.4"
 thiserror = "2.0"
 dropshot = { version = "0.17.1", features = [ "usdt-probes" ] }
@@ -150,11 +150,11 @@ iddqd = "0.4"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "3ddd7e684a78ad33be66717408c381b1962ae04e"
+rev = "aa4714289cbf28010a821c49d9b73ec94074fb91"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "3ddd7e684a78ad33be66717408c381b1962ae04e"
+rev = "aa4714289cbf28010a821c49d9b73ec94074fb91"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
