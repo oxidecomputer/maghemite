@@ -1691,7 +1691,7 @@ pub struct FsmDriver<Cnx: BgpConnection + 'static> {
 }
 
 impl<Cnx: BgpConnection + 'static> FsmDriver<Cnx> {
-    pub fn new(
+    pub(crate) fn new(
         runner: Arc<SessionRunner<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
     ) -> Self {
