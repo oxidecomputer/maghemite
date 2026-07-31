@@ -17,7 +17,7 @@ use crate::v4::bgp::config::JitterRange;
 use crate::v11;
 use crate::v11::bgp::config::Ipv4UnicastConfig;
 use crate::v11::bgp::config::Ipv6UnicastConfig;
-use crate::v12::common::headers::Dscp;
+use crate::v13::common::headers::Dscp;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerParameters {
@@ -121,9 +121,9 @@ pub struct ApplyRequest {
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
-// ----- v11 (prefix_to_oxnet) <-> v12 (dscp) conversions -----
+// ----- v11 (prefix_to_oxnet) <-> v13 (dscp) conversions -----
 //
-// v12 differs from v11 only by adding the `dscp` field and narrowing
+// v13 differs from v11 only by adding the `dscp` field and narrowing
 // `min_ttl` to `NonZeroU8`. All other fields share their v11 types, so
 // conversions are field-wise copies aside from those two.
 

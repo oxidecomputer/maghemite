@@ -5,6 +5,9 @@
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
 #: skip_clone = true
+#:
+#: enable = false
+#:
 #: access_repos = [
 #:   "oxidecomputer/testbed",
 #: ]

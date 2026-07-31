@@ -2,43 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-macro_rules! bfd_log {
-    ($log:expr, $level:ident, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
-        slog::$level!($log,
-            $msg, $($args),*;
-            "component" => crate::COMPONENT_MGD,
-            "module" => crate::MOD_ADMIN,
-            "unit" => UNIT_BFD,
-            $($key => $value),*
-        )
-    };
-    ($log:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
-        slog::$level!($log,
-            $msg;
-            "component" => crate::COMPONENT_MGD,
-            "module" => crate::MOD_ADMIN,
-            "unit" => UNIT_BFD,
-            $($key => $value),*
-        )
-    };
-    ($log:expr, $level:ident, $msg:expr) => {
-        slog::$level!($log,
-            $msg;
-            "component" => crate::COMPONENT_MGD,
-            "module" => crate::MOD_ADMIN,
-            "unit" => UNIT_BFD
-        )
-    };
-    ($log:expr, $level:ident, $msg:expr, $($args:expr),*) => {
-        slog::$level!($log,
-            $msg, $($args),*;
-            "component" => crate::COMPONENT_MGD,
-            "module" => crate::MOD_ADMIN,
-            "unit" => UNIT_BFD,
-        )
-    };
-}
-
 macro_rules! bgp_log {
     ($log:expr, $level:ident, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
         slog::$level!($log,
@@ -209,4 +172,4 @@ macro_rules! sig_log {
     };
 }
 
-pub(crate) use {bfd_log, bgp_log, dlog, olog, sig_log, smf_log};
+pub(crate) use {bgp_log, dlog, olog, sig_log, smf_log};

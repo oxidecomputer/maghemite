@@ -12,6 +12,7 @@ use mg_admin_client::{
 use mg_api_types::common::headers::Dscp;
 use std::io::Write;
 use std::net::IpAddr;
+use std::num::NonZeroU8;
 use tabwriter::TabWriter;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -34,7 +35,7 @@ pub enum Commands {
         /// Acceptable time between control messages in microseconds.
         required_rx: u64,
         /// Detection threshold for connectivity as a multipler to required_rx
-        detection_threshold: u8,
+        detection_threshold: NonZeroU8,
         /// Session mode is either single-hop or multi-hop
         mode: Mode,
         /// DSCP value for BFD UDP packets (0-63). Defaults to CS6 (48).

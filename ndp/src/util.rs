@@ -9,6 +9,7 @@ use slog::{Logger, error};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     net::{Ipv6Addr, SocketAddrV6},
+    num::NonZeroU32,
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -75,8 +76,15 @@ pub enum ListeningSocketError {
     #[error("set read timeout error: {0}")]
     SetReadTimeoutError(std::io::Error),
 
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
     #[error("failed to set ipv6 min hop count: {0}")]
     SetIpv6MinHopCount(std::io::Error),
+
+    #[error("failed to bind socket to interface: {0}")]
+    SetBoundIf(std::io::Error),
+
+    #[error("interface index must be non-zero")]
+    InvalidInterfaceIndex,
 }
 
 pub fn send_ra(
@@ -210,33 +218,52 @@ pub fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
     s.join_multicast_v6(&ALL_ROUTERS_MCAST, index)
         .map_err(E::JoinAllRoutersMulticast)?;
 
+    let ifindex = NonZeroU32::new(index).ok_or(E::InvalidInterfaceIndex)?;
+    s.bind_device_by_index_v6(Some(ifindex))
+        .map_err(E::SetBoundIf)?;
+
     s.bind(&sa).map_err(ListeningSocketError::Bind)?;
 
     s.set_read_timeout(Some(READ_TIMEOUT))
         .map_err(E::SetReadTimeoutError)?;
 
-    // IPV6_MINHOPCOUNT is not wrapped by socket2 and is only available on
-    // Linux and illumos. The option enforces RFC 5082 GTSM on inbound
-    // ICMPv6 — required so we only accept RAs/RSes from on-link neighbors.
-    #[cfg(any(target_os = "linux", target_os = "illumos"))]
-    {
-        use std::os::fd::AsRawFd;
-        let min_hops: libc::c_int = 255;
-        let rc = unsafe {
-            libc::setsockopt(
-                s.as_raw_fd(),
-                libc::IPPROTO_IPV6,
-                IPV6_MINHOPCOUNT,
-                &min_hops as *const libc::c_int as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            )
-        };
-        if rc < 0 {
-            return Err(ListeningSocketError::SetIpv6MinHopCount(
-                std::io::Error::last_os_error(),
-            ));
-        }
-    }
+    // Per RFC 4861 Section 6.1.2: a valid RA must have a hop limit of 255
+    set_min_hopcount(&s)?;
 
     Ok(s)
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn set_min_hopcount(s: &Socket) -> Result<(), ListeningSocketError> {
+    use std::os::fd::AsRawFd;
+
+    // illumos does not export IPV6_MINHOPCOUNT via libc; value from
+    // <netinet/in.h>. Linux provides it.
+    #[cfg(target_os = "illumos")]
+    const IPV6_MINHOPCOUNT: libc::c_int = 0x2f;
+    #[cfg(target_os = "linux")]
+    use libc::IPV6_MINHOPCOUNT;
+
+    let min_hops: libc::c_int = 255;
+    // SAFETY: setsockopt with a correctly-sized pointer to an integer option.
+    let rc = unsafe {
+        libc::setsockopt(
+            s.as_raw_fd(),
+            libc::IPPROTO_IPV6,
+            IPV6_MINHOPCOUNT,
+            &min_hops as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc < 0 {
+        return Err(ListeningSocketError::SetIpv6MinHopCount(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "illumos")))]
+fn set_min_hopcount(_s: &Socket) -> Result<(), ListeningSocketError> {
+    Ok(())
 }

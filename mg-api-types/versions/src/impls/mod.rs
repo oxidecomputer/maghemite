@@ -4,6 +4,7 @@
 
 //! Functional code for the latest versions of types.
 
+pub(crate) mod bfd;
 pub(crate) mod bgp;
 mod common;
 pub(crate) mod rdb;

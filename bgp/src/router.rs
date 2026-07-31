@@ -305,6 +305,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ensure_session(
         self: &Arc<Self>,
         peer: PeerConfig,
@@ -312,53 +313,28 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let sessions = lock!(self.sessions);
-        let key = PeerId::Ip(peer.host.ip());
-        if sessions.contains_key(&key) {
+        if sessions.contains_key(&peer.id) {
             drop(sessions);
             Ok(EnsureSessionResult::Updated(
                 self.update_session(peer, info)?,
             ))
         } else {
             Ok(EnsureSessionResult::New(self.new_session_locked(
-                sessions, key, peer, bind_addr, event_tx, event_rx, info, None,
-            )?))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn ensure_unnumbered_session(
-        self: &Arc<Self>,
-        interface: String,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
-        event_tx: Sender<FsmEvent<Cnx>>,
-        event_rx: Receiver<FsmEvent<Cnx>>,
-        info: SessionInfo,
-        unnumbered_manager: Arc<dyn UnnumberedManager>,
-    ) -> Result<EnsureSessionResult<Cnx>, Error> {
-        let sessions = lock!(self.sessions);
-        let key = PeerId::Interface(interface.clone());
-        if sessions.contains_key(&key) {
-            drop(sessions);
-            Ok(EnsureSessionResult::Updated(
-                self.update_unnumbered_session(&interface, peer, info)?,
-            ))
-        } else {
-            Ok(EnsureSessionResult::New(self.new_session_locked(
                 sessions,
-                key,
                 peer,
                 bind_addr,
                 event_tx,
                 event_rx,
                 info,
-                Some(unnumbered_manager),
+                unnumbered_manager,
             )?))
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_session(
         self: &Arc<Self>,
         peer: PeerConfig,
@@ -366,43 +342,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let sessions = lock!(self.sessions);
-        let key = PeerId::Ip(peer.host.ip());
-        if sessions.contains_key(&key) {
-            Err(Error::PeerExists)
-        } else {
-            self.new_session_locked(
-                sessions, key, peer, bind_addr, event_tx, event_rx, info, None,
-            )
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_unnumbered_session(
-        self: &Arc<Self>,
-        interface: String,
-        peer: PeerConfig,
-        bind_addr: Option<SocketAddr>,
-        event_tx: Sender<FsmEvent<Cnx>>,
-        event_rx: Receiver<FsmEvent<Cnx>>,
-        info: SessionInfo,
-        unnumbered_manager: Arc<dyn UnnumberedManager>,
-    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let sessions = lock!(self.sessions);
-        let key = PeerId::Interface(interface);
-        if sessions.contains_key(&key) {
+        if sessions.contains_key(&peer.id) {
             Err(Error::PeerExists)
         } else {
             self.new_session_locked(
                 sessions,
-                key,
                 peer,
                 bind_addr,
                 event_tx,
                 event_rx,
                 info,
-                Some(unnumbered_manager),
+                unnumbered_manager,
             )
         }
     }
@@ -411,7 +364,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     fn new_session_locked(
         self: &Arc<Self>,
         mut sessions: MutexGuard<SessionMap<Cnx>>,
-        peer_id: PeerId,
         peer: PeerConfig,
         bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
@@ -434,8 +386,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let neighbor = NeighborInfo {
             name: Arc::new(Mutex::new(peer.name.clone())),
             peer_group: peer.group.clone(),
-            peer: peer_id,
-            port: peer.host.port(),
+            peer: peer.id.clone(),
+            port: peer.port,
         };
 
         let runner = Arc::new(SessionRunner::new(
@@ -460,33 +412,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         peer: PeerConfig,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        // Use PeerId::Ip for numbered sessions
-        let key = PeerId::Ip(peer.host.ip());
+        let key = peer.id.clone();
         let session = match lock!(self.sessions).get(&key) {
-            None => return Err(Error::UnknownPeer(peer.host.ip())),
-            Some(s) => s.clone(),
-        };
-
-        session.update_session_parameters(peer, info)?;
-
-        Ok(session)
-    }
-
-    pub fn update_unnumbered_session(
-        self: &Arc<Self>,
-        interface: &str,
-        peer: PeerConfig,
-        info: SessionInfo,
-    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        // Use PeerId::Interface for unnumbered sessions
-        let key = PeerId::Interface(interface.to_string());
-        let session = match lock!(self.sessions).get(&key) {
-            None => {
-                return Err(Error::InternalCommunication(format!(
-                    "unnumbered session not found for interface: {}",
-                    interface
-                )));
-            }
+            None => return Err(Error::UnknownPeer(key)),
             Some(s) => s.clone(),
         };
 
@@ -524,7 +452,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 IpNet::V6(_) => None,
             })
             .collect();
-        self.db.create_origin4(&prefix4)?;
+        self.db.create_origin4(self.config.asn, &prefix4)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
@@ -534,7 +462,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn set_origin4(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
-        let origin4 = self.db.get_origin4()?;
+        let origin4 = self.db.get_origin4(self.config.asn)?;
         let current: BTreeSet<&Ipv4Net> = origin4.iter().collect();
 
         let prefix4: Vec<Ipv4Net> = prefixes
@@ -554,7 +482,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let to_announce: Vec<Ipv4Net> =
             new.difference(&current).map(|x| **x).collect();
 
-        self.db.set_origin4(&prefix4)?;
+        self.db.set_origin4(self.config.asn, &prefix4)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
@@ -565,13 +493,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn clear_origin4(&self) -> Result<(), Error> {
-        let current = self.db.get_origin4()?;
+        let current = self.db.get_origin4(self.config.asn)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
             self.withdraw_origin4(current);
         }
-        self.db.clear_origin4()?;
+        self.db.clear_origin4(self.config.asn)?;
         Ok(())
     }
 
@@ -628,7 +556,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 IpNet::V4(_) => None,
             })
             .collect();
-        self.db.create_origin6(&prefix6)?;
+        self.db.create_origin6(self.config.asn, &prefix6)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
@@ -638,7 +566,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn set_origin6(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
-        let origin6 = self.db.get_origin6()?;
+        let origin6 = self.db.get_origin6(self.config.asn)?;
         let current: BTreeSet<&Ipv6Net> = origin6.iter().collect();
 
         let prefix6: Vec<Ipv6Net> = prefixes
@@ -658,7 +586,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let to_announce: Vec<Ipv6Net> =
             new.difference(&current).map(|x| **x).collect();
 
-        self.db.set_origin6(&prefix6)?;
+        self.db.set_origin6(self.config.asn, &prefix6)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
@@ -669,14 +597,24 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn clear_origin6(&self) -> Result<(), Error> {
-        let current = self.db.get_origin6()?;
+        let current = self.db.get_origin6(self.config.asn)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
             self.withdraw_origin6(current);
         }
-        self.db.clear_origin6()?;
+        self.db.clear_origin6(self.config.asn)?;
         Ok(())
+    }
+
+    /// Prefixes this router is currently originating into IPv4 unicast.
+    pub fn originated4(&self) -> Result<Vec<Ipv4Net>, rdb::error::Error> {
+        self.db.get_origin4(self.config.asn)
+    }
+
+    /// Prefixes this router is currently originating into IPv6 unicast.
+    pub fn originated6(&self) -> Result<Vec<Ipv6Net>, rdb::error::Error> {
+        self.db.get_origin6(self.config.asn)
     }
 
     fn announce_origin6(&self, prefixes: Vec<Ipv6Net>) {
@@ -788,7 +726,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     fn announce_all(&self) -> Result<(), Error> {
-        let originated4 = self.db.get_origin4()?;
+        let originated4 = self.db.get_origin4(self.config.asn)?;
 
         if !originated4.is_empty() {
             slog::debug!(
@@ -802,7 +740,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
 
         // Also announce IPv6 originated routes
-        let originated6 = self.db.get_origin6()?;
+        let originated6 = self.db.get_origin6(self.config.asn)?;
 
         if !originated6.is_empty() {
             slog::debug!(
