@@ -22,6 +22,10 @@ mgd_api := "-p mg-api"
 ddm_api := "-p ddm-api"
 all_api := mgd_api + " " + ddm_api
 
+# Some tests require sudo on Linux. Let's ask for it up front so the run
+# prompts at most once, not per test.
+sudo_prompt := if os() == "linux" { "sudo -v" } else { "true" }
+
 # Select package group for test/nextest (all excludes mg-tests).
 pkgs(target) := if target == "ddm" {
     ddm_pkgs
@@ -56,11 +60,13 @@ build *ARGS:
 # Run cargo test for a target: `all`, `mgd`, or `ddm` (default: all).
 [arg('target', pattern='all|ddm|mgd')]
 test target='all':
+    @{{ sudo_prompt }}
     cargo test {{ pkgs(target) }}
 
 # Run cargo nextest for a target: `all`, `mgd`, or `ddm` (default: all).
 [arg('target', pattern='all|ddm|mgd')]
 nextest target='all':
+    @{{ sudo_prompt }}
     cargo nextest run {{ pkgs(target) }}
 
 # Build a daemon binary: `mgd`, `ddm`, or `all` (default: all).
