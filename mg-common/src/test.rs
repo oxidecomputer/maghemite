@@ -239,8 +239,15 @@ impl LoopbackIpManager {
 /// Returns true for addresses that are always present on loopback interfaces
 /// and should never be installed or removed by the manager.
 fn is_always_present(addr: IpAddr) -> bool {
-    addr == IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-        || addr == IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+    match addr {
+        // Linux configures `lo` with 127.0.0.1/8, so every address in
+        // 127.0.0.0/8 is already local and binds to it succeed without the
+        // address being installed. illumos and macOS instead require each
+        // loopback address to be configured explicitly.
+        IpAddr::V4(v4) if cfg!(target_os = "linux") => v4.is_loopback(),
+        IpAddr::V4(v4) => v4 == std::net::Ipv4Addr::LOCALHOST,
+        IpAddr::V6(v6) => v6 == std::net::Ipv6Addr::LOCALHOST,
+    }
 }
 
 // Helper functions for lockfile-based reference counting
@@ -284,7 +291,8 @@ impl LoopbackIpManager {
     }
 
     /// Install a single IP address with proper refcount management
-    /// Skips 127.0.0.1/::1 as they're always present on loopback interfaces
+    /// Skips addresses the platform already has on loopback, see
+    /// [`is_always_present`]
     fn install_single_ip_static(
         ifname: &str,
         log: &Logger,
@@ -416,7 +424,8 @@ impl LoopbackIpManager {
     }
 
     /// Uninstall a single IP address with proper refcount management
-    /// Skips 127.0.0.1 as it should always remain on loopback interfaces
+    /// Skips addresses the platform already has on loopback, see
+    /// [`is_always_present`]
     fn uninstall_single_ip(&mut self, target_addr: IpAddr) {
         if is_always_present(target_addr) {
             info!(
@@ -657,6 +666,13 @@ pub fn count_threads_with_prefix(
         for entry in fs::read_dir(task_dir)? {
             let entry = entry?;
             let tid = entry.file_name();
+
+            // On Linux we need to ignore the main thread. The binary cargo builds
+            // is named `<prefix>-<hash>`, producing thread names like `bgp-<hash>`.
+            if tid.to_string_lossy() == pid.to_string() {
+                continue;
+            }
+
             let comm_path =
                 format!("/proc/{}/task/{}/comm", pid, tid.to_string_lossy());
 
