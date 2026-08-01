@@ -1603,18 +1603,43 @@ fn setup_outbound_md5(
 mod tests {
     use super::*;
     use mg_api_types::common::headers::Dscp;
-    use std::net::{TcpListener, TcpStream};
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     use std::os::fd::AsRawFd;
 
+    fn dual_stack_connection(
+        connect_ip: IpAddr,
+    ) -> (TcpStream, TcpStream, SocketAddr) {
+        let listener =
+            Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))
+                .unwrap();
+        listener.set_only_v6(false).unwrap();
+        listener
+            .bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())
+            .unwrap();
+        listener.listen(1).unwrap();
+
+        let port = listener.local_addr().unwrap().as_socket().unwrap().port();
+        let client = TcpStream::connect((connect_ip, port)).unwrap();
+        let listener: TcpListener = listener.into();
+        let (accepted, peer) = listener.accept().unwrap();
+
+        assert!(peer.is_ipv6());
+        assert!(accepted.local_addr().unwrap().is_ipv6());
+        let peer = SocketAddr::new(peer.ip().to_canonical(), peer.port());
+        assert_eq!(peer.is_ipv4(), connect_ip.is_ipv4());
+
+        (client, accepted, peer)
+    }
+
     #[test]
     fn apply_dscp_sets_ip_tos() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stream = TcpStream::connect(addr).unwrap();
+        let (_client, stream, peer) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
         let dscp = Dscp::from_dscp_value(48).unwrap();
-        apply_dscp(&stream, dscp, addr).unwrap();
+        apply_dscp(&stream, dscp, peer).unwrap();
 
         let readback = SockRef::from(&stream).tos_v4().unwrap();
         // DSCP 48 → TOS byte = 48 << 2 = 192
@@ -1623,12 +1648,11 @@ mod tests {
 
     #[test]
     fn apply_dscp_sets_ipv6_tclass() {
-        let listener = TcpListener::bind("[::1]:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stream = TcpStream::connect(addr).unwrap();
+        let (_client, stream, peer) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
 
         let dscp = Dscp::from_dscp_value(46).unwrap(); // EF
-        apply_dscp(&stream, dscp, addr).unwrap();
+        apply_dscp(&stream, dscp, peer).unwrap();
 
         let readback = SockRef::from(&stream).tclass_v6().unwrap();
         // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
@@ -1637,11 +1661,10 @@ mod tests {
 
     #[test]
     fn apply_min_ttl_sets_ipv4_ttl() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stream = TcpStream::connect(addr).unwrap();
+        let (_client, stream, peer) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-        apply_ttl(&stream, NonZeroU8::new(42), addr).unwrap();
+        apply_ttl(&stream, NonZeroU8::new(42), peer).unwrap();
 
         let readback = SockRef::from(&stream).ttl_v4().unwrap();
         assert_eq!(readback, 42);
@@ -1649,11 +1672,10 @@ mod tests {
 
     #[test]
     fn apply_min_ttl_sets_ipv6_unicast_hops() {
-        let listener = TcpListener::bind("[::1]:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stream = TcpStream::connect(addr).unwrap();
+        let (_client, stream, peer) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
 
-        apply_ttl(&stream, NonZeroU8::new(42), addr).unwrap();
+        apply_ttl(&stream, NonZeroU8::new(42), peer).unwrap();
 
         let readback = SockRef::from(&stream).unicast_hops_v6().unwrap();
         assert_eq!(readback, 42);
@@ -1663,11 +1685,10 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     #[test]
     fn apply_min_ttl_sets_ipv4_minttl_filter() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stream = TcpStream::connect(addr).unwrap();
+        let (_client, stream, peer) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-        apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
+        apply_ttl(&stream, NonZeroU8::new(200), peer).unwrap();
 
         let mut readback: c_int = 0;
         let mut len = std::mem::size_of_val(&readback) as socklen_t;
@@ -1687,11 +1708,10 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     #[test]
     fn apply_min_ttl_sets_ipv6_minhopcount_filter() {
-        let listener = TcpListener::bind("[::1]:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stream = TcpStream::connect(addr).unwrap();
+        let (_client, stream, peer) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
 
-        apply_ttl(&stream, NonZeroU8::new(200), addr).unwrap();
+        apply_ttl(&stream, NonZeroU8::new(200), peer).unwrap();
 
         let mut readback: c_int = 0;
         let mut len = std::mem::size_of_val(&readback) as socklen_t;
