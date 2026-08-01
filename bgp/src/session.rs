@@ -4465,6 +4465,29 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
 
+                    AdminEvent::SocketOptionChanged(option) => {
+                        if let Err(e) = exist.conn.update_socket_option(&option)
+                        {
+                            session_log!(
+                                self,
+                                error,
+                                exist.conn,
+                                "exist conn failed to update socket option: {e}";
+                                "error" => format!("{e}")
+                            );
+                        }
+                        if let Err(e) = new.update_socket_option(&option) {
+                            session_log!(
+                                self,
+                                error,
+                                new,
+                                "new conn failed to update socket option: {e}";
+                                "error" => format!("{e}")
+                            );
+                        }
+                        continue;
+                    }
+
                     AdminEvent::Announce(_)
                     | AdminEvent::ShaperChanged(_)
                     | AdminEvent::ExportPolicyChanged(_)
@@ -4472,8 +4495,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
                     | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::EnforceFirstAsEnabled
-                    | AdminEvent::SocketOptionChanged(_) => {
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -5317,6 +5339,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
 
+                    AdminEvent::SocketOptionChanged(option) => {
+                        if let Err(e) = exist.update_socket_option(&option) {
+                            session_log!(
+                                self,
+                                error,
+                                exist,
+                                "exist conn failed to update socket option: {e}";
+                                "error" => format!("{e}")
+                            );
+                        }
+                        if let Err(e) = new.update_socket_option(&option) {
+                            session_log!(
+                                self,
+                                error,
+                                new,
+                                "new conn failed to update socket option: {e}";
+                                "error" => format!("{e}")
+                            );
+                        }
+                        continue;
+                    }
+
                     AdminEvent::Announce(_)
                     | AdminEvent::ShaperChanged(_)
                     | AdminEvent::ExportPolicyChanged(_)
@@ -5324,8 +5368,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
                     | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::EnforceFirstAsEnabled
-                    | AdminEvent::SocketOptionChanged(_) => {
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
