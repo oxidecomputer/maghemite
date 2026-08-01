@@ -1218,18 +1218,39 @@ fn create_outbound_socket(
     })
 }
 
-/// Apply IPv4 DSCP or IPv6 Traffic Class marking to a BGP TCP connection.
-fn apply_dscp(
-    sock: &impl AsFd,
-    dscp: Dscp,
-    peer: SocketAddr,
-) -> Result<(), Error> {
-    let tos = u32::from(dscp.as_tos_byte());
-    let sock = SockRef::from(sock);
-    if peer.is_ipv4() {
-        sock.set_tos_v4(tos).map_err(Error::Io)
-    } else {
-        sock.set_tclass_v6(tos).map_err(Error::Io)
+enum SockoptDomain {
+    AfInet,
+    AfInet6,
+}
+
+/// Determine whether an IP socket needs IPv4-level socket options.
+fn sockopt_domain(
+    _sock: &impl AsFd,
+    _peer: SocketAddr,
+) -> Result<SockoptDomain, Error> {
+    #[cfg(target_os = "linux")]
+    {
+        match _peer.is_ipv4() {
+            true => SockoptDomain::AfInet,
+            false => SockoptDomain::AfInet6,
+        }
+    }
+
+    #[cfg(any(target_os = "illumos", target_os = "macos"))]
+    {
+        SockRef::from(_sock)
+            .local_addr()
+            .map_err(Error::Io)?
+            .as_socket()
+            .map(|addr| match addr.is_ipv4() {
+                true => SockoptDomain::AfInet,
+                false => SockoptDomain::AfInet6,
+            })
+            .ok_or_else(|| {
+                Error::InvalidAddress(
+                    "socket does not have an IP address".into(),
+                )
+            })
     }
 }
 
@@ -1295,20 +1316,19 @@ fn apply_ttl(
 }
 
 /// Set the outgoing TTL/hop-limit on a TCP socket.
-///
-/// Uses IP_TTL for IPv4 and IPV6_UNICAST_HOPS for IPv6 via socket2.
-/// `TcpStream::set_ttl` would only set IP_TTL — silently a no-op on
-/// IPv6 sockets — so dispatch on the peer's address family.
 fn set_outgoing_ttl(
     sock: &impl AsFd,
     ttl: u8,
     peer: SocketAddr,
 ) -> Result<(), Error> {
+    let domain = sockopt_domain(sock, peer)?;
+    let ttl = u32::from(ttl);
     let sock = SockRef::from(sock);
-    if peer.is_ipv4() {
-        sock.set_ttl_v4(u32::from(ttl)).map_err(Error::Io)
-    } else {
-        sock.set_unicast_hops_v6(u32::from(ttl)).map_err(Error::Io)
+    match domain {
+        SockoptDomain::AfInet => sock.set_ttl_v4(ttl).map_err(Error::Io),
+        SockoptDomain::AfInet6 => {
+            sock.set_unicast_hops_v6(ttl).map_err(Error::Io)
+        }
     }
 }
 
@@ -1325,10 +1345,9 @@ fn set_ip_minttl(
 ) -> Result<(), Error> {
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
-        let (proto, optname) = if peer.is_ipv4() {
-            (IPPROTO_IP, IP_MINTTL)
-        } else {
-            (IPPROTO_IPV6, IPV6_MINHOPCOUNT)
+        let (proto, optname) = match sockopt_domain(sock, peer)? {
+            SockoptDomain::AfInet => (IPPROTO_IP, IP_MINTTL),
+            SockoptDomain::AfInet6 => (IPPROTO_IPV6, IPV6_MINHOPCOUNT),
         };
         let min_ttl = c_int::from(ttl);
         let rc = unsafe {
@@ -1345,6 +1364,21 @@ fn set_ip_minttl(
         }
     }
     Ok(())
+}
+
+/// Apply IPv4 DSCP or IPv6 Traffic Class marking to a BGP TCP connection.
+fn apply_dscp(
+    sock: &impl AsFd,
+    dscp: Dscp,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    let tos = u32::from(dscp.as_tos_byte());
+    let domain = sockopt_domain(sock, peer)?;
+    let sock = SockRef::from(sock);
+    match domain {
+        SockoptDomain::AfInet => sock.set_tos_v4(tos).map_err(Error::Io),
+        SockoptDomain::AfInet6 => sock.set_tclass_v6(tos).map_err(Error::Io),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1602,10 +1636,10 @@ fn setup_outbound_md5(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libc::{IPPROTO_IP, IPPROTO_IPV6, c_int, c_void, socklen_t};
     use mg_api_types::common::headers::Dscp;
     use socket2::{Domain, Protocol, Socket, Type};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
-    #[cfg(any(target_os = "linux", target_os = "illumos"))]
     use std::os::fd::AsRawFd;
 
     fn dual_stack_connection(
@@ -1633,15 +1667,179 @@ mod tests {
         (client, accepted, peer)
     }
 
+    fn report_int_sockopt_probe(
+        sock: &impl AsRawFd,
+        name: &str,
+        level: c_int,
+        option: Option<c_int>,
+        set_value: c_int,
+    ) {
+        let Some(option) = option else {
+            eprintln!(
+                "{name}: unavailable on {}; setsockopt => rc=N/A, \
+                 errno=N/A; getsockopt => rc=N/A, errno=N/A, \
+                 value=None, len=N/A",
+                std::env::consts::OS,
+            );
+            return;
+        };
+
+        let set_rc = unsafe {
+            libc::setsockopt(
+                sock.as_raw_fd(),
+                level,
+                option,
+                &set_value as *const c_int as *const c_void,
+                std::mem::size_of_val(&set_value) as socklen_t,
+            )
+        };
+        let set_errno = if set_rc == 0 {
+            None
+        } else {
+            std::io::Error::last_os_error().raw_os_error()
+        };
+
+        let mut readback: c_int = -1;
+        let mut readback_len = std::mem::size_of_val(&readback) as socklen_t;
+        let get_rc = unsafe {
+            libc::getsockopt(
+                sock.as_raw_fd(),
+                level,
+                option,
+                &mut readback as *mut c_int as *mut c_void,
+                &mut readback_len,
+            )
+        };
+        let get_errno = if get_rc == 0 {
+            None
+        } else {
+            std::io::Error::last_os_error().raw_os_error()
+        };
+        let returned_value = (get_rc == 0).then_some(readback);
+
+        eprintln!(
+            "{name} (level={level}, option={option}): \
+             setsockopt(value={set_value}) => rc={set_rc}, \
+             errno={set_errno:?}; getsockopt() => rc={get_rc}, \
+             errno={get_errno:?}, value={returned_value:?}, \
+             len={readback_len}"
+        );
+    }
+
     #[test]
-    fn apply_dscp_sets_ip_tos() {
+    fn report_mapped_ipv4_socket_option_matrix() {
+        #[cfg(any(target_os = "linux", target_os = "illumos"))]
+        let ipv6_minhopcount = Some(libc::IPV6_MINHOPCOUNT);
+        #[cfg(target_os = "macos")]
+        let ipv6_minhopcount = None;
+
+        #[cfg(any(target_os = "linux", target_os = "illumos"))]
+        let ip_minttl = Some(libc::IP_MINTTL);
+        #[cfg(target_os = "macos")]
+        let ip_minttl = None;
+
+        {
+            let (_client, stream, peer) =
+                dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+            eprintln!(
+                "IPv6-level options: local={}, accepted peer={}, \
+                 canonical peer={peer}",
+                stream.local_addr().unwrap(),
+                stream.peer_addr().unwrap(),
+            );
+            for (name, option, value) in [
+                (
+                    "IPPROTO_IPV6/IPV6_UNICAST_HOPS",
+                    Some(libc::IPV6_UNICAST_HOPS),
+                    42,
+                ),
+                ("IPPROTO_IPV6/IPV6_TCLASS", Some(libc::IPV6_TCLASS), 192),
+                ("IPPROTO_IPV6/IPV6_MINHOPCOUNT", ipv6_minhopcount, 200),
+            ] {
+                report_int_sockopt_probe(
+                    &stream,
+                    name,
+                    IPPROTO_IPV6,
+                    option,
+                    value,
+                );
+            }
+        }
+
+        {
+            let (_client, stream, peer) =
+                dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+            eprintln!(
+                "IPv4-level options: local={}, accepted peer={}, \
+                 canonical peer={peer}",
+                stream.local_addr().unwrap(),
+                stream.peer_addr().unwrap(),
+            );
+            for (name, option, value) in [
+                ("IPPROTO_IP/IP_TTL", Some(libc::IP_TTL), 42),
+                ("IPPROTO_IP/IP_TOS", Some(libc::IP_TOS), 192),
+                ("IPPROTO_IP/IP_MINTTL", ip_minttl, 200),
+            ] {
+                report_int_sockopt_probe(
+                    &stream, name, IPPROTO_IP, option, value,
+                );
+            }
+        }
+    }
+
+    fn read_connection_qos(sock: &impl AsFd, peer: SocketAddr) -> u32 {
+        let domain = sockopt_domain(sock, peer).unwrap();
+        let sock = SockRef::from(sock);
+        match domain {
+            SockoptDomain::AfInet => sock.tos_v4().unwrap(),
+            SockoptDomain::AfInet6 => sock.tclass_v6().unwrap(),
+        }
+    }
+
+    fn read_connection_ttl(sock: &impl AsFd, peer: SocketAddr) -> u32 {
+        let domain = sockopt_domain(sock, peer).unwrap();
+        let sock = SockRef::from(sock);
+        match domain {
+            SockoptDomain::AfInet => sock.ttl_v4().unwrap(),
+            SockoptDomain::AfInet6 => sock.unicast_hops_v6().unwrap(),
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
+    fn read_connection_min_ttl(
+        sock: &(impl AsFd + AsRawFd),
+        peer: SocketAddr,
+    ) -> c_int {
+        let (proto, optname) = match sockopt_domain(sock, peer).unwrap() {
+            SockoptDomain::AfInet => (IPPROTO_IP, IP_MINTTL),
+            SockoptDomain::AfInet6 => (IPPROTO_IPV6, IPV6_MINHOPCOUNT),
+        };
+        let mut readback: c_int = 0;
+        let mut len = std::mem::size_of_val(&readback) as socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                sock.as_raw_fd(),
+                proto,
+                optname,
+                &mut readback as *mut c_int as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        readback
+    }
+
+    #[test]
+    fn apply_dscp_sets_ipv4_connection_qos() {
         let (_client, stream, peer) =
             dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
         let dscp = Dscp::from_dscp_value(48).unwrap();
         apply_dscp(&stream, dscp, peer).unwrap();
 
-        let readback = SockRef::from(&stream).tos_v4().unwrap();
+        let readback = read_connection_qos(&stream, peer);
         // DSCP 48 → TOS byte = 48 << 2 = 192
         assert_eq!(readback, u32::from(dscp.as_tos_byte()));
     }
@@ -1654,19 +1852,19 @@ mod tests {
         let dscp = Dscp::from_dscp_value(46).unwrap(); // EF
         apply_dscp(&stream, dscp, peer).unwrap();
 
-        let readback = SockRef::from(&stream).tclass_v6().unwrap();
+        let readback = read_connection_qos(&stream, peer);
         // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
         assert_eq!(readback, u32::from(dscp.as_tos_byte()));
     }
 
     #[test]
-    fn apply_min_ttl_sets_ipv4_ttl() {
+    fn apply_min_ttl_sets_ipv4_connection_ttl() {
         let (_client, stream, peer) =
             dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
         apply_ttl(&stream, NonZeroU8::new(42), peer).unwrap();
 
-        let readback = SockRef::from(&stream).ttl_v4().unwrap();
+        let readback = read_connection_ttl(&stream, peer);
         assert_eq!(readback, 42);
     }
 
@@ -1677,7 +1875,7 @@ mod tests {
 
         apply_ttl(&stream, NonZeroU8::new(42), peer).unwrap();
 
-        let readback = SockRef::from(&stream).unicast_hops_v6().unwrap();
+        let readback = read_connection_ttl(&stream, peer);
         assert_eq!(readback, 42);
     }
 
@@ -1690,19 +1888,23 @@ mod tests {
 
         apply_ttl(&stream, NonZeroU8::new(200), peer).unwrap();
 
-        let mut readback: c_int = 0;
-        let mut len = std::mem::size_of_val(&readback) as socklen_t;
-        let rc = unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                IPPROTO_IP,
-                IP_MINTTL,
-                &mut readback as *mut c_int as *mut c_void,
-                &mut len,
-            )
-        };
-        assert_eq!(rc, 0, "getsockopt failed");
+        let readback = read_connection_min_ttl(&stream, peer);
         assert_eq!(readback, 200);
+    }
+
+    #[test]
+    fn native_ipv4_socket_uses_ipv4_options() {
+        let socket =
+            Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+                .unwrap();
+        let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, 179));
+        let dscp = Dscp::from_dscp_value(48).unwrap();
+
+        apply_ttl(&socket, NonZeroU8::new(42), peer).unwrap();
+        apply_dscp(&socket, dscp, peer).unwrap();
+
+        assert_eq!(socket.ttl_v4().unwrap(), 42);
+        assert_eq!(socket.tos_v4().unwrap(), u32::from(dscp.as_tos_byte()));
     }
 
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
@@ -1713,18 +1915,7 @@ mod tests {
 
         apply_ttl(&stream, NonZeroU8::new(200), peer).unwrap();
 
-        let mut readback: c_int = 0;
-        let mut len = std::mem::size_of_val(&readback) as socklen_t;
-        let rc = unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                IPPROTO_IPV6,
-                IPV6_MINHOPCOUNT,
-                &mut readback as *mut c_int as *mut c_void,
-                &mut len,
-            )
-        };
-        assert_eq!(rc, 0, "getsockopt failed");
+        let readback = read_connection_min_ttl(&stream, peer);
         assert_eq!(readback, 200);
     }
 }

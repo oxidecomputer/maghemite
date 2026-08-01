@@ -1214,7 +1214,8 @@ fn session_update_dscp_min_ttl_helper(
     let peer_config = PeerConfig {
         name: "r2".into(),
         group: String::new(),
-        host: r2_addr,
+        id: PeerId::Ip(r2_addr.ip()),
+        port: NonZeroU16::new(r2_addr.port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 10,
         delay_open: 0,
@@ -1247,7 +1248,8 @@ fn session_update_dscp_min_ttl_helper(
     let r2_peer_config = PeerConfig {
         name: "r1".into(),
         group: String::new(),
-        host: r1_addr,
+        id: PeerId::Ip(r1_addr.ip()),
+        port: NonZeroU16::new(r1_addr.port()).unwrap_or(BGP_PORT),
         hold_time: 6,
         idle_hold_time: 10,
         delay_open: 0,
