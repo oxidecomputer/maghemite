@@ -39,6 +39,7 @@ use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types_versions::{v1, v4};
 use mg_common::{IpNetExt, lock, read_lock, write_lock};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db};
@@ -52,7 +53,7 @@ use std::{
     num::NonZeroU16,
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
         mpsc::{Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -1561,6 +1562,78 @@ impl<Cnx: BgpConnection> Default for ConnectionRegistry<Cnx> {
     }
 }
 
+/// Where a session runner is in the shutdown lifecycle.
+///
+/// This is distinct from `FsmStateKind`, which tracks the BGP protocol
+/// state machine.
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive,
+)]
+#[repr(u8)]
+pub(crate) enum ShutdownState {
+    /// No shutdown has ever been requested.
+    ///
+    /// This is the initial state; a runner can never return to it.
+    NotRequested = 0,
+
+    /// A shutdown has been requested, but not yet completed.
+    ///
+    /// The state transitions here from any state on
+    /// `SessionRunner::shutdown()`.
+    Requested = 1,
+
+    /// A requested shutdown finished.
+    ///
+    /// Set when `on_shutdown` completes. This could be combined with
+    /// `NotRequested` in principle, but keeping them distinct allows a
+    /// completed shutdown to be observable in tests.
+    Complete = 2,
+}
+
+struct AtomicShutdownState(AtomicU8);
+
+impl AtomicShutdownState {
+    fn new() -> Self {
+        Self(AtomicU8::new(ShutdownState::NotRequested.into()))
+    }
+
+    fn load(&self) -> ShutdownState {
+        ShutdownState::try_from(self.0.load(Ordering::Acquire))
+            .expect("atomic holds a ShutdownState discriminant")
+    }
+
+    fn is_requested(&self) -> bool {
+        match self.load() {
+            ShutdownState::Requested => true,
+            ShutdownState::NotRequested | ShutdownState::Complete => false,
+        }
+    }
+
+    /// Move to `Requested`.
+    ///
+    /// `Complete -> Requested` is a valid transition if the session is running.
+    /// But there's a hazard here: a request landing on an already-stopped
+    /// runner will make its next start immediately stop.
+    fn request_shutdown(&self) {
+        self.0
+            .store(ShutdownState::Requested.into(), Ordering::Release);
+    }
+
+    /// Transition from `Requested` to `Complete`.
+    fn finish_shutdown(&self) -> Result<(), ShutdownState> {
+        match self.0.compare_exchange(
+            ShutdownState::Requested.into(),
+            ShutdownState::Complete.into(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(()),
+            Err(observed) => Err(ShutdownState::try_from(observed)
+                .expect("atomic holds a ShutdownState discriminant")),
+        }
+    }
+}
+
 #[expect(dead_code)]
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
@@ -1662,7 +1735,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Capabilities to send to the peer
     pub caps_tx: Arc<Mutex<BTreeSet<Capability>>>,
 
-    shutdown: AtomicBool,
+    shutdown_state: AtomicShutdownState,
     db: Db,
     fanout4: Arc<RwLock<Fanout4<Cnx>>>,
     fanout6: Arc<RwLock<Fanout6<Cnx>>>,
@@ -1779,7 +1852,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 router.log.clone(),
             )),
             log: router.log.clone(),
-            shutdown: AtomicBool::new(false),
+            shutdown_state: AtomicShutdownState::new(),
             fanout4: router.fanout4.clone(),
             fanout6: router.fanout6.clone(),
             router: router.clone(),
@@ -1865,16 +1938,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Request a peer session shutdown. Does not shut down the session right
-    /// away. Simply sets a flag that the session is to be shut down which will
-    /// be acted upon in the state machine loop.
+    /// away. Records the request, which the state machine loop will observe and
+    /// act upon at its next check.
     pub fn shutdown(&self) {
         session_log_lite!(
             self,
             info,
-            "session runner (peer {}) received shutdown request, setting shutdown flag",
+            "session runner (peer {}) received shutdown request",
             self.peer_id();
         );
-        self.shutdown.store(true, Ordering::Release);
+        self.shutdown_state.request_shutdown();
     }
 
     /// Join a connector thread and handle any panic, logging appropriately
@@ -2236,11 +2309,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 session_log_lite!(
                     self,
                     info,
-                    "session runner (peer: {}) caught shutdown flag",
+                    "session runner (peer: {}) observed shutdown request",
                     self.peer_id();
                 );
                 return;
@@ -2396,7 +2469,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 return FsmState::Idle;
             }
 
@@ -2631,7 +2704,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn fsm_connect(&self, event_rx: &Receiver<FsmEvent<Cnx>>) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 return FsmState::Idle;
             }
 
@@ -2969,7 +3042,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn fsm_active(&self, event_rx: &Receiver<FsmEvent<Cnx>>) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 return FsmState::Idle;
             }
 
@@ -3346,7 +3419,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 return FsmState::Idle;
             }
 
@@ -3925,7 +3998,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: PeerConnection<Cnx>,
     ) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
-        if self.shutdown.load(Ordering::Acquire) {
+        if self.shutdown_state.is_requested() {
             return FsmState::Idle;
         }
 
@@ -4460,7 +4533,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 return FsmState::Idle;
             }
 
@@ -5315,7 +5388,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
-            if self.shutdown.load(Ordering::Acquire) {
+            if self.shutdown_state.is_requested() {
                 return FsmState::Idle;
             }
 
@@ -6089,7 +6162,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Sync up with peers.
     fn fsm_session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
-        if self.shutdown.load(Ordering::Acquire) {
+        if self.shutdown_state.is_requested() {
             return FsmState::Idle;
         }
 
@@ -6244,7 +6317,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: PeerConnection<Cnx>,
     ) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
-        if self.shutdown.load(Ordering::Acquire) {
+        if self.shutdown_state.is_requested() {
             return self.exit_established(pc);
         }
 
@@ -7200,15 +7273,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             *(lock!(self.state)) = next;
         }
 
-        // Reset the shutdown signal.
-        self.shutdown.store(false, Ordering::Release);
-
-        session_log_lite!(
-            self,
-            info,
-            "session runner (peer {}): shutdown complete",
-            self.peer_id()
-        );
+        match self.shutdown_state.finish_shutdown() {
+            Ok(()) => {
+                session_log_lite!(
+                    self,
+                    info,
+                    "session runner (peer {}): shutdown complete",
+                    self.peer_id()
+                );
+            }
+            Err(observed) => {
+                // This is unreachable as of this writing. Error loudly, so it's
+                // flagged in logs in case this ever changes.
+                session_log_lite!(
+                    self,
+                    error,
+                    "session runner (peer {}): shutdown housekeeping ran, \
+                     but state was {observed:?}, not Requested",
+                    self.peer_id()
+                );
+            }
+        }
     }
 
     /// Send an event to the state machine driving this peer session.
@@ -9274,6 +9359,39 @@ mod tests {
     use super::*;
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn shutdown_state_transitions() {
+        let s = AtomicShutdownState::new();
+        assert_eq!(s.load(), ShutdownState::NotRequested);
+        assert!(!s.is_requested());
+
+        // Invalid state transition: NotRequested -> Complete.
+        assert_eq!(s.finish_shutdown(), Err(ShutdownState::NotRequested));
+        assert_eq!(s.load(), ShutdownState::NotRequested);
+
+        // NotRequested -> Requested.
+        s.request_shutdown();
+        assert_eq!(s.load(), ShutdownState::Requested);
+        assert!(s.is_requested());
+
+        // Requested -> Requested (a no-op).
+        s.request_shutdown();
+        assert_eq!(s.load(), ShutdownState::Requested);
+
+        // Requested -> Complete.
+        assert_eq!(s.finish_shutdown(), Ok(()));
+        assert_eq!(s.load(), ShutdownState::Complete);
+        assert!(!s.is_requested());
+
+        // Complete -> Complete (a no-op).
+        assert_eq!(s.finish_shutdown(), Err(ShutdownState::Complete));
+        assert_eq!(s.load(), ShutdownState::Complete);
+
+        // Complete -> Requested.
+        s.request_shutdown();
+        assert_eq!(s.load(), ShutdownState::Requested);
+    }
 
     #[test]
     fn test_resolve_collision_decision() {
