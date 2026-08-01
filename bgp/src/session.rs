@@ -1663,7 +1663,6 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     pub caps_tx: Arc<Mutex<BTreeSet<Capability>>>,
 
     shutdown: AtomicBool,
-    running: AtomicBool,
     db: Db,
     fanout4: Arc<RwLock<Fanout4<Cnx>>>,
     fanout6: Arc<RwLock<Fanout6<Cnx>>>,
@@ -1711,28 +1710,21 @@ impl<Cnx: BgpConnection + 'static> FsmDriver<Cnx> {
     /// starts up the FSM on this thread and waits until shutdown.
     pub(crate) fn fsm_start(&self) {
         // Check if this session is already running.
-        if self
-            .runner
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
+        let Some(event_rx) = lock!(self.event_rx).take() else {
+            session_log_lite!(
+                self.runner,
+                warn,
+                "not starting peer state machine: another thread owns it"
+            );
             return;
         };
 
-        // This expect() would fire (and take down the process) if the
-        // `self.runner.running` CAS above were not present.
-        let event_rx = lock!(self.event_rx).take().expect(
-            "receiver available to the thread that won the running CAS",
-        );
-
         self.runner.run_fsm(&event_rx);
-
-        // Restore the event receiver *before* on_shutdown clears `running`.
-        // This order is important for LIFO discipline. (But it also suggests
-        // that running is redundant and should go away.)
-        *lock!(self.event_rx) = Some(event_rx);
         self.runner.on_shutdown();
+
+        // Restore the event receiver *after* on_shutdown so that teardown
+        // completes before a restart.
+        *lock!(self.event_rx) = Some(event_rx);
     }
 }
 
@@ -1788,7 +1780,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             )),
             log: router.log.clone(),
             shutdown: AtomicBool::new(false),
-            running: AtomicBool::new(false),
             fanout4: router.fanout4.clone(),
             fanout6: router.fanout6.clone(),
             router: router.clone(),
@@ -7209,9 +7200,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             *(lock!(self.state)) = next;
         }
 
-        // Reset the shutdown signal and running flag.
+        // Reset the shutdown signal.
         self.shutdown.store(false, Ordering::Release);
-        self.running.store(false, Ordering::Release);
 
         session_log_lite!(
             self,
