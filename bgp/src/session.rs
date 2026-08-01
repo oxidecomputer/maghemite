@@ -1561,10 +1561,19 @@ impl<Cnx: BgpConnection> Default for ConnectionRegistry<Cnx> {
     }
 }
 
+#[expect(dead_code)]
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    const fn probe<Cnx: BgpConnection + 'static>() {
+        assert_send_sync::<SessionRunner<Cnx>>();
+        assert_send_sync::<FsmDriver<Cnx>>()
+    }
+};
+
 /// This is the top level object that tracks a BGP session with a peer. There is
 /// one SessionRunner per peer (based on IP), which transitions the peer through
-/// the Finite State Machine (FSM) via the SessionRunner's fsm_* methods.
-/// The FSM entry  point is fsm_start(), which loops indefinitely, cycling
+/// the Finite State Machine (FSM) via the SessionRunner's fsm_* methods. The
+/// FSM entry point is FsmDriver::fsm_start(), which loops indefinitely, cycling
 /// between FsmStates, until a shutdown request is observed. Each fsm_* method
 /// implements logic to read FSM events in a loop  until an event triggers an
 /// FSM state transition. Sometimes the method has its own loop, and sometimes
@@ -1645,7 +1654,6 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Configuration for this BGP Session
     pub session: Arc<Mutex<SessionInfo>>,
 
-    event_rx: Receiver<FsmEvent<Cnx>>,
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
@@ -1673,8 +1681,60 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     log: Logger,
 }
 
-unsafe impl<Cnx: BgpConnection> Send for SessionRunner<Cnx> {}
-unsafe impl<Cnx: BgpConnection> Sync for SessionRunner<Cnx> {}
+/// The FSM driver for a BGP session, handling state transitions and events.
+pub struct FsmDriver<Cnx: BgpConnection + 'static> {
+    // This could be a plain SessionRunner in principle, but other parts of the
+    // system clone this Arc.
+    runner: Arc<SessionRunner<Cnx>>,
+    // event_rx lives here so that SessionRunner can't reach into it.
+    event_rx: Mutex<Option<Receiver<FsmEvent<Cnx>>>>,
+}
+
+impl<Cnx: BgpConnection + 'static> FsmDriver<Cnx> {
+    pub(crate) fn new(
+        runner: Arc<SessionRunner<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+    ) -> Self {
+        Self {
+            runner,
+            event_rx: Mutex::new(Some(event_rx)),
+        }
+    }
+
+    pub fn runner(&self) -> &Arc<SessionRunner<Cnx>> {
+        &self.runner
+    }
+
+    /// Start the FSM.
+    ///
+    /// If the FSM is already running, this immediately returns. Otherwise, it
+    /// starts up the FSM on this thread and waits until shutdown.
+    pub(crate) fn fsm_start(&self) {
+        // Check if this session is already running.
+        if self
+            .runner
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        };
+
+        // This expect() would fire (and take down the process) if the
+        // `self.runner.running` CAS above were not present.
+        let event_rx = lock!(self.event_rx).take().expect(
+            "receiver available to the thread that won the running CAS",
+        );
+
+        self.runner.run_fsm(&event_rx);
+
+        // Restore the event receiver *before* on_shutdown clears `running`.
+        // This order is important for LIFO discipline. (But it also suggests
+        // that running is redundant and should go away.)
+        *lock!(self.event_rx) = Some(event_rx);
+        self.runner.on_shutdown();
+    }
+}
 
 /// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1702,7 +1762,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// object. Must call `start` to begin the peering state machine.
     pub fn new(
         session: Arc<Mutex<SessionInfo>>,
-        event_rx: Receiver<FsmEvent<Cnx>>,
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
         router: Arc<Router<Cnx>>,
@@ -1711,7 +1770,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
             session: session.clone(),
-            event_rx,
             event_tx: event_tx.clone(),
             asn: router.config.asn,
             id: router.config.id,
@@ -2170,18 +2228,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         registry.clear();
     }
 
-    /// This is the BGP peer state machine entry point. This function only
-    /// returns if a shutdown is requested.
-    pub fn fsm_start(self: &Arc<Self>) {
-        // Check if this session is already running.
-        if self
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
-            return;
-        };
-
+    /// Drive the FSM.
+    ///
+    /// Returns once a shutdown is seen.
+    fn run_fsm(self: &Arc<Self>, event_rx: &Receiver<FsmEvent<Cnx>>) {
         self.initialize_capabilities();
 
         // Run the BGP peer state machine.
@@ -2202,7 +2252,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     "session runner (peer: {}) caught shutdown flag",
                     self.peer_id();
                 );
-                self.on_shutdown();
                 return;
             }
 
@@ -2212,16 +2261,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // function. All handler functions return the next state as their
             // return value, stash that in the `current` variable.
             current = match current {
-                FsmState::Idle => self.fsm_idle(),
-                FsmState::Connect => self.fsm_connect(),
-                FsmState::Active => self.fsm_active(),
-                FsmState::OpenSent(conn) => self.fsm_open_sent(conn),
-                FsmState::OpenConfirm(pc) => self.fsm_open_confirm(pc),
+                FsmState::Idle => self.fsm_idle(event_rx),
+                FsmState::Connect => self.fsm_connect(event_rx),
+                FsmState::Active => self.fsm_active(event_rx),
+                FsmState::OpenSent(conn) => self.fsm_open_sent(event_rx, conn),
+                FsmState::OpenConfirm(pc) => {
+                    self.fsm_open_confirm(event_rx, pc)
+                }
                 FsmState::ConnectionCollision(cpair) => {
-                    self.fsm_connection_collision(cpair)
+                    self.fsm_connection_collision(event_rx, cpair)
                 }
                 FsmState::SessionSetup(pc) => self.fsm_session_setup(pc),
-                FsmState::Established(pc) => self.fsm_established(pc),
+                FsmState::Established(pc) => self.fsm_established(event_rx, pc),
             };
 
             // If we have made a state transition log that and update the
@@ -2322,7 +2373,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Initial state. Refuse all incoming BGP connections. No resources
     /// allocated to peer.
-    fn fsm_idle(&self) -> FsmState<Cnx> {
+    fn fsm_idle(&self, event_rx: &Receiver<FsmEvent<Cnx>>) -> FsmState<Cnx> {
         // Clean up connection registry
         self.cleanup_connections();
 
@@ -2358,7 +2409,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = recv_event_loop!(self, self.event_rx, lite);
+            let event = recv_event_loop!(self, event_rx, lite);
 
             // The only events we react to are ManualStart, Reset and
             // IdleHoldTimerExpires. ManualStart and Reset are explicit requests
@@ -2586,14 +2637,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// is important because in "later" FSM states, a ConnectRetryTimerExpires
     /// event is considered an FSM error that triggers a Notification and an FSM
     /// transition back to idle. So we need to get it right.
-    fn fsm_connect(&self) -> FsmState<Cnx> {
+    fn fsm_connect(&self, event_rx: &Receiver<FsmEvent<Cnx>>) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
                 return FsmState::Idle;
             }
 
-            let event = recv_event_loop!(self, self.event_rx, lite);
+            let event = recv_event_loop!(self, event_rx, lite);
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
@@ -2924,14 +2975,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// is important because in "later" FSM states, a ConnectRetryTimerExpires
     /// event is considered an FSM error that triggers a Notification and an FSM
     /// transition back to idle. So we need to get it right.
-    fn fsm_active(&self) -> FsmState<Cnx> {
+    fn fsm_active(&self, event_rx: &Receiver<FsmEvent<Cnx>>) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
                 return FsmState::Idle;
             }
 
-            let event = recv_event_loop!(self, self.event_rx, lite);
+            let event = recv_event_loop!(self, event_rx, lite);
 
             // The Dispatcher thread is running independently and will hand off
             // any inbound connections via a Connected event. So pretty much all
@@ -3297,14 +3348,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for open message from peer.
-    fn fsm_open_sent(&self, conn: Arc<Cnx>) -> FsmState<Cnx> {
+    fn fsm_open_sent(
+        &self,
+        event_rx: &Receiver<FsmEvent<Cnx>>,
+        conn: Arc<Cnx>,
+    ) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
                 return FsmState::Idle;
             }
 
-            let event = recv_event_loop!(self, self.event_rx, conn, conn);
+            let event = recv_event_loop!(self, event_rx, conn, conn);
 
             // The main thing we really care about in the open sent state is
             // receiving a reciprocal open message from the peer.
@@ -3873,7 +3928,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for keepalive or notification from peer.
-    fn fsm_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    fn fsm_open_confirm(
+        &self,
+        event_rx: &Receiver<FsmEvent<Cnx>>,
+        pc: PeerConnection<Cnx>,
+    ) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
             return FsmState::Idle;
@@ -3881,7 +3940,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         let event = recv_event_return!(
             self,
-            self.event_rx,
+            event_rx,
             FsmState::OpenConfirm(pc),
             pc.conn
         );
@@ -4351,6 +4410,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// is currently in.
     fn fsm_connection_collision(
         self: &Arc<Self>,
+        event_rx: &Receiver<FsmEvent<Cnx>>,
         conn_pair: CollisionPair<Cnx>,
     ) -> FsmState<Cnx> {
         match conn_pair {
@@ -4366,7 +4426,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     exist.conn.conn(),
                     exist.conn.id().short()
                 );
-                self.connection_collision_open_confirm(exist, new)
+                self.connection_collision_open_confirm(event_rx, exist, new)
             }
             CollisionPair::OpenSent(exist, new) => {
                 collision_log!(
@@ -4380,7 +4440,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     exist.conn(),
                     exist.id().short()
                 );
-                self.connection_collision_open_sent(exist, new)
+                self.connection_collision_open_sent(event_rx, exist, new)
             }
         }
     }
@@ -4403,6 +4463,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// do once we have the data available to do so.
     fn connection_collision_open_confirm(
         self: &Arc<Self>,
+        event_rx: &Receiver<FsmEvent<Cnx>>,
         exist: PeerConnection<Cnx>,
         new: Arc<Cnx>,
     ) -> FsmState<Cnx> {
@@ -4412,13 +4473,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = recv_event_loop!(
-                self,
-                self.event_rx,
-                collision,
-                new,
-                exist.conn
-            );
+            let event =
+                recv_event_loop!(self, event_rx, collision, new, exist.conn);
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
@@ -5262,6 +5318,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// OpenConfirm).
     fn connection_collision_open_sent(
         self: &Arc<Self>,
+        event_rx: &Receiver<FsmEvent<Cnx>>,
         exist: Arc<Cnx>,
         new: Arc<Cnx>,
     ) -> FsmState<Cnx> {
@@ -5271,8 +5328,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event =
-                recv_event_loop!(self, self.event_rx, collision, new, exist);
+            let event = recv_event_loop!(self, event_rx, collision, new, exist);
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
@@ -6191,7 +6247,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Able to exchange update, notification and keepliave messages with peers.
-    fn fsm_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    fn fsm_established(
+        &self,
+        event_rx: &Receiver<FsmEvent<Cnx>>,
+        pc: PeerConnection<Cnx>,
+    ) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
             return self.exit_established(pc);
@@ -6199,7 +6259,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         let event = recv_event_return!(
             self,
-            self.event_rx,
+            event_rx,
             FsmState::Established(pc),
             pc.conn
         );
@@ -7114,7 +7174,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     // Housekeeping items to do when a session shutdown is requested.
-    pub fn on_shutdown(&self) {
+    fn on_shutdown(&self) {
         session_log_lite!(
             self,
             info,
