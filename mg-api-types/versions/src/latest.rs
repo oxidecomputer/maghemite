@@ -176,6 +176,29 @@ pub mod rdb {
     pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_STATIC;
 }
 
+pub mod mrib {
+    pub use crate::v13::mrib::DEFAULT_MULTICAST_VNI;
+    pub use crate::v13::mrib::MAX_VNI;
+    pub use crate::v13::mrib::MribAddStaticRequest;
+    pub use crate::v13::mrib::MribDeleteStaticRequest;
+    pub use crate::v13::mrib::MribQuery;
+    pub use crate::v13::mrib::MulticastAddr;
+    pub use crate::v13::mrib::MulticastAddrV4;
+    pub use crate::v13::mrib::MulticastAddrV6;
+    pub use crate::v13::mrib::MulticastError;
+    pub use crate::v13::mrib::MulticastRoute;
+    pub use crate::v13::mrib::MulticastRouteKey;
+    pub use crate::v13::mrib::MulticastRouteKeyV4;
+    pub use crate::v13::mrib::MulticastRouteKeyV6;
+    pub use crate::v13::mrib::MulticastSourceProtocol;
+    pub use crate::v13::mrib::RouteOriginFilter;
+    pub use crate::v13::mrib::StaticMulticastRouteInput;
+    pub use crate::v13::mrib::UnderlayMulticastIpv6;
+    pub use crate::v13::mrib::UnicastAddrV4;
+    pub use crate::v13::mrib::UnicastAddrV6;
+    pub use crate::v13::mrib::Vni;
+}
+
 pub mod ndp {
     pub use crate::v5::ndp::NdpInterface;
     pub use crate::v5::ndp::NdpInterfaceSelector;
