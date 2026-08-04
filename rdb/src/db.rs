@@ -175,8 +175,10 @@ pub struct Db {
     log: Logger,
 }
 
-unsafe impl Sync for Db {}
-unsafe impl Send for Db {}
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Db>()
+};
 
 /// Width in bytes of the ASN prefix prepended to keys in router-scoped trees
 /// (neighbors, originated prefixes). Scoping every per-router key by ASN keeps
@@ -2763,7 +2765,7 @@ mod test {
 
         // Case: IPv6 (S,G) with SSM address (ff3e::)
         let v6_ssm_group = MulticastAddrV6::new(Ipv6Addr::new(
-            0xff3e, 0, 0, 0, 0, 0, 0, 0x1234,
+            0xff3e, 0, 0, 0, 0, 0, 0x8000, 0x1234,
         ))
         .expect("valid mcast");
         let v6_source = UnicastAddrV6::new(Ipv6Addr::new(

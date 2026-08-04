@@ -608,6 +608,20 @@ proptest! {
         );
     }
 
+    /// Property: addresses in the reserved underlay subnet (ff04::/64) are
+    /// rejected as external groups even though admin-local scope is usable
+    #[test]
+    fn prop_multicast_addr_v6_rejects_underlay_subnet(
+        underlay in admin_local_multicast_strategy()
+    ) {
+        let addr = underlay.ip();
+        let result = MulticastAddrV6::new(addr);
+        prop_assert!(
+            result.is_err(),
+            "underlay subnet address {addr} should be rejected"
+        );
+    }
+
     /// Property: `MulticastAddrV4` roundtrip through ip() preserves address
     #[test]
     fn prop_multicast_addr_ip_roundtrip_v4(mcast in any::<MulticastAddrV4>()) {

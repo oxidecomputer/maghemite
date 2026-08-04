@@ -572,9 +572,9 @@ dependencies = [
 
 [[package]]
 name = "camino"
-version = "1.2.4"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f2d30e4173c4026932d51d31d6b0613b1fd3014bf3f9f8943d4ba139c437ba0"
+checksum = "bb1307f12aa967b5a58416e87b3653360e0fd614a016b6e970db08fecbb1b80d"
 dependencies = [
  "serde_core",
 ]
@@ -736,9 +736,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "301b56658598e48f3648647ac6fc887be7e7108eddfa4e9b63fcf3ec58c0cadf"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -746,9 +746,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "94a65403d1a1bd28f7dc68eb8506e8874808ee5eecb59298de588e2e1407a078"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1396,8 +1396,8 @@ dependencies = [
  "libnet",
  "mg-common",
  "omicron-common",
- "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
+ "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
+ "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -3055,7 +3055,7 @@ dependencies = [
 [[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e#3ddd7e684a78ad33be66717408c381b1962ae04e"
+source = "git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91#aa4714289cbf28010a821c49d9b73ec94074fb91"
 dependencies = [
  "bitflags 2.12.1",
 ]
@@ -3158,8 +3158,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a17a93829808685f3b6882763901d7489efc1155ad4ae568499d1b303067ca6"
 dependencies = [
  "bitflags 2.12.1",
- "ingot-macros",
- "ingot-types",
+ "ingot-macros 0.1.1",
+ "ingot-types 0.1.2",
+ "macaddr",
+ "serde",
+ "zerocopy 0.8.50",
+]
+
+[[package]]
+name = "ingot"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20eae0b62f8c5e0215c7b3a00fe75566615ed7f2c96752ef8cd9e335a8922299"
+dependencies = [
+ "bitflags 2.12.1",
+ "ingot-macros 0.2.0",
+ "ingot-types 0.2.0",
  "macaddr",
  "serde",
  "zerocopy 0.8.50",
@@ -3180,12 +3194,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot-macros"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d8c6b68cf2c0e9c6c385c8655cd390d861d6fba0e30493ad7e0ab6013a46f61"
+dependencies = [
+ "darling 0.23.0",
+ "itertools 0.15.0",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "ingot-types"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d0d55db2f1de52564cc3781ffd5a7ebb7f2c6e1888841c2fa54231a9498db5f"
 dependencies = [
- "ingot-macros",
+ "ingot-macros 0.1.1",
+ "macaddr",
+ "zerocopy 0.8.50",
+]
+
+[[package]]
+name = "ingot-types"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c38331af4cff022b2ea46b220467d5962973853a47bd6851c54c111b71baa42"
+dependencies = [
+ "ingot-macros 0.2.0",
  "macaddr",
  "zerocopy 0.8.50",
 ]
@@ -3511,7 +3550,7 @@ dependencies = [
 [[package]]
 name = "kstat-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e#3ddd7e684a78ad33be66717408c381b1962ae04e"
+source = "git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91#aa4714289cbf28010a821c49d9b73ec94074fb91"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -4722,7 +4761,7 @@ dependencies = [
  "bitflags 2.12.1",
  "dyn-clone",
  "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
- "ingot",
+ "ingot 0.1.1",
  "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
  "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
  "postcard",
@@ -4736,14 +4775,14 @@ dependencies = [
 [[package]]
 name = "opte"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e#3ddd7e684a78ad33be66717408c381b1962ae04e"
+source = "git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91#aa4714289cbf28010a821c49d9b73ec94074fb91"
 dependencies = [
  "bitflags 2.12.1",
  "dyn-clone",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
- "ingot",
- "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
- "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
+ "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
+ "ingot 0.2.1",
+ "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
+ "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
  "postcard",
  "ref-cast",
  "serde",
@@ -4758,7 +4797,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238#2c6efefe14321dafe7e9e80129d38316adb2d238"
 dependencies = [
  "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
- "ingot",
+ "ingot 0.1.1",
  "ipnetwork",
  "postcard",
  "serde",
@@ -4768,10 +4807,10 @@ dependencies = [
 [[package]]
 name = "opte-api"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e#3ddd7e684a78ad33be66717408c381b1962ae04e"
+source = "git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91#aa4714289cbf28010a821c49d9b73ec94074fb91"
 dependencies = [
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
- "ingot",
+ "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
+ "ingot 0.2.1",
  "ipnetwork",
  "postcard",
  "serde",
@@ -4795,12 +4834,12 @@ dependencies = [
 [[package]]
 name = "opte-ioctl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e#3ddd7e684a78ad33be66717408c381b1962ae04e"
+source = "git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91#aa4714289cbf28010a821c49d9b73ec94074fb91"
 dependencies = [
  "libc",
  "libnet",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
+ "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
+ "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
  "postcard",
  "serde",
  "thiserror 2.0.19",
@@ -4841,11 +4880,11 @@ dependencies = [
 [[package]]
 name = "oxide-vpc"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e#3ddd7e684a78ad33be66717408c381b1962ae04e"
+source = "git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91#aa4714289cbf28010a821c49d9b73ec94074fb91"
 dependencies = [
  "cfg-if",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3ddd7e684a78ad33be66717408c381b1962ae04e)",
+ "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
+ "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=aa4714289cbf28010a821c49d9b73ec94074fb91)",
  "serde",
  "tabwriter",
  "uuid",
@@ -6668,9 +6707,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
+checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
@@ -6687,22 +6726,22 @@ dependencies = [
 
 [[package]]
 name = "serde_core"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.3",
 ]
 
 [[package]]

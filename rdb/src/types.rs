@@ -330,6 +330,23 @@ impl Display for PrefixChangeNotification {
 // Multicast types live in mg-api-types under the `mrib` module.
 pub use mg_api_types::mrib::*;
 
+/// Notification for MRIB changes, sent to watchers.
+///
+/// This is an internal watcher-channel type, not an API wire type, so it
+/// is owned by rdb rather than the versioned API-types crate.
+#[derive(Clone, Default, Debug)]
+pub struct MribChangeNotification {
+    pub changed: BTreeSet<MulticastRouteKey>,
+}
+
+impl From<MulticastRouteKey> for MribChangeNotification {
+    fn from(value: MulticastRouteKey) -> Self {
+        Self {
+            changed: BTreeSet::from([value]),
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod test_helpers {
     use super::Path;
@@ -637,9 +654,10 @@ mod test {
     #[test]
     fn route_key_af_mismatch_v4_source_v6_group() {
         let src = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 1)).unwrap();
-        let group =
-            MulticastAddrV6::new(Ipv6Addr::new(0xff3e, 0, 0, 0, 0, 0, 0, 1))
-                .unwrap();
+        let group = MulticastAddrV6::new(Ipv6Addr::new(
+            0xff3e, 0, 0, 0, 0, 0, 0x8000, 1,
+        ))
+        .unwrap();
         let result = MulticastRouteKey::new(
             Some(IpAddr::V4(src.ip())),
             group.into(),

@@ -210,7 +210,7 @@ async fn run() -> Result<()> {
                     writeln!(
                         &mut tw,
                         "{}\t{}\t{}",
-                        &pv.destination, nexthop, strpath,
+                        pv.destination, nexthop, strpath,
                     )?;
                 }
             }
@@ -221,7 +221,7 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(&mut tw, "{}", "Prefix".dimmed(),)?;
             for prefix in msg.into_inner() {
-                writeln!(&mut tw, "{}", &prefix)?;
+                writeln!(&mut tw, "{}", prefix)?;
             }
             tw.flush()?;
         }
@@ -246,7 +246,7 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}",
-                    &endpoint.origin.overlay_prefix,
+                    endpoint.origin.overlay_prefix,
                     endpoint.origin.boundary_addr,
                     endpoint.origin.vni,
                     endpoint.origin.metric,
@@ -269,7 +269,7 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}",
-                    &endpoint.overlay_prefix,
+                    endpoint.overlay_prefix,
                     endpoint.boundary_addr,
                     endpoint.vni,
                     endpoint.metric,
