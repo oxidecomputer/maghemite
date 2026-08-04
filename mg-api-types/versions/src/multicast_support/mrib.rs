@@ -12,15 +12,15 @@
 //! IPv6 group within `ff04::/64`), and the multicast route and route key
 //! types stored in the MRIB.
 
-use std::collections::BTreeSet;
 use std::fmt::{self, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use client_common::address::{
-    IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET,
-    IPV6_MULTICAST_RANGE, UNDERLAY_MULTICAST_SUBNET,
+    IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE,
+    IPV4_SSM_RESERVED_SUBNET, IPV6_MULTICAST_RANGE, UNDERLAY_MULTICAST_SUBNET,
+    is_ssm_address,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -397,6 +397,17 @@ impl MulticastAddrV4 {
             )));
         }
 
+        // The first /24 of the SSM range is reserved (RFC 4607 section 4.3):
+        // 232.0.0.0 must not be used as a destination and 232.0.0.1 through
+        // 232.0.0.255 are held for IANA allocation. This matches DPD's
+        // validate_ipv4_multicast.
+        if IPV4_SSM_RESERVED_SUBNET.contains(value) {
+            return Err(MulticastError::Validation(format!(
+                "IPv4 address {value} is in the reserved IPv4 SSM subnet \
+                 ({IPV4_SSM_RESERVED_SUBNET}, RFC 4607)"
+            )));
+        }
+
         Ok(Self(value))
     }
 
@@ -429,8 +440,12 @@ impl From<MulticastAddrV4> for Ipv4Addr {
 
 /// A validated IPv6 multicast address.
 ///
-/// This type guarantees that the inner address is a routable multicast address
-/// (not interface-local, link-local, or reserved scope).
+/// This type guarantees that the inner address is a multicast address usable
+/// for switch-forwarded delivery: the scope is admin-local (4), site-local
+/// (5), organization-local (8), or global (e), the address is outside the
+/// reserved underlay subnet (ff04::/64), and SSM addresses fall in the
+/// dynamically allocatable group-ID range. This matches DPD's
+/// `validate_ipv6_multicast` and `validate_not_underlay_subnet`.
 #[derive(
     Debug,
     Copy,
@@ -462,27 +477,62 @@ impl MulticastAddrV6 {
         // (high nibble) and scope (low nibble). Classify on the scope
         // nibble alone: a /16 prefix comparison encodes flags=0 and would
         // accept, e.g., ff11::1 despite its interface-local scope.
-        let scope = value.segments()[0] & 0x000f;
-        match scope {
-            0x0 => Err(MulticastError::Validation(format!(
-                "IPv6 address {value} has reserved multicast scope 0, \
-                 which is not routable"
-            ))),
-            0x1 => Err(MulticastError::Validation(format!(
-                "IPv6 address {value} has interface-local multicast scope, \
-                 which is not routable"
-            ))),
-            0x2 => Err(MulticastError::Validation(format!(
-                "IPv6 address {value} has link-local multicast scope, \
-                 which is not routable"
-            ))),
-            // RFC 7346 section 2 reserves scope F alongside scope 0.
-            0xf => Err(MulticastError::Validation(format!(
-                "IPv6 address {value} has reserved multicast scope F, \
-                 which is not routable"
-            ))),
-            _ => Ok(Self(value)),
+        //
+        // Admit only scopes usable for switch-forwarded delivery,
+        // independent of the flags nibble: admin-local (4), site-local (5),
+        // organization-local (8), and global (e). RFC 7346 section 2
+        // reserves 0 and f, scopes 1 and 2 never leave a host or link, and
+        // 6, 7, and 9 through d are unassigned (RFC 4291 section 2.7).
+        // Realm-local (3) is defined per network technology (RFC 7346
+        // section 3 covers only IEEE 802.15.4), so it is excluded absent an
+        // Ethernet realm definition. This matches DPD's
+        // validate_ipv6_multicast.
+        let segs = value.segments();
+        let scope_name = match segs[0] & 0x000f {
+            0x0 | 0xf => Some("reserved"),
+            0x1 => Some("interface-local"),
+            0x2 => Some("link-local"),
+            0x3 => Some("realm-local"),
+            0x4 | 0x5 | 0x8 | 0xe => None,
+            _ => Some("unassigned"),
+        };
+        if let Some(scope_name) = scope_name {
+            return Err(MulticastError::Validation(format!(
+                "IPv6 address {value} has {scope_name} multicast scope and \
+                 cannot be used for group creation"
+            )));
         }
+
+        // Admin-local scope is otherwise usable, but the reserved underlay
+        // subnet (ff04::/64) within it is allocated by Omicron for internal
+        // underlay multicast mapping. This matches DPD's
+        // validate_not_underlay_subnet.
+        if UNDERLAY_MULTICAST_SUBNET.contains(value) {
+            return Err(MulticastError::Validation(format!(
+                "IPv6 address {value} is in the reserved underlay multicast \
+                 subnet ({UNDERLAY_MULTICAST_SUBNET})"
+            )));
+        }
+
+        // Only the low 32 bits of an SSM block (ff3x::/32) form the group
+        // ID. RFC 4607 section 1 invalidates IDs below 0x40000000 and
+        // section 4.3 reserves 0x40000000 through 0x7fffffff for IANA
+        // allocation, leaving ff3x::8000:0 through ff3x::ffff:ffff for
+        // dynamic allocation.
+        if is_ssm_address(IpAddr::V6(value)) {
+            let within_prefix =
+                segs[2] == 0 && segs[3] == 0 && segs[4] == 0 && segs[5] == 0;
+            let group_id = (u32::from(segs[6]) << 16) | u32::from(segs[7]);
+            if !within_prefix || group_id < 0x8000_0000 {
+                return Err(MulticastError::Validation(format!(
+                    "IPv6 address {value} is not a dynamically allocatable \
+                     IPv6 SSM address (ff3x::8000:0 through ff3x::ffff:ffff \
+                     per RFC 4607)"
+                )));
+            }
+        }
+
+        Ok(Self(value))
     }
 
     /// Returns the underlying IPv6 address.
@@ -934,26 +984,6 @@ impl MulticastRouteKey {
         }
     }
 
-    /// Serialize this key to bytes for use as a sled database key.
-    pub fn db_key(&self) -> Result<Vec<u8>, MulticastError> {
-        let s = serde_json::to_string(self).map_err(|e| {
-            MulticastError::Parsing(format!(
-                "failed to serialize multicast route key: {e}"
-            ))
-        })?;
-        Ok(s.as_bytes().into())
-    }
-
-    /// Deserialize a key from sled database bytes.
-    pub fn from_db_key(v: &[u8]) -> Result<Self, MulticastError> {
-        let s = String::from_utf8_lossy(v);
-        serde_json::from_str(&s).map_err(|e| {
-            MulticastError::DbKey(format!(
-                "failed to parse multicast route key: {e}"
-            ))
-        })
-    }
-
     /// Validate the multicast route key.
     ///
     /// Checks:
@@ -976,16 +1006,14 @@ impl MulticastRouteKey {
         // If real-world deployments need (*,G) on SSM addresses, this
         // check and the corresponding DPD validation can be relaxed
         // together and we can update our policy handling.
+        // RFC 4607 section 1 allocates IPv6 SSM as FF3x::/32 (flags nibble
+        // 3, any scope, remaining prefix bits zero). The shared predicate
+        // matches the exact per-scope /32 blocks; a broader ff30::/12 match
+        // would also classify RFC 3306 unicast-prefix based addresses with
+        // a nonzero network prefix as SSM.
         let is_ssm = match self {
-            Self::V4(k) => IPV4_SSM_SUBNET.contains(k.group.ip()),
-            // RFC 4607 section 1 allocates IPv6 SSM as FF3x::/32 (flags
-            // nibble 3, any scope, remaining prefix bits zero). A broader
-            // ff30::/12 match would also classify RFC 3306 unicast-prefix
-            // based addresses with a nonzero network prefix as SSM.
-            Self::V6(k) => {
-                let segs = k.group.ip().segments();
-                segs[0] & 0xfff0 == 0xff30 && segs[1] == 0
-            }
+            Self::V4(k) => is_ssm_address(IpAddr::V4(k.group.ip())),
+            Self::V6(k) => is_ssm_address(IpAddr::V6(k.group.ip())),
         };
         if is_ssm && self.source().is_none() {
             return Err(MulticastError::Validation(format!(
@@ -1109,20 +1137,6 @@ pub enum MulticastSourceProtocol {
     Igmp,
     /// Learned via MLD snooping (future).
     Mld,
-}
-
-/// Notification for MRIB changes, sent to watchers.
-#[derive(Clone, Default, Debug)]
-pub struct MribChangeNotification {
-    pub changed: BTreeSet<MulticastRouteKey>,
-}
-
-impl From<MulticastRouteKey> for MribChangeNotification {
-    fn from(value: MulticastRouteKey) -> Self {
-        Self {
-            changed: BTreeSet::from([value]),
-        }
-    }
 }
 
 #[cfg(test)]

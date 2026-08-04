@@ -22,26 +22,75 @@
 //! [RFC 7346]: https://www.rfc-editor.org/rfc/rfc7346
 
 use oxnet::{Ipv4Net, Ipv6Net};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 // TODO: Consolidate these constants and the `omicron_common::address`
 // originals into `oxnet`, the cycle-free leaf crate that maghemite, dendrite,
 // and omicron already share, so the duplication can be removed.
 
-/// IPv4 Source-Specific Multicast (SSM) subnet (232.0.0.0/8) per RFC 4607 §3.
+/// IPv4 Source-Specific Multicast (SSM) subnet (232.0.0.0/8) per RFC 4607 §1.
 pub const IPV4_SSM_SUBNET: Ipv4Net =
     Ipv4Net::new_unchecked(Ipv4Addr::new(232, 0, 0, 0), 8);
 
-/// IPv6 Source-Specific Multicast (SSM) subnet.
+/// Reserved IPv4 SSM subnet (232.0.0.0/24).
 ///
-/// RFC 4607 §3 specifies ff3x::/32, where the `x` nibble is the multicast
-/// scope. We use /12 as an implementation convenience matching all per-scope
-/// blocks (ff30:: through ff3f:ffff:..:ffff) with a single subnet, since all
-/// SSM addresses share the first 12 bits (0xff prefix plus flag field 3).
-/// This superset is used only for contains-based classification, not as an
-/// allocation boundary.
-pub const IPV6_SSM_SUBNET: Ipv6Net =
-    Ipv6Net::new_unchecked(Ipv6Addr::new(0xff30, 0, 0, 0, 0, 0, 0, 0), 12);
+/// RFC 4607 §4.3 reserves 232.0.0.0 (must not be assigned to any
+/// application) and notes that IANA holds 232.0.0.1 through 232.0.0.255
+/// in reserve, so the entire first /24 is excluded from allocation.
+pub const IPV4_SSM_RESERVED_SUBNET: Ipv4Net =
+    Ipv4Net::new_unchecked(Ipv4Addr::new(232, 0, 0, 0), 24);
+
+const fn ipv6_ssm_subnet(scope: u16) -> Ipv6Net {
+    Ipv6Net::new_unchecked(
+        Ipv6Addr::new(0xff30 | scope, 0, 0, 0, 0, 0, 0, 0),
+        32,
+    )
+}
+
+/// IPv6 Source-Specific Multicast (SSM) subnets, one per scope field value.
+///
+/// RFC 4607 §1 specifies "ff3x::/32 for each scope x", meaning one /32
+/// block per scope (ff30::/32, ff31::/32, ..., ff3f::/32).
+///
+/// These blocks cannot be represented by one CIDR: the scope nibble precedes
+/// the 16 zero bits that complete each /32. In particular, ff3e:1:: is outside
+/// ff3e::/32 even though it is inside the broader ff30::/12 prefix.
+pub const IPV6_SSM_SUBNETS: [Ipv6Net; 16] = [
+    ipv6_ssm_subnet(0x0),
+    ipv6_ssm_subnet(0x1),
+    ipv6_ssm_subnet(0x2),
+    ipv6_ssm_subnet(0x3),
+    ipv6_ssm_subnet(0x4),
+    ipv6_ssm_subnet(0x5),
+    ipv6_ssm_subnet(0x6),
+    ipv6_ssm_subnet(0x7),
+    ipv6_ssm_subnet(0x8),
+    ipv6_ssm_subnet(0x9),
+    ipv6_ssm_subnet(0xa),
+    ipv6_ssm_subnet(0xb),
+    ipv6_ssm_subnet(0xc),
+    ipv6_ssm_subnet(0xd),
+    ipv6_ssm_subnet(0xe),
+    ipv6_ssm_subnet(0xf),
+];
+
+/// Check if an IP is in the SSM (Source-Specific Multicast) range.
+///
+/// SSM ranges per RFC 4607 §1:
+/// - IPv4: 232.0.0.0/8
+/// - IPv6: ff3x::/32 (all SSM scopes)
+///
+/// The IPv6 check matches the exact per-scope /32 blocks, not ff30::/12.
+/// A /12 match would also classify RFC 3306 unicast-prefix-based addresses
+/// with a nonzero network prefix as SSM.
+pub fn is_ssm_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(addr) => IPV4_SSM_SUBNET.contains(addr),
+        IpAddr::V6(addr) => {
+            IPV6_SSM_SUBNETS.iter().any(|subnet| subnet.contains(addr))
+        }
+    }
+}
 
 /// IPv4 multicast address range (224.0.0.0/4) per RFC 5771.
 pub const IPV4_MULTICAST_RANGE: Ipv4Net =
@@ -111,7 +160,10 @@ mod tests {
     #[test]
     fn constants_match_canonical_values() {
         assert_eq!(IPV4_SSM_SUBNET, canonical::IPV4_SSM_SUBNET);
-        assert_eq!(IPV6_SSM_SUBNET, canonical::IPV6_SSM_SUBNET);
+        // TODO: Compare IPV4_SSM_RESERVED_SUBNET, IPV6_SSM_SUBNETS, and
+        // is_ssm_address against their canonical originals once the Omicron
+        // change replacing the ff30::/12 IPV6_SSM_SUBNET with per-scope /32
+        // blocks lands on main and the pinned revision picks it up.
         assert_eq!(IPV4_MULTICAST_RANGE, canonical::IPV4_MULTICAST_RANGE);
         assert_eq!(
             IPV4_LINK_LOCAL_MULTICAST_SUBNET,

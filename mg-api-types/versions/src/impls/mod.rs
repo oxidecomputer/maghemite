@@ -8,4 +8,5 @@ pub(crate) mod bfd;
 pub(crate) mod bgp;
 #[cfg(feature = "proptest")]
 pub mod mrib;
+pub(crate) mod mrib_db;
 pub(crate) mod rdb;
