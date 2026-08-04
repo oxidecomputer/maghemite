@@ -49,8 +49,10 @@ pub struct DbData {
     pub imported_tunnel: HashSet<TunnelRoute>,
 }
 
-unsafe impl Sync for Db {}
-unsafe impl Send for Db {}
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Db>()
+};
 
 impl Db {
     pub fn new(db_path: &str, log: Logger) -> Result<Self, sled::Error> {

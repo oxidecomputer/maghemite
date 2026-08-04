@@ -14,7 +14,8 @@ use crate::{
     },
     policy::{load_checker, load_shaper},
     session::{
-        AdminEvent, FsmEvent, NeighborInfo, PeerId, SessionInfo, SessionRunner,
+        AdminEvent, FsmDriver, FsmEvent, NeighborInfo, PeerId, SessionInfo,
+        SessionRunner,
     },
     unnumbered::UnnumberedManager,
 };
@@ -36,13 +37,13 @@ use std::{
 };
 
 /// Internal newtype for `IdOrdItem` impl — not exposed outside this module.
-struct SessionHandle<Cnx: BgpConnection + 'static>(Arc<SessionRunner<Cnx>>);
+struct SessionHandle<Cnx: BgpConnection + 'static>(Arc<FsmDriver<Cnx>>);
 
 impl<Cnx: BgpConnection + 'static> IdOrdItem for SessionHandle<Cnx> {
     type Key<'a> = &'a PeerId;
 
     fn key(&self) -> Self::Key<'_> {
-        &self.0.neighbor.peer
+        &self.0.runner().neighbor.peer
     }
 
     id_upcast!();
@@ -67,20 +68,23 @@ impl<Cnx: BgpConnection + 'static> SessionMap<Cnx> {
     }
 
     pub fn get(&self, peer: &PeerId) -> Option<&Arc<SessionRunner<Cnx>>> {
-        self.0.get(peer).map(|h| &h.0)
+        self.0.get(peer).map(|h| h.0.runner())
     }
 
     /// Inserts `session`, overwriting any existing entry for the same
     /// `PeerId`. Returns the displaced session if one was present.
-    pub fn insert_overwrite(
+    pub(crate) fn insert_overwrite(
         &mut self,
-        session: Arc<SessionRunner<Cnx>>,
-    ) -> Option<Arc<SessionRunner<Cnx>>> {
+        session: Arc<FsmDriver<Cnx>>,
+    ) -> Option<Arc<FsmDriver<Cnx>>> {
         self.0.insert_overwrite(SessionHandle(session)).map(|h| h.0)
     }
 
-    pub fn remove(&mut self, peer: &PeerId) -> Option<Arc<SessionRunner<Cnx>>> {
-        self.0.remove(peer).map(|h| h.0)
+    pub(crate) fn remove(
+        &mut self,
+        peer: &PeerId,
+    ) -> Option<Arc<SessionRunner<Cnx>>> {
+        self.0.remove(peer).map(|h| Arc::clone(h.0.runner()))
     }
 
     pub fn contains_key(&self, peer: &PeerId) -> bool {
@@ -88,17 +92,23 @@ impl<Cnx: BgpConnection + 'static> SessionMap<Cnx> {
     }
 
     pub fn values(&self) -> impl Iterator<Item = &Arc<SessionRunner<Cnx>>> {
+        self.0.iter().map(|h| h.0.runner())
+    }
+
+    pub(crate) fn drivers(&self) -> impl Iterator<Item = &Arc<FsmDriver<Cnx>>> {
         self.0.iter().map(|h| &h.0)
     }
 
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = (&PeerId, &Arc<SessionRunner<Cnx>>)> {
-        self.0.iter().map(|h| (&h.0.neighbor.peer, &h.0))
+        self.0
+            .iter()
+            .map(|h| (&h.0.runner().neighbor.peer, h.0.runner()))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &PeerId> {
-        self.0.iter().map(|h| &h.0.neighbor.peer)
+        self.0.iter().map(|h| &h.0.runner().neighbor.peer)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -147,8 +157,13 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     pub fanout6: Arc<RwLock<Fanout6<Cnx>>>,
 }
 
-unsafe impl<Cnx: BgpConnection> Send for Router<Cnx> {}
-unsafe impl<Cnx: BgpConnection> Sync for Router<Cnx> {}
+#[expect(dead_code)]
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    const fn probe<Cnx: BgpConnection + 'static>() {
+        assert_send_sync::<Router<Cnx>>()
+    }
+};
 
 impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn new(
@@ -182,12 +197,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     /// Spawn an FSM thread for the given session.
     /// This is used both when initially creating sessions and when restarting
     /// the router.
-    fn spawn_session_thread(&self, session: Arc<SessionRunner<Cnx>>) {
-        let peer_id = &session.neighbor.peer;
+    fn spawn_session_thread(&self, driver: Arc<FsmDriver<Cnx>>) {
+        let peer_id = &driver.runner().neighbor.peer;
         slog::info!(
             self.log,
             "spawning session for {}",
-            lock!(session.neighbor.name);
+            lock!(driver.runner().neighbor.name);
             slog::o!(
                 "component" => crate::COMPONENT_BGP,
                 "module" => crate::MOD_ROUTER,
@@ -197,7 +212,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         std::thread::Builder::new()
             .name(format!("bgp-fsm-{}", peer_id))
             .spawn(move || {
-                session.fsm_start();
+                driver.fsm_start();
             })
             .expect("failed to spawn BGP FSM thread");
     }
@@ -245,8 +260,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         // Hold lock during entire iteration to prevent concurrent modifications
         let sessions = lock!(self.sessions);
-        for session in sessions.values() {
-            self.spawn_session_thread(session.clone());
+        for driver in sessions.drivers() {
+            self.spawn_session_thread(driver.clone());
         }
     }
 
@@ -392,17 +407,17 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         let runner = Arc::new(SessionRunner::new(
             session,
-            event_rx,
             event_tx.clone(),
             neighbor,
             self.clone(),
             unnumbered_manager,
         ));
+        let driver = Arc::new(FsmDriver::new(runner.clone(), event_rx));
 
-        sessions.insert_overwrite(runner.clone());
+        sessions.insert_overwrite(driver.clone());
         drop(sessions);
 
-        self.spawn_session_thread(runner.clone());
+        self.spawn_session_thread(driver);
 
         Ok(runner)
     }
