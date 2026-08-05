@@ -897,7 +897,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=04a52a3240a26c58f03e1cf40353d67ff69d76b6#04a52a3240a26c58f03e1cf40353d67ff69d76b6"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=9645288adc19b352aaa9a675be9953fe4e0b6e1b#9645288adc19b352aaa9a675be9953fe4e0b6e1b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1674,7 +1674,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=04a52a3240a26c58f03e1cf40353d67ff69d76b6#04a52a3240a26c58f03e1cf40353d67ff69d76b6"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=9645288adc19b352aaa9a675be9953fe4e0b6e1b#9645288adc19b352aaa9a675be9953fe4e0b6e1b"
 dependencies = [
  "async-trait",
  "chrono",
