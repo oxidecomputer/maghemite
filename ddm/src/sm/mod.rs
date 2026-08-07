@@ -4,13 +4,13 @@
 
 //! State machine type definitions and the [`StateMachine`] handle. The
 //! routing state machine implementation (discovery, solicit, exchange) lives
-//! in the [`state`] submodule and is illumos-only, since it programs kernel
-//! routes via [`crate::sys`] and reads interface addressing through `libnet`.
+//! in the `state` submodule and is illumos-only, since it programs kernel
+//! routes via `crate::sys` and reads interface addressing through `libnet`.
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
@@ -33,6 +33,17 @@ pub enum AdminEvent {
     /// Withdraw a set of IPv6 prefixes
     Withdraw(PrefixSet),
 
+    /// Announce a set of multicast origins to peers.
+    AnnounceMulticast(HashSet<MulticastOrigin>),
+
+    /// Withdraw a set of multicast origins. Each state machine revalidates
+    /// remaining reachability against the database when it processes the
+    /// event, rather than acting on a snapshot captured at request time.
+    /// The modification lands before this event is enqueued, so the processing-
+    /// time read is guaranteed to observe the withdrawal, and it also
+    /// observes any later import that has since restored reachability.
+    WithdrawMulticast(HashSet<MulticastOrigin>),
+
     /// Expire the peer at the specified address
     Expire(Ipv6Addr),
 
@@ -48,7 +59,7 @@ pub enum PrefixSet {
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(ddm_protocol::v3::Update),
+    Push(Arc<ddm_protocol::v4::Update>),
 }
 
 #[derive(Debug)]
@@ -187,6 +198,11 @@ pub struct InterfaceState {
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
+    /// Orders route application with expiry and renumber cleanup for this
+    /// interface. Discovery must not take this lock: route programming can
+    /// perform network and kernel I/O, while discovery needs to keep updating
+    /// peer liveness independently.
+    pub route_update: Mutex<()>,
 }
 
 impl InterfaceState {
@@ -218,6 +234,7 @@ impl Default for InterfaceState {
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),
+            route_update: Mutex::new(()),
         }
     }
 }
@@ -251,6 +268,11 @@ pub struct SmContext {
     pub hostname: String,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
+    /// Notifies the `crate::mcast` sweep that an underlay group's imported
+    /// membership changed, by sending the group's address. The sweep wakes early
+    /// to reconcile the group's DPD members, so the control plane never touches
+    /// DPD directly.
+    pub mcast_notify: tokio::sync::mpsc::Sender<Ipv6Addr>,
     pub log: Logger,
 }
 

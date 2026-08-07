@@ -829,6 +829,10 @@ version = "0.1.0"
 dependencies = [
  "omicron-common",
  "oxnet",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -901,7 +905,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=04a52a3240a26c58f03e1cf40353d67ff69d76b6#04a52a3240a26c58f03e1cf40353d67ff69d76b6"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=0d48b5a39dc49d30b228ae01f04b8cc27a161e74#0d48b5a39dc49d30b228ae01f04b8cc27a161e74"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1378,10 +1382,12 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
  "dropshot",
  "expectorate",
+ "futures",
  "hostname 0.4.2",
  "http-body-util",
  "hyper",
@@ -1397,6 +1403,7 @@ dependencies = [
  "oxnet",
  "port-file",
  "pretty_assertions",
+ "reqwest 0.13.4",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -1404,6 +1411,7 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "socket2",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "uuid",
@@ -1443,11 +1451,14 @@ dependencies = [
 name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
+ "client-common",
  "ddm-protocol",
  "oxnet",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "serde_repr",
+ "thiserror 2.0.19",
  "uuid",
 ]
 
@@ -1678,7 +1689,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=04a52a3240a26c58f03e1cf40353d67ff69d76b6#04a52a3240a26c58f03e1cf40353d67ff69d76b6"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=0d48b5a39dc49d30b228ae01f04b8cc27a161e74#0d48b5a39dc49d30b228ae01f04b8cc27a161e74"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3911,13 +3922,16 @@ dependencies = [
  "backoff",
  "clap",
  "ddm-api-types",
+ "dpd-client",
  "libc",
  "libnet",
  "oximeter",
  "oximeter-producer",
  "oxnet",
+ "proptest",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-bunyan",
