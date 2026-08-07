@@ -24,9 +24,7 @@ use std::{collections::BTreeMap, sync::Arc};
 // Both source and target types are foreign to `mgd`, so we expose the
 // conversion as free fns here at the call site.
 fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
-    // Compile barrier: a new StaticRoute4 field will fail to bind here,
-    // forcing a deliberate decision about how (or whether) it should
-    // appear in the rdb runtime key.
+    // Full destructure: a new StaticRoute4 field must be handled here.
     let StaticRoute4 {
         prefix,
         nexthop,
@@ -42,9 +40,7 @@ fn static_route_key_from_v4(v: StaticRoute4) -> StaticRouteKey {
 }
 
 fn static_route_key_from_v6(v: StaticRoute6) -> StaticRouteKey {
-    // Compile barrier: a new StaticRoute6 field will fail to bind here,
-    // forcing a deliberate decision about how (or whether) it should
-    // appear in the rdb runtime key.
+    // Full destructure: a new StaticRoute6 field must be handled here.
     let StaticRoute6 {
         prefix,
         nexthop,

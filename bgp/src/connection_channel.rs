@@ -11,8 +11,8 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        BgpConnection, BgpConnector, BgpListener, ConnectTarget,
+        ConnectionDirection, ConnectionId, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -275,6 +275,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         _conn: &BgpConnectionChannel,
         _min_ttl: Option<u8>,
         _md5_key: Option<String>,
+        _listen_port: std::num::NonZeroU16,
     ) -> Result<(), Error> {
         // Policy application is ignored for test connections
         Ok(())
@@ -563,15 +564,16 @@ pub struct BgpConnectorChannel;
 
 impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
     fn connect(
-        peer: SocketAddr,
+        addrs: ConnectTarget,
         timeout: Duration,
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
         config: SessionInfo,
     ) -> Result<JoinHandle<()>, Error> {
         let direction = ConnectionDirection::Outbound;
-        let addr = config
-            .bind_addr
+        let peer = addrs.destination;
+        let addr = addrs
+            .source
             .expect("source address required for channel-based connection");
 
         connection_log_lite!(log,

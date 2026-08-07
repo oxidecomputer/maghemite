@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 chrono.workspace = true
 clap = { workspace = true, optional = true }
+iddqd = { workspace = true, features = ["schemars08", "serde"] }
 nom.workspace = true
 num_enum.workspace = true
 oxnet.workspace = true

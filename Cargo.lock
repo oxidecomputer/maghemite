@@ -3884,6 +3884,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "iddqd",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",

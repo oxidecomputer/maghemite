@@ -13,6 +13,7 @@ use mg_common::lock;
 use slog::{Logger, debug, error, info, warn};
 use std::{
     net::SocketAddr,
+    num::NonZeroU16,
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     thread::sleep,
@@ -32,6 +33,7 @@ pub struct Dispatcher<Cnx: BgpConnection + 'static> {
 
     shutdown: AtomicBool,
     listen: String,
+    listen_port: Arc<NonZeroU16>,
     log: Mutex<Logger>,
 }
 
@@ -39,6 +41,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     pub fn new(
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
         listen: String,
+        listen_port: Arc<NonZeroU16>,
         log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Self {
@@ -52,6 +55,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             sessions,
             unnumbered_manager,
             listen,
+            listen_port,
             log: Mutex::new(log),
             shutdown: AtomicBool::new(false),
         }
@@ -187,9 +191,12 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     )
                 };
 
-                if let Err(e) =
-                    Listener::apply_policy(&accepted, min_ttl, md5_key)
-                {
+                if let Err(e) = Listener::apply_policy(
+                    &accepted,
+                    min_ttl,
+                    md5_key,
+                    *self.listen_port,
+                ) {
                     warn!(session_log,
                         "failed to apply policy for connection";
                         "error" => format!("{e}")
@@ -212,6 +219,10 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
     pub fn listen_addr(&self) -> &str {
         &self.listen
+    }
+
+    pub fn listen_port(&self) -> Arc<NonZeroU16> {
+        self.listen_port.clone()
     }
 
     pub fn shutdown(&self) {

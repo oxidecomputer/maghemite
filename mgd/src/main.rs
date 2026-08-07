@@ -9,11 +9,9 @@ use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
+use client_common::eprintln_nopipe;
 use mg_api_types::bfd::BfdPeerConfig;
-use mg_api_types::bgp::config::{
-    BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig,
-};
-use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
+use mg_api_types::bgp::config::Neighbor;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
@@ -116,11 +114,16 @@ struct RunArgs {
 fn main() {
     let args = Cli::parse();
     match args.command {
-        Commands::Run(run_args) => oxide_tokio_rt::run(run(run_args)),
+        Commands::Run(run_args) => oxide_tokio_rt::run(async move {
+            if let Err(e) = run(run_args).await {
+                eprintln_nopipe!("{e}");
+                std::process::exit(1);
+            }
+        }),
     }
 }
 
-async fn run(args: RunArgs) {
+async fn run(args: RunArgs) -> Result<(), String> {
     let log = init_logger();
 
     let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
@@ -130,7 +133,7 @@ async fn run(args: RunArgs) {
 
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
-    let bgp = init_bgp(&args, &log);
+    let bgp = init_bgp(&args, &log)?;
 
     let tep_ula = get_tunnel_endpoint_ula(&db);
     let bfd = BfdContext::new(log.clone());
@@ -190,8 +193,6 @@ async fn run(args: RunArgs) {
             .expect("get BGP routers from datastore"),
         db.get_bgp_neighbors()
             .expect("get BGP neighbors from data store"),
-        db.get_unnumbered_bgp_neighbors()
-            .expect("get BGP unnumbered neighbors from data store"),
     );
 
     start_bfd_sessions(
@@ -240,6 +241,7 @@ async fn run(args: RunArgs) {
     )
     .expect("start API server");
     j.await.expect("API server quit unexpectedly");
+    Ok(())
 }
 
 fn detect_switch_slot(
@@ -280,17 +282,25 @@ fn detect_switch_slot(
     rt.spawn(task());
 }
 
-fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
+fn init_bgp(args: &RunArgs, log: &Logger) -> Result<BgpContext, String> {
     let sessions = Arc::new(Mutex::new(bgp::router::SessionMap::new()));
 
     // Create BgpContext first to get access to unnumbered_manager
-    let bgp_context = BgpContext::new(sessions.clone(), log.clone());
+    let bgp_listen_port = Arc::new(
+        std::num::NonZeroU16::new(args.bgp_dispatcher_addr.port()).ok_or(
+            "--bgp-dispatcher-addr port 0 is not supported; the BGP listen \
+             port is shared with sessions at startup",
+        )?,
+    );
+    let bgp_context =
+        BgpContext::new(sessions.clone(), log.clone(), bgp_listen_port.clone());
 
     if !args.no_bgp_dispatcher {
         let bgp_dispatcher =
             bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
                 sessions.clone(),
                 args.bgp_dispatcher_addr.to_string(),
+                bgp_listen_port,
                 log.clone(),
                 Some(bgp_context.unnumbered_manager.clone()), // Enable link-local connection routing
             );
@@ -304,14 +314,13 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
             .expect("failed to start {listener_str}");
     }
 
-    bgp_context
+    Ok(bgp_context)
 }
 
 fn start_bgp_routers(
     context: Arc<HandlerContext>,
     routers: BTreeMap<u32, BgpRouterInfo>,
-    neighbors: Vec<BgpNeighborInfo>,
-    uneighbors: Vec<BgpUnnumberedNeighborInfo>,
+    neighbors: Vec<Neighbor>,
 ) {
     dlog!(context.log, info, "starting bgp routers: {routers:#?}");
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
@@ -331,148 +340,8 @@ fn start_bgp_routers(
     drop(guard);
 
     for nbr in neighbors {
-        bgp_admin::helpers::add_neighbor(
-            context.clone(),
-            mg_api_types::bgp::config::Neighbor {
-                asn: nbr.asn,
-                group: nbr.group.clone(),
-                name: nbr.name.clone(),
-                host: nbr.host.into(),
-                parameters: BgpPeerParameters {
-                    remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
-                    hold_time: nbr.parameters.hold_time,
-                    idle_hold_time: nbr.parameters.idle_hold_time,
-                    delay_open: nbr.parameters.delay_open,
-                    connect_retry: nbr.parameters.connect_retry,
-                    keepalive: nbr.parameters.keepalive,
-                    resolution: nbr.parameters.resolution,
-                    passive: nbr.parameters.passive,
-                    md5_auth_key: nbr.parameters.md5_auth_key.clone(),
-                    multi_exit_discriminator: nbr
-                        .parameters
-                        .multi_exit_discriminator,
-                    communities: nbr.parameters.communities.clone(),
-                    local_pref: nbr.parameters.local_pref,
-                    enforce_first_as: nbr.parameters.enforce_first_as,
-                    deterministic_collision_resolution: false,
-                    idle_hold_jitter: None,
-                    connect_retry_jitter: None,
-                    ipv4_unicast: if nbr.parameters.ipv4_enabled {
-                        Some(Ipv4UnicastConfig {
-                            nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import4
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export4
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    ipv6_unicast: if nbr.parameters.ipv6_enabled {
-                        Some(Ipv6UnicastConfig {
-                            nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import6
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export6
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    vlan_id: nbr.parameters.vlan_id,
-                    src_addr: nbr.parameters.src_addr,
-                    src_port: nbr.parameters.src_port,
-                },
-            },
-            true,
-        )
-        .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
-    }
-
-    for nbr in uneighbors {
-        bgp_admin::helpers::add_unnumbered_neighbor(
-            context.clone(),
-            mg_api_types::bgp::config::UnnumberedNeighbor {
-                asn: nbr.asn,
-                group: nbr.group.clone(),
-                name: nbr.name.clone(),
-                interface: nbr.interface.clone(),
-                act_as_a_default_ipv6_router: nbr.router_lifetime,
-                parameters: BgpPeerParameters {
-                    remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
-                    hold_time: nbr.parameters.hold_time,
-                    idle_hold_time: nbr.parameters.idle_hold_time,
-                    delay_open: nbr.parameters.delay_open,
-                    connect_retry: nbr.parameters.connect_retry,
-                    keepalive: nbr.parameters.keepalive,
-                    resolution: nbr.parameters.resolution,
-                    passive: nbr.parameters.passive,
-                    md5_auth_key: nbr.parameters.md5_auth_key.clone(),
-                    multi_exit_discriminator: nbr
-                        .parameters
-                        .multi_exit_discriminator,
-                    communities: nbr.parameters.communities.clone(),
-                    local_pref: nbr.parameters.local_pref,
-                    enforce_first_as: nbr.parameters.enforce_first_as,
-                    deterministic_collision_resolution: false,
-                    idle_hold_jitter: None,
-                    connect_retry_jitter: None,
-                    ipv4_unicast: if nbr.parameters.ipv4_enabled {
-                        Some(Ipv4UnicastConfig {
-                            nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import4
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export4
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    ipv6_unicast: if nbr.parameters.ipv6_enabled {
-                        Some(Ipv6UnicastConfig {
-                            nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import6
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export6
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    vlan_id: nbr.parameters.vlan_id,
-                    src_addr: nbr.parameters.src_addr,
-                    src_port: nbr.parameters.src_port,
-                },
-            },
-            true,
-        )
-        .unwrap_or_else(|_| panic!("add BGP unnumbered neighbor {nbr:#?}"));
+        bgp_admin::helpers::add_neighbor(context.clone(), nbr.clone(), true)
+            .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
     }
 }
 

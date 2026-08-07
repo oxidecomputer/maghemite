@@ -557,9 +557,7 @@ impl From<PathAttribute> for Option<crate::v1::bgp::messages::PathAttribute> {
 
 impl From<UpdateMessage> for crate::v1::bgp::messages::UpdateMessage {
     fn from(msg: UpdateMessage) -> Self {
-        // Compile barrier: a latest UpdateMessage field addition will
-        // fail to bind here, forcing a deliberate decision about how
-        // (or whether) to surface it on the v1 form.
+        // Full destructure: a new UpdateMessage field must be handled here.
         let UpdateMessage {
             withdrawn,
             path_attributes,

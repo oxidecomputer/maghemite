@@ -89,9 +89,7 @@ impl From<MessageHistory> for v2::bgp::history::MessageHistory {
 
 impl From<MessageHistoryEntry> for v1::bgp::session::MessageHistoryEntry {
     fn from(entry: MessageHistoryEntry) -> Self {
-        // Compile barrier: a latest MessageHistoryEntry field addition
-        // will fail to bind here, forcing a deliberate decision about
-        // how (or whether) to surface it on the v1 form.
+        // Full destructure: a new MessageHistoryEntry field must be handled here.
         let MessageHistoryEntry {
             timestamp,
             message,

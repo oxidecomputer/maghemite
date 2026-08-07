@@ -18,7 +18,7 @@ pub struct Origin6 {
 
 impl From<v2::bgp::history::Origin6> for Origin6 {
     fn from(old: v2::bgp::history::Origin6) -> Self {
-        // v2 is frozen; compile barrier protects against upstream field additions.
+        // v2 is frozen.
         let v2::bgp::history::Origin6 { asn, prefixes } = old;
         Self {
             asn,
@@ -29,7 +29,7 @@ impl From<v2::bgp::history::Origin6> for Origin6 {
 
 impl From<Origin6> for v2::bgp::history::Origin6 {
     fn from(new: Origin6) -> Self {
-        // v2 is frozen; compile barrier protects against upstream field additions.
+        // v2 is frozen.
         let Origin6 { asn, prefixes } = new;
         Self {
             asn,
