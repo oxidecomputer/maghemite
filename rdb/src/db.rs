@@ -416,7 +416,7 @@ impl Db {
                         rdb_log!(
                             self,
                             error,
-                            "error parsing bgp neighbor entry value {value:?}: {e}";
+                            "error parsing bgp neighbor entry: {e}";
                             "unit" => UNIT_PERSISTENT
                         );
                         return None;
@@ -455,7 +455,7 @@ impl Db {
                         rdb_log!(
                             self,
                             error,
-                            "error parsing unnumbered bgp neighbor entry value {value:?}: {e}";
+                            "error parsing unnumbered bgp neighbor entry: {e}";
                             "unit" => UNIT_PERSISTENT
                         );
                         return None;

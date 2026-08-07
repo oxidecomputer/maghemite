@@ -166,6 +166,207 @@ pub struct Neighbor {
     pub parameters: BgpPeerParameters,
 }
 
+// v4 -> v1: drop the fields v1 lacks, keep only the IPv4 policy.
+impl From<Neighbor> for v1::bgp::config::Neighbor {
+    fn from(n: Neighbor) -> Self {
+        let Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: parameters.into(),
+        }
+    }
+}
+
+impl From<BgpPeerConfig> for v1::bgp::config::BgpPeerConfig {
+    fn from(cfg: BgpPeerConfig) -> Self {
+        let BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
+        Self {
+            host,
+            name,
+            parameters: parameters.into(),
+        }
+    }
+}
+
+impl From<BgpPeerParameters> for v1::bgp::config::BgpPeerParameters {
+    fn from(p: BgpPeerParameters) -> Self {
+        let BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            ipv4_unicast,
+            // dropped: no v1 representation.
+            ipv6_unicast: _,
+            deterministic_collision_resolution: _,
+            idle_hold_jitter: _,
+            connect_retry_jitter: _,
+        } = p;
+
+        let (allow_import, allow_export) = ipv4_unicast
+            .map(|c| (c.import_policy.into(), c.export_policy.into()))
+            .unwrap_or_default();
+
+        Self {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            allow_import,
+            allow_export,
+            vlan_id,
+        }
+    }
+}
+
+// v1 -> v4: enable IPv4 with the v1 policies, IPv6 off, defaults for the
+// fields v4 added (the jitter/collision values a v1 neighbor runs with).
+impl From<v1::bgp::config::Neighbor> for Neighbor {
+    fn from(n: v1::bgp::config::Neighbor) -> Self {
+        let v1::bgp::config::Neighbor {
+            asn,
+            name,
+            group,
+            host,
+            parameters,
+        } = n;
+        Self {
+            asn,
+            name,
+            group,
+            host,
+            parameters: parameters.into(),
+        }
+    }
+}
+
+impl From<v1::bgp::config::BgpPeerParameters> for BgpPeerParameters {
+    fn from(p: v1::bgp::config::BgpPeerParameters) -> Self {
+        let v1::bgp::config::BgpPeerParameters {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            allow_import,
+            allow_export,
+            vlan_id,
+        } = p;
+        Self {
+            hold_time,
+            idle_hold_time,
+            delay_open,
+            connect_retry,
+            keepalive,
+            resolution,
+            passive,
+            remote_asn,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: allow_import.into(),
+                export_policy: allow_export.into(),
+            }),
+            ipv6_unicast: None,
+            deterministic_collision_resolution: false,
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+        }
+    }
+}
+
+impl From<v1::bgp::config::BgpPeerConfig> for BgpPeerConfig {
+    fn from(cfg: v1::bgp::config::BgpPeerConfig) -> Self {
+        let v1::bgp::config::BgpPeerConfig {
+            host,
+            name,
+            parameters,
+        } = cfg;
+        Self {
+            host,
+            name,
+            parameters: parameters.into(),
+        }
+    }
+}
+
+impl From<v1::bgp::config::ApplyRequest> for ApplyRequest {
+    fn from(req: v1::bgp::config::ApplyRequest) -> Self {
+        let v1::bgp::config::ApplyRequest {
+            asn,
+            originate,
+            checker,
+            shaper,
+            peers,
+        } = req;
+        Self {
+            asn,
+            originate: originate.iter().map(|p| Prefix::V4(*p)).collect(),
+            checker,
+            shaper,
+            peers: peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: HashMap::default(),
+        }
+    }
+}
+
 /// Unnumbered BGP peer config for v4-v6 API (lacks src_addr/src_port).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct UnnumberedBgpPeerConfig {

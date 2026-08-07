@@ -21,6 +21,7 @@ use crate::{
     session::{ConnectionEvent, FsmEvent, PeerId, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use mg_api_types::bgp::config::Md5AuthString;
 use mg_common::lock;
 use slog::{Logger, info};
 use std::{
@@ -274,7 +275,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn apply_policy(
         _conn: &BgpConnectionChannel,
         _min_ttl: Option<u8>,
-        _md5_key: Option<String>,
+        _md5_key: Option<Md5AuthString>,
     ) -> Result<(), Error> {
         // Policy application is ignored for test connections
         Ok(())

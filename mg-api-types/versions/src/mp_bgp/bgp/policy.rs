@@ -30,6 +30,18 @@ pub enum ImportExportPolicy6 {
     Allow(BTreeSet<Prefix6>),
 }
 
+// v1 is IPv4-implicit: keep only the IPv4 policy.
+impl From<ImportExportPolicy4> for crate::v1::bgp::policy::ImportExportPolicy {
+    fn from(p: ImportExportPolicy4) -> Self {
+        match p {
+            ImportExportPolicy4::NoFiltering => Self::NoFiltering,
+            ImportExportPolicy4::Allow(p4) => {
+                Self::Allow(p4.into_iter().map(Into::into).collect())
+            }
+        }
+    }
+}
+
 impl crate::v1::bgp::policy::ImportExportPolicy {
     /// Combine v4-introduced per-AF policies back into the v1 mixed-AF
     /// policy. Used by prior-version (v1) endpoints to project the
