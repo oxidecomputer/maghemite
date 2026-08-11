@@ -66,12 +66,21 @@ const STATIC4_ROUTES: &str = "static4_routes";
 /// The handle used to open a persistent key-value tree for IPv6 static routes.
 const STATIC6_ROUTES: &str = "static6_routes";
 
-/// Key used in settings tree for tunnel endpoint setting
-const TEP_KEY: &str = "tep";
-
 /// The handle used to open a persistent key-value tree for BFD neighbor
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
+
+/// The handle used to open a persistent key-value tree for router instances.
+/// Keys are router names, values are JSON-encoded [`RouterInfo`].
+const ROUTER: &str = "router";
+
+/// Key used in settings tree for the database format version.
+const DB_VERSION_KEY: &str = "db_version";
+
+/// Current database format version. When the on-disk version does not match,
+/// all known trees are dropped and the database is rebuilt from scratch:
+/// routes are ephemeral and the control plane replays configuration.
+const DB_VERSION: u8 = 2;
 
 /// Key used in settings tree for bestpath fanout setting
 const BESTPATH_FANOUT: &str = "bestpath_fanout";
@@ -79,14 +88,56 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
+/// All trees holding router-scoped state. Dropped wholesale on a database
+/// version mismatch, and prefix-purged per router on router deletion.
+const ROUTER_SCOPED_TREES: &[&str] = &[
+    BGP_ROUTER,
+    BGP_NEIGHBOR,
+    BGP_UNNUMBERED_NEIGHBOR,
+    BGP_ORIGIN4,
+    BGP_ORIGIN6,
+    STATIC4_ROUTES,
+    STATIC6_ROUTES,
+    BFD_NEIGHBOR,
+    SETTINGS,
+];
+
 use crate::rib::{Rib, Rib4, Rib6};
 
-/// The central routing information base. Both persistent an volatile route
-/// information is managed through this structure.
+/// The routing database. Holds the set of named routers, each with its own
+/// RIB ([`RouterDb`]), plus global state (switch slot, reaper). All routers
+/// share a single underlying sled database; router-scoped keys are prefixed
+/// with the 16-byte router UUID.
 #[derive(Clone)]
 pub struct Db {
     /// A sled database handle where persistent routing information is stored.
     persistent: sled::Db,
+
+    /// The named routers, keyed by router name.
+    routers: Arc<RwLock<BTreeMap<String, RouterDb>>>,
+
+    /// Reaps expired routes from the local RIB.
+    reaper: Arc<Reaper>,
+
+    /// Switch slot reported from MGS.
+    /// Information is not available until first successful communication with MGS.
+    slot: Arc<RwLock<Option<u16>>>,
+
+    log: Logger,
+}
+unsafe impl Sync for Db {}
+unsafe impl Send for Db {}
+
+/// A handle to a single named router's slice of the routing database. Holds
+/// that router's volatile RIBs and scopes all persistent operations to the
+/// router's UUID prefix. Cheaply clonable; clones share state.
+#[derive(Clone)]
+pub struct RouterDb {
+    /// Shared sled database handle (same as [`Db::persistent`]).
+    persistent: sled::Db,
+
+    /// Identity of this router (id, name, tep).
+    info: RouterInfo,
 
     /// IPv4 Unicast routes learned from BGP update messages or administratively
     /// added static routes. These are volatile.
@@ -104,45 +155,64 @@ pub struct Db {
     /// added to the lower half forwarding plane.
     rib6_loc: Arc<Mutex<Rib6>>,
 
-    /// A generation number for the overall data store.
+    /// A generation number for this router's data.
     generation: Arc<AtomicU64>,
 
-    /// A set of watchers that are notified when changes to the data store occur.
+    /// A set of watchers that are notified when changes to this router's RIB
+    /// occur.
     watchers: Arc<RwLock<Vec<Watcher>>>,
-
-    /// Reaps expired routes from the local RIB.
-    reaper: Arc<Reaper>,
-
-    /// Switch slot reported from MGS.
-    /// Information is not available until first successful communication with MGS.
-    slot: Arc<RwLock<Option<u16>>>,
 
     log: Logger,
 }
-unsafe impl Sync for Db {}
-unsafe impl Send for Db {}
+unsafe impl Sync for RouterDb {}
+unsafe impl Send for RouterDb {}
 
-/// Width in bytes of the ASN prefix prepended to keys in router-scoped trees
-/// (neighbors, originated prefixes). Scoping every per-router key by ASN keeps
-/// state belonging to distinct routers from colliding in the shared sled trees
-/// and lets a router's state be enumerated/dropped with a single prefix scan.
+/// Width in bytes of the router-id prefix prepended to keys in router-scoped
+/// trees. Scoping every per-router key by router UUID keeps state belonging
+/// to distinct routers from colliding in the shared sled trees and lets a
+/// router's state be enumerated/dropped with a single prefix scan.
+const ROUTER_KEY_LEN: usize = 16;
+
+/// Width in bytes of the ASN prefix that follows the router-id prefix in
+/// BGP-related trees (neighbors, originated prefixes).
 const ASN_KEY_LEN: usize = 4;
 
-/// Prepend `asn` to `key`, producing the on-disk key for a router-scoped entry.
-fn asn_scoped_key(asn: u32, key: &[u8]) -> Vec<u8> {
-    let mut buf = asn.to_be_bytes().to_vec();
+/// Prepend `id` to `key`, producing the on-disk key for a router-scoped entry.
+fn router_scoped_key(id: RouterId, key: &[u8]) -> Vec<u8> {
+    let mut buf = id.as_bytes().to_vec();
     buf.extend_from_slice(key);
     buf
 }
 
-/// Strip the ASN prefix from a router-scoped key, yielding the inner key bytes.
-fn strip_asn(key: &[u8]) -> &[u8] {
-    &key[ASN_KEY_LEN..]
+/// Prepend `id` and `asn` to `key`, producing the on-disk key for a
+/// (router, asn)-scoped BGP entry.
+fn router_asn_scoped_key(id: RouterId, asn: u32, key: &[u8]) -> Vec<u8> {
+    let mut buf = id.as_bytes().to_vec();
+    buf.extend_from_slice(&asn.to_be_bytes());
+    buf.extend_from_slice(key);
+    buf
 }
 
-/// Remove every entry in `tree` scoped to `asn`.
-fn remove_asn_scoped(tree: &sled::Tree, asn: u32) -> Result<(), Error> {
-    for item in tree.scan_prefix(asn.to_be_bytes()) {
+/// The scan prefix covering every (router, asn)-scoped entry for `asn`.
+fn router_asn_prefix(id: RouterId, asn: u32) -> Vec<u8> {
+    let mut buf = id.as_bytes().to_vec();
+    buf.extend_from_slice(&asn.to_be_bytes());
+    buf
+}
+
+/// Strip the router-id prefix from a router-scoped key.
+fn strip_router(key: &[u8]) -> &[u8] {
+    &key[ROUTER_KEY_LEN..]
+}
+
+/// Strip the router-id and ASN prefixes from a (router, asn)-scoped key.
+fn strip_router_asn(key: &[u8]) -> &[u8] {
+    &key[ROUTER_KEY_LEN + ASN_KEY_LEN..]
+}
+
+/// Remove every entry in `tree` whose key starts with `prefix`.
+fn remove_prefix_scoped(tree: &sled::Tree, prefix: &[u8]) -> Result<(), Error> {
+    for item in tree.scan_prefix(prefix) {
         let (key, _) = item?;
         tree.remove(key)?;
     }
@@ -160,18 +230,145 @@ impl Db {
     /// Create a new routing database that stores persistent data at `path`.
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
         let rib_loc = Arc::new(Mutex::new(Rib::new()));
-        Ok(Self {
-            persistent: sled::open(path)?,
+        let persistent = sled::open(path)?;
+        Self::check_db_version(&persistent, &log)?;
+        let db = Self {
+            persistent,
+            routers: Arc::new(RwLock::new(BTreeMap::new())),
+            reaper: Reaper::new(rib_loc),
+            slot: Arc::new(RwLock::new(None)),
+            log,
+        };
+        db.load_routers()?;
+        Ok(db)
+    }
+
+    /// Check the on-disk database format version. On mismatch, drop all
+    /// known trees and stamp the current version. Routes are ephemeral and
+    /// configuration is replayed by the control plane, so no migration is
+    /// performed.
+    fn check_db_version(
+        persistent: &sled::Db,
+        log: &Logger,
+    ) -> Result<(), Error> {
+        let settings = persistent.open_tree(SETTINGS)?;
+        let version = settings
+            .get(DB_VERSION_KEY)?
+            .and_then(|v| v.first().copied());
+        if version == Some(DB_VERSION) {
+            return Ok(());
+        }
+        slog::info!(log,
+            "database version {version:?} != {DB_VERSION}, rebuilding";
+            "component" => crate::COMPONENT_RDB,
+            "module" => crate::MOD_DB,
+            "unit" => UNIT_PERSISTENT
+        );
+        drop(settings);
+        for tree in ROUTER_SCOPED_TREES {
+            persistent.drop_tree(tree)?;
+        }
+        persistent.drop_tree(ROUTER)?;
+        let settings = persistent.open_tree(SETTINGS)?;
+        settings.insert(DB_VERSION_KEY, &[DB_VERSION])?;
+        settings.flush()?;
+        Ok(())
+    }
+
+    /// Load all persisted routers into the volatile router map, creating
+    /// fresh (empty) RIBs for each.
+    fn load_routers(&self) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(ROUTER)?;
+        let mut routers = write_lock!(self.routers);
+        for item in tree.iter() {
+            let (_, value) = item?;
+            let value = String::from_utf8_lossy(&value);
+            let info: RouterInfo = serde_json::from_str(&value)?;
+            routers.insert(info.name.clone(), self.router_db(info));
+        }
+        Ok(())
+    }
+
+    fn router_db(&self, info: RouterInfo) -> RouterDb {
+        RouterDb {
+            persistent: self.persistent.clone(),
+            log: self.log.new(slog::o!("router" => info.name.clone())),
+            info,
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
-            reaper: Reaper::new(rib_loc),
-            slot: Arc::new(RwLock::new(None)),
-            log,
-        })
+        }
+    }
+
+    /// Create a new named router. Fails if the name, id, or tep collides
+    /// with an existing router.
+    pub fn create_router(&self, info: RouterInfo) -> Result<RouterDb, Error> {
+        let mut routers = write_lock!(self.routers);
+        if routers.contains_key(&info.name) {
+            return Err(Error::Conflict(format!(
+                "router {} already exists",
+                info.name
+            )));
+        }
+        for r in routers.values() {
+            if r.info.id == info.id {
+                return Err(Error::Conflict(format!(
+                    "router id {} already in use by {}",
+                    info.id, r.info.name
+                )));
+            }
+            if r.info.tep == info.tep {
+                return Err(Error::Conflict(format!(
+                    "tep {} already in use by router {}",
+                    info.tep, r.info.name
+                )));
+            }
+        }
+        let tree = self.persistent.open_tree(ROUTER)?;
+        tree.insert(
+            info.name.as_str(),
+            serde_json::to_string(&info)?.as_str(),
+        )?;
+        tree.flush()?;
+        let rdb = self.router_db(info);
+        routers.insert(rdb.info.name.clone(), rdb.clone());
+        Ok(rdb)
+    }
+
+    /// Delete a named router, dropping its volatile RIBs and purging all of
+    /// its persistent state.
+    pub fn delete_router(&self, name: &str) -> Result<(), Error> {
+        let Some(rdb) = write_lock!(self.routers).remove(name) else {
+            return Err(Error::NotFound(format!("router {name}")));
+        };
+        for tree_name in ROUTER_SCOPED_TREES {
+            let tree = self.persistent.open_tree(tree_name)?;
+            remove_prefix_scoped(&tree, rdb.info.id.as_bytes())?;
+            tree.flush()?;
+        }
+        let tree = self.persistent.open_tree(ROUTER)?;
+        tree.remove(name)?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    /// List all named routers.
+    pub fn list_routers(&self) -> Vec<RouterInfo> {
+        read_lock!(self.routers)
+            .values()
+            .map(|r| r.info.clone())
+            .collect()
+    }
+
+    /// Get a handle to the named router's slice of the database.
+    pub fn router(&self, name: &str) -> Result<RouterDb, Error> {
+        read_lock!(self.routers)
+            .get(name)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("router {name}")))
     }
 
     pub fn set_reaper_interval(&self, interval: std::time::Duration) {
@@ -180,6 +377,51 @@ impl Db {
 
     pub fn set_reaper_stale_max(&self, stale_max: chrono::Duration) {
         *lock!(self.reaper.stale_max) = stale_max;
+    }
+
+    pub fn slot(&self) -> Option<u16> {
+        match self.slot.read() {
+            Ok(v) => *v,
+            Err(e) => {
+                error!(self.log, "unable to read switch slot"; "error" => %e);
+                None
+            }
+        }
+    }
+
+    pub fn set_slot(&mut self, slot: Option<u16>) {
+        let mut value = self.slot.write().unwrap();
+        *value = slot;
+    }
+}
+
+impl RouterDb {
+    pub fn info(&self) -> &RouterInfo {
+        &self.info
+    }
+
+    pub fn id(&self) -> RouterId {
+        self.info.id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.info.name
+    }
+
+    pub fn tep(&self) -> Ipv6Addr {
+        self.info.tep
+    }
+
+    fn scoped_key(&self, key: &[u8]) -> Vec<u8> {
+        router_scoped_key(self.info.id, key)
+    }
+
+    fn scoped_asn_key(&self, asn: u32, key: &[u8]) -> Vec<u8> {
+        router_asn_scoped_key(self.info.id, asn, key)
+    }
+
+    fn scoped_asn_prefix(&self, asn: u32) -> Vec<u8> {
+        router_asn_prefix(self.info.id, asn)
     }
 
     /// Register a routing databse watcher.
@@ -283,17 +525,16 @@ impl Db {
         info: BgpRouterInfo,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
-        let key = asn.to_string();
+        let key = self.scoped_key(&asn.to_be_bytes());
         let value = serde_json::to_string(&info)?;
-        tree.insert(key.as_str(), value.as_str())?;
+        tree.insert(key, value.as_str())?;
         tree.flush()?;
         Ok(())
     }
 
     pub fn remove_bgp_router(&self, asn: u32) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
-        let key = asn.to_string();
-        tree.remove(key.as_str())?;
+        tree.remove(self.scoped_key(&asn.to_be_bytes()))?;
         tree.flush()?;
         Ok(())
     }
@@ -303,7 +544,7 @@ impl Db {
     ) -> Result<BTreeMap<u32, BgpRouterInfo>, Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let result = tree
-            .scan_prefix(vec![])
+            .scan_prefix(self.info.id.as_bytes())
             .filter_map(|item| {
                 let (key, value) = match item {
                     Ok(item) => item,
@@ -316,8 +557,8 @@ impl Db {
                         return None;
                     }
                 };
-                let key = match String::from_utf8_lossy(&key).parse() {
-                    Ok(item) => item,
+                let key = match <[u8; 4]>::try_from(strip_router(&key)) {
+                    Ok(bytes) => u32::from_be_bytes(bytes),
                     Err(e) => {
                         rdb_log!(self,
                             error,
@@ -347,7 +588,8 @@ impl Db {
 
     pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        let key = asn_scoped_key(nbr.asn, nbr.host.ip().to_string().as_bytes());
+        let key =
+            self.scoped_asn_key(nbr.asn, nbr.host.ip().to_string().as_bytes());
         let value = serde_json::to_string(&nbr)?;
         tree.insert(key, value.as_str())?;
         tree.flush()?;
@@ -359,7 +601,7 @@ impl Db {
         nbr: BgpUnnumberedNeighborInfo,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        let key = asn_scoped_key(nbr.asn, nbr.interface.as_bytes());
+        let key = self.scoped_asn_key(nbr.asn, nbr.interface.as_bytes());
         let value = serde_json::to_string(&nbr)?;
         tree.insert(key, value.as_str())?;
         tree.flush()?;
@@ -372,7 +614,7 @@ impl Db {
         interface: &str,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        tree.remove(asn_scoped_key(asn.as_u32(), interface.as_bytes()))?;
+        tree.remove(self.scoped_asn_key(asn.as_u32(), interface.as_bytes()))?;
         tree.flush()?;
         Ok(())
     }
@@ -383,7 +625,9 @@ impl Db {
         addr: IpAddr,
     ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        tree.remove(asn_scoped_key(asn.as_u32(), addr.to_string().as_bytes()))?;
+        tree.remove(
+            self.scoped_asn_key(asn.as_u32(), addr.to_string().as_bytes()),
+        )?;
         tree.flush()?;
         Ok(())
     }
@@ -391,7 +635,7 @@ impl Db {
     pub fn get_bgp_neighbors(&self) -> Result<Vec<BgpNeighborInfo>, Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let result = tree
-            .scan_prefix(vec![])
+            .scan_prefix(self.info.id.as_bytes())
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
@@ -430,7 +674,7 @@ impl Db {
     ) -> Result<Vec<BgpUnnumberedNeighborInfo>, Error> {
         let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
         let result = tree
-            .scan_prefix(vec![])
+            .scan_prefix(self.info.id.as_bytes())
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
@@ -466,17 +710,16 @@ impl Db {
 
     pub fn add_bfd_neighbor(&self, cfg: BfdPeerConfig) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
-        let key = cfg.peer.to_string();
+        let key = self.scoped_key(cfg.peer.to_string().as_bytes());
         let value = serde_json::to_string(&cfg)?;
-        tree.insert(key.as_str(), value.as_str())?;
+        tree.insert(key, value.as_str())?;
         tree.flush()?;
         Ok(())
     }
 
     pub fn remove_bfd_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
-        let key = addr.to_string();
-        tree.remove(key)?;
+        tree.remove(self.scoped_key(addr.to_string().as_bytes()))?;
         tree.flush()?;
         Ok(())
     }
@@ -484,7 +727,7 @@ impl Db {
     pub fn get_bfd_neighbors(&self) -> Result<Vec<BfdPeerConfig>, Error> {
         let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
         let result = tree
-            .scan_prefix(vec![])
+            .scan_prefix(self.info.id.as_bytes())
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
@@ -539,9 +782,9 @@ impl Db {
     pub fn set_origin4(&self, asn: Asn, ps: &[Ipv4Net]) -> Result<(), Error> {
         let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        remove_asn_scoped(&tree, asn)?;
+        remove_prefix_scoped(&tree, &self.scoped_asn_prefix(asn))?;
         for p in ps.iter() {
-            tree.insert(asn_scoped_key(asn, &p.db_key()), "")?;
+            tree.insert(self.scoped_asn_key(asn, &p.db_key()), "")?;
         }
         tree.flush()?;
         Ok(())
@@ -550,7 +793,7 @@ impl Db {
     pub fn clear_origin4(&self, asn: Asn) -> Result<(), Error> {
         let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        remove_asn_scoped(&tree, asn)?;
+        remove_prefix_scoped(&tree, &self.scoped_asn_prefix(asn))?;
         tree.flush()?;
         Ok(())
     }
@@ -559,7 +802,7 @@ impl Db {
         let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         let result = tree
-            .scan_prefix(asn.to_be_bytes())
+            .scan_prefix(self.scoped_asn_prefix(asn))
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
@@ -573,7 +816,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Ipv4Net::from_db_key(strip_asn(&key)) {
+                Some(match Ipv4Net::from_db_key(strip_router_asn(&key)) {
                     Ok(item) => item,
                     Err(ref e) => {
                         rdb_log!(
@@ -606,9 +849,9 @@ impl Db {
     pub fn set_origin6(&self, asn: Asn, ps: &[Ipv6Net]) -> Result<(), Error> {
         let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        remove_asn_scoped(&tree, asn)?;
+        remove_prefix_scoped(&tree, &self.scoped_asn_prefix(asn))?;
         for p in ps.iter() {
-            tree.insert(asn_scoped_key(asn, &p.db_key()), "")?;
+            tree.insert(self.scoped_asn_key(asn, &p.db_key()), "")?;
         }
         tree.flush()?;
         Ok(())
@@ -617,7 +860,7 @@ impl Db {
     pub fn clear_origin6(&self, asn: Asn) -> Result<(), Error> {
         let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        remove_asn_scoped(&tree, asn)?;
+        remove_prefix_scoped(&tree, &self.scoped_asn_prefix(asn))?;
         tree.flush()?;
         Ok(())
     }
@@ -626,7 +869,7 @@ impl Db {
         let asn = asn.as_u32();
         let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
         let result = tree
-            .scan_prefix(asn.to_be_bytes())
+            .scan_prefix(self.scoped_asn_prefix(asn))
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
@@ -640,7 +883,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Ipv6Net::from_db_key(strip_asn(&key)) {
+                Some(match Ipv6Net::from_db_key(strip_router_asn(&key)) {
                     Ok(item) => item,
                     Err(e) => {
                         rdb_log!(
@@ -897,12 +1140,12 @@ impl Db {
 
         for route in routes {
             let key = serde_json::to_string(&route)?;
-            route_keys.push(key);
+            route_keys.push(self.scoped_key(key.as_bytes()));
         }
 
         tree.transaction(|tx_db| {
             for key in &route_keys {
-                tx_db.insert(key.as_str(), "")?;
+                tx_db.insert(key.as_slice(), "")?;
             }
             Ok(())
         })?;
@@ -960,7 +1203,7 @@ impl Db {
         tree: Tree,
     ) -> Result<Vec<StaticRouteKey>, Error> {
         Ok(tree
-            .scan_prefix(vec![])
+            .scan_prefix(self.info.id.as_bytes())
             .filter_map(|item| {
                 let (key, _) = match item {
                     Ok(item) => item,
@@ -975,7 +1218,7 @@ impl Db {
                     }
                 };
 
-                let key = String::from_utf8_lossy(&key);
+                let key = String::from_utf8_lossy(strip_router(&key));
                 // XXX: figure out how to handle removal of old static routes
                 //      where the host bits aren't zeroed out
                 let rkey: StaticRouteKey = match serde_json::from_str(&key) {
@@ -1020,7 +1263,7 @@ impl Db {
 
     pub fn get_static4_count(&self) -> Result<usize, Error> {
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-        Ok(tree.len())
+        Ok(tree.scan_prefix(self.info.id.as_bytes()).count())
     }
 
     pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
@@ -1034,7 +1277,7 @@ impl Db {
 
     pub fn get_static6_count(&self) -> Result<usize, Error> {
         let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-        Ok(tree.len())
+        Ok(tree.scan_prefix(self.info.id.as_bytes()).count())
     }
 
     pub fn get_static_nexthop6_count(&self) -> Result<usize, Error> {
@@ -1263,13 +1506,13 @@ impl Db {
         let mut route_keys = Vec::new();
         for route in routes {
             let key = serde_json::to_string(route)?;
-            route_keys.push(key);
+            route_keys.push(self.scoped_key(key.as_bytes()));
             pcn.changed.insert(route.prefix);
         }
 
         tree.transaction(|tx_db| {
             for key in &route_keys {
-                tx_db.remove(key.as_str())?;
+                tx_db.remove(key.as_slice())?;
             }
             Ok(())
         })?;
@@ -1349,34 +1592,9 @@ impl Db {
         self.generation.load(Ordering::SeqCst)
     }
 
-    pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let result = tree.get(TEP_KEY)?;
-        let value = match result {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-        let octets: [u8; 16] = (*value).try_into().map_err(|_| {
-            Error::DbValue(format!(
-                "rdb: tep length error exepcted 16 bytes found {}",
-                value.len(),
-            ))
-        })?;
-
-        Ok(Some(Ipv6Addr::from(octets)))
-    }
-
-    pub fn set_tep_addr(&self, addr: Ipv6Addr) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let key = addr.octets();
-        tree.insert(TEP_KEY, &key)?;
-        tree.flush()?;
-        Ok(())
-    }
-
     pub fn get_bestpath_fanout(&self) -> Result<NonZeroU8, Error> {
         let tree = self.persistent.open_tree(SETTINGS)?;
-        let fan = match tree.get(BESTPATH_FANOUT)? {
+        let fan = match tree.get(self.scoped_key(BESTPATH_FANOUT.as_bytes()))? {
             // fanout was not in db
             None => DEFAULT_BESTPATH_FANOUT,
             Some(value) => {
@@ -1396,7 +1614,10 @@ impl Db {
 
     pub fn set_bestpath_fanout(&self, fanout: NonZeroU8) -> Result<(), Error> {
         let tree = self.persistent.open_tree(SETTINGS)?;
-        tree.insert(BESTPATH_FANOUT, &[fanout.get()])?;
+        tree.insert(
+            self.scoped_key(BESTPATH_FANOUT.as_bytes()),
+            &[fanout.get()],
+        )?;
         tree.flush()?;
         self.trigger_bestpath_when(|_pfx, _paths| true);
         Ok(())
@@ -1444,21 +1665,6 @@ impl Db {
                 path.replace(t);
             }
         });
-    }
-
-    pub fn slot(&self) -> Option<u16> {
-        match self.slot.read() {
-            Ok(v) => *v,
-            Err(e) => {
-                error!(self.log, "unable to read switch slot"; "error" => %e);
-                None
-            }
-        }
-    }
-
-    pub fn set_slot(&mut self, slot: Option<u16>) {
-        let mut value = self.slot.write().unwrap();
-        *value = slot;
     }
 
     pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
@@ -1522,8 +1728,8 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
-        types::test_helpers::path_vecs_equal,
+        StaticRouteKey, db::RouterDb, test::TestDb, types::Asn,
+        types::PrefixDbKey, types::test_helpers::path_vecs_equal,
     };
     use client_common::eprintln_nopipe;
     use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
@@ -1540,7 +1746,7 @@ mod test {
     }
 
     pub fn check_prefix_path(
-        db: &Db,
+        db: &RouterDb,
         prefix: &IpNet,
         rib_in_paths: Vec<Path>,
         loc_rib_paths: Vec<Path>,
@@ -1564,7 +1770,6 @@ mod test {
     #[test]
     fn test_rib() {
         use crate::StaticRouteKey;
-        use crate::db::Db;
         use mg_api_types::bgp::peer::PeerId;
         use mg_api_types::rdb::path::{BgpPathProperties, Path};
         use mg_api_types::rdb::{
@@ -1662,11 +1867,7 @@ mod test {
         let static_path1 = Path::from(static_key1);
 
         // setup
-        std::fs::create_dir_all("/tmp").expect("create tmp dir");
-        let log = init_file_logger("rib.log");
-        let db_path = "/tmp/rib.db".to_string();
-        let _ = std::fs::remove_dir_all(&db_path);
-        let db = Db::new(&db_path, log.clone()).expect("create db");
+        let db = get_test_db();
 
         // Start test cases
 
@@ -2468,5 +2669,121 @@ mod test {
         assert!("invalid".parse::<Ipv6Net>().is_err());
         assert!("2001:db8:".parse::<Ipv6Net>().is_err());
         assert!("2001:db8::/abc".parse::<Ipv6Net>().is_err());
+    }
+
+    #[test]
+    fn test_multi_router_isolation() {
+        use crate::types::{PrefixChangeNotification, RouterId, RouterInfo};
+        use std::sync::mpsc::channel;
+
+        let db = get_test_db();
+        let r1 = db.router().clone();
+        let r2 = db
+            .db()
+            .create_router(RouterInfo {
+                id: RouterId::new_random(),
+                name: "r2".to_string(),
+                tep: Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1),
+            })
+            .expect("create r2");
+
+        assert_eq!(db.db().list_routers().len(), 2);
+
+        // Watchers are per-router.
+        let (tx1, rx1) = channel::<PrefixChangeNotification>();
+        let (tx2, rx2) = channel::<PrefixChangeNotification>();
+        r1.watch("test-r1".to_string(), tx1);
+        r2.watch("test-r2".to_string(), tx2);
+
+        // Static routes land only in the owning router.
+        let route1 = StaticRouteKey {
+            prefix: "10.0.0.0/24".parse().unwrap(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        let route2 = StaticRouteKey {
+            prefix: "10.1.0.0/24".parse().unwrap(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 2, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        r1.add_static_routes(&[route1]).expect("add route to r1");
+        r2.add_static_routes(&[route2]).expect("add route to r2");
+
+        assert_eq!(r1.get_static(None).unwrap(), vec![route1]);
+        assert_eq!(r2.get_static(None).unwrap(), vec![route2]);
+        assert_eq!(r1.get_static4_count().unwrap(), 1);
+        assert_eq!(r2.get_static4_count().unwrap(), 1);
+
+        // RIBs are isolated.
+        assert!(r1.loc_rib(None).contains_key(&route1.prefix));
+        assert!(!r1.loc_rib(None).contains_key(&route2.prefix));
+        assert!(r2.loc_rib(None).contains_key(&route2.prefix));
+        assert!(!r2.loc_rib(None).contains_key(&route1.prefix));
+
+        // Each router saw exactly its own change.
+        assert!(rx1.try_recv().unwrap().changed.contains(&route1.prefix));
+        assert!(rx1.try_recv().is_err());
+        assert!(rx2.try_recv().unwrap().changed.contains(&route2.prefix));
+        assert!(rx2.try_recv().is_err());
+
+        // Same ASN in both routers: origins are isolated.
+        let asn = Asn::FourOctet(65000);
+        let p1: Ipv4Net = "1.1.1.0/24".parse().unwrap();
+        let p2: Ipv4Net = "2.2.2.0/24".parse().unwrap();
+        r1.set_origin4(asn, &[p1]).unwrap();
+        r2.set_origin4(asn, &[p2]).unwrap();
+        assert_eq!(r1.get_origin4(asn).unwrap(), vec![p1]);
+        assert_eq!(r2.get_origin4(asn).unwrap(), vec![p2]);
+
+        // Settings are per-router.
+        r2.set_bestpath_fanout(std::num::NonZeroU8::new(4).unwrap())
+            .unwrap();
+        assert_eq!(r1.get_bestpath_fanout().unwrap().get(), 1);
+        assert_eq!(r2.get_bestpath_fanout().unwrap().get(), 4);
+
+        // Nexthop shutdown (the BFD session-down path) only stale-marks the
+        // owning router's paths, even when both routers route via the same
+        // nexthop.
+        let shared_nh = IpAddr::V4(Ipv4Addr::new(192, 168, 3, 1));
+        let route1s = StaticRouteKey {
+            prefix: "10.2.0.0/24".parse().unwrap(),
+            nexthop: shared_nh,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        let route2s = StaticRouteKey {
+            prefix: "10.3.0.0/24".parse().unwrap(),
+            nexthop: shared_nh,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        r1.add_static_routes(&[route1s]).unwrap();
+        r2.add_static_routes(&[route2s]).unwrap();
+        let all_shutdown = |rdb: &crate::RouterDb, prefix: &IpNet| {
+            rdb.full_rib(None)
+                .get(prefix)
+                .expect("prefix present")
+                .iter()
+                .all(|p| p.shutdown)
+        };
+        r1.set_nexthop_shutdown(shared_nh, true);
+        assert!(all_shutdown(&r1, &route1s.prefix));
+        assert!(!all_shutdown(&r2, &route2s.prefix));
+
+        // Deleting a router purges its persistent state but leaves other
+        // routers untouched.
+        let r2_info = r2.info().clone();
+        db.db().delete_router("r2").expect("delete r2");
+        assert!(db.db().router("r2").is_err());
+        assert_eq!(r1.get_static(None).unwrap(), vec![route1, route1s]);
+        assert_eq!(r1.get_origin4(asn).unwrap(), vec![p1]);
+
+        // Re-creating a router with the same identity finds no leftovers.
+        let r2b = db.db().create_router(r2_info).expect("recreate r2");
+        assert!(r2b.get_static(None).unwrap().is_empty());
+        assert!(r2b.get_origin4(asn).unwrap().is_empty());
+        assert_eq!(r2b.get_bestpath_fanout().unwrap().get(), 1);
     }
 }

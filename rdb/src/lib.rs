@@ -6,7 +6,7 @@ pub mod db;
 pub mod rib;
 pub mod types;
 
-pub use db::Db;
+pub use db::{Db, RouterDb};
 pub use rib::{Rib, Rib4, Rib6, RibExt};
 pub use types::*;
 pub mod bestpath;
