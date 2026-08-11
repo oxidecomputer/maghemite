@@ -29,6 +29,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (13, MULTI_ROUTER),
     (12, BFD_NONZERO_DETECT_MULT),
     (11, PREFIX_TO_OXNET),
     (10, V4_OVER_V6_STATIC_ROUTES),
@@ -129,6 +130,62 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         params: Path<latest::bfd::DeleteBfdPeerPathParams>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // Multi-router ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    //
+    // Named router instances (VRF-like), each with its own RIB and TEP
+    // address. Configuration is declarative: `multi_router_apply` reconciles
+    // the daemon to the full desired router list. Endpoints that predate
+    // VERSION_MULTI_ROUTER operate on the router named "default".
+
+    /// Apply the full desired set of routers.
+    ///
+    /// Routers absent from the request are torn down (BGP sessions closed,
+    /// routes withdrawn, persistent state purged); routers present are
+    /// created or updated in place.
+    #[endpoint {
+        method = PUT,
+        path = "/routers",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn multi_router_apply(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::router::MultiRouterApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// List all named routers.
+    #[endpoint {
+        method = GET,
+        path = "/routers",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn list_routers(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<latest::router::RouterInfo>>, HttpError>;
+
+    /// Get the imported RIB (rib-in) of a named router.
+    #[endpoint {
+        method = GET,
+        path = "/router/{router}/rib/imported",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_rib_imported(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+        request: Query<latest::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
+
+    /// Get the selected RIB (loc-rib) of a named router.
+    #[endpoint {
+        method = GET,
+        path = "/router/{router}/rib/selected",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_rib_selected(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+        request: Query<latest::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
 
     #[endpoint {
         method = GET,

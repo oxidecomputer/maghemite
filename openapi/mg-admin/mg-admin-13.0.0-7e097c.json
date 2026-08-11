@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "12.0.0"
+    "version": "13.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1484,6 +1484,162 @@
         }
       }
     },
+    "/router/{router}/rib/imported": {
+      "get": {
+        "summary": "Get the imported RIB (rib-in) of a named router.",
+        "operationId": "get_router_rib_imported",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "router",
+            "description": "Name of the router.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family (None means all families)",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/router/{router}/rib/selected": {
+      "get": {
+        "summary": "Get the selected RIB (loc-rib) of a named router.",
+        "operationId": "get_router_rib_selected",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "router",
+            "description": "Name of the router.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family (None means all families)",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/routers": {
+      "get": {
+        "summary": "List all named routers.",
+        "operationId": "list_routers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_RouterInfo",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RouterInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Apply the full desired set of routers.",
+        "description": "Routers absent from the request are torn down (BGP sessions closed, routes withdrawn, persistent state purged); routers present are created or updated in place.",
+        "operationId": "multi_router_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultiRouterApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/static/route4": {
       "get": {
         "operationId": "static_list_v4_routes",
@@ -2343,6 +2499,81 @@
           "name",
           "passive",
           "resolution"
+        ]
+      },
+      "BgpSpec": {
+        "description": "BGP configuration for one router in a [`RouterSpec`]. Combines the router-level settings (ASN, BGP id, listen address) with the declarative peer/origination set from `ApplyRequest`.",
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "Autonomous system number for this router.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "checker": {
+            "nullable": true,
+            "description": "Checker rhai code to apply to ingress open and update messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CheckerSource"
+              }
+            ]
+          },
+          "id": {
+            "description": "BGP id for this router.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "listen": {
+            "description": "Listening address `<addr>:<port>`.",
+            "type": "string"
+          },
+          "originate": {
+            "description": "Complete set of prefixes to originate.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IpNet"
+            }
+          },
+          "peers": {
+            "description": "Lists of peers indexed by peer group.",
+            "default": {},
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/BgpPeerConfig"
+              }
+            }
+          },
+          "shaper": {
+            "nullable": true,
+            "description": "Shaper rhai code to apply to egress open and update messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShaperSource"
+              }
+            ]
+          },
+          "unnumbered_peers": {
+            "description": "Lists of unnumbered peers indexed by peer group.",
+            "default": {},
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnnumberedBgpPeerConfig"
+              }
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "id",
+          "listen",
+          "originate"
         ]
       },
       "Capability": {
@@ -3792,6 +4023,21 @@
           }
         ]
       },
+      "MultiRouterApplyRequest": {
+        "description": "The multi-router reconciler request: the complete desired router list. Routers absent from the list are torn down; present ones are created or updated in place.",
+        "type": "object",
+        "properties": {
+          "routers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouterSpec"
+            }
+          }
+        },
+        "required": [
+          "routers"
+        ]
+      },
       "NdpInterface": {
         "description": "NDP state for an interface",
         "type": "object",
@@ -5239,6 +5485,85 @@
           "graceful_shutdown",
           "id",
           "listen"
+        ]
+      },
+      "RouterInfo": {
+        "description": "A named router instance (VRF-like). BGP configuration, static routes and BFD peers all attach to a router, and each router has its own RIB and its own tunnel endpoint (TEP) address.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tep": {
+            "description": "Tunnel endpoint address for this router's RIB. Advertised to ddmd as the boundary address for prefixes selected into this router's loc-RIB.",
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tep"
+        ]
+      },
+      "RouterSpec": {
+        "description": "Full desired state for one named router.",
+        "type": "object",
+        "properties": {
+          "bfd_peers": {
+            "description": "Complete set of BFD peers.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BfdPeerConfig"
+            }
+          },
+          "bgp": {
+            "nullable": true,
+            "description": "BGP configuration (None = no BGP for this router).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BgpSpec"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "static4": {
+            "description": "Complete set of IPv4 static routes.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticRoute4"
+            }
+          },
+          "static6": {
+            "description": "Complete set of IPv6 static routes.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticRoute6"
+            }
+          },
+          "tep": {
+            "description": "Tunnel endpoint address for this router's RIB.",
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tep"
         ]
       },
       "SessionMode": {
