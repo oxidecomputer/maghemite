@@ -1374,6 +1374,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
  "dropshot",
@@ -1476,6 +1477,7 @@ dependencies = [
  "slog-envlogger",
  "slog-term",
  "tabwriter",
+ "uuid",
 ]
 
 [[package]]

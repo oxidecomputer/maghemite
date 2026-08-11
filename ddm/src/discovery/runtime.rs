@@ -50,7 +50,7 @@ struct DiscoveryPacket {
 impl DiscoveryPacket {
     fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::MAX as u8,
             flags: SOLICIT,
             hostname,
             kind,
@@ -58,7 +58,7 @@ impl DiscoveryPacket {
     }
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::MAX as u8,
             flags: ADVERTISE,
             hostname,
             kind,
@@ -356,24 +356,23 @@ fn handle_advertisement(
         .advertisements_received
         .fetch_add(1, Ordering::Relaxed);
 
-    // TODO: version negotiation
+    // Version negotiation: speak the minimum of what both sides advertise.
+    // A peer advertising a version above ours necessarily supports our
+    // version's exchange endpoints, so clamp to [`Version::MAX`].
     //
-    // Things currently work because ddm v1 does no version checking at all.
-    // So ddm v2 speakers can send out discovery packets with the version set to
-    // 2, and ddm v1 speakers can send out discovery packets with the version
-    // set to 1, and as long a v2 router speaks version 1 after discovering a v1
-    // peer, things will work. However, this will not work for version 3. So we
-    // need to implement version negotiation. This would also not work for
-    // changes in the discovery protocol, if we were to have changes there. So
-    // we need to come up with a general way for both protocols to evolve.
+    // NOTE: peers running code that predates this negotiation always
+    // advertise 2 (and reject hellos with versions they do not know), so a
+    // mixed fleet degrades to DDMv2 at best and requires the whole fleet to
+    // update before higher versions are spoken.
     let version = match version {
         2 => Version::V2,
         3 => Version::V3,
+        x if x >= 4 => Version::MAX,
         x => {
             err!(
                 ctx.log,
                 ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
+                "unsupported protocol version {}, minimum supported is 2",
                 x
             );
             return;
