@@ -21,7 +21,7 @@ use crate::{
 use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use rdb::{Asn, Db};
+use rdb::{Asn, RouterDb};
 use rhai::AST;
 use slog::Logger;
 use std::{
@@ -112,7 +112,7 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     /// The underlying routing information base (RIB) databse this router
     /// will update in response to BGP update messages (imported routes)
     /// and administrative API requests (originated routes).
-    pub db: Db,
+    pub db: RouterDb,
 
     /// The static configuration associated with this router.
     pub config: RouterConfig,
@@ -154,7 +154,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn new(
         config: RouterConfig,
         log: Logger,
-        db: Db,
+        db: RouterDb,
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
     ) -> Router<Cnx> {
         Self {

@@ -41,7 +41,7 @@ use mg_api_types_versions::{v1, v4};
 use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, Db};
+use rdb::{Asn, RouterDb};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -1656,7 +1656,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
 
     shutdown: AtomicBool,
     running: AtomicBool,
-    db: Db,
+    db: RouterDb,
     fanout4: Arc<RwLock<Fanout4<Cnx>>>,
     fanout6: Arc<RwLock<Fanout6<Cnx>>>,
     router: Arc<Router<Cnx>>,
