@@ -627,15 +627,7 @@ async fn sync_mixed_v4_and_v4_over_v6() {
         let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
         crate::sync_prefix(
-            router,
-            tep,
-            &rib,
-            &prefix,
-            &dpd,
-            &ddm,
-            &sw,
-            &log,
-            &rt,
+            router, tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt,
         )
         .expect("sync_prefix");
 

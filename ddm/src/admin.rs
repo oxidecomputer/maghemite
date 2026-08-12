@@ -272,7 +272,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn advertise_tunnel_endpoints_v1(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<ddm_api_types_versions::v1::net::TunnelOrigin>>,
+        request: TypedBody<
+            HashSet<ddm_api_types_versions::v1::net::TunnelOrigin>,
+        >,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let endpoints =
             request.into_inner().into_iter().map(Into::into).collect();

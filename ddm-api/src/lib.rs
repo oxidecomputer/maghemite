@@ -103,8 +103,7 @@ pub trait DdmAdminApi {
     }]
     async fn get_originated_tunnel_endpoints_v1(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<v1::net::TunnelOrigin>>, HttpError>
-    {
+    ) -> Result<HttpResponseOk<HashSet<v1::net::TunnelOrigin>>, HttpError> {
         let resp = Self::get_originated_tunnel_endpoints(ctx).await?;
         let converted: HashSet<v1::net::TunnelOrigin> =
             resp.0.into_iter().map(Into::into).collect();
