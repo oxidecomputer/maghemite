@@ -22,7 +22,7 @@ use crate::{
     },
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
-    router::Router,
+    router::{Router, RouterInstanceId},
     unnumbered::{UnnumberedError, UnnumberedManager},
 };
 use mg_api_types::bgp::config::{
@@ -1739,7 +1739,15 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     db: Db,
     fanout4: Arc<RwLock<Fanout4<Cnx>>>,
     fanout6: Arc<RwLock<Fanout6<Cnx>>>,
+    // This must remain a strong Arc: the no-`Drop` argument on
+    // `Router::shutdown` relies on sessions in the map keeping their router
+    // alive, and the runner dereferences it on live paths (policy, base
+    // attributes). Turning it into a Weak would need `upgrade()` plus
+    // dead-router handling at each use.
     router: Arc<Router<Cnx>>,
+
+    /// Identity of the router this session belongs to (see `belongs_to`).
+    router_instance_id: RouterInstanceId,
 
     /// Registry of active connections with typestate enforcement
     /// Ensures at most 2 connections (primary + collision during negotiation)
@@ -1855,6 +1863,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             shutdown_state: AtomicShutdownState::new(),
             fanout4: router.fanout4.clone(),
             fanout6: router.fanout6.clone(),
+            router_instance_id: router.instance_id(),
             router: router.clone(),
             message_history: Arc::new(Mutex::new(MessageHistory::default())),
             fsm_event_history: Arc::new(Mutex::new(FsmEventHistory::new())),
@@ -1948,6 +1957,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.peer_id();
         );
         self.shutdown_state.request_shutdown();
+    }
+
+    // (cfg(test) since nothing outside tests reads this yet.)
+    #[cfg(test)]
+    pub(crate) fn shutdown_state(&self) -> ShutdownState {
+        self.shutdown_state.load()
+    }
+
+    /// Return true if this session belongs to the given router.
+    ///
+    /// Ownership is compared by [`RouterInstanceId`], so a router deleted and
+    /// created with the same ASN does not claim the old router's sessions
+    /// (re-creation yields a fresh instance ID).
+    pub(crate) fn belongs_to(&self, router: &Router<Cnx>) -> bool {
+        self.router_instance_id == router.instance_id()
     }
 
     /// Join a connector thread and handle any panic, logging appropriately

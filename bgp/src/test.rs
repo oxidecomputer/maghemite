@@ -12,7 +12,7 @@ use crate::{
     router::{EnsureSessionResult, Router, SessionMap},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
-        SessionInfo, SessionRunner,
+        SessionInfo, SessionRunner, ShutdownState,
     },
     unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
@@ -4237,4 +4237,257 @@ fn test_unnumbered_interface_lifecycle() {
     router2.shutdown();
     disp1.shutdown();
     disp2.shutdown();
+}
+
+#[test]
+#[serial_test::parallel]
+fn router_teardown_leaves_other_routers_sessions_alone() {
+    let test_name = "router_teardown_leaves_other_routers_sessions_alone";
+    let log = init_file_logger(&format!("{test_name}.log"));
+
+    // Create a database and single (shared) session map for both routers.
+    let db = rdb::test::get_test_db(test_name, log.clone())
+        .expect("created test db");
+    let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+
+    let router_a = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64512),
+            id: 1,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+    let router_b = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64513),
+            id: 2,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    let bind_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::1]:{TEST_BGP_PORT}"));
+    let peer_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::2]:{TEST_BGP_PORT}"));
+    let (event_tx, event_rx) = channel();
+
+    let result = router_b
+        .ensure_session(
+            PeerConfig {
+                name: "peer-b".to_string(),
+                group: String::new(),
+                id: PeerId::Ip(peer_addr.ip()),
+                port: NonZeroU16::new(peer_addr.port()).unwrap_or(BGP_PORT),
+                hold_time: TEST_HOLD_TIME_SECS,
+                idle_hold_time: 0,
+                delay_open: 0,
+                connect_retry: TEST_CONNECT_RETRY_SECS,
+                keepalive: 3,
+                resolution: 100,
+            },
+            Some(bind_addr),
+            event_tx,
+            event_rx,
+            create_test_session_info(
+                RouteExchange::Ipv6 { nexthop: None },
+                bind_addr,
+                peer_addr,
+                // passive = true so the connector thread doesn't run.
+                //
+                // What happens if we set passive = false? The big risk would be
+                // the connector thread perturbing other tests. But as of this
+                // writing, bind_addr and peer_addr have scope ID 0, and the
+                // other tests bind against fe80::1/2 with a non-zero scope ID.
+                // (The BgpConnectionChannel `NET` static keys endpoints by
+                // exact SocketAddr, including scope_id.) So the worst that can
+                // happen is that the connector would fail forever, spamming the
+                // log and the process-global CONNECTION_ATTEMPTS list. But
+                // passive also stays robust if a future test ever binds these
+                // exact endpoints with scope ID 0.
+                true,
+            ),
+            None,
+        )
+        .expect("created session on router b");
+
+    let session_b = match result {
+        EnsureSessionResult::New(s) => s,
+        EnsureSessionResult::Updated(s) => s,
+    };
+    let peer_b = session_b.peer_id();
+
+    let assert_b_intact = |after: &str| {
+        let state = session_b.shutdown_state();
+        let unaltered = match state {
+            ShutdownState::NotRequested => true,
+            ShutdownState::Requested | ShutdownState::Complete => false,
+        };
+        assert!(
+            unaltered,
+            "{after} shouldn't alter router b's session (shutdown state {state:?})"
+        );
+        assert!(
+            lock!(sessions).contains_key(&peer_b),
+            "{after} shouldn't remove router b's session from the shared map"
+        );
+    };
+
+    assert_b_intact("creating router b's session");
+
+    // run() reports the spawn count.
+    assert_eq!(
+        router_a.run(),
+        0,
+        "router a's run() shouldn't spawn threads for sessions it does not own"
+    );
+    assert_b_intact("router a's run()");
+
+    router_a.shutdown();
+    assert_b_intact("router a's shutdown");
+
+    drop(router_a);
+    assert_b_intact("dropping router a");
+
+    // Delete the session -- don't just shut it down. delete_session both
+    // removes the map entry (breaking the router Arc cycle) and requests FSM
+    // shutdown, so that once the FSM thread exits and this test's own Arc
+    // drops, nothing keeps the runner (and via it, the clock thread) alive.
+    router_b.delete_session(peer_b);
+}
+
+#[test]
+#[serial_test::parallel]
+fn recreated_router_does_not_claim_predecessors_sessions() {
+    let test_name = "recreated_router_does_not_claim_predecessors_sessions";
+    let log = init_file_logger(&format!("{test_name}.log"));
+
+    let db = rdb::test::get_test_db(test_name, log.clone())
+        .expect("created test db");
+    let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+
+    // Ensure that multiple routers with the same config aren't confused with
+    // each other (that is, we use RouterInstanceId to distinguish between
+    // them).
+    let config = RouterConfig {
+        asn: Asn::FourOctet(64514),
+        id: 3,
+    };
+
+    let old_router = Arc::new(Router::new(
+        config,
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    let bind_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::3]:{TEST_BGP_PORT}"));
+    let peer_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::4]:{TEST_BGP_PORT}"));
+    let (event_tx, event_rx) = channel();
+
+    let result = old_router
+        .ensure_session(
+            PeerConfig {
+                name: "peer-old".to_string(),
+                group: String::new(),
+                id: PeerId::Ip(peer_addr.ip()),
+                port: NonZeroU16::new(peer_addr.port()).unwrap_or(BGP_PORT),
+                hold_time: TEST_HOLD_TIME_SECS,
+                idle_hold_time: 0,
+                delay_open: 0,
+                connect_retry: TEST_CONNECT_RETRY_SECS,
+                keepalive: 3,
+                resolution: 100,
+            },
+            Some(bind_addr),
+            event_tx,
+            event_rx,
+            create_test_session_info(
+                RouteExchange::Ipv6 { nexthop: None },
+                bind_addr,
+                peer_addr,
+                // See router_teardown_leaves_other_routers_sessions_alone for
+                // why passive = true.
+                true,
+            ),
+            None,
+        )
+        .expect("created session on the old router");
+
+    let session_old = match result {
+        EnsureSessionResult::New(s) => s,
+        EnsureSessionResult::Updated(s) => s,
+    };
+    let peer_old = session_old.peer_id();
+
+    // Recreate the router with an identical config, sharing the map. This
+    // mirrors mgd's delete-and-recreate flow, where a stale handle to the old
+    // instance can outlive creation of the new one.
+    let new_router = Arc::new(Router::new(
+        config,
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    assert_eq!(
+        new_router.run(),
+        0,
+        "recreated router's run() shouldn't spawn threads for the old \
+         instance's sessions"
+    );
+
+    new_router.shutdown();
+    let state = session_old.shutdown_state();
+    let unaltered = match state {
+        ShutdownState::NotRequested => true,
+        ShutdownState::Requested | ShutdownState::Complete => false,
+    };
+    assert!(
+        unaltered,
+        "recreated router's shutdown shouldn't stop the old instance's \
+         session (shutdown state {state:?})"
+    );
+    assert!(
+        lock!(sessions).contains_key(&peer_old),
+        "recreated router's shutdown shouldn't remove the old instance's \
+         session from the shared map"
+    );
+
+    // Ensure that the owning instance's run() and shutdown() do reach
+    // its own session.
+    //
+    // run() counts spawn attempts -- the duplicate thread exits immediately
+    // because the original FSM thread owns the event receiver.
+    assert_eq!(
+        old_router.run(),
+        1,
+        "owning router's run() should spawn a thread for its session"
+    );
+    old_router.shutdown();
+    let state = session_old.shutdown_state();
+    let stopped = match state {
+        ShutdownState::NotRequested => false,
+        ShutdownState::Requested | ShutdownState::Complete => true,
+    };
+    assert!(
+        stopped,
+        "owning router's shutdown should stop its session \
+         (shutdown state {state:?})"
+    );
+    assert!(
+        lock!(sessions).contains_key(&peer_old),
+        "shutdown stops sessions but shouldn't remove them from the map"
+    );
+
+    // See router_teardown_leaves_other_routers_sessions_alone for why
+    // deletion (not just shutdown) is needed for cleanup.
+    old_router.delete_session(peer_old);
 }
