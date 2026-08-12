@@ -90,12 +90,15 @@ pub struct BgpSpec {
 }
 
 /// Full desired state for one named router.
+///
+/// The router's TEP address is not part of the spec: the daemon generates a
+/// random ULA when the router is created and persists it (observable via
+/// [`RouterInfo`]). Consumers key on the router id, which rides with the
+/// TEP in ddm tunnel advertisements.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RouterSpec {
     pub name: String,
     pub id: RouterId,
-    /// Tunnel endpoint address for this router's RIB.
-    pub tep: Ipv6Addr,
     /// BGP configuration (None = no BGP for this router).
     pub bgp: Option<BgpSpec>,
     /// Complete set of IPv4 static routes.

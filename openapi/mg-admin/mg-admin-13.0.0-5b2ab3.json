@@ -5511,7 +5511,7 @@
         ]
       },
       "RouterSpec": {
-        "description": "Full desired state for one named router.",
+        "description": "Full desired state for one named router.\n\nThe router's TEP address is not part of the spec: the daemon generates a random ULA when the router is created and persists it (observable via [`RouterInfo`]). Consumers key on the router id, which rides with the TEP in ddm tunnel advertisements.",
         "type": "object",
         "properties": {
           "bfd_peers": {
@@ -5553,17 +5553,11 @@
             "items": {
               "$ref": "#/components/schemas/StaticRoute6"
             }
-          },
-          "tep": {
-            "description": "Tunnel endpoint address for this router's RIB.",
-            "type": "string",
-            "format": "ipv6"
           }
         },
         "required": [
           "id",
-          "name",
-          "tep"
+          "name"
         ]
       },
       "SessionMode": {

@@ -68,6 +68,17 @@ fn router_db(
     ctx.db.router(name).map_err(|e| Error::from(e).into())
 }
 
+/// Generate a random ULA fdxx:xxxx:xxxx:xxxx::1 to serve as a router's TEP.
+/// Generated once at router creation and persisted with the router, so it is
+/// stable across restarts and re-applies; callers are never asked for a TEP.
+pub(crate) fn random_tep_ula() -> std::net::Ipv6Addr {
+    let mut r = [0u8; 7];
+    rand::fill(&mut r);
+    std::net::Ipv6Addr::from([
+        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
+    ])
+}
+
 pub(crate) async fn multi_router_apply(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MultiRouterApplyRequest>,
@@ -83,14 +94,14 @@ pub(crate) async fn do_multi_router_apply(
     validate_apply_request(&rq)?;
 
     // Tear down routers that are absent from the desired list. A change of
-    // identity (uuid) or TEP is also handled as teardown followed by
-    // re-creation below: both scope persistent state and platform
-    // programming, so rebuilding is simpler and safer than editing in place.
+    // identity (uuid) is also handled as teardown followed by re-creation
+    // below: the uuid scopes persistent state and platform programming, so
+    // rebuilding is simpler and safer than editing in place.
     let desired: BTreeMap<&str, &RouterSpec> =
         rq.routers.iter().map(|s| (s.name.as_str(), s)).collect();
     for info in ctx.db.list_routers() {
         match desired.get(info.name.as_str()) {
-            Some(spec) if spec.id == info.id && spec.tep == info.tep => {}
+            Some(spec) if spec.id == info.id => {}
             _ => teardown_router(ctx, &info.name).await?,
         }
     }
@@ -103,7 +114,7 @@ pub(crate) async fn do_multi_router_apply(
                 .create_router(RouterInfo {
                     id: spec.id,
                     name: spec.name.clone(),
-                    tep: spec.tep,
+                    tep: random_tep_ula(),
                 })
                 .map_err(|e| HttpError::from(Error::from(e)))?,
         };
@@ -125,7 +136,6 @@ fn validate_apply_request(
     };
     let mut names = HashSet::new();
     let mut ids = HashSet::new();
-    let mut teps = HashSet::new();
     // The BGP dispatcher and the BFD daemon are shared across routers and
     // demux inbound traffic purely by peer address / interface, so these
     // must be unique across the whole router set, not just within one.
@@ -138,9 +148,6 @@ fn validate_apply_request(
         }
         if !ids.insert(spec.id) {
             return dup("router id", &spec.id);
-        }
-        if !teps.insert(spec.tep) {
-            return dup("router tep", &spec.tep);
         }
         if let Some(bgp) = &spec.bgp {
             for p in bgp.peers.values().flatten() {
@@ -373,11 +380,10 @@ mod tests {
     use mg_common::lock;
     use std::collections::HashMap;
 
-    fn spec(name: &str, tep: &str, asn: u32, peer: &str) -> RouterSpec {
+    fn spec(name: &str, asn: u32, peer: &str) -> RouterSpec {
         RouterSpec {
             name: name.into(),
             id: RouterId::new_random(),
-            tep: tep.parse().unwrap(),
             bgp: Some(BgpSpec {
                 asn,
                 id: asn,
@@ -411,8 +417,8 @@ mod tests {
     async fn two_router_apply_then_remove() {
         let ctx = test_ctx("two_router_apply_then_remove");
 
-        let r1 = spec("one", "fd00::1", 65001, "203.0.113.1");
-        let r2 = spec("two", "fd00::2", 65001, "203.0.113.2");
+        let r1 = spec("one", 65001, "203.0.113.1");
+        let r2 = spec("two", 65001, "203.0.113.2");
         let rq = MultiRouterApplyRequest {
             routers: vec![r1.clone(), r2.clone()],
         };
@@ -433,7 +439,8 @@ mod tests {
             );
             let rdb = ctx.db.router(&spec.name).expect("router db");
             assert_eq!(rdb.id(), spec.id);
-            assert_eq!(rdb.tep(), spec.tep);
+            // The TEP is daemon-generated, not caller-supplied: a ULA.
+            assert_eq!(rdb.tep().octets()[0], 0xfd);
             let neighbors = rdb.get_bgp_neighbors().expect("neighbors");
             assert_eq!(neighbors.len(), 1);
             assert_eq!(
@@ -447,6 +454,8 @@ mod tests {
                 oxnet::IpNet::from(spec.static4[0].prefix),
             );
         }
+
+        let tep_one = ctx.db.router("one").expect("router db").tep();
 
         // Re-apply with router "two" removed.
         do_multi_router_apply(
@@ -466,10 +475,11 @@ mod tests {
             !lock!(ctx.bgp.router).contains_key(&("two".to_string(), 65001))
         );
 
-        // The survivor is untouched.
+        // The survivor is untouched, including its generated TEP.
         let rdb = ctx.db.router("one").expect("router db");
         assert_eq!(rdb.get_bgp_neighbors().expect("neighbors").len(), 1);
         assert_eq!(rdb.get_static(None).expect("static routes").len(), 1);
+        assert_eq!(rdb.tep(), tep_one);
 
         // Recreating "two" after teardown must start from a clean slate.
         do_multi_router_apply(&ctx, rq)
@@ -480,16 +490,16 @@ mod tests {
         assert_eq!(rdb.get_static(None).expect("static routes").len(), 1);
     }
 
-    /// Duplicate router names, ids, teps, or cross-router BGP peer
-    /// addresses must be rejected up front.
+    /// Duplicate router names, ids, or cross-router BGP peer addresses must
+    /// be rejected up front.
     #[tokio::test]
     async fn apply_validation_rejects_duplicates() {
         let ctx = test_ctx("apply_validation_rejects_duplicates");
 
         let good = || {
             (
-                spec("one", "fd00::1", 65001, "203.0.113.1"),
-                spec("two", "fd00::2", 65002, "203.0.113.2"),
+                spec("one", 65001, "203.0.113.1"),
+                spec("two", 65002, "203.0.113.2"),
             )
         };
 
@@ -503,18 +513,13 @@ mod tests {
             b.id = a.id;
             vec![a, b]
         };
-        let dup_tep = {
-            let (a, mut b) = good();
-            b.tep = a.tep;
-            vec![a, b]
-        };
         let dup_peer = {
             let (a, mut b) = good();
             b.bgp = a.bgp.clone();
             vec![a, b]
         };
 
-        for routers in [dup_name, dup_id, dup_tep, dup_peer] {
+        for routers in [dup_name, dup_id, dup_peer] {
             let err = do_multi_router_apply(
                 &ctx,
                 MultiRouterApplyRequest { routers },

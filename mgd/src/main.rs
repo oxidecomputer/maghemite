@@ -558,23 +558,15 @@ fn initialize_static_routes(db: &rdb::RouterDb, log: &Logger) {
 
 /// Seed the "default" router if the router table is empty of it, so
 /// single-router setups and the pre-multi-router API surface keep working.
-/// The TEP is a randomized ULA fdxx:xxxx:xxxx:xxxx::1, persisted with the
-/// router so it is stable across restarts.
 fn ensure_default_router(db: &rdb::Db) {
     if db.router(admin::DEFAULT_ROUTER).is_ok() {
         return;
     }
 
-    let mut r = [0u8; 7];
-    rand::fill(&mut r);
-    let tep_ula = Ipv6Addr::from([
-        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
-    ]);
-
     db.create_router(rdb::types::RouterInfo {
         id: rdb::types::RouterId::new_random(),
         name: admin::DEFAULT_ROUTER.to_string(),
-        tep: tep_ula,
+        tep: router_admin::random_tep_ula(),
     })
     .expect("create default router");
 }
