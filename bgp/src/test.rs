@@ -11,8 +11,8 @@ use crate::{
     dispatcher::Dispatcher,
     router::{EnsureSessionResult, Router, SessionMap},
     session::{
-        AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
-        SessionInfo, SessionRunner, ShutdownState,
+        AdminEvent, ConnectionKind, FsmDriver, FsmEvent, FsmStateKind,
+        NeighborInfo, PeerId, SessionInfo, SessionRunner, ShutdownState,
     },
     unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
@@ -4490,4 +4490,218 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     // See router_teardown_leaves_other_routers_sessions_alone for why
     // deletion (not just shutdown) is needed for cleanup.
     old_router.delete_session(peer_old);
+}
+
+#[test]
+#[serial_test::parallel]
+fn admin_events_do_not_reach_other_routers_sessions() {
+    let test_name = "admin_events_do_not_reach_other_routers_sessions";
+    let log = init_file_logger(&format!("{test_name}.log"));
+
+    let db = rdb::test::get_test_db(test_name, log.clone())
+        .expect("created test db");
+
+    let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+
+    let router_a = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64512),
+            id: 1,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+    let router_b = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64513),
+            id: 2,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    // This is built directly rather than via ensure_session, so that no FSM
+    // thread is spawned to drain the probe channel.
+    fn install_test_session(
+        sessions: &Arc<Mutex<SessionMap<BgpConnectionChannel>>>,
+        router: &Arc<Router<BgpConnectionChannel>>,
+        name: &str,
+        bind_addr: SocketAddr,
+        peer_addr: SocketAddr,
+    ) -> (
+        Arc<SessionRunner<BgpConnectionChannel>>,
+        std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+    ) {
+        let (probe_tx, probe_rx) = channel();
+        let session = Arc::new(SessionRunner::new(
+            Arc::new(Mutex::new(create_test_session_info(
+                RouteExchange::Ipv6 { nexthop: None },
+                bind_addr,
+                peer_addr,
+                true,
+            ))),
+            probe_tx,
+            NeighborInfo {
+                name: Arc::new(Mutex::new(name.to_string())),
+                peer_group: String::new(),
+                peer: PeerId::Ip(peer_addr.ip()),
+                port: NonZeroU16::new(peer_addr.port())
+                    .expect("test peer port is non-zero"),
+            },
+            router.clone(),
+            None,
+        ));
+        // FsmDriver::new needs a receiver -- ordinarily, `probe_rx` would be
+        // provided here. But we deliberately do not pass that in so that the
+        // test can receive events from it instead.
+        let (_driver_tx, driver_rx) = channel();
+        let displaced = lock!(sessions).insert_overwrite(Arc::new(
+            FsmDriver::new(session.clone(), driver_rx),
+        ));
+        assert!(
+            displaced.is_none(),
+            "inserting {name} displaced another session; each test session \
+             must use a distinct peer address"
+        );
+        (session, probe_rx)
+    }
+
+    // Set up two sessions for router_a and one for router_b. Two sessions show
+    // that admin event delivery happens to both.
+    let (session_a1, probe_a1_rx) = install_test_session(
+        &sessions,
+        &router_a,
+        "peer-a1",
+        sockaddr!(&format!("[fe80::10]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[fe80::11]:{TEST_BGP_PORT}")),
+    );
+    let (session_a2, probe_a2_rx) = install_test_session(
+        &sessions,
+        &router_a,
+        "peer-a2",
+        sockaddr!(&format!("[fe80::12]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[fe80::13]:{TEST_BGP_PORT}")),
+    );
+    let (session_b, probe_b_rx) = install_test_session(
+        &sessions,
+        &router_b,
+        "peer-b",
+        sockaddr!(&format!("[fe80::14]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[fe80::15]:{TEST_BGP_PORT}")),
+    );
+
+    // Note that the clock threads hold clones of the probe senders, but their
+    // timers stay disabled while the FSM isn't running, so nothing but
+    // send_admin_event can reach either probe channel.
+    fn admin_events_delivered(
+        rx: &std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+    ) -> Vec<AdminEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            // (This is an exhaustive match so that new variants result in
+            // compile errors.)
+            match event {
+                FsmEvent::Admin(admin) => events.push(admin),
+                FsmEvent::Connection(_) | FsmEvent::Session(_) => {
+                    panic!("unexpected {} on the probe channel", event.title())
+                }
+            }
+        }
+        events
+    }
+
+    #[track_caller]
+    fn assert_one_manual_start(
+        rx: &std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+        context: &str,
+    ) {
+        let events = admin_events_delivered(rx);
+        match events.as_slice() {
+            [AdminEvent::ManualStart] => {}
+            other => panic!(
+                "{context}: expected exactly one ManualStart, got {other:?}"
+            ),
+        }
+    }
+
+    #[track_caller]
+    fn assert_no_admin_events(
+        rx: &std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+        context: &str,
+    ) {
+        let events = admin_events_delivered(rx);
+        assert!(
+            events.is_empty(),
+            "{context}: expected no admin events, got {events:?}"
+        );
+    }
+
+    router_a
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("router a sent its admin event");
+
+    assert_one_manual_start(
+        &probe_a1_rx,
+        "router a's admin event did not reach its session a1",
+    );
+    assert_one_manual_start(
+        &probe_a2_rx,
+        "router a's admin event did not reach its session a2",
+    );
+    assert_no_admin_events(
+        &probe_b_rx,
+        "router a's admin event reached router b's session",
+    );
+
+    router_b
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("router b sent its admin event");
+    assert_one_manual_start(
+        &probe_b_rx,
+        "router b's admin event did not reach its own session",
+    );
+    assert_no_admin_events(
+        &probe_a1_rx,
+        "router b's admin event reached router a's session a1",
+    );
+    assert_no_admin_events(
+        &probe_a2_rx,
+        "router b's admin event reached router a's session a2",
+    );
+
+    drop(probe_b_rx);
+    router_a
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("router a's send is unaffected by router b's dead channel");
+    assert_one_manual_start(
+        &probe_a1_rx,
+        "router a's admin event did not reach its session a1",
+    );
+    assert_one_manual_start(
+        &probe_a2_rx,
+        "router a's admin event did not reach its session a2",
+    );
+
+    // Once shutdown has occurred, remaining events are dropped.
+    router_a.shutdown();
+    router_a
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("send_admin_event returned Ok on a shut-down router");
+    assert_no_admin_events(
+        &probe_a1_rx,
+        "admin event was delivered to a shut-down router's session a1",
+    );
+    assert_no_admin_events(
+        &probe_a2_rx,
+        "admin event was delivered to a shut-down router's session a2",
+    );
+
+    // See router_teardown_leaves_other_routers_sessions_alone for why
+    // deletion (not just shutdown) is needed for cleanup.
+    router_a.delete_session(session_a1.peer_id());
+    router_a.delete_session(session_a2.peer_id());
+    router_b.delete_session(session_b.peer_id());
 }
