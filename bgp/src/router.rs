@@ -27,10 +27,11 @@ use rhai::AST;
 use slog::Logger;
 use std::{
     collections::BTreeSet,
+    fmt,
     net::SocketAddr,
     sync::{
         Arc, Mutex, MutexGuard, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{Receiver, Sender},
     },
     time::Duration,
@@ -99,12 +100,37 @@ impl<Cnx: BgpConnection + 'static> SessionMap<Cnx> {
         self.0.iter().map(|h| &h.0)
     }
 
+    /// Return the drivers corresponding to the given router.
+    ///
+    /// A session map may be shared across routers (mgd uses one daemon-wide
+    /// map), so any work that is scoped to an individual router should use
+    /// this rather than `drivers()`.
+    pub fn drivers_of(
+        &self,
+        router: &Router<Cnx>,
+    ) -> impl Iterator<Item = &Arc<FsmDriver<Cnx>>> {
+        self.drivers()
+            .filter(move |d| d.runner().belongs_to(router))
+    }
+
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = (&PeerId, &Arc<SessionRunner<Cnx>>)> {
         self.0
             .iter()
             .map(|h| (&h.0.runner().neighbor.peer, h.0.runner()))
+    }
+
+    /// Return the sessions corresponding to the given router.
+    ///
+    /// A session map may be shared across routers (mgd uses one daemon-wide
+    /// map), so any work that is scoped to an individual router should use
+    /// this rather than `iter()`.
+    pub fn sessions_of(
+        &self,
+        router: &Router<Cnx>,
+    ) -> impl Iterator<Item = (&PeerId, &Arc<SessionRunner<Cnx>>)> {
+        self.iter().filter(move |(_, s)| s.belongs_to(router))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &PeerId> {
@@ -118,6 +144,34 @@ impl<Cnx: BgpConnection + 'static> SessionMap<Cnx> {
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
+/// Process-unique identity of a [`Router`] instance.
+///
+/// This is used to scope operations to a single router (see
+/// `SessionRunner::belongs_to`).
+///
+/// Note that this is not the BGP router ID (`RouterConfig::id`), and in
+/// particular, recreating a router with identical configuration yields a fresh
+/// `RouterInstanceId`.
+///
+/// IDs are allocated from a monotonic counter and never reused within a
+/// process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RouterInstanceId(u64);
+
+impl RouterInstanceId {
+    /// Allocate the next process-unique id.
+    fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl fmt::Display for RouterInstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
 pub struct Router<Cnx: BgpConnection + 'static> {
     /// The underlying routing information base (RIB) databse this router
     /// will update in response to BGP update messages (imported routes)
@@ -126,6 +180,10 @@ pub struct Router<Cnx: BgpConnection + 'static> {
 
     /// The static configuration associated with this router.
     pub config: RouterConfig,
+
+    /// Process-unique identity of this router instance (see
+    /// [`RouterInstanceId`]).
+    instance_id: RouterInstanceId,
 
     /// A set of BGP session runners indexed by PeerId (IP or interface).
     /// Shared with the Dispatcher for connection routing.
@@ -172,8 +230,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         db: Db,
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
     ) -> Router<Cnx> {
+        let instance_id = RouterInstanceId::next();
+        let log = log.new(slog::o!("router_instance_id" => instance_id.0));
         Self {
             config,
+            instance_id,
             sessions,
             log,
             shutdown: AtomicBool::new(false),
@@ -183,6 +244,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             fanout6: Arc::new(RwLock::new(Fanout6::<Cnx>::default())),
             policy: Policy::default(),
         }
+    }
+
+    /// Return the process-unique identity of this router instance.
+    pub(crate) fn instance_id(&self) -> RouterInstanceId {
+        self.instance_id
     }
 
     // Get the session runner mapped to the peer id
@@ -217,28 +283,47 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             .expect("failed to spawn BGP FSM thread");
     }
 
-    /// Stop all session threads but retain session metadata.
+    /// Stop all of this router's session threads but retain session metadata.
     /// This allows the router to be restarted via run().
     /// Also cleans up fanout entries for all stopped sessions.
     fn stop_all_sessions(&self) {
         let sessions = lock!(self.sessions);
-        for (peer, s) in sessions.iter() {
+        for (peer, s) in sessions.sessions_of(self) {
             self.remove_fanout(peer.clone());
             s.shutdown();
         }
     }
 
-    /// Delete all sessions, clearing the SessionRunner and SessionEndpoint maps.
-    /// This signals SessionRunner threads to exit and releases Arc<SessionRunner>
-    /// references, allowing BgpConnections to drop and their threads to clean up.
-    fn delete_all_sessions(&self) {
-        let sessions = std::mem::take(&mut *lock!(self.sessions));
-        for (peer, s) in sessions.iter() {
-            self.remove_fanout(peer.clone());
-            s.shutdown();
-        }
-    }
-
+    /// Shut down this router, stopping all of its sessions.
+    ///
+    /// This does not delete sessions from the `self.sessions` map; doing so is
+    /// the caller's job (mgd does it per-neighbor before deleting a router).
+    ///
+    /// # Notes
+    ///
+    /// There is no `Drop` impl that calls `shutdown`. Why? Because any `Drop`
+    /// impl that only calls `shutdown` would necessarily be vacuous. Let's say
+    /// we have a router R and suppose one of R's sessions is in the map. Then:
+    ///
+    /// - The map holds an `Arc<FsmDriver>` for it, which in turn holds an
+    ///   `Arc<SessionRunner>`, so the runner's strong count >= 1. This keeps
+    ///   the runner alive.
+    /// - That live runner holds an `Arc<Router>` pointing at R, which keeps R
+    ///   alive.
+    ///
+    /// So, while one of R's sessions is in the map, R is alive and `R::drop`
+    /// (if it existed) would not run. The contrapositive is that if `R::drop`
+    /// is running, none of R's sessions are in the map (other routers'
+    /// sessions might be). But the only externally-visible thing `shutdown`
+    /// does is iterate over R's sessions in the map, stopping each and
+    /// removing its fanout entries -- with none of R's sessions present, that
+    /// iteration is empty. (`shutdown` also logs and sets the shutdown flag,
+    /// but while `R::drop` runs, no reference to R exists that could observe
+    /// the flag.) So `R::drop` is vacuous.
+    ///
+    /// (This argument would no longer hold if any of these `Arc` references
+    /// became weak, breaking the cycle -- or if we got rid of `Arc` and
+    /// switched to using actors.)
     pub fn shutdown(&self) {
         slog::info!(
             self.log,
@@ -254,15 +339,25 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         self.shutdown.store(true, Ordering::Release);
     }
 
-    pub fn run(&self) {
+    /// Run this router, spawning FSM threads for each of this router's
+    /// sessions.
+    ///
+    /// Returns how many FSM threads were spawned. Note that this counts spawn
+    /// attempts: a spawned thread exits immediately (with a warning) if
+    /// another thread still owns the session's event receiver, so the count
+    /// can overstate how many FSMs are actually running.
+    pub fn run(&self) -> usize {
         // Clear shutdown flag to allow router to restart
         self.shutdown.store(false, Ordering::Release);
 
         // Hold lock during entire iteration to prevent concurrent modifications
         let sessions = lock!(self.sessions);
-        for driver in sessions.drivers() {
+        let mut spawned = 0;
+        for driver in sessions.drivers_of(self) {
             self.spawn_session_thread(driver.clone());
+            spawned += 1;
         }
+        spawned
     }
 
     pub fn add_fanout4(
@@ -769,15 +864,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
 
         Ok(())
-    }
-}
-
-impl<Cnx: BgpConnection + 'static> Drop for Router<Cnx> {
-    fn drop(&mut self) {
-        // Stop all sessions when router is dropped to prevent thread leaks.
-        // We don't set the shutdown flag here because it's not relevant during drop
-        // (the router is being destroyed, not temporarily shutdown).
-        self.delete_all_sessions();
     }
 }
 
