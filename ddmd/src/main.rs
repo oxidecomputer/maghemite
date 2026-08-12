@@ -6,20 +6,20 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
-#[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sys::Route;
+use ddm::sm::{DpdConfig, SmContext};
 use ddm_api_types::db::RouterKind;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use {
+    ddm::sm::{InterfaceState, StateMachine},
+    ddm::sys::Route,
+    std::sync::mpsc::channel,
+};
 
 mod signal;
 mod smf;
@@ -160,48 +160,63 @@ async fn run() {
         .to_string_lossy()
         .to_string();
 
-    let (sms, event_channels) =
-        start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
+    let base_fsm_config = ddm::sm::Config {
+        solicit_interval: arg.solicit_interval,
+        expire_threshold: arg.expire_threshold,
+        discovery_read_timeout: arg.discovery_read_timeout,
+        ip_addr_wait: arg.ip_addr_wait,
+        exchange_timeout: arg.exchange_timeout,
+        exchange_port: arg.exchange_port,
+        aobj_name: String::new(),
+        if_name: String::new(),
+        if_index: 0,
+        kind: arg.kind,
+        dpd: dpd.clone(),
+        addr: Ipv6Addr::UNSPECIFIED,
+    };
+
+    let router_stats = Arc::new(RouterStats::default());
+    let peers: Arc<RwLock<Vec<SmContext>>> = Arc::new(RwLock::new(Vec::new()));
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
-    let router_stats = Arc::new(RouterStats::default());
-    let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
-
-    let stats_handler = if arg.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
+    let stats_handler = if arg.with_stats
+        && let (Some(rack_uuid), Some(sled_uuid)) =
             (arg.rack_uuid, arg.sled_uuid)
-        {
-            match ddm::oxstats::start_server(
-                arg.oximeter_port,
-                peers.clone(),
-                router_stats.clone(),
-                hostname.clone(),
-                rack_uuid,
-                sled_uuid,
-                log.clone(),
-            ) {
-                Ok(handler) => Some(handler),
-                Err(e) => {
-                    error!(log, "failed to start stats server: {e}");
-                    None
-                }
+    {
+        match ddm::oxstats::start_server(
+            arg.oximeter_port,
+            peers.clone(),
+            router_stats.clone(),
+            hostname.clone(),
+            rack_uuid,
+            sled_uuid,
+            log.clone(),
+        ) {
+            Ok(handler) => Some(handler),
+            Err(e) => {
+                error!(log, "failed to start stats server: {e}");
+                None
             }
-        } else {
-            None
         }
     } else {
         None
     };
 
     let context = Arc::new(Mutex::new(HandlerContext {
-        event_channels,
+        event_channels: Vec::new(),
         db,
         stats: router_stats,
         peers,
         stats_handler: Arc::new(Mutex::new(stats_handler)),
         log: log.clone(),
+        hostname,
+        base_fsm_config,
+        rt,
     }));
+
+    #[cfg(all(feature = "backend", target_os = "illumos"))]
+    context.start_state_machines(arg.addresses);
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         error!(log, "send context to signal handler {e}");
@@ -217,104 +232,6 @@ async fn run() {
     .expect("started ddmd admin API server");
 
     std::thread::park();
-}
-
-/// Build, wire, and start the per-address routing state machines.
-///
-/// Returns the running [`StateMachine`] handles plus the sender side of each
-/// machine's event channel. When `--api-only` is set the function
-/// short-circuits to empty vectors, leaving the daemon to serve only its
-/// admin API. The illumos and non-illumos variants share that early-exit
-/// branch, only the actual machine setup is platform-specific.
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-fn start_state_machines(
-    arg: &Arg,
-    db: &Db,
-    dpd: &Option<DpdConfig>,
-    hostname: &str,
-    rt: &Arc<tokio::runtime::Handle>,
-    log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
-    if arg.api_only {
-        return (Vec::new(), Vec::new());
-    }
-
-    let mut sms = Vec::new();
-    let mut event_channels = Vec::new();
-
-    for name in &arg.addresses {
-        let (tx, rx) = channel();
-
-        let config = ddm::sm::Config {
-            solicit_interval: arg.solicit_interval,
-            expire_threshold: arg.expire_threshold,
-            discovery_read_timeout: arg.discovery_read_timeout,
-            ip_addr_wait: arg.ip_addr_wait,
-            exchange_timeout: arg.exchange_timeout,
-            exchange_port: arg.exchange_port,
-            aobj_name: name.clone(),
-            if_name: String::new(),
-            if_index: 0,
-            kind: arg.kind,
-            dpd: dpd.clone(),
-            addr: Ipv6Addr::UNSPECIFIED,
-        };
-
-        let ctx = SmContext {
-            config,
-            db: db.clone(),
-            event_channels: Vec::new(),
-            tx: tx.clone(),
-            log: log.clone(),
-            hostname: hostname.to_string(),
-            rt: rt.clone(),
-            iface: Arc::new(InterfaceState::default()),
-            stats: Arc::new(ddm::sm::SessionStats::default()),
-        };
-
-        let sm = StateMachine { ctx, rx: Some(rx) };
-        sms.push(sm);
-        event_channels.push(tx);
-    }
-
-    // Add an event channel sender for each state machine to every other state
-    // machine.
-    for (i, sm) in sms.iter_mut().enumerate() {
-        for (j, e) in event_channels.iter().enumerate() {
-            // dont give a state machine an event sender to itself.
-            if i == j {
-                continue;
-            }
-            sm.ctx.event_channels.push(e.clone());
-        }
-    }
-
-    for sm in &mut sms {
-        sm.run().unwrap();
-    }
-
-    (sms, event_channels)
-}
-
-/// Non-illumos variant: the routing state machine depends on illumos
-/// kernel networking, so on every other platform the function returns
-/// empty vectors and the daemon serves only its admin API.
-#[cfg(not(all(feature = "backend", target_os = "illumos")))]
-fn start_state_machines(
-    _arg: &Arg,
-    _db: &Db,
-    _dpd: &Option<DpdConfig>,
-    _hostname: &str,
-    _rt: &Arc<tokio::runtime::Handle>,
-    _log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
-    (Vec::new(), Vec::new())
 }
 
 /// Install a Ctrl-C handler that withdraws ddmd's imported routes from the

@@ -6,9 +6,35 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "paths": {
+    "/ddm/omicron/apply": {
+      "post": {
+        "operationId": "ddm_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/disable-stats": {
       "post": {
         "operationId": "disable_stats",
@@ -359,6 +385,21 @@
   },
   "components": {
     "schemas": {
+      "ApplyRequest": {
+        "type": "object",
+        "properties": {
+          "ddm_interfaces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ddm_interfaces"
+        ]
+      },
       "Duration": {
         "type": "object",
         "properties": {

@@ -8,6 +8,7 @@ use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
+use ddm_api_types::config::ApplyRequest;
 use ddm_api_types::db::{PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::net::TunnelOrigin;
@@ -22,7 +23,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use mg_common::lock;
+use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
@@ -30,10 +31,18 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use {
+    crate::sm::{InterfaceState, StateMachine},
+    mg_common::write_lock,
+    std::sync::mpsc::channel,
+};
 
 pub const DDM_STATS_PORT: u16 = 8001;
 
@@ -50,9 +59,52 @@ pub struct HandlerContext {
     pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
+    pub peers: Arc<RwLock<Vec<SmContext>>>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
+    pub hostname: String,
+    pub base_fsm_config: crate::sm::Config,
+    pub rt: Arc<tokio::runtime::Handle>,
+}
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+impl HandlerContext {
+    /// Build, wire, and start the per-interface routing state machines.
+    pub fn start_state_machines(&mut self, interfaces: Vec<String>) {
+        interfaces
+            .into_iter()
+            .for_each(|ifname| self.start_state_machine(ifname));
+    }
+
+    /// Build, wire, and start one routing state machine for an interface.
+    pub fn start_state_machine(&mut self, ifname: String) {
+        let (tx, rx) = channel();
+        let mut config = self.base_fsm_config.clone();
+        config.aobj = ifname;
+        let ctx = SmContext {
+            config,
+            db: self.db.clone(),
+            tx,
+            event_channels: Vec::new(),
+            rt: self.rt.clone(),
+            hostname: self.hostname.clone(),
+            iface: Arc::new(InterfaceState::default()),
+            stats: Arc::new(crate::sm::SessionStats::default()),
+            log: self.log.clone(),
+        };
+        let sm = StateMachine { ctx, rx: Some(rx) };
+        // populate the new FSM's event sender list with all existing peers
+        for e_chan in self.event_channels {
+            sm.ctx.event_channels.push(e_chan.clone());
+        }
+        // populate all existing peers' FSM event senders lists with the new FSM
+        for peer in write_lock!(self.peers).iter_mut() {
+            peer.event_channels.push(tx.clone());
+        }
+        sm.run().unwrap();
+        write_lock!(self.peers).push(sm.ctx.clone());
+        self.event_channels.push(tx);
+    }
 }
 
 pub fn handler(
@@ -126,18 +178,28 @@ pub enum DdmAdminApiImpl {}
 impl DdmAdminApi for DdmAdminApiImpl {
     type Context = Arc<Mutex<HandlerContext>>;
 
+    async fn ddm_apply(
+        _ctx: RequestContext<Self::Context>,
+        _request: TypedBody<ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        #[cfg(all(feature = "backend", target_os = "illumos"))]
+        lock!(_ctx.context())
+            .start_state_machines(_request.into_inner().ddm_interfaces);
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
-        for sm in &ctx.peers {
+        read_lock!(ctx.peers).iter().for_each(|sm| {
             // Compute status first so peer_status() never runs while we hold
             // any of the InterfaceState mutexes below.
             let status = sm.iface.peer_status();
             let if_index = *lock!(sm.iface.if_index);
             let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
-                continue;
+                return;
             };
             result.insert(
                 if_index,
@@ -148,7 +210,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                     kind: peer.kind,
                 },
             );
-        }
+        });
         Ok(HttpResponseOk(result))
     }
 

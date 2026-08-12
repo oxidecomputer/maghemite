@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use mg_common::{
     lock,
     nexus::{local_underlay_address, run_oximeter},
+    read_lock,
 };
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::{
@@ -15,6 +16,7 @@ use oximeter::{
 };
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
 use slog::Logger;
+use std::sync::RwLock;
 use std::sync::atomic::Ordering;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
@@ -46,7 +48,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    peers: Vec<SmContext>,
+    peers: Arc<RwLock<Vec<SmContext>>>,
     router_stats: Arc<RouterStats>,
 }
 
@@ -151,7 +153,7 @@ impl Producer for Stats {
             self.router_stats.originated_tunnel_endpoints
         ));
 
-        for peer in &self.peers {
+        for peer in read_lock!(self.peers).iter() {
             let if_name = lock!(peer.iface.if_name).clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -268,7 +270,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    peers: Vec<SmContext>,
+    peers: Arc<RwLock<Vec<SmContext>>>,
     router_stats: Arc<RouterStats>,
     hostname: String,
     rack_id: Uuid,
