@@ -49,6 +49,15 @@ mod test;
 
 /// Tag used for managing both dpd and rdb elements.
 const MG_LOWER_TAG: &str = "mg-lower";
+
+/// The id stamped on this router's ddm tunnel origins. The default router
+/// advertises unscoped origins (`None`): they serialize byte-identically to
+/// the legacy pre-multi-router shape and are the only origins ddm forwards
+/// to pre-v4 peers. Non-default routers' origins carry the router's uuid and
+/// are invisible to old peers.
+fn tunnel_origin_id(db: &RouterDb) -> Option<uuid::Uuid> {
+    (db.name() != rdb::DEFAULT_ROUTER).then(|| db.id().0)
+}
 const COMPONENT_MG_LOWER: &str = MG_LOWER_TAG;
 const MOD_SYNC: &str = "sync";
 const UNIT_EVENT_LOOP: &str = "event_loop";
@@ -184,7 +193,18 @@ fn full_sync(
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for prefix in rib_in.keys() {
-        sync_prefix(db.id(), tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?;
+        sync_prefix(
+            db.id(),
+            tunnel_origin_id(db),
+            tep,
+            &rib_loc,
+            prefix,
+            dpd,
+            ddm,
+            sw,
+            log,
+            &rt,
+        )?;
     }
 
     Ok(())
@@ -240,13 +260,15 @@ fn withdraw_all(
         }
     }
 
-    // Tunnel origins are scoped to this router by its id.
+    // Tunnel origins are scoped to this router by its origin id. For the
+    // default router (None) this also adopts unscoped origins left behind by
+    // pre-multi-router daemons.
     match rt.block_on(async { ddm.get_originated_tunnel_endpoints().await }) {
         Ok(origins) => {
             let ours: Vec<TunnelOrigin> = origins
                 .into_inner()
                 .into_iter()
-                .filter(|x| x.router_id == Some(db.id().0))
+                .filter(|x| x.router_id == tunnel_origin_id(db))
                 .collect();
             remove_tunnel_routes(ddm, ours.iter(), rt, log);
         }
@@ -275,7 +297,18 @@ fn handle_change(
     let rib_loc = db.loc_rib(None);
 
     for prefix in notification.changed.iter() {
-        sync_prefix(db.id(), tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?
+        sync_prefix(
+            db.id(),
+            tunnel_origin_id(db),
+            tep,
+            &rib_loc,
+            prefix,
+            dpd,
+            ddm,
+            sw,
+            log,
+            &rt,
+        )?
     }
 
     Ok(())
@@ -284,6 +317,7 @@ fn handle_change(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_prefix(
     router: RouterId,
+    origin_id: Option<uuid::Uuid>,
     tep: Ipv6Addr,
     rib_loc: &Rib,
     prefix: &IpNet,
@@ -297,16 +331,15 @@ pub(crate) fn sync_prefix(
     let dpd_current =
         get_routes_for_prefix(router, dpd, prefix, rt.clone(), log.clone())?;
 
-    // The current tunnel routes in ddm, scoped to this router so that one
-    // router's sync never withdraws another router's origins for the same
-    // prefix.
+    // The current tunnel routes in ddm, scoped to this router's origin id so
+    // that one router's sync never withdraws another router's origins for
+    // the same prefix. The default router (origin id None) also owns legacy
+    // unscoped origins.
     let ddm_current = rt
         .block_on(async { ddm.get_originated_tunnel_endpoints().await })?
         .into_inner()
         .into_iter()
-        .filter(|x| {
-            x.overlay_prefix == *prefix && x.router_id == Some(router.0)
-        })
+        .filter(|x| x.overlay_prefix == *prefix && x.router_id == origin_id)
         .collect::<HashSet<_>>();
 
     // The best routes in the RIB
@@ -375,7 +408,7 @@ pub(crate) fn sync_prefix(
             overlay_prefix: x.cidr,
             metric: DEFAULT_ROUTE_PRIORITY,
             vni: BOUNDARY_SERVICES_VNI,
-            router_id: Some(router.0),
+            router_id: origin_id,
         })
         .collect::<HashSet<_>>();
 

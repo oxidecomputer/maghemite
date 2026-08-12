@@ -260,15 +260,23 @@ impl From<v3::TunnelUpdate> for v4::TunnelUpdate {
 
 impl From<v4::TunnelUpdate> for v3::TunnelUpdate {
     fn from(value: v4::TunnelUpdate) -> Self {
+        // Router-scoped origins (router_id = Some) are dropped, not
+        // stripped: distinct routers may originate the same overlay prefix,
+        // and collapsing them into a v3 peer's single unscoped namespace
+        // would let one router's origin overwrite or withdraw another's.
+        // Only unscoped origins — the default router's and legacy ones —
+        // are visible to pre-v4 peers, in the byte-identical legacy shape.
         Self {
             announce: value
                 .announce
                 .into_iter()
+                .filter(|o| o.router_id.is_none())
                 .map(v3::TunnelOrigin::from)
                 .collect(),
             withdraw: value
                 .withdraw
                 .into_iter()
+                .filter(|o| o.router_id.is_none())
                 .map(v3::TunnelOrigin::from)
                 .collect(),
         }
@@ -425,5 +433,44 @@ impl From<v2::IpPrefix> for IpNet {
             v2::IpPrefix::V4(x) => IpNet::V4(x.into()),
             v2::IpPrefix::V6(x) => IpNet::V6(x.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Router-scoped origins must be dropped, not stripped, when
+    /// downconverting updates for pre-v4 peers; unscoped (default/legacy)
+    /// origins pass through in the legacy shape.
+    #[test]
+    fn v4_to_v3_tunnel_update_drops_scoped_origins() {
+        let unscoped = v4::TunnelOrigin {
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            boundary_addr: "fd00::1".parse().unwrap(),
+            vni: 99,
+            metric: 0,
+            router_id: None,
+        };
+        let scoped = v4::TunnelOrigin {
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            boundary_addr: "fd00::2".parse().unwrap(),
+            vni: 99,
+            metric: 0,
+            router_id: Some(uuid::Uuid::new_v4()),
+        };
+
+        let update = v4::TunnelUpdate {
+            announce: [unscoped, scoped].into_iter().collect(),
+            withdraw: [scoped].into_iter().collect(),
+        };
+
+        let v3: v3::TunnelUpdate = update.into();
+        assert_eq!(v3.announce.len(), 1);
+        assert_eq!(
+            v3.announce.iter().next().unwrap().boundary_addr,
+            unscoped.boundary_addr
+        );
+        assert!(v3.withdraw.is_empty());
     }
 }

@@ -19,6 +19,11 @@ mod proptest;
 /// The priority routes default to.
 pub const DEFAULT_ROUTE_PRIORITY: u64 = u64::MAX;
 
+/// Name of the router that endpoints and behavior predating the multi-router
+/// API operate on. Its tunnel origins are advertised unscoped (no router id)
+/// so pre-multi-router ddm peers and consumers keep seeing the legacy shape.
+pub const DEFAULT_ROUTER: &str = "default";
+
 pub const COMPONENT_RDB: &str = "rdb";
 pub const MOD_DB: &str = "database";
 

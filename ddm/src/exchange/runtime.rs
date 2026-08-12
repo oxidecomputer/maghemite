@@ -437,9 +437,14 @@ async fn pull_handler_v2(
         underlay: pr
             .underlay
             .map(|x| x.into_iter().map(v2::PathVector::from).collect()),
-        tunnel: pr
-            .tunnel
-            .map(|x| x.into_iter().map(v2::TunnelOrigin::from).collect()),
+        // Router-scoped origins are invisible to pre-v4 peers; see
+        // From<v4::TunnelUpdate> for v3::TunnelUpdate.
+        tunnel: pr.tunnel.map(|x| {
+            x.into_iter()
+                .filter(|o| o.router_id.is_none())
+                .map(v2::TunnelOrigin::from)
+                .collect()
+        }),
     }))
 }
 
@@ -455,9 +460,14 @@ async fn pull_handler_v3(
         underlay: pr
             .underlay
             .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
-        tunnel: pr
-            .tunnel
-            .map(|x| x.into_iter().map(v3::TunnelOrigin::from).collect()),
+        // Router-scoped origins are invisible to pre-v4 peers; see
+        // From<v4::TunnelUpdate> for v3::TunnelUpdate.
+        tunnel: pr.tunnel.map(|x| {
+            x.into_iter()
+                .filter(|o| o.router_id.is_none())
+                .map(v3::TunnelOrigin::from)
+                .collect()
+        }),
     }))
 }
 

@@ -61,6 +61,7 @@ async fn sync_prefix_test() {
 
         crate::sync_prefix(
             router,
+            Some(router.0),
             tep,
             &rib,
             &"4.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
@@ -119,6 +120,7 @@ async fn sync_link_down_test() {
         let do_sync = || {
             crate::sync_prefix(
                 router,
+                Some(router.0),
                 tep,
                 &rib,
                 &"3.0.0.0/24".parse::<Ipv4Net>().unwrap().into(),
@@ -433,7 +435,16 @@ async fn sync_v4_over_v6_idempotent() {
 
         // First sync — installs the route.
         crate::sync_prefix(
-            router, tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt,
+            router,
+            Some(router.0),
+            tep,
+            &rib,
+            &prefix,
+            &dpd,
+            &ddm,
+            &sw,
+            &log,
+            &rt,
         )
         .expect("first sync_prefix");
 
@@ -448,7 +459,16 @@ async fn sync_v4_over_v6_idempotent() {
 
         // Second sync — should be a no-op; route is already on the ASIC.
         crate::sync_prefix(
-            router, tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt,
+            router,
+            Some(router.0),
+            tep,
+            &rib,
+            &prefix,
+            &dpd,
+            &ddm,
+            &sw,
+            &log,
+            &rt,
         )
         .expect("second sync_prefix");
 
@@ -511,8 +531,10 @@ async fn sync_v4_over_v6_removal() {
         let log = util::test::logger();
         let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
+        let router = RouterId::new_random();
         crate::sync_prefix(
-            RouterId::new_random(),
+            router,
+            Some(router.0),
             tep,
             &rib,
             &prefix,
@@ -627,7 +649,16 @@ async fn sync_mixed_v4_and_v4_over_v6() {
         let prefix: IpNet = "5.0.0.0/24".parse::<Ipv4Net>().unwrap().into();
 
         crate::sync_prefix(
-            router, tep, &rib, &prefix, &dpd, &ddm, &sw, &log, &rt,
+            router,
+            Some(router.0),
+            tep,
+            &rib,
+            &prefix,
+            &dpd,
+            &ddm,
+            &sw,
+            &log,
+            &rt,
         )
         .expect("sync_prefix");
 

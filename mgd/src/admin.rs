@@ -50,7 +50,7 @@ use tokio::task::JoinHandle;
 const UNIT_API_SERVER: &str = "api_server";
 
 /// The router that endpoints predating the multi-router API operate on.
-pub const DEFAULT_ROUTER: &str = "default";
+pub use rdb::DEFAULT_ROUTER;
 
 pub struct HandlerContext {
     pub bgp: BgpContext,
