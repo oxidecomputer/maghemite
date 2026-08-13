@@ -105,6 +105,17 @@ impl HandlerContext {
         sm.run().unwrap();
         write_lock!(self.peers).insert_overwrite(sm.ctx.clone());
     }
+
+    /// Stop and remove the state machine for a set of interfaces.
+    pub fn stop_state_machines(
+        &self,
+        interfaces: impl IntoIterator<Item = String>,
+    ) {
+        let mut peers = write_lock!(self.peers);
+        interfaces.into_iter().for_each(|ifname| {
+            peers.remove(&ifname);
+        });
+    }
 }
 
 pub fn handler(
@@ -183,8 +194,19 @@ impl DdmAdminApi for DdmAdminApiImpl {
         _request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         #[cfg(all(feature = "backend", target_os = "illumos"))]
-        lock!(_ctx.context())
-            .start_state_machines(_request.into_inner().ddm_interfaces);
+        {
+            let ctx = lock!(_ctx.context());
+            let old: BTreeMap<String> = ctx
+                .peers
+                .iter()
+                .map(|ctx| ctx.config.aobj_name.clone())
+                .collect();
+            let new: BTreeMap<String> = _request.into_inner().ddm_interfaces;
+            let to_add = new.difference(old);
+            let to_del = old.difference(new);
+            ctx.start_state_machines(to_add);
+            ctx.stop_state_machines(to_del);
+        }
         Ok(HttpResponseUpdatedNoContent())
     }
 
