@@ -125,8 +125,8 @@ pub enum Error {
     #[error("Connection attempt from unknown peer: {0}")]
     UnknownPeer(PeerId),
 
-    #[error("Session for peer already exists")]
-    PeerExists,
+    #[error("Session for peer {0} already exists")]
+    PeerExists(PeerId),
 
     #[error("Capability not supported {0:?}")]
     UnsupportedCapability(crate::messages::Capability),
