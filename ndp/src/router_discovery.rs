@@ -49,17 +49,17 @@ pub struct RouterDiscoveryRuntimeState {
 #[derive(Debug)]
 pub struct RouterDiscoveryThreads {
     /// Handle to the transmit loop thread
-    _tx_thread: Arc<ManagedThread>,
+    tx_thread: Arc<ManagedThread>,
     /// Handle to the receive loop thread
-    _rx_thread: Arc<ManagedThread>,
+    rx_thread: Arc<ManagedThread>,
 }
 
 impl RouterDiscoveryThreads {
     /// Query the current state of the rx/tx threads for this interface.
     pub fn get_runtime_state(&self) -> RouterDiscoveryRuntimeState {
         RouterDiscoveryRuntimeState {
-            tx_running: self._tx_thread.is_running(),
-            rx_running: self._rx_thread.is_running(),
+            tx_running: self.tx_thread.is_running(),
+            rx_running: self.rx_thread.is_running(),
         }
     }
 
@@ -109,8 +109,8 @@ impl RouterDiscoveryThreads {
         });
 
         Ok(Self {
-            _tx_thread: tx_thread,
-            _rx_thread: rx_thread,
+            tx_thread,
+            rx_thread,
         })
     }
 }

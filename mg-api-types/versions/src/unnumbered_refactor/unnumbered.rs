@@ -92,11 +92,11 @@ pub struct DiscoveredRouter {
     /// Effective reachable time governing expiry of this entry
     pub effective_reachable_time: Duration,
     /// Router lifetime from RA (seconds)
-    pub router_lifetime: u16,
+    pub router_lifetime: Duration,
     /// Reachable time from RA (milliseconds)
-    pub reachable_time: u32,
+    pub reachable_time: Duration,
     /// Retransmit timer from RA (milliseconds)
-    pub retrans_timer: u32,
+    pub retrans_timer: Duration,
 }
 
 impl From<DiscoveredRouter> for v5::ndp::NdpPeer {
@@ -117,9 +117,21 @@ impl From<DiscoveredRouter> for v5::ndp::NdpPeer {
             address: router.address,
             discovered_at: to_iso8601(router.time_since_discovered),
             last_advertisement: to_iso8601(router.time_since_last_rx),
-            router_lifetime: router.router_lifetime,
-            reachable_time: router.reachable_time,
-            retrans_timer: router.retrans_timer,
+            router_lifetime: router
+                .router_lifetime
+                .as_secs()
+                .try_into()
+                .unwrap_or(u16::MAX),
+            reachable_time: router
+                .reachable_time
+                .as_millis()
+                .try_into()
+                .unwrap_or(u32::MAX),
+            retrans_timer: router
+                .retrans_timer
+                .as_millis()
+                .try_into()
+                .unwrap_or(u32::MAX),
             expired: false,
             time_until_expiry: Some(client_common::format_duration_human(
                 time_until_expiry,
@@ -233,9 +245,9 @@ mod tests {
                 time_since_discovered: Duration::from_secs(60),
                 time_since_last_rx: Duration::from_secs(1),
                 effective_reachable_time: Duration::from_secs(42),
-                router_lifetime: 42,
-                reachable_time: 5000,
-                retrans_timer: 1000,
+                router_lifetime: Duration::from_secs(42),
+                reachable_time: Duration::from_millis(5000),
+                retrans_timer: Duration::from_millis(1000),
             }),
             runtime_state: RouterDiscoveryRuntimeState {
                 tx_running: true,

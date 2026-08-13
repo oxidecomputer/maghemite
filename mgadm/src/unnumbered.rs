@@ -206,13 +206,13 @@ async fn ndp_interface_detail(interface: String, c: Client) -> Result<()> {
             "  Time Since Last RX: {}",
             human(peer.time_since_last_rx)
         );
-        println_nopipe!("  Router Lifetime: {}s", peer.router_lifetime);
-        println_nopipe!("  Reachable Time: {}ms", peer.reachable_time);
+        println_nopipe!("  Router Lifetime: {}s", human(peer.router_lifetime));
+        println_nopipe!("  Reachable Time: {}ms", human(peer.reachable_time));
         println_nopipe!(
             "  Effective Reachable Time: {}",
             human(peer.effective_reachable_time)
         );
-        println_nopipe!("  Retrans Timer: {}ms", peer.retrans_timer);
+        println_nopipe!("  Retrans Timer: {}ms", human(peer.retrans_timer));
         println_nopipe!("  Time Until Expiry: {}", human(time_until_expiry));
     } else {
         println_nopipe!("Discovered Peer: None");

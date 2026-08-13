@@ -39,6 +39,11 @@ pub enum AddNeighborError {
     UnnumberedInterface(#[from] NewUnnumberedInterfaceError),
 }
 
+/// # Lock-ordering invariant
+///
+/// When both interface maps must be locked, `configured_interfaces` must be
+/// acquired before `active_interfaces`. Code holding `active_interfaces` must
+/// not subsequently acquire `configured_interfaces`.
 pub struct UnnumberedManager {
     log: Logger,
     /// Interfaces currently active for unnumbered operation.
@@ -652,8 +657,8 @@ pub struct DiscoveredRouterState {
 }
 
 impl From<ndp::RouterAdvertisementInfo> for DiscoveredRouterState {
-    fn from(info: ndp::RouterAdvertisementInfo) -> Self {
-        let ndp::RouterAdvertisementInfo {
+    fn from(
+        ndp::RouterAdvertisementInfo {
             address,
             first_seen,
             last_seen,
@@ -662,7 +667,8 @@ impl From<ndp::RouterAdvertisementInfo> for DiscoveredRouterState {
             effective_reachable_time,
             retrans_timer,
             expired,
-        } = info;
+        }: ndp::RouterAdvertisementInfo,
+    ) -> Self {
         Self {
             address,
             first_seen,
@@ -681,8 +687,8 @@ impl From<&DiscoveredRouterState>
 {
     /// The API represents an expired discovery entry as an absent peer, so
     /// expired state converts to None.
-    fn from(state: &DiscoveredRouterState) -> Self {
-        let &DiscoveredRouterState {
+    fn from(
+        &DiscoveredRouterState {
             address,
             first_seen,
             last_seen,
@@ -691,7 +697,8 @@ impl From<&DiscoveredRouterState>
             effective_reachable_time,
             retrans_timer,
             expired,
-        } = state;
+        }: &DiscoveredRouterState,
+    ) -> Self {
         if expired {
             return None;
         }
@@ -701,9 +708,9 @@ impl From<&DiscoveredRouterState>
             time_since_discovered: now.duration_since(first_seen),
             time_since_last_rx: now.duration_since(last_seen),
             effective_reachable_time,
-            router_lifetime,
-            reachable_time,
-            retrans_timer,
+            router_lifetime: Duration::from_secs(router_lifetime.into()),
+            reachable_time: Duration::from_millis(reachable_time.into()),
+            retrans_timer: Duration::from_millis(retrans_timer.into()),
         })
     }
 }
@@ -762,9 +769,9 @@ mod tests {
 
         assert_eq!(peer.address, link_local(1));
         assert_eq!(peer.effective_reachable_time, Duration::from_secs(42));
-        assert_eq!(peer.router_lifetime, 42);
-        assert_eq!(peer.reachable_time, 5000);
-        assert_eq!(peer.retrans_timer, 1000);
+        assert_eq!(peer.router_lifetime.as_secs(), 42);
+        assert_eq!(peer.reachable_time.as_millis(), 5000);
+        assert_eq!(peer.retrans_timer.as_millis(), 1000);
         // Elapsed durations are measured against Instant::now(), so bound
         // them rather than asserting exact values.
         assert!(peer.time_since_discovered >= Duration::from_secs(60));

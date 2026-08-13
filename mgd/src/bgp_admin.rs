@@ -43,8 +43,7 @@ use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_api_types::unnumbered::{
     RouterDiscoveryRuntimeState, UnnumberedInterface,
-    UnnumberedInterfaceSelector, UnnumberedInterfaceStatus,
-    UnnumberedManagerState,
+    UnnumberedInterfaceStatus, UnnumberedManagerState,
 };
 use mg_api_types_versions::{v1, v2, v4, v5, v8};
 use mg_common::lock;
@@ -651,16 +650,24 @@ pub async fn get_ndp_interfaces_v5(
 
 pub async fn get_bgp_unnumbered_interface_detail(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<UnnumberedInterfaceSelector>,
+    ifname: String,
+    asn: Option<u32>,
 ) -> Result<HttpResponseOk<UnnumberedInterface>, HttpError> {
-    let rq = request.into_inner();
     let ctx = rqctx.context();
+
+    // Preserve legacy ASN scoping when requested. This is a read-only status
+    // filter; concurrent reconfiguration can make the result stale.
+    if let Some(asn) = asn {
+        get_router!(ctx, asn)?.get_session(ifname.clone()).ok_or(
+            Error::NotFound("session for unnumbered neighbor not found".into()),
+        )?;
+    }
 
     // Get detailed NDP state
     let unnumbered_manager = &ctx.bgp.unnumbered_manager;
 
     let ndp_detail = unnumbered_manager
-        .get_interface_detail(&rq.interface)
+        .get_interface_detail(&ifname)
         .map_err(|e| {
             HttpError::for_internal_error(format!(
                 "failed to get NDP state: {e}"
@@ -669,7 +676,7 @@ pub async fn get_bgp_unnumbered_interface_detail(
         .ok_or_else(|| {
             HttpError::for_not_found(
                 None,
-                format!("interface {} not managed by NDP", rq.interface),
+                format!("interface {ifname} not managed by NDP"),
             )
         })?;
 
@@ -677,62 +684,13 @@ pub async fn get_bgp_unnumbered_interface_detail(
     let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
 
     Ok(HttpResponseOk(UnnumberedInterface {
-        interface: rq.interface,
+        interface: ifname,
         local_address: ndp_detail.local_address,
         scope_id: ndp_detail.scope_id,
         router_lifetime: ndp_detail.router_lifetime,
         discovered_peer,
         runtime_state,
     }))
-}
-
-pub async fn get_ndp_interface_detail_v5(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<v5::ndp::NdpInterfaceSelector>,
-) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = rqctx.context();
-
-    // Legacy NDP detail is scoped by ASN and interface, but unnumbered/NDP
-    // runtime state is now global and interface-oriented. Validate the old
-    // ASN-to-interface mapping through BGP session ownership before returning
-    // runtime state from the unnumbered manager.
-    get_router!(ctx, rq.asn)?
-        .get_session(rq.interface.clone())
-        .ok_or(Error::NotFound(
-            "session for unnumbered neighbor not found".into(),
-        ))?;
-
-    let ndp_detail = ctx
-        .bgp
-        .unnumbered_manager
-        .get_interface_detail(&rq.interface)
-        .map_err(|e| {
-            HttpError::for_internal_error(format!(
-                "failed to get NDP state: {e}"
-            ))
-        })?
-        .ok_or_else(|| {
-            HttpError::for_not_found(
-                None,
-                format!("interface {} not managed by NDP", rq.interface),
-            )
-        })?;
-
-    let discovered_peer = ndp_detail.peer_state.as_ref().and_then(Into::into);
-    let runtime_state = convert_runtime_state_to_api(&ndp_detail.runtime_state);
-
-    Ok(HttpResponseOk(
-        UnnumberedInterface {
-            interface: rq.interface,
-            local_address: ndp_detail.local_address,
-            scope_id: ndp_detail.scope_id,
-            router_lifetime: ndp_detail.router_lifetime,
-            discovered_peer,
-            runtime_state,
-        }
-        .into(),
-    ))
 }
 
 // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

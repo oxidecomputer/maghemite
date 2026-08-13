@@ -681,14 +681,23 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
         request: Query<UnnumberedInterfaceSelector>,
     ) -> Result<HttpResponseOk<UnnumberedInterface>, HttpError> {
-        bgp_admin::get_bgp_unnumbered_interface_detail(ctx, request).await
+        let rq = request.into_inner();
+        bgp_admin::get_bgp_unnumbered_interface_detail(ctx, rq.interface, None)
+            .await
     }
 
     async fn get_ndp_interface_detail_v5(
         ctx: RequestContext<Self::Context>,
         request: Query<v5::ndp::NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<v5::ndp::NdpInterface>, HttpError> {
-        bgp_admin::get_ndp_interface_detail_v5(ctx, request).await
+        let rq = request.into_inner();
+        bgp_admin::get_bgp_unnumbered_interface_detail(
+            ctx,
+            rq.interface,
+            Some(rq.asn),
+        )
+        .await
+        .map(|response| response.map(Into::into))
     }
 }
 
