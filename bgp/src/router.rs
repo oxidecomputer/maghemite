@@ -547,7 +547,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             return Ok(());
         }
 
-        for s in lock!(self.sessions).values() {
+        // Admin events are scoped to the router that raised them.
+        for (_, s) in lock!(self.sessions).sessions_of(self) {
             s.send_event(FsmEvent::Admin(e.clone()))?;
         }
         Ok(())
