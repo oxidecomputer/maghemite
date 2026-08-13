@@ -196,14 +196,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
             let ctx = lock!(_ctx.context());
-            let old: BTreeMap<String> = ctx
-                .peers
+            let old: BTreeSet<String> = read_lock!(ctx.peers)
                 .iter()
                 .map(|ctx| ctx.config.aobj_name.clone())
                 .collect();
-            let new: BTreeMap<String> = _request.into_inner().ddm_interfaces;
-            let to_add = new.difference(old);
-            let to_del = old.difference(new);
+            let new: BTreeSet<String> = _request.into_inner().ddm_interfaces;
+            let to_add: BTreeSet<String> =
+                new.difference(&old).cloned().collect();
+            let to_del: BTreeSet<String> =
+                old.difference(&new).cloned().collect();
             ctx.start_state_machines(to_add);
             ctx.stop_state_machines(to_del);
         }
