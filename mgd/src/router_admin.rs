@@ -100,6 +100,11 @@ pub(crate) async fn do_multi_router_apply(
     let desired: BTreeMap<&str, &RouterSpec> =
         rq.routers.iter().map(|s| (s.name.as_str(), s)).collect();
     for info in ctx.db.list_routers() {
+        // The default router is daemon-owned (its uuid is generated at
+        // startup and unknowable to callers), so apply never tears it down.
+        if info.name == rdb::DEFAULT_ROUTER {
+            continue;
+        }
         match desired.get(info.name.as_str()) {
             Some(spec) if spec.id == info.id => {}
             _ => teardown_router(ctx, &info.name).await?,
@@ -143,6 +148,15 @@ fn validate_apply_request(
     let mut bgp_interfaces = HashSet::new();
     let mut bfd_peers = HashSet::new();
     for spec in &rq.routers {
+        if spec.name == rdb::DEFAULT_ROUTER {
+            return Err(HttpError::for_bad_request(
+                None,
+                format!(
+                    "the {} router is daemon-owned and cannot be applied",
+                    rdb::DEFAULT_ROUTER
+                ),
+            ));
+        }
         if !names.insert(&spec.name) {
             return dup("router name", &spec.name);
         }
