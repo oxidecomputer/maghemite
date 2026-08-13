@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -246,7 +246,7 @@ pub struct SmContext {
     pub config: Config,
     pub db: Db,
     pub tx: Sender<Event>,
-    pub event_channels: Vec<Sender<Event>>,
+    pub event_channels: Arc<RwLock<Vec<Sender<Event>>>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub hostname: String,
     pub iface: Arc<InterfaceState>,

@@ -88,7 +88,7 @@ impl HandlerContext {
             config,
             db: self.db.clone(),
             tx: tx.clone(),
-            event_channels: Vec::new(),
+            event_channels: Arc::new(RwLock::new(Vec::new())),
             rt: self.rt.clone(),
             hostname: self.hostname.clone(),
             iface: Arc::new(InterfaceState::default()),
@@ -98,11 +98,11 @@ impl HandlerContext {
         let mut sm = StateMachine { ctx, rx: Some(rx) };
         // populate the new FSM's event sender list with all existing peers
         for e_chan in self.event_channels.iter_mut() {
-            sm.ctx.event_channels.push(e_chan.clone());
+            write_lock!(sm.ctx.event_channels).push(e_chan.clone());
         }
         // populate all existing peers' FSM event senders lists with the new FSM
         for peer in write_lock!(self.peers).iter_mut() {
-            peer.event_channels.push(tx.clone());
+            write_lock!(peer.event_channels).push(tx.clone());
         }
         sm.run().unwrap();
         write_lock!(self.peers).push(sm.ctx.clone());

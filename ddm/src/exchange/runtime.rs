@@ -12,6 +12,7 @@ use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
+use mg_common::read_lock;
 use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
@@ -550,7 +551,7 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
             ctx.log,
             ctx.ctx.config.if_name,
             "redistributing update to {} peers",
-            ctx.ctx.event_channels.len()
+            read_lock!(ctx.ctx.event_channels).len()
         );
 
         let underlay = update
@@ -563,7 +564,7 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
             tunnel: update.tunnel.clone(),
         };
 
-        for ec in &ctx.ctx.event_channels {
+        for ec in read_lock!(ctx.ctx.event_channels).iter() {
             ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
         }
     }

@@ -12,6 +12,7 @@ use super::{
     SmContext, SmError, StateMachine,
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
+use mg_common::read_lock;
 use ddm_api_types::db::RouterKind;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use libnet::get_ipaddr_info;
@@ -332,7 +333,7 @@ impl Exchange {
                 self.log,
                 self.ctx.config.if_name,
                 "redistributing expire to {} peers",
-                self.ctx.event_channels.len()
+                read_lock!(self.ctx.event_channels).len()
             );
 
             let underlay = if to_remove.is_empty() {
@@ -362,7 +363,7 @@ impl Exchange {
             };
 
             let push = Update { underlay, tunnel };
-            for ec in &self.ctx.event_channels {
+            for ec in read_lock!(self.ctx.event_channels).iter() {
                 ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
             }
         }
