@@ -15,11 +15,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use {
-    ddm::sm::{InterfaceState, StateMachine},
-    ddm::sys::Route,
-    std::sync::mpsc::channel,
-};
+use ddm::sys::Route;
 
 mod signal;
 mod smf;
@@ -203,7 +199,7 @@ async fn run() {
         None
     };
 
-    let context = Arc::new(Mutex::new(HandlerContext {
+    let mut context = HandlerContext {
         event_channels: Vec::new(),
         db,
         stats: router_stats,
@@ -213,10 +209,12 @@ async fn run() {
         hostname,
         base_fsm_config,
         rt,
-    }));
+    };
 
     #[cfg(all(feature = "backend", target_os = "illumos"))]
     context.start_state_machines(arg.addresses);
+
+    let context = Arc::new(Mutex::new(context));
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         error!(log, "send context to signal handler {e}");

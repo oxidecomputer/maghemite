@@ -70,7 +70,10 @@ pub struct HandlerContext {
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 impl HandlerContext {
     /// Build, wire, and start the per-interface routing state machines.
-    pub fn start_state_machines(&mut self, interfaces: Vec<String>) {
+    pub fn start_state_machines(
+        &mut self,
+        interfaces: impl IntoIterator<Item = String>,
+    ) {
         interfaces
             .into_iter()
             .for_each(|ifname| self.start_state_machine(ifname));
@@ -80,11 +83,11 @@ impl HandlerContext {
     pub fn start_state_machine(&mut self, ifname: String) {
         let (tx, rx) = channel();
         let mut config = self.base_fsm_config.clone();
-        config.aobj = ifname;
+        config.aobj_name = ifname;
         let ctx = SmContext {
             config,
             db: self.db.clone(),
-            tx,
+            tx: tx.clone(),
             event_channels: Vec::new(),
             rt: self.rt.clone(),
             hostname: self.hostname.clone(),
@@ -92,9 +95,9 @@ impl HandlerContext {
             stats: Arc::new(crate::sm::SessionStats::default()),
             log: self.log.clone(),
         };
-        let sm = StateMachine { ctx, rx: Some(rx) };
+        let mut sm = StateMachine { ctx, rx: Some(rx) };
         // populate the new FSM's event sender list with all existing peers
-        for e_chan in self.event_channels {
+        for e_chan in self.event_channels.iter_mut() {
             sm.ctx.event_channels.push(e_chan.clone());
         }
         // populate all existing peers' FSM event senders lists with the new FSM
