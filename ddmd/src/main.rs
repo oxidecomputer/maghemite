@@ -8,6 +8,7 @@ use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
 use ddm::sm::{DpdConfig, SmContext};
 use ddm_api_types::db::RouterKind;
+use iddqd::IdOrdMap;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sys::Route;
+use {ddm::sys::Route, std::collections::BTreeSet};
 
 mod signal;
 mod smf;
@@ -172,7 +173,8 @@ async fn run() {
     };
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Arc<RwLock<Vec<SmContext>>> = Arc::new(RwLock::new(Vec::new()));
+    let peers: Arc<RwLock<IdOrdMap<SmContext>>> =
+        Arc::new(RwLock::new(IdOrdMap::new()));
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
@@ -199,8 +201,7 @@ async fn run() {
         None
     };
 
-    let mut context = HandlerContext {
-        event_channels: Vec::new(),
+    let context = HandlerContext {
         db,
         stats: router_stats,
         peers,
@@ -212,7 +213,9 @@ async fn run() {
     };
 
     #[cfg(all(feature = "backend", target_os = "illumos"))]
-    context.start_state_machines(arg.addresses);
+    context.start_state_machines(
+        arg.addresses.into_iter().collect::<BTreeSet<_>>(),
+    );
 
     let context = Arc::new(Mutex::new(context));
 

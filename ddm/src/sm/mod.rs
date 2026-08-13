@@ -11,6 +11,7 @@ use crate::db::Db;
 use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
+use iddqd::{IdOrdItem, id_upcast};
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
@@ -252,6 +253,16 @@ pub struct SmContext {
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
+}
+
+impl IdOrdItem for SmContext {
+    type Key<'a> = &'a str;
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.config.aobj_name
+    }
+
+    id_upcast!();
 }
 
 pub struct StateMachine {

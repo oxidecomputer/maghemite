@@ -23,6 +23,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use iddqd::IdOrdMap;
 use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
@@ -33,7 +34,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
@@ -41,6 +41,7 @@ use tokio::task::JoinHandle;
 use {
     crate::sm::{InterfaceState, StateMachine},
     mg_common::write_lock,
+    std::collections::BTreeSet,
     std::sync::mpsc::channel,
 };
 
@@ -56,10 +57,9 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Arc<RwLock<Vec<SmContext>>>,
+    pub peers: Arc<RwLock<IdOrdMap<SmContext>>>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
     pub hostname: String,
@@ -71,7 +71,7 @@ pub struct HandlerContext {
 impl HandlerContext {
     /// Build, wire, and start the per-interface routing state machines.
     pub fn start_state_machines(
-        &mut self,
+        &self,
         interfaces: impl IntoIterator<Item = String>,
     ) {
         interfaces
@@ -80,7 +80,7 @@ impl HandlerContext {
     }
 
     /// Build, wire, and start one routing state machine for an interface.
-    pub fn start_state_machine(&mut self, ifname: String) {
+    pub fn start_state_machine(&self, ifname: String) {
         let (tx, rx) = channel();
         let mut config = self.base_fsm_config.clone();
         config.aobj_name = ifname;
@@ -96,17 +96,14 @@ impl HandlerContext {
             log: self.log.clone(),
         };
         let mut sm = StateMachine { ctx, rx: Some(rx) };
-        // populate the new FSM's event sender list with all existing peers
-        for e_chan in self.event_channels.iter_mut() {
-            write_lock!(sm.ctx.event_channels).push(e_chan.clone());
-        }
-        // populate all existing peers' FSM event senders lists with the new FSM
-        for peer in write_lock!(self.peers).iter_mut() {
+        for peer in read_lock!(self.peers).iter() {
+            // push all existing peers' FSM handles to the new FSM
+            write_lock!(sm.ctx.event_channels).push(peer.tx.clone());
+            // push the new FSM handle to all existing peers
             write_lock!(peer.event_channels).push(tx.clone());
         }
         sm.run().unwrap();
-        write_lock!(self.peers).push(sm.ctx.clone());
-        self.event_channels.push(tx);
+        write_lock!(self.peers).insert_overwrite(sm.ctx.clone());
     }
 }
 
@@ -224,8 +221,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Expire(addr)))
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Expire(addr)))
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
                         "admin event send: {e}"
@@ -303,13 +301,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
+                    prefixes.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_count() {
@@ -339,13 +340,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+                    endpoints.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_tunnel_count() {
@@ -373,13 +377,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
+                    prefixes.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_count() {
@@ -409,13 +416,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+                    endpoints.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_tunnel_count() {
@@ -439,8 +449,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
                 HttpError::for_internal_error(format!("admin event send: {e}"))
             })?;
         }

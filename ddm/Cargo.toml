@@ -36,6 +36,7 @@ oximeter-producer.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 ddm-api.workspace = true
+iddqd.workspace = true
 
 # illumos-only deps used by the routing state machine and platform sys layer.
 # Gated by the `backend` feature so stub builds (e.g. Linux test fixtures

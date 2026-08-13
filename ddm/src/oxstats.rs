@@ -4,6 +4,7 @@
 
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
+use iddqd::IdOrdMap;
 use mg_common::{
     lock,
     nexus::{local_underlay_address, run_oximeter},
@@ -48,7 +49,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    peers: Arc<RwLock<Vec<SmContext>>>,
+    peers: Arc<RwLock<IdOrdMap<SmContext>>>,
     router_stats: Arc<RouterStats>,
 }
 
@@ -270,7 +271,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    peers: Arc<RwLock<Vec<SmContext>>>,
+    peers: Arc<RwLock<IdOrdMap<SmContext>>>,
     router_stats: Arc<RouterStats>,
     hostname: String,
     rack_id: Uuid,

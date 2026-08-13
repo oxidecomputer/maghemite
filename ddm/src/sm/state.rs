@@ -12,10 +12,10 @@ use super::{
     SmContext, SmError, StateMachine,
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
-use mg_common::read_lock;
 use ddm_api_types::db::RouterKind;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use libnet::get_ipaddr_info;
+use mg_common::read_lock;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
