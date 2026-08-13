@@ -53,6 +53,7 @@ impl LowerContext {
             .spawn(move || {
                 let dpd = mg_lower::ProductionDpd {
                     client: mg_lower::new_dpd_client(&log),
+                    rid: rdb.switch_index(),
                 };
                 let ddm = mg_lower::ProductionDdm {
                     client: mg_lower::new_ddm_client(&log),

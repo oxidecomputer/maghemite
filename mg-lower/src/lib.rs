@@ -188,7 +188,7 @@ fn full_sync(
     let rib_loc = db.loc_rib(None);
 
     // Make sure our tunnel endpoint address is on the switch ASIC
-    ensure_tep_addr(tep, dpd, rt.clone(), log);
+    ensure_tep_addr(db.id(), tep, dpd, rt.clone(), log);
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.

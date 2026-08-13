@@ -74,6 +74,12 @@ const BFD_NEIGHBOR: &str = "bfd_neighbor";
 /// Keys are router names, values are JSON-encoded [`RouterInfo`].
 const ROUTER: &str = "router";
 
+/// The handle used to open a persistent key-value tree mapping router UUIDs
+/// (16-byte keys) to the switch-local table index (single u8 value) used when
+/// programming dendrite. The uuid is the router's fleet-visible identity; the
+/// u8 is confined to this switch.
+const SWITCH_INDEX: &str = "switch_index";
+
 /// Key used in settings tree for the database format version.
 const DB_VERSION_KEY: &str = "db_version";
 
@@ -100,6 +106,7 @@ const ROUTER_SCOPED_TREES: &[&str] = &[
     STATIC6_ROUTES,
     BFD_NEIGHBOR,
     SETTINGS,
+    SWITCH_INDEX,
 ];
 
 use crate::rib::{Rib, Rib4, Rib6};
@@ -138,6 +145,10 @@ pub struct RouterDb {
 
     /// Identity of this router (id, name, tep).
     info: RouterInfo,
+
+    /// Switch-local table index used when programming dendrite (0 = the
+    /// default router). Persisted in the [`SWITCH_INDEX`] tree.
+    switch_index: u8,
 
     /// IPv4 Unicast routes learned from BGP update messages or administratively
     /// added static routes. These are volatile.
@@ -284,16 +295,46 @@ impl Db {
             let (_, value) = item?;
             let value = String::from_utf8_lossy(&value);
             let info: RouterInfo = serde_json::from_str(&value)?;
-            routers.insert(info.name.clone(), self.router_db(info));
+            let switch_index = self.ensure_switch_index(&info)?;
+            routers
+                .insert(info.name.clone(), self.router_db(info, switch_index));
         }
         Ok(())
     }
 
-    fn router_db(&self, info: RouterInfo) -> RouterDb {
+    /// Get or allocate the persistent switch-local table index for a router.
+    /// The default router always maps to index 0, matching dendrite's
+    /// implicit default table; other routers get the smallest free index.
+    fn ensure_switch_index(&self, info: &RouterInfo) -> Result<u8, Error> {
+        let tree = self.persistent.open_tree(SWITCH_INDEX)?;
+        if let Some(v) = tree.get(info.id.as_bytes())? {
+            return Ok(v[0]);
+        }
+        let index = if info.name == crate::DEFAULT_ROUTER {
+            0
+        } else {
+            let used = tree
+                .iter()
+                .values()
+                .map(|v| v.map(|v| v[0]))
+                .collect::<Result<std::collections::BTreeSet<u8>, _>>()?;
+            (1..=u8::MAX).find(|i| !used.contains(i)).ok_or_else(|| {
+                Error::Conflict(
+                    "switch-local router table indexes exhausted".to_string(),
+                )
+            })?
+        };
+        tree.insert(info.id.as_bytes(), &[index])?;
+        tree.flush()?;
+        Ok(index)
+    }
+
+    fn router_db(&self, info: RouterInfo, switch_index: u8) -> RouterDb {
         RouterDb {
             persistent: self.persistent.clone(),
             log: self.log.new(slog::o!("router" => info.name.clone())),
             info,
+            switch_index,
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
@@ -327,13 +368,14 @@ impl Db {
                 )));
             }
         }
+        let switch_index = self.ensure_switch_index(&info)?;
         let tree = self.persistent.open_tree(ROUTER)?;
         tree.insert(
             info.name.as_str(),
             serde_json::to_string(&info)?.as_str(),
         )?;
         tree.flush()?;
-        let rdb = self.router_db(info);
+        let rdb = self.router_db(info, switch_index);
         routers.insert(rdb.info.name.clone(), rdb.clone());
         Ok(rdb)
     }
@@ -410,6 +452,11 @@ impl RouterDb {
 
     pub fn tep(&self) -> Ipv6Addr {
         self.info.tep
+    }
+
+    /// Switch-local table index used when programming dendrite (0 = default).
+    pub fn switch_index(&self) -> u8 {
+        self.switch_index
     }
 
     fn scoped_key(&self, key: &[u8]) -> Vec<u8> {

@@ -97,10 +97,10 @@ impl From<libnet::route::Route> for SysRoute {
 
 /// This trait wraps the dpd methods mg-lower uses.
 ///
-/// Route methods carry the id of the logical router the route belongs to.
-/// Dendrite does not yet have per-router (per-RIB) tables, so the production
-/// implementation ignores it; the parameter exists so callers are already
-/// wired for when it does.
+/// Route and loopback methods carry the uuid of the logical router they
+/// belong to. The production implementation programs dendrite's per-router
+/// tables (dpd API v13) using a switch-local u8 table index bound at
+/// construction time — one `Dpd` instance serves exactly one router.
 #[allow(async_fn_in_trait)]
 pub trait Dpd {
     async fn route_ipv4_get(
@@ -123,6 +123,7 @@ pub trait Dpd {
     ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>>;
     async fn loopback_ipv6_create(
         &self,
+        router: RouterId,
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
@@ -241,10 +242,14 @@ pub trait SwitchZone {
     ) -> Result<SysRoute, SysRouteError>;
 }
 
-/// Production dpd trait that simply passes through calls to a dpd client.
+/// Production dpd trait that passes calls through to a dpd client, scoping
+/// route and loopback operations to one router's switch-local table index.
 #[cfg(target_os = "illumos")]
 pub struct ProductionDpd {
     pub client: DpdClient,
+    /// Switch-local table index of the router this instance serves
+    /// (0 = default). Allocated and persisted by rdb.
+    pub rid: u8,
 }
 
 #[cfg(target_os = "illumos")]
@@ -255,7 +260,7 @@ impl Dpd for ProductionDpd {
         cidr: &Ipv4Net,
     ) -> Result<dpd_client::ResponseValue<Vec<Route>>, DpdClientError<DpdError>>
     {
-        self.client.route_ipv4_get(cidr).await
+        self.client.router_route_ipv4_get(self.rid, cidr).await
     }
 
     async fn route_ipv6_get(
@@ -266,7 +271,7 @@ impl Dpd for ProductionDpd {
         dpd_client::ResponseValue<Vec<Ipv6Route>>,
         DpdClientError<DpdError>,
     > {
-        self.client.route_ipv6_get(cidr).await
+        self.client.router_route_ipv6_get(self.rid, cidr).await
     }
 
     async fn link_get(
@@ -279,9 +284,12 @@ impl Dpd for ProductionDpd {
 
     async fn loopback_ipv6_create(
         &self,
+        _router: RouterId,
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.loopback_ipv6_create(addr).await
+        self.client
+            .router_loopback_ipv6_create(self.rid, addr)
+            .await
     }
 
     async fn link_list_all<'a>(
@@ -327,7 +335,7 @@ impl Dpd for ProductionDpd {
         _router: RouterId,
         body: &'a Ipv4RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.route_ipv4_add(body).await
+        self.client.router_route_ipv4_add(self.rid, body).await
     }
 
     async fn route_ipv6_add<'a>(
@@ -335,7 +343,7 @@ impl Dpd for ProductionDpd {
         _router: RouterId,
         body: &'a Ipv6RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.route_ipv6_add(body).await
+        self.client.router_route_ipv6_add(self.rid, body).await
     }
 
     async fn route_ipv4_delete_target<'a>(
@@ -347,7 +355,9 @@ impl Dpd for ProductionDpd {
         tgt_ip: &'a IpAddr,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
-            .route_ipv4_delete_target(cidr, port_id, link_id, tgt_ip)
+            .router_route_ipv4_delete_target(
+                self.rid, cidr, port_id, link_id, tgt_ip,
+            )
             .await
     }
 
@@ -360,7 +370,9 @@ impl Dpd for ProductionDpd {
         tgt_ip: &'a std::net::Ipv6Addr,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
-            .route_ipv6_delete_target(cidr, port_id, link_id, tgt_ip)
+            .router_route_ipv6_delete_target(
+                self.rid, cidr, port_id, link_id, tgt_ip,
+            )
             .await
     }
 
@@ -557,6 +569,7 @@ pub(crate) mod test {
 
         async fn loopback_ipv6_create(
             &self,
+            _router: RouterId,
             addr: &Ipv6Entry,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {

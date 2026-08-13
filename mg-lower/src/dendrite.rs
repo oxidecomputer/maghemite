@@ -67,16 +67,20 @@ impl RouteHash {
 }
 
 pub(crate) fn ensure_tep_addr(
+    router: RouterId,
     tep: Ipv6Addr,
     dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
     if let Err(e) = rt.block_on(async {
-        dpd.loopback_ipv6_create(&types::Ipv6Entry {
-            tag: MG_LOWER_TAG.into(),
-            addr: tep,
-        })
+        dpd.loopback_ipv6_create(
+            router,
+            &types::Ipv6Entry {
+                tag: MG_LOWER_TAG.into(),
+                addr: tep,
+            },
+        )
         .await
     }) && e.status() != Some(reqwest::StatusCode::CONFLICT)
     {
