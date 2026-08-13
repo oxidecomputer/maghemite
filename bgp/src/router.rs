@@ -456,7 +456,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let sessions = lock!(self.sessions);
         if sessions.contains_key(&peer.id) {
-            Err(Error::PeerExists)
+            Err(Error::PeerExists(peer.id))
         } else {
             self.new_session_locked(
                 sessions,
