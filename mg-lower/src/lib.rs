@@ -169,7 +169,7 @@ fn full_sync(
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
-    for (prefix, _paths) in rib_in.iter() {
+    for prefix in rib_in.keys() {
         sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?;
     }
 

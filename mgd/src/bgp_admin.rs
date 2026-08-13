@@ -2070,6 +2070,9 @@ pub(crate) mod helpers {
             true
         };
 
+        // XXX Note that if this fails, we'll have an orphaned session that's
+        // live without a DB row. This should either use a prepare-and-commit
+        // pattern or rollbacks.
         ctx.db.add_bgp_neighbor(
             mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,
@@ -2205,6 +2208,9 @@ pub(crate) mod helpers {
                 ),
             };
 
+        // XXX Note that if this fails, we'll have an orphaned session that's
+        // live without a DB row. This should either use a prepare-and-commit
+        // pattern or rollbacks.
         ctx.db.add_bgp_neighbor(
             mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,
