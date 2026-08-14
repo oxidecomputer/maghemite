@@ -3,7 +3,17 @@
 use anyhow::Result;
 use libfalcon::{Runner, node, unit::gb};
 
-use crate::{eos::EosNode, frr::FrrNode, juniper::JuniperNode, mgd::MgdNode};
+use crate::{
+    ddm::DdmNode, eos::EosNode, frr::FrrNode, juniper::JuniperNode,
+    mgd::MgdNode,
+};
+
+pub struct DdmTrio {
+    pub d: Runner,
+    pub hub: DdmNode,
+    pub peer1: DdmNode,
+    pub peer2: DdmNode,
+}
 
 pub struct MgdDuo {
     pub d: Runner,
@@ -17,6 +27,34 @@ pub struct Quartet {
     pub cr1: FrrNode,
     pub cr2: EosNode,
     pub cr3: JuniperNode,
+}
+
+/// Three DDM routers in a star. The hub's first two interfaces connect to one
+/// leaf each, allowing their FSM lifecycles to be controlled independently.
+pub fn ddm_trio(name: &str) -> Result<DdmTrio> {
+    let mut d = Runner::new(name);
+
+    node!(d, hub, "helios-3.0", 4, gb(4));
+    node!(d, peer1, "helios-3.0", 4, gb(4));
+    node!(d, peer2, "helios-3.0", 4, gb(4));
+
+    d.link(hub, peer1);
+    d.link(hub, peer2);
+
+    d.default_ext_link(hub)?;
+    d.default_ext_link(peer1)?;
+    d.default_ext_link(peer2)?;
+
+    d.mount("cargo-bay", "/opt/cargo-bay", hub)?;
+    d.mount("cargo-bay", "/opt/cargo-bay", peer1)?;
+    d.mount("cargo-bay", "/opt/cargo-bay", peer2)?;
+
+    Ok(DdmTrio {
+        d,
+        hub: DdmNode(hub),
+        peer1: DdmNode(peer1),
+        peer2: DdmNode(peer2),
+    })
 }
 
 pub fn mgd_duo(name: &str) -> Result<MgdDuo> {

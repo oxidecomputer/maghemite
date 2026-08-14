@@ -10,12 +10,20 @@ pub mod admin {
     pub use crate::v1::admin::PrefixMap;
 }
 
+pub mod config {
+    pub use crate::v3::config::ApplyRequest;
+}
+
 pub mod db {
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
 
     pub use crate::v2::db::PeerInfo;
     pub use crate::v2::db::PeerStatus;
+
+    pub use crate::v3::db::InterfaceInfo;
+    pub use crate::v3::db::InterfaceStats;
+    pub use crate::v3::db::PeerIdentity;
 }
 
 pub mod exchange {

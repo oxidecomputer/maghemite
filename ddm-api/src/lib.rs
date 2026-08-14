@@ -4,6 +4,7 @@
 
 use ddm_api_types_versions::latest;
 use ddm_api_types_versions::v1;
+use ddm_api_types_versions::v3;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -26,6 +27,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (3, DDM_APPLY),
     (2, PEER_DURATIONS),
     (1, INITIAL),
 ]);
@@ -45,6 +47,28 @@ api_versions!([
 #[dropshot::api_description]
 pub trait DdmAdminApi {
     type Context;
+
+    #[endpoint {
+        method = GET,
+        path = "/interfaces",
+        versions = VERSION_DDM_APPLY..,
+    }]
+    async fn get_interfaces(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<u32, latest::db::InterfaceInfo>>,
+        HttpError,
+    >;
+
+    #[endpoint {
+        method = POST,
+        path = "/ddm/omicron/apply",
+        versions = VERSION_DDM_APPLY..,
+    }]
+    async fn ddm_apply(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v3::config::ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
         method = GET,

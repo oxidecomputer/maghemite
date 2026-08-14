@@ -15,6 +15,7 @@ use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use libnet::get_ipaddr_info;
+use mg_common::read_lock;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -101,9 +102,11 @@ impl State for Init {
             self.ctx.config.if_name.clone_from(&info.ifname);
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
-            self.ctx
-                .iface
-                .set_if_info(info.index as u32, info.ifname.clone());
+            self.ctx.iface.set_if_info(
+                info.index as u32,
+                info.ifname.clone(),
+                addr,
+            );
             inf!(
                 self.log,
                 self.ctx.config.if_name,
@@ -332,7 +335,7 @@ impl Exchange {
                 self.log,
                 self.ctx.config.if_name,
                 "redistributing expire to {} peers",
-                self.ctx.event_channels.len()
+                read_lock!(self.ctx.event_channels).len()
             );
 
             let underlay = if to_remove.is_empty() {
@@ -362,7 +365,7 @@ impl Exchange {
             };
 
             let push = Update { underlay, tunnel };
-            for ec in &self.ctx.event_channels {
+            for ec in read_lock!(self.ctx.event_channels).iter() {
                 ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
             }
         }

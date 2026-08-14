@@ -60,7 +60,11 @@ fn refresh_stats_server(
         }
     };
 
-    let context = lock!(ctx);
+    let mut context = lock!(ctx);
+
+    // keep hostname up-to-date in handler in case it changes
+    context.hostname = hostname.clone();
+
     let mut handler = lock!(context.stats_handler);
     if handler.is_none() {
         info!(log, "starting stats server on smf refresh");

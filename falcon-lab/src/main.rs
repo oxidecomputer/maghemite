@@ -2,8 +2,9 @@
 
 use crate::dendrite::NpuvmCommits;
 use crate::test::{
-    cleanup_mgd_unnumbered_test, cleanup_quartet_bfd_static_test,
-    cleanup_quartet_unnumbered_test, run_mgd_unnumbered_test,
+    cleanup_ddm_apply_lifecycle_test, cleanup_mgd_unnumbered_test,
+    cleanup_quartet_bfd_static_test, cleanup_quartet_unnumbered_test,
+    run_ddm_apply_lifecycle_test, run_mgd_unnumbered_test,
     run_quartet_bfd_static_test, run_quartet_unnumbered_test,
 };
 use clap::{Parser, Subcommand};
@@ -69,6 +70,7 @@ struct Serial {
 
 #[derive(Debug, Subcommand)]
 enum TestCommand {
+    DdmApplyLifecycle,
     MgdUnnumbered,
     QuartetUnnumbered,
     QuartetBfdStaticRouting,
@@ -88,6 +90,13 @@ async fn run() -> anyhow::Result<()> {
                 sidecar_lite: cmd.sidecar_lite_commit,
             };
             match cmd.command {
+                TestCommand::DdmApplyLifecycle => {
+                    run_ddm_apply_lifecycle_test(
+                        cmd.no_cleanup,
+                        !cmd.no_diag_on_fail,
+                    )
+                    .await?
+                }
                 TestCommand::MgdUnnumbered => {
                     run_mgd_unnumbered_test(
                         cmd.no_cleanup,
@@ -114,6 +123,9 @@ async fn run() -> anyhow::Result<()> {
             }
         }
         Command::Cleanup(cmd) => match cmd.command {
+            TestCommand::DdmApplyLifecycle => {
+                cleanup_ddm_apply_lifecycle_test().await?
+            }
             TestCommand::MgdUnnumbered => cleanup_mgd_unnumbered_test().await?,
             TestCommand::QuartetUnnumbered => {
                 cleanup_quartet_unnumbered_test().await?

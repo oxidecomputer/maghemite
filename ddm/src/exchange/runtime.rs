@@ -29,6 +29,7 @@ use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use mg_common::read_lock;
 use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
@@ -53,7 +54,7 @@ pub(crate) fn announce_underlay(
     prefixes: HashSet<v3::PathVector>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::announce(prefixes);
@@ -66,7 +67,7 @@ pub(crate) fn announce_tunnel(
     endpoints: HashSet<v3::TunnelOrigin>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
@@ -79,7 +80,7 @@ pub(crate) fn withdraw_underlay(
     prefixes: HashSet<v3::PathVector>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::withdraw(prefixes);
@@ -92,7 +93,7 @@ pub(crate) fn withdraw_tunnel(
     endpoints: HashSet<v3::TunnelOrigin>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
@@ -102,7 +103,7 @@ pub(crate) fn withdraw_tunnel(
 pub(crate) fn do_pull(
     ctx: &SmContext,
     addr: &Ipv6Addr,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) -> Result<v3::PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/v3/pull",
@@ -115,7 +116,7 @@ pub(crate) fn do_pull(
 pub(crate) fn do_pull_v2(
     ctx: &SmContext,
     addr: &Ipv6Addr,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) -> Result<v2::PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/v2/pull",
@@ -127,7 +128,7 @@ pub(crate) fn do_pull_v2(
 
 fn do_pull_common(
     uri: String,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) -> Result<Bytes, ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
 
@@ -154,7 +155,7 @@ pub(crate) fn pull(
     ctx: SmContext,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let pr: v3::PullResponse = match version {
@@ -180,7 +181,7 @@ fn send_update(
     update: v3::Update,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
@@ -197,7 +198,7 @@ fn send_update_v2(
     config: Config,
     update: v2::Update,
     addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
@@ -213,7 +214,7 @@ fn send_update_v3(
     config: Config,
     update: v3::Update,
     addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
@@ -229,7 +230,7 @@ fn send_update_common(
     uri: String,
     payload: String,
     config: Config,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
@@ -550,7 +551,7 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
             ctx.log,
             ctx.ctx.config.if_name,
             "redistributing update to {} peers",
-            ctx.ctx.event_channels.len()
+            read_lock!(ctx.ctx.event_channels).len()
         );
 
         let underlay = update
@@ -563,7 +564,7 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
             tunnel: update.tunnel.clone(),
         };
 
-        for ec in &ctx.ctx.event_channels {
+        for ec in read_lock!(ctx.ctx.event_channels).iter() {
             ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
         }
     }
