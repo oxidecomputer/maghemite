@@ -3,7 +3,9 @@
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
 export SIDECAR_LITE_VERSION=a95b7a9f78c08125f4e34106f5c885c7e9f2e8d5
-export DENDRITE_VERSION=72461d3a6e4724fd33454836d3c9d93c393fd4e4
+# Keep this in sync with the dpd-client revision in Cargo.toml. DDM requires a
+# Dendrite image that provides the per-link `link_uplink_get` endpoint.
+export DENDRITE_VERSION=9645288adc19b352aaa9a675be9953fe4e0b6e1b
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
