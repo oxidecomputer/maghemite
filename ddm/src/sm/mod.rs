@@ -269,3 +269,78 @@ pub struct StateMachine {
     pub ctx: SmContext,
     pub rx: Option<Receiver<Event>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ddm_api_types::db::RouterKind;
+    use mg_common::{read_lock, write_lock};
+    use std::net::Ipv6Addr;
+    use std::sync::OnceLock;
+    use std::sync::mpsc;
+
+    // A single shared runtime lives for the duration of the test binary.
+    // SmContext holds an Arc<Handle>; without a live runtime the handle would
+    // be invalid, but our tests never drive any async work through it.
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    fn rt_handle() -> Arc<tokio::runtime::Handle> {
+        let rt = RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap());
+        Arc::new(rt.handle().clone())
+    }
+
+    fn make_ctx(aobj_name: &str) -> SmContext {
+        let (tx, _rx) = mpsc::channel();
+        SmContext {
+            config: Config {
+                aobj_name: aobj_name.to_string(),
+                if_name: String::new(),
+                if_index: 0,
+                addr: Ipv6Addr::UNSPECIFIED,
+                solicit_interval: 0,
+                discovery_read_timeout: 0,
+                ip_addr_wait: 0,
+                expire_threshold: 0,
+                exchange_timeout: 0,
+                exchange_port: 0,
+                kind: RouterKind::Server,
+                dpd: None,
+            },
+            db: crate::db::Db::new_for_test(),
+            tx,
+            event_channels: Arc::new(RwLock::new(Vec::new())),
+            rt: rt_handle(),
+            hostname: String::new(),
+            iface: Arc::new(InterfaceState::default()),
+            stats: Arc::new(SessionStats::default()),
+            log: slog::Logger::root(slog::Discard, slog::o!()),
+        }
+    }
+
+    // event_channels is Arc<RwLock<...>>, so all clones of an SmContext share
+    // the same channel list. This is the property that makes start_state_machine
+    // wiring correct: pushing a sender through the clone in HandlerContext::peers
+    // is immediately visible to the running FSM.
+
+    #[test]
+    fn event_channels_shared_across_clones() {
+        let ctx = make_ctx("eth0");
+        let clone = ctx.clone();
+
+        let (tx, _rx) = mpsc::channel::<Event>();
+        write_lock!(ctx.event_channels).push(tx);
+
+        assert_eq!(read_lock!(clone.event_channels).len(), 1);
+    }
+
+    #[test]
+    fn event_channels_independent_across_distinct_contexts() {
+        let a = make_ctx("eth0");
+        let b = make_ctx("eth1");
+
+        let (tx, _rx) = mpsc::channel::<Event>();
+        write_lock!(a.event_channels).push(tx);
+
+        assert_eq!(read_lock!(b.event_channels).len(), 0);
+    }
+}
