@@ -47,12 +47,14 @@ cp /input/build-dhcp-server/work/dhcp-server .
 cp /input/build/work/release/falcon-lab .
 cp /input/build/work/release/mgd .
 cp /input/build/work/release/ddmd .
+cp /input/build/work/release/ddmadm .
 
-chmod +x dhcp-server falcon-lab mgd ddmd
+chmod +x dhcp-server falcon-lab mgd ddmd ddmadm
 
 mkdir -p cargo-bay
 mv mgd cargo-bay/
 mv ddmd cargo-bay/
+mv ddmadm cargo-bay/
 
 # Juniper/cRPD images require a runtime license. Fetch it on the CI runner,
 # which has catacomb access, and pass it to the guest by file via cargo-bay.

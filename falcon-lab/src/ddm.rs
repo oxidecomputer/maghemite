@@ -13,6 +13,9 @@ use tokio::time::{Instant, sleep};
 /// Path to the ddmd binary inside the helios VM
 const DDMD_BIN: &str = "/opt/cargo-bay/ddmd";
 
+/// Path to the ddmadm binary inside the helios VM
+const DDMADM_BIN: &str = "/opt/cargo-bay/ddmadm";
+
 /// File ddmd's stdout/stderr is redirected to inside the helios VM
 const DDM_LOG: &str = "/tmp/ddm.log";
 
@@ -78,6 +81,23 @@ impl DdmNode {
                 &contents,
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {label}: {e}"),
+        }
+
+        for command in [
+            "get-peers",
+            "get-prefixes",
+            "get-originated",
+            "tunnel-imported",
+            "tunnel-originated",
+        ] {
+            crate::diagnostics::capture(
+                d,
+                self.0,
+                topo,
+                &format!("{name}-ddmadm-{command}"),
+                &format!("{DDMADM_BIN} --address ::1 {command}"),
+            )
+            .await;
         }
     }
 }
