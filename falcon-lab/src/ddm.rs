@@ -3,10 +3,12 @@
 #![allow(dead_code)]
 
 use crate::{dendrite::DendriteNode, illumos::IllumosNode};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
 use libfalcon::{NodeRef, Runner};
 use std::net::IpAddr;
+use std::time::Duration;
+use tokio::time::{Instant, sleep};
 
 /// Path to the ddmd binary inside the helios VM
 const DDMD_BIN: &str = "/opt/cargo-bay/ddmd";
@@ -29,6 +31,29 @@ impl DdmNode {
 
     pub async fn client(&self, d: &Runner, addr: IpAddr) -> Result<Client> {
         Ok(Client::new(&format!("http://{addr}:8000"), d.log.clone()))
+    }
+
+    pub async fn wait_for_api(
+        &self,
+        client: &Client,
+        timeout: Duration,
+        d: &Runner,
+    ) -> Result<()> {
+        let start = Instant::now();
+        loop {
+            match client.get_peers().await {
+                Ok(_) => return Ok(()),
+                Err(e) if start.elapsed() < timeout => {
+                    slog::debug!(d.log, "wait for ddmd admin API: {e}");
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(e) => {
+                    return Err(anyhow!(
+                        "timeout waiting for ddmd admin API after {timeout:?}: {e}"
+                    ));
+                }
+            }
+        }
     }
 
     pub fn illumos(&self) -> IllumosNode {
