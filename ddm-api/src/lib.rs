@@ -49,6 +49,18 @@ pub trait DdmAdminApi {
     type Context;
 
     #[endpoint {
+        method = GET,
+        path = "/interfaces",
+        versions = VERSION_DDM_APPLY..,
+    }]
+    async fn get_interfaces(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<u32, latest::db::InterfaceInfo>>,
+        HttpError,
+    >;
+
+    #[endpoint {
         method = POST,
         path = "/ddm/omicron/apply",
         versions = VERSION_DDM_APPLY..,

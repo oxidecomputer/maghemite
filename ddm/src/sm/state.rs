@@ -102,9 +102,11 @@ impl State for Init {
             self.ctx.config.if_name.clone_from(&info.ifname);
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
-            self.ctx
-                .iface
-                .set_if_info(info.index as u32, info.ifname.clone());
+            self.ctx.iface.set_if_info(
+                info.index as u32,
+                info.ifname.clone(),
+                addr,
+            );
             inf!(
                 self.log,
                 self.ctx.config.if_name,

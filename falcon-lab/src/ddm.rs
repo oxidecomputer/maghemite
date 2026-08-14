@@ -84,6 +84,7 @@ impl DdmNode {
         }
 
         for command in [
+            "get-interfaces",
             "get-peers",
             "get-prefixes",
             "get-originated",

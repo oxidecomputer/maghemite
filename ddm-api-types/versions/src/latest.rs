@@ -20,6 +20,8 @@ pub mod db {
 
     pub use crate::v2::db::PeerInfo;
     pub use crate::v2::db::PeerStatus;
+
+    pub use crate::v3::db::InterfaceInfo;
 }
 
 pub mod exchange {

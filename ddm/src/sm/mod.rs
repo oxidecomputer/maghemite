@@ -9,7 +9,7 @@
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
-use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::db::{InterfaceInfo, PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use iddqd::{IdOrdItem, id_upcast};
 use mg_common::lock;
@@ -17,7 +17,7 @@ use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -185,6 +185,7 @@ pub struct PeerIdentity {
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
+    pub addr: Mutex<Ipv6Addr>,
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
@@ -200,9 +201,10 @@ impl InterfaceState {
         *lock!(self.peer_identity) = None;
     }
 
-    pub fn set_if_info(&self, index: u32, name: String) {
+    pub fn set_if_info(&self, index: u32, name: String, addr: Ipv6Addr) {
         *lock!(self.if_index) = index;
         *lock!(self.if_name) = name;
+        *lock!(self.addr) = addr;
     }
 
     pub fn peer_status(&self) -> PeerStatus {
@@ -216,6 +218,7 @@ impl Default for InterfaceState {
         Self {
             if_index: Mutex::new(0),
             if_name: Mutex::new(String::new()),
+            addr: Mutex::new(Ipv6Addr::UNSPECIFIED),
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),
@@ -263,6 +266,66 @@ impl IdOrdItem for SmContext {
     }
 
     id_upcast!();
+}
+
+impl SmContext {
+    pub fn interface_info(&self) -> InterfaceInfo {
+        let status = self.iface.peer_status();
+        let peer = lock!(self.iface.peer_identity).clone();
+        InterfaceInfo {
+            name: lock!(self.iface.if_name).clone(),
+            addr: *lock!(self.iface.addr),
+            status,
+            peer_addr: peer.as_ref().map(|p| p.addr),
+            peer_host: peer.as_ref().map(|p| p.hostname.clone()),
+            peer_kind: peer.as_ref().map(|p| p.kind),
+            solicitations_sent: self
+                .stats
+                .solicitations_sent
+                .load(Ordering::Relaxed),
+            solicitations_received: self
+                .stats
+                .solicitations_received
+                .load(Ordering::Relaxed),
+            advertisements_sent: self
+                .stats
+                .advertisements_sent
+                .load(Ordering::Relaxed),
+            advertisements_received: self
+                .stats
+                .advertisements_received
+                .load(Ordering::Relaxed),
+            peer_expirations: self
+                .stats
+                .peer_expirations
+                .load(Ordering::Relaxed),
+            peer_address_changes: self
+                .stats
+                .peer_address_changes
+                .load(Ordering::Relaxed),
+            peer_established: self
+                .stats
+                .peer_established
+                .load(Ordering::Relaxed),
+            updates_sent: self.stats.updates_sent.load(Ordering::Relaxed),
+            updates_received: self
+                .stats
+                .updates_received
+                .load(Ordering::Relaxed),
+            imported_underlay_prefixes: self
+                .stats
+                .imported_underlay_prefixes
+                .load(Ordering::Relaxed),
+            imported_tunnel_endpoints: self
+                .stats
+                .imported_tunnel_endpoints
+                .load(Ordering::Relaxed),
+            update_send_fail: self
+                .stats
+                .update_send_fail
+                .load(Ordering::Relaxed),
+        }
+    }
 }
 
 pub struct StateMachine {
@@ -315,6 +378,17 @@ mod tests {
             stats: Arc::new(SessionStats::default()),
             log: slog::Logger::root(slog::Discard, slog::o!()),
         }
+    }
+
+    #[test]
+    fn interface_info_uses_shared_initialized_address() {
+        let ctx = make_ctx("eth0");
+        let addr = "fe80::1234".parse().unwrap();
+        ctx.iface.set_if_info(7, "net0".to_string(), addr);
+
+        let info = ctx.interface_info();
+        assert_eq!(info.name, "net0");
+        assert_eq!(info.addr, addr);
     }
 
     // event_channels is Arc<RwLock<...>>, so all clones of an SmContext share

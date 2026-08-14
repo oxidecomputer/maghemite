@@ -5,3 +5,4 @@
 //! Version `DDM_APPLY` of the DDM Admin API.
 
 pub mod config;
+pub mod db;
