@@ -127,6 +127,12 @@ pub trait Dpd {
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
+    async fn loopback_ipv6_delete(
+        &self,
+        router: RouterId,
+        addr: &std::net::Ipv6Addr,
+    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
+
     async fn link_list_all<'a>(
         &'a self,
         filter: Option<&'a str>,
@@ -289,6 +295,16 @@ impl Dpd for ProductionDpd {
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
             .router_loopback_ipv6_create(self.rid, addr)
+            .await
+    }
+
+    async fn loopback_ipv6_delete(
+        &self,
+        _router: RouterId,
+        addr: &std::net::Ipv6Addr,
+    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
+        self.client
+            .router_loopback_ipv6_delete(self.rid, addr)
             .await
     }
 
@@ -492,7 +508,7 @@ pub(crate) mod test {
         pub(crate) v6_routes: Mutex<HashMap<Ipv6Net, Vec<Ipv6Route>>>,
         pub(crate) v4_addrs: HashMap<String, Vec<Ipv4Entry>>,
         pub(crate) v6_addrs: HashMap<String, Vec<Ipv6Entry>>,
-        pub(crate) loopback: Mutex<Option<Ipv6Entry>>,
+        pub(crate) loopback: Mutex<Vec<Ipv6Entry>>,
         /// Every router id passed to a route method, in call order.
         pub(crate) route_call_routers: Mutex<Vec<RouterId>>,
     }
@@ -505,7 +521,7 @@ pub(crate) mod test {
                 v6_routes: Mutex::new(HashMap::default()),
                 v4_addrs: HashMap::default(),
                 v6_addrs: HashMap::default(),
-                loopback: Mutex::new(None),
+                loopback: Mutex::new(Vec::default()),
                 route_call_routers: Mutex::new(Vec::default()),
             }
         }
@@ -573,7 +589,20 @@ pub(crate) mod test {
             addr: &Ipv6Entry,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            self.loopback.lock().unwrap().replace(addr.clone());
+            let mut loopback = self.loopback.lock().unwrap();
+            if !loopback.iter().any(|e| e.addr == addr.addr) {
+                loopback.push(addr.clone());
+            }
+            Ok(dpd_response_ok!(()))
+        }
+
+        async fn loopback_ipv6_delete(
+            &self,
+            _router: RouterId,
+            addr: &std::net::Ipv6Addr,
+        ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
+        {
+            self.loopback.lock().unwrap().retain(|e| e.addr != *addr);
             Ok(dpd_response_ok!(()))
         }
 

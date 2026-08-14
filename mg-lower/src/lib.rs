@@ -9,6 +9,7 @@
 #![allow(clippy::result_large_err)]
 use crate::dendrite::{
     RouteHash, ensure_tep_addr, get_routes_for_prefix, update_dendrite,
+    withdraw_tep_addr,
 };
 use crate::error::Error;
 use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
@@ -85,7 +86,7 @@ pub fn run(
 ) {
     loop {
         if shutdown.load(Ordering::Relaxed) {
-            withdraw_all(&db, &log, dpd, ddm, &rt);
+            withdraw_all(tep, &db, &log, dpd, ddm, &rt);
             return;
         }
 
@@ -111,7 +112,7 @@ pub fn run(
         // handle any changes that occur
         loop {
             if shutdown.load(Ordering::Relaxed) {
-                withdraw_all(&db, &log, dpd, ddm, &rt);
+                withdraw_all(tep, &db, &log, dpd, ddm, &rt);
                 return;
             }
             match rx.recv_timeout(Duration::from_secs(1)) {
@@ -211,10 +212,11 @@ fn full_sync(
 }
 
 /// Withdraw all of this router's state from the underlying platforms: its
-/// routes from the ASIC and its tunnel advertisements from ddm. Called when
-/// the router is being torn down. Failures are logged and skipped — teardown
-/// should always run to completion.
+/// routes from the ASIC, its tunnel advertisements from ddm, and its TEP
+/// address claim. Called when the router is being torn down. Failures are
+/// logged and skipped — teardown should always run to completion.
 fn withdraw_all(
+    tep: Ipv6Addr,
     db: &RouterDb,
     log: &Logger,
     dpd: &impl Dpd,
@@ -280,6 +282,8 @@ fn withdraw_all(
             );
         }
     }
+
+    withdraw_tep_addr(db.id(), tep, dpd, rt.clone(), log);
 }
 
 /// Synchronize a change set from the RIB to the underlying platform.

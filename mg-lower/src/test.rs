@@ -770,6 +770,13 @@ async fn two_router_lifecycle() {
                 && ddm.tunnel_originated.lock().unwrap().len() == 2
         });
 
+        // Both routers' TEPs are claimed on the ASIC.
+        {
+            let loopback = dpd.loopback.lock().unwrap();
+            assert!(loopback.iter().any(|e| e.addr == tep1));
+            assert!(loopback.iter().any(|e| e.addr == tep2));
+        }
+
         // Each tunnel origin carries its own router's tep.
         {
             let origins = ddm.tunnel_originated.lock().unwrap();
@@ -798,8 +805,8 @@ async fn two_router_lifecycle() {
             assert!(seen.contains(&r2.id()));
         }
 
-        // Shut down r1: its ASIC routes and tunnel origins are withdrawn,
-        // r2's are untouched.
+        // Shut down r1: its ASIC routes, tunnel origins and TEP claim are
+        // withdrawn, r2's are untouched.
         shut1.store(true, Ordering::Relaxed);
         j1.join().expect("join r1 mg-lower");
         {
@@ -809,12 +816,16 @@ async fn two_router_lifecycle() {
             let origins = ddm.tunnel_originated.lock().unwrap();
             assert_eq!(origins.len(), 1);
             assert!(origins.iter().all(|x| x.boundary_addr == tep2));
+            let loopback = dpd.loopback.lock().unwrap();
+            assert!(!loopback.iter().any(|e| e.addr == tep1));
+            assert!(loopback.iter().any(|e| e.addr == tep2));
         }
 
         shut2.store(true, Ordering::Relaxed);
         j2.join().expect("join r2 mg-lower");
         assert!(dpd.v4_routes.lock().unwrap().is_empty());
         assert!(ddm.tunnel_originated.lock().unwrap().is_empty());
+        assert!(dpd.loopback.lock().unwrap().is_empty());
 
         tx.send(()).unwrap();
     });

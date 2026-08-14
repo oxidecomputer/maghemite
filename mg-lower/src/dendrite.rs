@@ -94,6 +94,27 @@ pub(crate) fn ensure_tep_addr(
     }
 }
 
+pub(crate) fn withdraw_tep_addr(
+    router: RouterId,
+    tep: Ipv6Addr,
+    dpd: &impl Dpd,
+    rt: Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    if let Err(e) =
+        rt.block_on(async { dpd.loopback_ipv6_delete(router, &tep).await })
+        && e.status() != Some(reqwest::StatusCode::NOT_FOUND)
+    {
+        dpd_log!(
+            log,
+            warn,
+            "failed to withdraw TEP address {tep} from ASIC: {e}";
+            "error" => format!("{e}"),
+            "prefix" => format!("{tep}")
+        );
+    }
+}
+
 pub(crate) fn link_is_up(
     dpd: &impl Dpd,
     port_id: &types::PortId,
