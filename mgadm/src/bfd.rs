@@ -9,6 +9,7 @@ use mg_admin_client::{
     Client,
     types::{BfdPeerConfig, SessionMode},
 };
+use mg_api_types::common::headers::Dscp;
 use std::io::Write;
 use std::net::IpAddr;
 use std::num::NonZeroU8;
@@ -37,6 +38,9 @@ pub enum Commands {
         detection_threshold: NonZeroU8,
         /// Session mode is either single-hop or multi-hop
         mode: Mode,
+        /// DSCP value for BFD UDP packets (0-63). Defaults to CS6 (48).
+        #[arg(long)]
+        dscp: Option<Dscp>,
     },
 
     /// Remove a peer.
@@ -53,23 +57,29 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let mut tw = TabWriter::new(std::io::stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 "Peer".dimmed(),
                 "Listen".dimmed(),
                 "Required Rx".dimmed(),
                 "Detection Threshold".dimmed(),
                 "Mode".dimmed(),
+                "DSCP".dimmed(),
                 "Status".dimmed(),
             )?;
             for info in &msg.into_inner() {
+                let dscp_str = info
+                    .config
+                    .dscp
+                    .map_or("default".to_string(), |d| d.to_string());
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{:?}\t{:?}",
+                    "{}\t{}\t{}\t{}\t{:?}\t{}\t{:?}",
                     info.config.peer,
                     info.config.listen,
                     info.config.required_rx,
                     info.config.detection_threshold,
                     info.config.mode,
+                    dscp_str,
                     info.state,
                 )?;
             }
@@ -81,6 +91,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             required_rx,
             detection_threshold,
             mode,
+            dscp,
         } => {
             client
                 .add_bfd_peer(&BfdPeerConfig {
@@ -92,6 +103,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                         Mode::SingleHop => SessionMode::SingleHop,
                         Mode::MultiHop => SessionMode::MultiHop,
                     },
+                    dscp,
                 })
                 .await?;
         }

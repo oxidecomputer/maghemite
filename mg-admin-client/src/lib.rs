@@ -25,6 +25,9 @@ progenitor::generate_api!(
         AddressFamily = mg_api_types_versions::latest::rdb::rib::AddressFamily,
         ProtocolFilter = mg_api_types_versions::latest::rdb::rib::ProtocolFilter,
 
+        // IP header shapes.
+        Dscp = mg_api_types_versions::latest::common::headers::Dscp,
+
         // BGP policy and peer-identity shapes.
         ImportExportPolicy4 = mg_api_types_versions::latest::bgp::policy::ImportExportPolicy4,
         ImportExportPolicy6 = mg_api_types_versions::latest::bgp::policy::ImportExportPolicy6,

@@ -27,9 +27,9 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api_types::bgp::config::{
-    ApplyRequest, AsnSelector, CheckerSource, Neighbor, NeighborResetOp,
-    NeighborResetRequest, NeighborSelector, Origin4, PeerInfo, ShaperSource,
-    UnnumberedNeighbor, UnnumberedNeighborResetRequest,
+    ApplyRequest, AsnSelector, BgpPeerParameters, CheckerSource, Neighbor,
+    NeighborResetOp, NeighborResetRequest, NeighborSelector, Origin4, PeerInfo,
+    ShaperSource, UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
 use mg_api_types::bgp::history::{FsmEventBuffer, MessageDirection, Origin6};
@@ -43,13 +43,14 @@ use mg_api_types::bgp::session::{
 use mg_api_types::bgp::session::{
     FsmEventRecord, FsmStateKind, MessageHistory,
 };
+use mg_api_types::common::headers::Dscp;
 use mg_api_types::ndp::{
     NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
     NdpPendingInterface, NdpThreadState,
 };
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5, v8};
+use mg_api_types_versions::{v1, v2, v4, v5, v8, v11};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
@@ -57,6 +58,7 @@ use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::num::NonZeroU8;
 use std::sync::{
     Arc, Mutex,
     mpsc::{Sender, channel},
@@ -246,10 +248,11 @@ pub async fn read_neighbors_v1(
         .into_iter()
         .filter(|x| x.asn == rq.asn)
         .map(|x| {
-            v8::bgp::config::Neighbor::from(Neighbor::from_rdb_neighbor_info(
-                rq.asn, &x,
+            v1::bgp::config::Neighbor::from(v8::bgp::config::Neighbor::from(
+                v11::bgp::config::Neighbor::from(
+                    Neighbor::from_rdb_neighbor_info(rq.asn, &x),
+                ),
             ))
-            .into()
         })
         .collect();
 
@@ -282,10 +285,11 @@ pub async fn read_neighbor_v1(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result: v1::bgp::config::Neighbor = v8::bgp::config::Neighbor::from(
-        Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info),
-    )
-    .into();
+    let result: v1::bgp::config::Neighbor =
+        v8::bgp::config::Neighbor::from(v11::bgp::config::Neighbor::from(
+            Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info),
+        ))
+        .into();
     Ok(HttpResponseOk(result))
 }
 
@@ -1957,7 +1961,11 @@ pub(crate) mod helpers {
             rq.parameters.allow_export.clone(),
         );
 
-        let info = SessionInfo::from(&rq.parameters);
+        let params =
+            BgpPeerParameters::from(v11::bgp::config::BgpPeerParameters::from(
+                v8::bgp::config::BgpPeerParameters::from(rq.parameters.clone()),
+            ));
+        let info = SessionInfo::from(&params);
 
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
@@ -1998,7 +2006,7 @@ pub(crate) mod helpers {
                     keepalive: rq.parameters.keepalive,
                     resolution: rq.parameters.resolution,
                     remote_asn: rq.parameters.remote_asn,
-                    min_ttl: rq.parameters.min_ttl,
+                    min_ttl: rq.parameters.min_ttl.and_then(NonZeroU8::new),
                     md5_auth_key: rq.parameters.md5_auth_key,
                     multi_exit_discriminator: rq
                         .parameters
@@ -2021,6 +2029,7 @@ pub(crate) mod helpers {
                     nexthop6: None,
                     src_addr: None,
                     src_port: None,
+                    dscp: Dscp::CS6,
                 },
             },
         )?;
@@ -2137,6 +2146,7 @@ pub(crate) mod helpers {
                     vlan_id: rq.parameters.vlan_id,
                     src_addr: rq.parameters.src_addr,
                     src_port: rq.parameters.src_port,
+                    dscp: rq.parameters.dscp.unwrap_or(Dscp::CS6),
                 },
             },
         )?;
@@ -2253,6 +2263,7 @@ pub(crate) mod helpers {
                     vlan_id: rq.parameters.vlan_id,
                     src_addr: rq.parameters.src_addr,
                     src_port: rq.parameters.src_port,
+                    dscp: rq.parameters.dscp.unwrap_or(Dscp::CS6),
                 },
             },
         )?;
@@ -2726,6 +2737,7 @@ fn update(message, asn, addr) {
             connect_retry_jitter: None,
             src_addr: None,
             src_port: None,
+            dscp: None,
         }
     }
 

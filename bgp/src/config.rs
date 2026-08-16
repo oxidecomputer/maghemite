@@ -76,6 +76,7 @@ impl From<Neighbor> for PeerConfig {
             connect_retry_jitter: _,
             src_addr: _,
             src_port: _,
+            dscp: _,
         } = parameters;
         Self {
             name,
@@ -171,6 +172,7 @@ impl PeerConfig {
             connect_retry_jitter: _,
             src_addr: _,
             src_port: _,
+            dscp: _,
         } = parameters;
         Self {
             name,
