@@ -31,6 +31,7 @@
 use crate::DEFAULT_BFD_TTL;
 use crate::SessionCounters;
 use crate::egress_src_port_iter::EgressSrcPortIter;
+use mg_api_types::common::headers::Dscp;
 use slog::Logger;
 use slog::warn;
 use slog_error_chain::InlineErrorChain;
@@ -69,6 +70,9 @@ enum BindEgressSocketError {
     #[error("failed to set socket TTL")]
     SetTtl(#[source] io::Error),
 
+    #[error("failed to set socket DSCP")]
+    SetDscp(#[source] io::Error),
+
     #[error("failed to convert std socket to tokio socket")]
     StdToTokio(#[source] io::Error),
 }
@@ -78,6 +82,7 @@ pub(crate) struct EgressTask {
     socket: Option<UdpSocket>,
     local_ip: IpAddr,
     remote_addr: SocketAddr,
+    dscp: Dscp,
     src_port_iter: Arc<EgressSrcPortIter>,
     counters: Arc<SessionCounters>,
     log: Logger,
@@ -88,6 +93,7 @@ impl EgressTask {
         egress_rx: mpsc::Receiver<Vec<u8>>,
         local_ip: IpAddr,
         remote_addr: SocketAddr,
+        dscp: Dscp,
         src_port_iter: Arc<EgressSrcPortIter>,
         counters: Arc<SessionCounters>,
         log: Logger,
@@ -97,6 +103,7 @@ impl EgressTask {
             socket: None,
             local_ip,
             remote_addr,
+            dscp,
             src_port_iter,
             counters,
             log,
@@ -168,6 +175,7 @@ impl EgressTask {
     async fn try_bind_socket(&self) -> Option<UdpSocket> {
         match try_bind_with_max_src_port_tries(
             self.local_ip,
+            self.dscp,
             &self.src_port_iter,
             MAX_SRC_PORTS_TRIED_PER_BIND_ATTEMPT,
         )
@@ -188,6 +196,7 @@ impl EgressTask {
 
 async fn try_bind_with_max_src_port_tries(
     local_ip: IpAddr,
+    dscp: Dscp,
     src_port_iter: &EgressSrcPortIter,
     max_ports_to_try: NonZeroUsize,
 ) -> Result<UdpSocket, BindEgressSocketError> {
@@ -198,7 +207,7 @@ async fn try_bind_with_max_src_port_tries(
     loop {
         // Try to bind; on success we're done.
         let bind_addr = SocketAddr::new(local_ip, last_port_tried);
-        let err = match bind_egress_socket(bind_addr).await {
+        let err = match bind_egress_socket(bind_addr, dscp).await {
             Ok(socket) => return Ok(socket),
             Err(err) => err,
         };
@@ -227,6 +236,7 @@ async fn try_bind_with_max_src_port_tries(
 
 async fn bind_egress_socket(
     local_addr: SocketAddr,
+    dscp: Dscp,
 ) -> Result<UdpSocket, BindEgressSocketError> {
     let sock = UdpSocket::bind(local_addr)
         .await
@@ -240,7 +250,17 @@ async fn bind_egress_socket(
     };
     ttl_result.map_err(BindEgressSocketError::SetTtl)?;
 
+    set_dscp(&sock, local_addr.ip(), u32::from(dscp.as_tos_byte()))
+        .map_err(BindEgressSocketError::SetDscp)?;
+
     UdpSocket::from_std(sock.into()).map_err(BindEgressSocketError::StdToTokio)
+}
+
+fn set_dscp(sock: &Socket, addr: IpAddr, tos: u32) -> io::Result<()> {
+    match addr {
+        IpAddr::V4(_) => sock.set_tos_v4(tos),
+        IpAddr::V6(_) => sock.set_tclass_v6(tos),
+    }
 }
 
 #[cfg(test)]

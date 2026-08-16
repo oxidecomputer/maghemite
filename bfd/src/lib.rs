@@ -4,6 +4,7 @@
 
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bfd::SessionMode;
+use mg_api_types::common::headers::Dscp;
 use std::io;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -15,11 +16,10 @@ mod daemon;
 mod dispatcher;
 mod egress;
 mod egress_src_port_iter;
+pub mod packet;
 mod rib;
 mod session;
 mod sm;
-
-pub mod packet;
 pub use daemon::Daemon;
 pub use dispatcher::ListenerShutdownHandle;
 pub use session::Session;
@@ -66,6 +66,7 @@ pub struct AddPeerRequest {
     required_rx_micros: u64,
     detection_threshold: NonZeroU8,
     mode: SessionMode,
+    dscp: Dscp,
 }
 
 impl From<BfdPeerConfig> for AddPeerRequest {
@@ -81,6 +82,7 @@ impl From<BfdPeerConfig> for AddPeerRequest {
             required_rx: required_rx_micros,
             detection_threshold,
             mode,
+            dscp,
         } = value;
 
         let mode_port = match mode {
@@ -94,6 +96,7 @@ impl From<BfdPeerConfig> for AddPeerRequest {
             required_rx_micros,
             detection_threshold,
             mode,
+            dscp: dscp.unwrap_or(Dscp::CS6),
         }
     }
 }

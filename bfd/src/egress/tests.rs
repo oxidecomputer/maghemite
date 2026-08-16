@@ -32,6 +32,7 @@ fn spawn_egress(
         rx,
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         remote,
+        mg_api_types::common::headers::Dscp::CS6,
         src_port_iter,
         Arc::clone(&counters),
         test_logger(),
@@ -42,20 +43,24 @@ fn spawn_egress(
 
 #[tokio::test]
 async fn egress_socket_sets_ttl_v4() {
-    let sk = bind_egress_socket(sockaddr!("127.0.0.1:0"))
+    let dscp = mg_api_types::common::headers::Dscp::CS3;
+    let sk = bind_egress_socket(sockaddr!("127.0.0.1:0"), dscp)
         .await
         .expect("created v4 egress socket");
     let sock = Socket::from(sk.into_std().expect("converted socket"));
     assert_eq!(sock.ttl_v4().unwrap(), DEFAULT_BFD_TTL);
+    assert_eq!(sock.tos_v4().unwrap(), u32::from(dscp.as_tos_byte()));
 }
 
 #[tokio::test]
 async fn egress_socket_sets_hop_limit_v6() {
-    let sk = bind_egress_socket(sockaddr!("[::1]:0"))
+    let dscp = mg_api_types::common::headers::Dscp::CS3;
+    let sk = bind_egress_socket(sockaddr!("[::1]:0"), dscp)
         .await
         .expect("created v6 egress socket");
     let sock = Socket::from(sk.into_std().expect("converted socket"));
     assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);
+    assert_eq!(sock.tclass_v6().unwrap(), u32::from(dscp.as_tos_byte()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
