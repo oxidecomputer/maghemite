@@ -2,7 +2,7 @@
 #:
 #: name = "image"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/out/*",
@@ -43,7 +43,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
-pfexec pkg install clang-15
+PKG_SUCCESS_ON_NOP=1 pfexec pkg install clang-15
 cargo --version
 rustc --version
 
@@ -68,4 +68,3 @@ cd /out
 digest -a sha256 mg-ddm-gz.tar > mg-ddm-gz.sha256.txt
 digest -a sha256 mg-ddm.tar.gz > mg-ddm.sha256.txt
 digest -a sha256 mgd.tar.gz > mgd.sha256.txt
-

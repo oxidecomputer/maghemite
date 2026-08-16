@@ -3,7 +3,7 @@
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
 export SIDECAR_LITE_VERSION=a95b7a9f78c08125f4e34106f5c885c7e9f2e8d5
-export DENDRITE_VERSION=72461d3a6e4724fd33454836d3c9d93c393fd4e4
+export DENDRITE_VERSION=803f6899e3bc64780a965d625e248e1d77e37d43
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
@@ -57,12 +57,7 @@ popd
 
 banner "install"
 for p in clang-15 pkg-config brand/omicron1 brand/omicron1/tools ; do
-    set +o errexit
-    pkg info $p | grep -qi installed
-    if [[ $? != 0 ]]; then
-        set -o errexit
-        pfexec pkg install $p
-    fi
+    PKG_SUCCESS_ON_NOP=1 pfexec pkg install $p
 done
 
 pfexec svcadm enable baseline

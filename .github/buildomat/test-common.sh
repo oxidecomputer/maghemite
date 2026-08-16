@@ -7,13 +7,7 @@ NEXTEST_VERSION='0.9.97'
 PLATFORM='illumos'
 
 banner "install"
-set +o errexit
-pkg info clang-15 | grep -qi installed
-if [[ $? != 0 ]]; then
-    set -o errexit
-    pfexec pkg install clang-15
-fi
-set -o errexit
+PKG_SUCCESS_ON_NOP=1 pfexec pkg install clang-15
 
 cargo --version
 rustc --version

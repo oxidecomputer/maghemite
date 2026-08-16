@@ -2,7 +2,7 @@
 #:
 #: name = "mg-p5p"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "=/out/mg.p5p",
@@ -24,7 +24,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
-pfexec pkg install clang-15
+PKG_SUCCESS_ON_NOP=1 pfexec pkg install clang-15
 cargo --version
 rustc --version
 
