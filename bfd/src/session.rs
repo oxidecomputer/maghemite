@@ -33,6 +33,7 @@ use crate::sm::CheckRecvDeadlineResult;
 use crate::sm::StateMachine;
 use mg_api_types::bfd::BfdPeerState;
 use mg_api_types::bfd::SessionMode;
+use mg_api_types::common::headers::Dscp;
 use slog::Logger;
 use slog::info;
 use slog::trace;
@@ -57,6 +58,7 @@ pub struct Session {
     required_rx_micros: u64,
     detection_threshold: NonZeroU8,
     mode: SessionMode,
+    dscp: Dscp,
     state_rx: watch::Receiver<BfdPeerState>,
     counters: Arc<SessionCounters>,
 
@@ -88,6 +90,7 @@ impl Session {
             required_rx_micros,
             detection_threshold,
             mode,
+            dscp,
         } = rq;
 
         let local_peer_info = PeerInfo::with_random_discriminator(
@@ -116,6 +119,7 @@ impl Session {
                 egress_rx,
                 listen_addr.ip(),
                 remote_addr,
+                dscp,
                 src_port_iter,
                 Arc::clone(&counters),
                 log.clone(),
@@ -140,6 +144,7 @@ impl Session {
             required_rx_micros,
             detection_threshold,
             mode,
+            dscp,
             state_rx,
             counters,
             driver_task,
@@ -166,6 +171,10 @@ impl Session {
 
     pub fn mode(&self) -> SessionMode {
         self.mode
+    }
+
+    pub fn dscp(&self) -> Dscp {
+        self.dscp
     }
 }
 

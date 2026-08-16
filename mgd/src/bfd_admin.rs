@@ -53,6 +53,7 @@ pub(crate) async fn get_bfd_peers(
                     )))?
                     .ip(),
                 mode: session.mode(),
+                dscp: Some(session.dscp()),
             },
             state: session.state(),
         });

@@ -122,6 +122,7 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
                 required_rx_micros: REQUIRED_RX_MICROS,
                 detection_threshold: DETECTION_MULT,
                 mode: SessionMode::MultiHop,
+                dscp: mg_api_types::common::headers::Dscp::CS6,
             },
         )
         .expect("add peer to daemon a");
@@ -134,6 +135,7 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
                 required_rx_micros: REQUIRED_RX_MICROS,
                 detection_threshold: DETECTION_MULT,
                 mode: SessionMode::MultiHop,
+                dscp: mg_api_types::common::headers::Dscp::CS6,
             },
         )
         .expect("add peer to daemon b");

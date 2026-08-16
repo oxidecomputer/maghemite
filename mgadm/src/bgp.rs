@@ -12,11 +12,13 @@ use mg_api_types::bgp::config::{
 };
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
+use mg_api_types::common::headers::Dscp;
 use oxnet::{Ipv4Net, Ipv6Net};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZeroU8,
     time::Duration,
 };
 use tabwriter::TabWriter;
@@ -592,6 +594,11 @@ pub struct Neighbor {
     #[arg(long)]
     pub src_port: Option<u16>,
 
+    /// DSCP value for BGP TCP connections (0-63). Defaults to CS6 (48),
+    /// per RFC 4271 Appendix E.
+    #[arg(long)]
+    pub dscp: Option<Dscp>,
+
     /// Multi-exit discriminator to send to eBGP peers.
     #[arg(long)]
     pub med: Option<u32>,
@@ -728,7 +735,7 @@ impl Neighbor {
         types::Neighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
-            min_ttl: self.min_ttl,
+            min_ttl: self.min_ttl.and_then(NonZeroU8::new),
             name: self.name.clone(),
             host: SocketAddr::new(addr, self.port),
             hold_time: self.hold_time,
@@ -753,6 +760,7 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
+            dscp: self.dscp,
         }
     }
 
@@ -806,7 +814,7 @@ impl Neighbor {
         types::UnnumberedNeighbor {
             asn: self.asn,
             remote_asn: self.remote_asn,
-            min_ttl: self.min_ttl,
+            min_ttl: self.min_ttl.and_then(NonZeroU8::new),
             act_as_a_default_ipv6_router: if self.act_as_default_router {
                 1800
             } else {
@@ -836,6 +844,7 @@ impl Neighbor {
                 .deterministic_collision_resolution,
             src_addr: self.src_addr,
             src_port: self.src_port,
+            dscp: self.dscp,
         }
     }
 }

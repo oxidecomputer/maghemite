@@ -47,5 +47,6 @@ pub fn basic_unnumbered_neighbor(
         idle_hold_jitter: None,
         src_addr: None,
         src_port: None,
+        dscp: None,
     }
 }
