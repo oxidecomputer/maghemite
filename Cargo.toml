@@ -158,4 +158,4 @@ rev = "aa4714289cbf28010a821c49d9b73ec94074fb91"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "9645288adc19b352aaa9a675be9953fe4e0b6e1b"
+rev = "803f6899e3bc64780a965d625e248e1d77e37d43"

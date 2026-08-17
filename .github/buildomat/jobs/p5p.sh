@@ -2,7 +2,7 @@
 #:
 #: name = "mg-p5p"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "=/out/mg.p5p",
@@ -24,9 +24,8 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+source .github/buildomat/common.sh
 pfexec pkg install clang-15
-cargo --version
-rustc --version
 
 banner build
 ptime -m cargo build --release --verbose -p ddmd -p ddmadm
