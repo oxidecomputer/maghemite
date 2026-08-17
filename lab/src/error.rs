@@ -8,6 +8,18 @@
 #[error(transparent)]
 pub struct Error(Box<libfalcon::error::Error>);
 
+impl Error {
+    /// Returns the underlying Falcon error.
+    pub fn as_inner(&self) -> &libfalcon::error::Error {
+        &self.0
+    }
+
+    /// Consumes this wrapper and returns the underlying Falcon error.
+    pub fn into_inner(self) -> libfalcon::error::Error {
+        *self.0
+    }
+}
+
 impl From<libfalcon::error::Error> for Error {
     fn from(e: libfalcon::error::Error) -> Self {
         Error(Box::new(e))
