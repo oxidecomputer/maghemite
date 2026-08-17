@@ -4,9 +4,9 @@
 
 // Copyright 2021 Oxide Computer Company
 
+use lab::error::Error;
 use libfalcon::Runner;
 use libfalcon::cli::run;
-use libfalcon::error::Error;
 use libfalcon::unit::gb;
 
 fn main() -> Result<(), Error> {

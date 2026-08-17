@@ -3549,6 +3549,7 @@ version = "0.1.0"
 dependencies = [
  "libfalcon",
  "oxide-tokio-rt",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

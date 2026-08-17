@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 oxide-tokio-rt.workspace = true
+thiserror.workspace = true
 
 [[bin]]
 name = "solo"
