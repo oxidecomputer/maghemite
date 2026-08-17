@@ -6,9 +6,9 @@
 NEXTEST_VERSION='0.9.97'
 PLATFORM='illumos'
 
-banner "install"
-PKG_SUCCESS_ON_NOP=1 pfexec pkg install clang-15
+source .github/buildomat/common.sh
 
-cargo --version
-rustc --version
+banner "install"
+pfexec pkg install clang-15
+
 cargo install cargo-nextest --version "$NEXTEST_VERSION"

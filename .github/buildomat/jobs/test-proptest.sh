@@ -17,16 +17,6 @@
 set -x
 set -e
 
-# NOTE: This version should be in sync with the recommended version in
-# .config/nextest.toml. (Maybe build an automated way to pull the recommended
-# version in the future.)
-NEXTEST_VERSION='0.9.97'
-PLATFORM='illumos'
-
-cargo --version
-rustc --version
-cargo install cargo-nextest --version "${NEXTEST_VERSION}"
-
 source .github/buildomat/test-common.sh
 
 # Run property-based tests with high intensity (default is 256)

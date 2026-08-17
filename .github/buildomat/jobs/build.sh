@@ -59,9 +59,8 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
-PKG_SUCCESS_ON_NOP=1 pfexec pkg install clang-15
-cargo --version
-rustc --version
+source .github/buildomat/common.sh
+pfexec pkg install clang-15
 
 banner "check"
 cargo fmt -- --check

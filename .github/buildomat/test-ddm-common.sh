@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source .github/buildomat/common.sh
+
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
 export SIDECAR_LITE_VERSION=a95b7a9f78c08125f4e34106f5c885c7e9f2e8d5
@@ -57,7 +59,7 @@ popd
 
 banner "install"
 for p in clang-15 pkg-config brand/omicron1 brand/omicron1/tools ; do
-    PKG_SUCCESS_ON_NOP=1 pfexec pkg install $p
+    pfexec pkg install $p
 done
 
 pfexec svcadm enable baseline
