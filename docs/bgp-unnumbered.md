@@ -70,15 +70,19 @@ Router A (fe80::1%eth0) ←→ Router B (fe80::2%eth0)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    UnnumberedManagerNdp                     │
+│                     UnnumberedManager                       │
 │  ┌──────────────────┐      ┌─────────────────────────────┐  │
-│  │ NDP Manager      │      │ scope_id → interface map    │  │
-│  │ (per-interface   │      │ (for Dispatcher routing)    │  │
-│  │  discovery)      │      └─────────────────────────────┘  │
-│  └──────────────────┘                                       │
+│  │ InterfaceMap     │      │ pending interface configs   │  │
+│  │ scope_id ⇄ name  │      │ name → router lifetime      │  │
+│  └────────┬─────────┘      └─────────────────────────────┘  │
+│           │                                                 │
+│  ┌────────▼──────────────────────────────────────────────┐  │
+│  │ UnnumberedInterface                                   │  │
+│  │ name, link-local address, scope_id, router discovery  │  │
+│  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
            │                               │
-           │ NDP queries                   │ scope_id lookup
+           │ discovered NDP neighbor       │ scope_id lookup
            ▼                               ▼
     ┌───────────────┐              ┌───────────────┐
     │ SessionRunner │              │  Dispatcher   │
@@ -97,9 +101,9 @@ Router A (fe80::1%eth0) ←→ Router B (fe80::2%eth0)
 
 | Component | Purpose | Cardinality |
 |-----------|---------|-------------|
-| **NdpManager** | Top-level manager for all unnumbered interfaces | 1 per daemon |
-| **InterfaceNdpManager** | Per-interface NDP discovery (tx/rx loops) | 1 per unnumbered interface |
-| **UnnumberedManagerNdp** | Bridge between NDP and BGP, maintains scope_id mappings | 1 per daemon |
+| **UnnumberedManager** | Owns pending/active BGP unnumbered interfaces and implements BGP's lookup seam | 1 per daemon |
+| **UnnumberedInterface** | Active interface entry: name, link-local address, scope ID, and router-discovery runtime | 1 per active unnumbered interface |
+| **RouterDiscoveryThreads** | Per-interface NDP router-discovery tx/rx loops | 1 per active unnumbered interface |
 | **SessionRunner (FSM)** | BGP state machine, queries NDP for peer discovery | 1 per unnumbered peer |
 | **Dispatcher** | Accepts incoming connections, uses scope_id to route to correct FSM | 1 per listening address |
 
@@ -113,22 +117,34 @@ NDP (RFC 4861) is the IPv6 equivalent of ARP. For BGP unnumbered, we use:
 - **Router Solicitation (RS)**: "Is there a router on this link?"
 - **Router Advertisement (RA)**: "I'm a router at fe80::X"
 
-### NdpManager Architecture
+### Router Discovery Architecture
 
-**NdpManager** manages multiple interfaces:
+`UnnumberedManager` owns the active interface collection. Each active
+`UnnumberedInterface` owns its per-interface router-discovery runtime:
+
 ```rust
-pub struct NdpManager {
-    interfaces: RwLock<Vec<Arc<InterfaceNdpManager>>>,
-    log: Logger,
+pub struct UnnumberedInterface {
+    name: String,
+    local_address: Ipv6Addr,
+    scope_id: NonZeroU32,
+    router_discovery: RouterDiscoveryRuntime,
 }
 ```
 
-**InterfaceNdpManager** handles per-interface discovery:
+The production runtime owns the NDP tx/rx thread handles:
+
 ```rust
-pub struct InterfaceNdpManager {
+enum RouterDiscoveryRuntime {
+    Ndp {
+        state: Arc<ndp::RouterDiscoveryState>,
+        threads: ndp::RouterDiscoveryThreads,
+    },
+    // Test-only manual runtime omits real NDP threads.
+}
+
+pub struct RouterDiscoveryThreads {
     _tx_thread: Arc<ManagedThread>,  // Sends RA/RS every 5s
     _rx_thread: Arc<ManagedThread>,  // Receives RA/RS
-    inner: InterfaceNdpManagerInner,
 }
 ```
 
@@ -139,29 +155,31 @@ pub struct InterfaceNdpManager {
 
 **NDP Cache**: Single-entry cache per interface
 ```rust
-neighbor_router: Arc<Mutex<Option<ReceivedAdvertisement>>>
+RouterDiscoveryState {
+    neighbor: Mutex<Option<ReceivedRouterAdvertisement>>,
+    tx_router_lifetime: AtomicU16,
+}
 ```
 
-Only the most recently received RA is kept. Expiry is checked based on time since reception and router lifetime from the RA message.
+Only the most recently received RA is kept. Expiry is checked based on time since reception and the RA effective reachable time.
 
-### UnnumberedManagerNdp: The Bridge
+### UnnumberedManager: BGP's Unnumbered Lookup Owner
 
 Connects NDP discovery with BGP session management:
 
 ```rust
-pub struct UnnumberedManagerNdp {
-    routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
-    ndp_mgr: Arc<NdpManager>,
-    interface_scope_map: Mutex<HashMap<u32, String>>,  // scope_id → interface
+pub struct UnnumberedManager {
+    active_interfaces: Mutex<InterfaceMap>,
+    pending_interfaces: Mutex<HashMap<String, u16>>,
     log: Logger,
 }
 ```
 
 **Key Operations**:
 
-1. **add_neighbor**: Start NDP discovery and create BGP session
-2. **get_neighbor_for_interface**: Query discovered peer (used by FSM for connection attempts)
-3. **get_interface_for_scope**: Map scope_id → interface (used by Dispatcher for routing incoming connections)
+1. **add_interface**: Resolve an interface or place it on the pending list, then start router discovery when active.
+2. **get_discovered_ndp_neighbor**: Query discovered peer (used by FSM for connection attempts).
+3. **get_active_interface_by_scope**: Map scope_id → interface (used by Dispatcher for routing incoming connections).
 
 **Critical Detail**: scope_id is the interface index, used to disambiguate link-local addresses:
 - `fe80::1%2` (scope_id=2, eth0) ≠ `fe80::1%3` (scope_id=3, eth1)
@@ -338,16 +356,15 @@ Path {
 }
 ```
 
-### 4. UnnumberedManager Trait for Testability
+### 4. BgpUnnumbered Trait for Testability
 
-**Decision**: Define `UnnumberedManager` trait with two implementations:
-- `UnnumberedManagerNdp`: Production (real NDP)
-- `UnnumberedManagerMock`: Testing (simulated NDP)
+**Decision**: Define a small `BgpUnnumbered` resolver trait consumed by BGP.
+Production uses `UnnumberedManager`; BGP tests use compact local stubs.
 
 **Benefits**:
 - BGP tests don't require real network interfaces
 - Tests can control NDP state changes explicitly
-- Tests verify FSM behavior independent of NDP implementation
+- Tests verify FSM behavior independent of the unnumbered/NDP implementation
 
 ### 5. ManagedThread Typestate Pattern
 

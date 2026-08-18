@@ -1,0 +1,16 @@
+[package]
+name = "unnumbered"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iddqd.workspace = true
+mg-api-types.workspace = true
+mg-common.workspace = true
+ndp.workspace = true
+network-interface.workspace = true
+slog.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
