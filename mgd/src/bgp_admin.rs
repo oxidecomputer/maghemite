@@ -1095,6 +1095,36 @@ pub async fn get_selected_v1(
     )))
 }
 
+/// The session map is daemon-global (shared with the connection dispatcher),
+/// so a router's sessions are attributed via its own rdb neighbor lists,
+/// optionally narrowed to one ASN — the same pattern teardown uses.
+pub(crate) fn rdb_attributed_sessions(
+    ctx: &Arc<HandlerContext>,
+    rdb: &rdb::RouterDb,
+    asn: Option<u32>,
+) -> Result<Vec<Arc<SessionRunner<BgpConnectionTcp>>>, HttpError> {
+    let wanted = |a: u32| asn.is_none_or(|x| x == a);
+    let peers: Vec<PeerId> = rdb
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::from(Error::Db(e)))?
+        .into_iter()
+        .filter(|n| wanted(n.asn))
+        .map(|n| PeerId::Ip(n.host.ip()))
+        .chain(
+            rdb.get_unnumbered_bgp_neighbors()
+                .map_err(|e| HttpError::from(Error::Db(e)))?
+                .into_iter()
+                .filter(|n| wanted(n.asn))
+                .map(|n| PeerId::Interface(n.interface)),
+        )
+        .collect();
+    let sessions = lock!(ctx.bgp.sessions);
+    Ok(peers
+        .iter()
+        .filter_map(|p| sessions.get(p).cloned())
+        .collect())
+}
+
 pub async fn get_neighbors_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<v1::bgp::config::AsnSelector>,
@@ -1103,13 +1133,17 @@ pub async fn get_neighbors_v1(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
-    let routers = lock!(ctx.bgp.router);
-    let r = routers
-        .get(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
-        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ));
+    }
 
-    for s in lock!(r.sessions).values() {
+    let mut peers = HashMap::new();
+    for s in rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))? {
         let dur =
             s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
@@ -1171,13 +1205,17 @@ pub async fn get_neighbors_v2(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
-    let routers = lock!(ctx.bgp.router);
-    let r = routers
-        .get(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
-        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ));
+    }
 
-    for s in lock!(r.sessions).values() {
+    let mut peers = HashMap::new();
+    for s in rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))? {
         let dur =
             s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
@@ -1235,19 +1273,17 @@ pub async fn get_neighbors_v4(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ));
+    }
 
-    // Clone sessions while holding locks, then release them
-    let sessions: Vec<_> = {
-        let routers = lock!(ctx.bgp.router);
-        let r = routers
-            .get(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
-            .ok_or(HttpError::for_not_found(
-                None,
-                "ASN not found".to_string(),
-            ))?;
-        lock!(r.sessions).values().cloned().collect()
-    };
+    let mut peers = HashMap::new();
+    let sessions = rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))?;
 
     for s in sessions.iter() {
         let peer_ip = match s.neighbor.peer {
@@ -1267,19 +1303,17 @@ pub async fn get_neighbors(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ));
+    }
 
-    // Clone sessions while holding locks, then release them
-    let sessions: Vec<_> = {
-        let routers = lock!(ctx.bgp.router);
-        let r = routers
-            .get(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
-            .ok_or(HttpError::for_not_found(
-                None,
-                "ASN not found".to_string(),
-            ))?;
-        lock!(r.sessions).values().cloned().collect()
-    };
+    let mut peers = HashMap::new();
+    let sessions = rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))?;
 
     for s in sessions.iter() {
         // Use PeerId Display impl as HashMap key
