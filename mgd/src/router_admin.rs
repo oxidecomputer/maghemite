@@ -425,8 +425,9 @@ mod tests {
     /// Apply a two-router spec (same ASN, distinct peers), then re-apply
     /// with one router removed: the removed router's BGP, static and
     /// persistent state must be fully torn down while the surviving router
-    /// is untouched. The "default" router seeded by the test db is absent
-    /// from the desired list, so the first apply also tears it down.
+    /// is untouched. The "default" router seeded by the test db is
+    /// daemon-owned: apply never tears it down even though it is absent
+    /// from the desired list.
     #[tokio::test]
     async fn two_router_apply_then_remove() {
         let ctx = test_ctx("two_router_apply_then_remove");
@@ -443,7 +444,14 @@ mod tests {
         let mut names: Vec<String> =
             ctx.db.list_routers().into_iter().map(|r| r.name).collect();
         names.sort();
-        assert_eq!(names, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "default".to_string(),
+                "one".to_string(),
+                "two".to_string()
+            ]
+        );
 
         // Same ASN on both routers is allowed; each has its own BGP router
         // instance and its own neighbor/static state.
@@ -481,9 +489,10 @@ mod tests {
         .await
         .expect("re-apply with one router removed");
 
-        let names: Vec<String> =
+        let mut names: Vec<String> =
             ctx.db.list_routers().into_iter().map(|r| r.name).collect();
-        assert_eq!(names, vec!["one".to_string()]);
+        names.sort();
+        assert_eq!(names, vec!["default".to_string(), "one".to_string()]);
         assert!(ctx.db.router("two").is_err());
         assert!(
             !lock!(ctx.bgp.router).contains_key(&("two".to_string(), 65001))
