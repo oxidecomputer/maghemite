@@ -123,21 +123,25 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_bfd_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {
-        bfd_admin::get_bfd_peers(ctx).await
+        ctx.context().bfd.get_peers().map(HttpResponseOk)
     }
 
     async fn add_bfd_peer(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<BfdPeerConfig>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bfd_admin::add_bfd_peer(ctx, request).await
+        let ctx = ctx.context();
+        ctx.bfd.add_new_peer(ctx.db.clone(), request)
     }
 
     async fn remove_bfd_peer(
         ctx: RequestContext<Self::Context>,
         params: Path<DeleteBfdPeerPathParams>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bfd_admin::remove_bfd_peer(ctx, params).await
+        let ctx = ctx.context();
+        ctx.bfd
+            .remove_peer(ctx.db.clone(), params.into_inner())
+            .await
     }
 
     async fn read_routers(

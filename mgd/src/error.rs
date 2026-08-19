@@ -16,6 +16,9 @@ pub enum Error {
     #[error("not found: {0}")]
     NotFound(String),
 
+    #[error("bfd error: {0}")]
+    Bfd(#[from] bfd::AddPeerError),
+
     #[error("bgp error: {0}")]
     Bgp(#[from] bgp::error::Error),
 
@@ -47,6 +50,20 @@ impl From<Error> for HttpError {
                 ClientErrorStatusCode::CONFLICT,
             ),
             Error::NotFound(_) => Self::for_not_found(None, value.to_string()),
+            Error::Bfd(ref err) => match err {
+                bfd::AddPeerError::PeerExists(ip_addr) => {
+                    Self::for_client_error(
+                        Some(err.to_string()),
+                        ClientErrorStatusCode::CONFLICT,
+                        format!("bfd peer {ip_addr} already exists"),
+                    )
+                }
+                bfd::AddPeerError::Bind { .. }
+                | bfd::AddPeerError::SetSocketNonBlocking(_)
+                | bfd::AddPeerError::StdToTokio(_) => {
+                    Self::for_internal_error(value.to_string())
+                }
+            },
             Error::Bgp(ref err) => match err {
                 bgp::error::Error::PeerExists(_) => {
                     Self::for_client_error_with_status(
