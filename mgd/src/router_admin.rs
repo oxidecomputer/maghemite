@@ -20,6 +20,7 @@ use dropshot::{
 };
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::config::{ApplyRequest, PeerInfo};
+use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rib::{Rib, RibQuery};
 use mg_api_types::router::{
     MultiRouterApplyRequest, RouterInfo, RouterSelector, RouterSpec,
@@ -68,17 +69,26 @@ pub(crate) async fn get_router_neighbors(
     let name = path.into_inner().router;
     let ctx = ctx.context();
     // 404 for an unknown router; a router with no BGP sessions returns {}.
-    router_db(ctx, &name)?;
-    let sessions: Vec<_> = lock!(ctx.bgp.router)
-        .iter()
-        .filter(|((n, _), _)| n == &name)
-        .flat_map(|(_, r)| {
-            lock!(r.sessions).values().cloned().collect::<Vec<_>>()
-        })
+    let rdb = router_db(ctx, &name)?;
+    // The session map is daemon-global (shared with the connection
+    // dispatcher), so ownership comes from this router's rdb neighbor lists.
+    let peers: Vec<PeerId> = rdb
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::from(Error::Db(e)))?
+        .into_iter()
+        .map(|n| PeerId::Ip(n.host.ip()))
+        .chain(
+            rdb.get_unnumbered_bgp_neighbors()
+                .map_err(|e| HttpError::from(Error::Db(e)))?
+                .into_iter()
+                .map(|n| PeerId::Interface(n.interface)),
+        )
         .collect();
+    let sessions = lock!(ctx.bgp.sessions);
     Ok(HttpResponseOk(
-        sessions
+        peers
             .iter()
+            .filter_map(|p| sessions.get(p))
             .map(|s| (s.neighbor.peer.to_string(), s.get_peer_info()))
             .collect(),
     ))
