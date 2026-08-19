@@ -187,6 +187,21 @@ pub trait MgAdminApi {
         request: Query<latest::rib::RibQuery>,
     ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
 
+    /// Get the status of a named router's BGP neighbors, across all of the
+    /// router's BGP instances.
+    #[endpoint {
+        method = GET,
+        path = "/router/{router}/bgp/status/neighbors",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+    ) -> Result<
+        HttpResponseOk<HashMap<String, latest::bgp::config::PeerInfo>>,
+        HttpError,
+    >;
+
     #[endpoint {
         method = GET,
         path = "/bgp/config/routers",

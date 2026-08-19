@@ -79,8 +79,13 @@ pub struct StatusSubcommand {
 pub enum StatusCmd {
     /// Get the status of a router's neighbors.
     Neighbors {
-        #[clap(env)]
-        asn: u32,
+        /// ASN of a BGP instance on the default router.
+        #[clap(env, required_unless_present = "router")]
+        asn: Option<u32>,
+
+        /// Named router to show neighbors for (all its BGP instances).
+        #[clap(long, conflicts_with = "asn")]
+        router: Option<String>,
 
         /// Display mode: summary (default) or detail.
         #[clap(long, value_enum, default_value = "summary")]
@@ -915,8 +920,14 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         },
 
         Commands::Status(cmd) => match cmd.command {
-            StatusCmd::Neighbors { asn, mode } => {
-                get_neighbors(c, asn, mode).await?
+            StatusCmd::Neighbors { asn, router, mode } => {
+                let result = match router {
+                    Some(router) => {
+                        c.get_router_neighbors(&router).await?.into_inner()
+                    }
+                    None => c.get_neighbors(asn.unwrap()).await?.into_inner(),
+                };
+                display_neighbors(result, mode)?
             }
             StatusCmd::Exported { asn, peer, afi } => {
                 get_exported(c, asn, peer, afi).await?
@@ -1005,12 +1016,13 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn get_neighbors(
-    c: Client,
-    asn: u32,
+fn display_neighbors(
+    result: std::collections::HashMap<
+        String,
+        mg_api_types::bgp::config::PeerInfo,
+    >,
     mode: NeighborDisplayMode,
 ) -> Result<()> {
-    let result = c.get_neighbors(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
 
     // Sort using natural sorting to handle both IP addresses and interface names

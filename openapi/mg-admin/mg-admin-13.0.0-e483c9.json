@@ -1484,6 +1484,46 @@
         }
       }
     },
+    "/router/{router}/bgp/status/neighbors": {
+      "get": {
+        "summary": "Get the status of a named router's BGP neighbors, across all of the",
+        "description": "router's BGP instances.",
+        "operationId": "get_router_neighbors",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "router",
+            "description": "Name of the router.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/router/{router}/rib/imported": {
       "get": {
         "summary": "Get the imported RIB (rib-in) of a named router.",

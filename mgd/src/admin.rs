@@ -165,6 +165,13 @@ impl MgAdminApi for MgAdminApiImpl {
         router_admin::get_router_rib_selected(ctx, path, request).await
     }
 
+    async fn get_router_neighbors(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        router_admin::get_router_neighbors(ctx, path).await
+    }
+
     async fn get_bfd_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {

@@ -19,7 +19,7 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use mg_api_types::bfd::BfdPeerConfig;
-use mg_api_types::bgp::config::ApplyRequest;
+use mg_api_types::bgp::config::{ApplyRequest, PeerInfo};
 use mg_api_types::rib::{Rib, RibQuery};
 use mg_api_types::router::{
     MultiRouterApplyRequest, RouterInfo, RouterSelector, RouterSpec,
@@ -27,7 +27,7 @@ use mg_api_types::router::{
 use mg_common::lock;
 use oxnet::IpNet;
 use rdb::{RibExt, StaticRouteKey};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -59,6 +59,29 @@ pub(crate) async fn get_router_rib_selected(
     let selected = rdb.loc_rib(query.address_family);
     let filtered = selected.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(filtered.into_latest_api_rib()))
+}
+
+pub(crate) async fn get_router_neighbors(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<RouterSelector>,
+) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+    let name = path.into_inner().router;
+    let ctx = ctx.context();
+    // 404 for an unknown router; a router with no BGP sessions returns {}.
+    router_db(ctx, &name)?;
+    let sessions: Vec<_> = lock!(ctx.bgp.router)
+        .iter()
+        .filter(|((n, _), _)| n == &name)
+        .flat_map(|(_, r)| {
+            lock!(r.sessions).values().cloned().collect::<Vec<_>>()
+        })
+        .collect();
+    Ok(HttpResponseOk(
+        sessions
+            .iter()
+            .map(|s| (s.neighbor.peer.to_string(), s.get_peer_info()))
+            .collect(),
+    ))
 }
 
 fn router_db(
