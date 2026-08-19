@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+// Copyright 2026 Oxide Computer Company
+
 use oxnet::IpNet;
 use slog_error_chain::InlineErrorChain;
 use std::collections::HashMap;
@@ -29,6 +31,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (13, MULTICAST_SUPPORT),
     (12, BFD_NONZERO_DETECT_MULT),
     (11, PREFIX_TO_OXNET),
     (10, V4_OVER_V6_STATIC_ROUTES),
@@ -1573,4 +1576,40 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::ndp::NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<latest::ndp::NdpInterface>, HttpError>;
+
+    // MRIB: Multicast ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    /// Get imported multicast routes from `mrib_in`.
+    #[endpoint { method = GET, path = "/mrib/status/imported", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn get_mrib_imported(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<latest::mrib::MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<latest::mrib::MulticastRoute>>, HttpError>;
+
+    /// Get selected multicast routes from `mrib_loc` (RPF-validated).
+    #[endpoint { method = GET, path = "/mrib/status/selected", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn get_mrib_selected(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<latest::mrib::MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<latest::mrib::MulticastRoute>>, HttpError>;
+
+    /// Add static multicast routes.
+    #[endpoint { method = PUT, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_add_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::mrib::MribAddStaticRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Remove static multicast routes.
+    #[endpoint { method = DELETE, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_remove_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::mrib::MribDeleteStaticRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    /// List all static multicast routes from persistence.
+    #[endpoint { method = GET, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_list_mcast_routes(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<latest::mrib::MulticastRoute>>, HttpError>;
 }
