@@ -3,6 +3,9 @@ name = "bfd"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 mg-common.workspace = true
