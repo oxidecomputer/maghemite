@@ -8,7 +8,8 @@ use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::config::ApplyRequest;
+use ddm_api_types::db::{InterfaceInfo, PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
@@ -22,7 +23,8 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use mg_common::lock;
+use iddqd::IdOrdMap;
+use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
@@ -30,10 +32,18 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use {
+    crate::sm::{InterfaceState, StateMachine},
+    mg_common::write_lock,
+    std::collections::BTreeSet,
+    std::sync::mpsc::channel,
+};
 
 pub const DDM_STATS_PORT: u16 = 8001;
 
@@ -47,12 +57,65 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
+    pub peers: Arc<RwLock<IdOrdMap<SmContext>>>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
+    pub hostname: String,
+    pub base_fsm_config: crate::sm::Config,
+    pub rt: tokio::runtime::Handle,
+}
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+impl HandlerContext {
+    /// Build, wire, and start the per-interface routing state machines.
+    pub fn start_state_machines(
+        &self,
+        interfaces: impl IntoIterator<Item = String>,
+    ) {
+        interfaces
+            .into_iter()
+            .for_each(|ifname| self.start_state_machine(ifname));
+    }
+
+    /// Build, wire, and start one routing state machine for an interface.
+    pub fn start_state_machine(&self, ifname: String) {
+        let (tx, rx) = channel();
+        let mut config = self.base_fsm_config.clone();
+        config.aobj_name = ifname;
+        let ctx = SmContext {
+            config,
+            db: self.db.clone(),
+            tx: tx.clone(),
+            event_channels: Arc::new(RwLock::new(Vec::new())),
+            rt: self.rt.clone(),
+            hostname: self.hostname.clone(),
+            iface: Arc::new(InterfaceState::default()),
+            stats: Arc::new(crate::sm::SessionStats::default()),
+            log: self.log.clone(),
+        };
+        let mut sm = StateMachine { ctx, rx: Some(rx) };
+        for peer in read_lock!(self.peers).iter() {
+            // push all existing peers' FSM handles to the new FSM
+            write_lock!(sm.ctx.event_channels).push(peer.tx.clone());
+            // push the new FSM handle to all existing peers
+            write_lock!(peer.event_channels).push(tx.clone());
+        }
+        sm.run().unwrap();
+        write_lock!(self.peers).insert_overwrite(sm.ctx.clone());
+    }
+
+    /// Stop and remove the state machine for a set of interfaces.
+    pub fn stop_state_machines(
+        &self,
+        interfaces: impl IntoIterator<Item = String>,
+    ) {
+        let mut peers = write_lock!(self.peers);
+        interfaces.into_iter().for_each(|ifname| {
+            peers.remove(ifname.as_str());
+        });
+    }
 }
 
 pub fn handler(
@@ -126,30 +189,72 @@ pub enum DdmAdminApiImpl {}
 impl DdmAdminApi for DdmAdminApiImpl {
     type Context = Arc<Mutex<HandlerContext>>;
 
+    async fn get_interfaces(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, InterfaceInfo>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let mut result = HashMap::new();
+        for sm in read_lock!(ctx.peers).iter() {
+            result.insert(*lock!(sm.iface.if_index), sm.interface_info());
+        }
+        Ok(HttpResponseOk(result))
+    }
+
+    async fn ddm_apply(
+        _ctx: RequestContext<Self::Context>,
+        _request: TypedBody<ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        #[cfg(all(feature = "backend", target_os = "illumos"))]
+        {
+            let ctx = lock!(_ctx.context());
+            let old: BTreeSet<String> = read_lock!(ctx.peers)
+                .iter()
+                .map(|ctx| ctx.config.aobj_name.clone())
+                .collect();
+            // XXX: SMF tells DDM about addr objects, not ifnames, so for now
+            //      we append "/ll" to the end of the ifname. Eventually this
+            //      endpoint and SMF should move over to using a stronger type.
+            let new: BTreeSet<String> = _request
+                .into_inner()
+                .ddm_interfaces
+                .into_iter()
+                .map(|ifname| format!("{ifname}/ll"))
+                .collect();
+            let to_add: BTreeSet<String> =
+                new.difference(&old).cloned().collect();
+            let to_del: BTreeSet<String> =
+                old.difference(&new).cloned().collect();
+            ctx.start_state_machines(to_add);
+            ctx.stop_state_machines(to_del);
+        }
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let mut result = HashMap::new();
-        for sm in &ctx.peers {
-            // Compute status first so peer_status() never runs while we hold
-            // any of the InterfaceState mutexes below.
-            let status = sm.iface.peer_status();
-            let if_index = *lock!(sm.iface.if_index);
-            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
-                continue;
-            };
-            result.insert(
-                if_index,
-                PeerInfo {
-                    status,
-                    addr: peer.addr,
-                    host: peer.hostname,
-                    kind: peer.kind,
-                },
-            );
-        }
-        Ok(HttpResponseOk(result))
+        Ok(HttpResponseOk(
+            read_lock!(ctx.peers)
+                .iter()
+                .filter_map(|sm| {
+                    // Compute status first so peer_status() never runs while we
+                    // hold any of the InterfaceState mutexes below.
+                    let status = sm.iface.peer_status();
+                    let if_index = *lock!(sm.iface.if_index);
+                    let peer = lock!(sm.iface.peer_identity).clone()?;
+                    Some((
+                        if_index,
+                        PeerInfo {
+                            status,
+                            addr: peer.addr,
+                            host: peer.hostname,
+                            kind: peer.kind,
+                        },
+                    ))
+                })
+                .collect(),
+        ))
     }
 
     async fn expire_peer(
@@ -159,8 +264,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Expire(addr)))
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Expire(addr)))
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
                         "admin event send: {e}"
@@ -238,13 +344,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
+                    prefixes.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_count() {
@@ -274,13 +383,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+                    endpoints.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_tunnel_count() {
@@ -308,13 +420,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
+                    prefixes.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_count() {
@@ -344,13 +459,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx
+                .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+                    endpoints.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_tunnel_count() {
@@ -374,8 +492,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
+        for peer in read_lock!(ctx.peers).iter() {
+            peer.tx.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
                 HttpError::for_internal_error(format!("admin event send: {e}"))
             })?;
         }

@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::Arc;
 use types::PortId;
 
 #[cfg(target_os = "illumos")]
@@ -99,7 +98,7 @@ pub fn add_underlay_routes(
     log: &Logger,
     config: &Config,
     routes: Vec<Route>,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) {
     match &config.dpd {
         Some(dpd) => {
@@ -135,7 +134,7 @@ pub fn add_routes_dendrite(
     host: &str,
     port: u16,
     ifname: &str,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
     log: &Logger,
 ) {
     dbg!(log, ifname, "sending to dpd host={} port={}", host, port);
@@ -145,6 +144,37 @@ pub fn add_routes_dendrite(
         log: log.clone(),
     };
     let client = Client::new(&format!("http://{host}:{port}"), client_state);
+
+    // Map the system interface name (e.g. "tfportrear0_0") to the Dendrite
+    // switch port and link it fronts.
+    let Some((port_id, link_id)) = tfport_to_dpd(ifname) else {
+        err!(log, ifname, "cannot derive switch port from interface name");
+        return;
+    };
+
+    // Underlay routes belong only on rack-interior links. Unlike the old
+    // tfportrear name check, the uplink attribute also handles multi-rack port
+    // layouts without assuming a particular physical port type.
+    match rt.block_on({
+        let client = client.clone();
+        let port_id = port_id.clone();
+        async move { client.link_uplink_get(&port_id, &link_id).await }
+    }) {
+        Ok(response) => {
+            if response.into_inner() {
+                inf!(
+                    log,
+                    ifname,
+                    "skipping route install on uplink port {port_id}/{link_id}"
+                );
+                return;
+            }
+        }
+        Err(error) => {
+            err!(log, ifname, "failed to query uplink property: {error}");
+            return;
+        }
+    }
 
     for r in routes {
         let cidr = match r.dest {
@@ -176,45 +206,17 @@ pub fn add_routes_dendrite(
             }
         };
 
-        // TODO this is gross, use link type properties rather than futzing
-        // around with strings.
-        let Some(egress_port_num) = ifname
-            .strip_prefix("tfportrear")
-            .and_then(|x| x.strip_suffix("_0"))
-            .map(|x| x.trim())
-            .and_then(|x| x.parse::<u8>().ok())
-        else {
-            err!(log, ifname, "expected tfportrear");
-            continue;
-        };
-
-        // TODO this assumes ddm only operates on rear ports, which will not be
-        // true for multi-rack deployments.
-        let port_name = format!("rear{}", egress_port_num);
-        let port_id = match types::Rear::try_from(&port_name) {
-            Ok(rear) => PortId::Rear(rear),
-            Err(e) => {
-                err!(log, ifname, "bad port name ({port_name}): {e}");
-                continue;
-            }
-        };
-
         inf!(
             log,
             ifname,
-            "adding route {} -> {} on port {:?}/{}",
+            "adding route {} -> {} on port {port_id}/{link_id}",
             r.dest,
             r.gw,
-            port_id,
-            0,
         );
-
-        // TODO breakout considerations
-        let link_id = types::LinkId(0);
 
         let target = types::Ipv6Route {
             tag: DDM_DPD_TAG.into(),
-            port_id,
+            port_id: port_id.clone(),
             link_id,
             tgt_ip: gw,
             vlan_id: None,
@@ -233,6 +235,17 @@ pub fn add_routes_dendrite(
             err!(log, ifname, "dpd route create: {e}");
         }
     }
+}
+
+/// Derive the Dendrite switch port and link fronted by a tfport interface.
+///
+/// Tfport interfaces are named `tfport<port>_<link>`, such as
+/// `tfportrear0_0` or `tfportqsfp10_1`.
+fn tfport_to_dpd(ifname: &str) -> Option<(PortId, types::LinkId)> {
+    let (port, link) = ifname.strip_prefix("tfport")?.rsplit_once('_')?;
+    let port_id = port.parse::<PortId>().ok()?;
+    let link_id = types::LinkId(link.parse::<u8>().ok()?);
+    Some((port_id, link_id))
 }
 
 #[cfg(target_os = "illumos")]
@@ -364,7 +377,7 @@ pub fn remove_underlay_routes(
     ifname: &str,
     dpd: &Option<DpdConfig>,
     routes: Vec<Route>,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) {
     match dpd {
         Some(dpd) => {
@@ -393,7 +406,7 @@ pub fn remove_routes_dendrite(
     routes: Vec<Route>,
     host: &str,
     port: u16,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
     ifname: &str,
     log: &Logger,
 ) {
@@ -443,7 +456,7 @@ pub fn remove_routes_dendrite(
 pub fn get_routes_dendrite(
     host: String,
     port: u16,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
     log: Logger,
 ) -> Result<Vec<Route>, String> {
     let client_state = ClientState {
@@ -575,5 +588,24 @@ pub fn remove_routes_illumos(log: &Logger, ifname: &str, routes: Vec<Route>) {
             err!(log, ifname, "set route: {e}");
             continue;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tfport_to_dpd;
+
+    #[test]
+    fn tfport_to_dpd_parses_port_type_and_link() {
+        let (port, link) = tfport_to_dpd("tfportqsfp10_1").unwrap();
+        assert_eq!(port.to_string(), "qsfp10");
+        assert_eq!(link.0, 1);
+    }
+
+    #[test]
+    fn tfport_to_dpd_rejects_invalid_names() {
+        assert!(tfport_to_dpd("qsfp10_1").is_none());
+        assert!(tfport_to_dpd("tfportqsfp10").is_none());
+        assert!(tfport_to_dpd("tfportqsfp10_invalid").is_none());
     }
 }

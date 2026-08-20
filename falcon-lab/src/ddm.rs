@@ -3,13 +3,18 @@
 #![allow(dead_code)]
 
 use crate::{dendrite::DendriteNode, illumos::IllumosNode};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
 use libfalcon::{NodeRef, Runner};
 use std::net::IpAddr;
+use std::time::Duration;
+use tokio::time::sleep;
 
 /// Path to the ddmd binary inside the helios VM
 const DDMD_BIN: &str = "/opt/cargo-bay/ddmd";
+
+/// Path to the ddmadm binary inside the helios VM
+const DDMADM_BIN: &str = "/opt/cargo-bay/ddmadm";
 
 /// File ddmd's stdout/stderr is redirected to inside the helios VM
 const DDM_LOG: &str = "/tmp/ddm.log";
@@ -29,6 +34,38 @@ impl DdmNode {
 
     pub async fn client(&self, d: &Runner, addr: IpAddr) -> Result<Client> {
         Ok(Client::new(&format!("http://{addr}:8000"), d.log.clone()))
+    }
+
+    pub async fn wait_for_api(
+        &self,
+        client: &Client,
+        timeout: Duration,
+        d: &Runner,
+    ) -> Result<()> {
+        let mut last_error = None;
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                match client.get_peers().await {
+                    Ok(_) => return,
+                    Err(e) => {
+                        slog::debug!(d.log, "wait for ddmd admin API: {e}");
+                        last_error = Some(e);
+                    }
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await;
+
+        match (result, last_error) {
+            (Ok(()), _) => Ok(()),
+            (Err(_), Some(e)) => Err(anyhow!(
+                "timeout waiting for ddmd admin API after {timeout:?}: {e}"
+            )),
+            (Err(_), None) => Err(anyhow!(
+                "timeout waiting for ddmd admin API after {timeout:?}"
+            )),
+        }
     }
 
     pub fn illumos(&self) -> IllumosNode {
@@ -53,6 +90,24 @@ impl DdmNode {
                 &contents,
             ),
             Err(e) => slog::warn!(d.log, "diagnostics {label}: {e}"),
+        }
+
+        for command in [
+            "get-interfaces",
+            "get-peers",
+            "get-prefixes",
+            "get-originated",
+            "tunnel-imported",
+            "tunnel-originated",
+        ] {
+            crate::diagnostics::capture(
+                d,
+                self.0,
+                topo,
+                &format!("{name}-ddmadm-{command}"),
+                &format!("{DDMADM_BIN} --address ::1 {command}"),
+            )
+            .await;
         }
     }
 }

@@ -8,11 +8,9 @@
 //! illumos-only.
 
 use super::{DiscoveryError, Version};
-use crate::sm::{
-    Config, Event, InterfaceState, NeighborEvent, PeerIdentity, SessionStats,
-};
+use crate::sm::{Config, Event, InterfaceState, NeighborEvent, SessionStats};
 use crate::{dbg, err, inf, trc, wrn};
-use ddm_api_types::db::RouterKind;
+use ddm_api_types::db::{PeerIdentity, RouterKind};
 use mg_common::lock;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -122,6 +120,7 @@ pub(crate) fn handler(
 
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
+    uc.set_reuse_address(true)?;
     uc.bind(&uc_sa)?;
     uc.set_read_timeout(Some(Duration::from_millis(
         config.discovery_read_timeout,

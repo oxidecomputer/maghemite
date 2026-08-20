@@ -9,16 +9,19 @@
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
-use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::db::{
+    InterfaceInfo, InterfaceStats, PeerIdentity, PeerStatus, RouterKind,
+};
 use ddm_api_types::net::TunnelOrigin;
+use iddqd::{IdOrdItem, id_upcast};
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -174,16 +177,10 @@ impl FsmState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct PeerIdentity {
-    pub addr: Ipv6Addr,
-    pub hostname: String,
-    pub kind: RouterKind,
-}
-
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
+    pub addr: Mutex<Ipv6Addr>,
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
@@ -199,9 +196,10 @@ impl InterfaceState {
         *lock!(self.peer_identity) = None;
     }
 
-    pub fn set_if_info(&self, index: u32, name: String) {
+    pub fn set_if_info(&self, index: u32, name: String, addr: Ipv6Addr) {
         *lock!(self.if_index) = index;
         *lock!(self.if_name) = name;
+        *lock!(self.addr) = addr;
     }
 
     pub fn peer_status(&self) -> PeerStatus {
@@ -215,6 +213,7 @@ impl Default for InterfaceState {
         Self {
             if_index: Mutex::new(0),
             if_name: Mutex::new(String::new()),
+            addr: Mutex::new(Ipv6Addr::UNSPECIFIED),
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),
@@ -241,20 +240,161 @@ pub struct SessionStats {
     pub update_send_fail: AtomicU64,
 }
 
+impl SessionStats {
+    fn snapshot(&self) -> InterfaceStats {
+        InterfaceStats {
+            solicitations_sent: self.solicitations_sent.load(Ordering::Relaxed),
+            solicitations_received: self
+                .solicitations_received
+                .load(Ordering::Relaxed),
+            advertisements_sent: self
+                .advertisements_sent
+                .load(Ordering::Relaxed),
+            advertisements_received: self
+                .advertisements_received
+                .load(Ordering::Relaxed),
+            peer_expirations: self.peer_expirations.load(Ordering::Relaxed),
+            peer_address_changes: self
+                .peer_address_changes
+                .load(Ordering::Relaxed),
+            peer_established: self.peer_established.load(Ordering::Relaxed),
+            updates_sent: self.updates_sent.load(Ordering::Relaxed),
+            updates_received: self.updates_received.load(Ordering::Relaxed),
+            imported_underlay_prefixes: self
+                .imported_underlay_prefixes
+                .load(Ordering::Relaxed),
+            imported_tunnel_endpoints: self
+                .imported_tunnel_endpoints
+                .load(Ordering::Relaxed),
+            update_send_fail: self.update_send_fail.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SmContext {
     pub config: Config,
     pub db: Db,
     pub tx: Sender<Event>,
-    pub event_channels: Vec<Sender<Event>>,
-    pub rt: Arc<tokio::runtime::Handle>,
+    pub event_channels: Arc<RwLock<Vec<Sender<Event>>>>,
+    pub rt: tokio::runtime::Handle,
     pub hostname: String,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
 }
 
+impl IdOrdItem for SmContext {
+    type Key<'a> = &'a str;
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.config.aobj_name
+    }
+
+    id_upcast!();
+}
+
+impl SmContext {
+    pub fn interface_info(&self) -> InterfaceInfo {
+        let status = self.iface.peer_status();
+        let peer = lock!(self.iface.peer_identity).clone();
+        InterfaceInfo {
+            name: lock!(self.iface.if_name).clone(),
+            addr: *lock!(self.iface.addr),
+            status,
+            peer,
+            stats: self.stats.snapshot(),
+        }
+    }
+}
+
 pub struct StateMachine {
     pub ctx: SmContext,
     pub rx: Option<Receiver<Event>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ddm_api_types::db::RouterKind;
+    use mg_common::{read_lock, write_lock};
+    use std::net::Ipv6Addr;
+    use std::sync::OnceLock;
+    use std::sync::mpsc;
+
+    // A single shared runtime lives for the duration of the test binary.
+    // SmContext holds a Handle; without a live runtime the handle would
+    // be invalid, but our tests never drive any async work through it.
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    fn rt_handle() -> tokio::runtime::Handle {
+        let rt = RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap());
+        rt.handle().clone()
+    }
+
+    fn make_ctx(aobj_name: &str) -> SmContext {
+        let (tx, _rx) = mpsc::channel();
+        SmContext {
+            config: Config {
+                aobj_name: aobj_name.to_string(),
+                if_name: String::new(),
+                if_index: 0,
+                addr: Ipv6Addr::UNSPECIFIED,
+                solicit_interval: 0,
+                discovery_read_timeout: 0,
+                ip_addr_wait: 0,
+                expire_threshold: 0,
+                exchange_timeout: 0,
+                exchange_port: 0,
+                kind: RouterKind::Server,
+                dpd: None,
+            },
+            db: crate::db::Db::new_for_test(),
+            tx,
+            event_channels: Arc::new(RwLock::new(Vec::new())),
+            rt: rt_handle(),
+            hostname: String::new(),
+            iface: Arc::new(InterfaceState::default()),
+            stats: Arc::new(SessionStats::default()),
+            log: slog::Logger::root(slog::Discard, slog::o!()),
+        }
+    }
+
+    #[test]
+    fn interface_info_uses_shared_initialized_address() {
+        let ctx = make_ctx("eth0");
+        let addr = "fe80::1234".parse().unwrap();
+        ctx.iface.set_if_info(7, "net0".to_string(), addr);
+
+        let info = ctx.interface_info();
+        assert_eq!(info.name, "net0");
+        assert_eq!(info.addr, addr);
+    }
+
+    // event_channels is Arc<RwLock<...>>, so all clones of an SmContext share
+    // the same channel list. This is the property that makes start_state_machine
+    // wiring correct: pushing a sender through the clone in HandlerContext::peers
+    // is immediately visible to the running FSM.
+
+    #[test]
+    fn event_channels_shared_across_clones() {
+        let ctx = make_ctx("eth0");
+        let clone = ctx.clone();
+
+        let (tx, _rx) = mpsc::channel::<Event>();
+        write_lock!(ctx.event_channels).push(tx);
+
+        assert_eq!(read_lock!(clone.event_channels).len(), 1);
+    }
+
+    #[test]
+    fn event_channels_independent_across_distinct_contexts() {
+        let a = make_ctx("eth0");
+        let b = make_ctx("eth1");
+
+        let (tx, _rx) = mpsc::channel::<Event>();
+        write_lock!(a.event_channels).push(tx);
+
+        assert_eq!(read_lock!(b.event_channels).len(), 0);
+    }
 }
