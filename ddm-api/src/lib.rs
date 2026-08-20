@@ -48,6 +48,8 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
+    /// Query interfaces known to DDM. Exposes configured interfaces, regardless
+    /// of whether they have learned a peer yet.
     #[endpoint {
         method = GET,
         path = "/interfaces",
@@ -60,6 +62,9 @@ pub trait DdmAdminApi {
         HttpError,
     >;
 
+    /// Declarative endpoint describing the set of interfaces DDM should run on.
+    /// DDM FSMs will be spawned for requested interfaces that are unknown to
+    /// DDM, and stopped for known interfaces that aren't in the request.
     #[endpoint {
         method = POST,
         path = "/ddm/omicron/apply",
