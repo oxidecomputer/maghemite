@@ -48,8 +48,8 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
-    /// Query interfaces known to DDM. Exposes configured interfaces, regardless
-    /// of whether they have learned a peer yet.
+    /// Query interfaces known to DDM.
+    /// Exposes configured interfaces, regardless of peer discovery.
     #[endpoint {
         method = GET,
         path = "/interfaces",

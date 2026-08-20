@@ -11,6 +11,8 @@
   "paths": {
     "/ddm/omicron/apply": {
       "post": {
+        "summary": "Declarative endpoint describing the set of interfaces DDM should run on.",
+        "description": "DDM FSMs will be spawned for requested interfaces that are unknown to DDM, and stopped for known interfaces that aren't in the request.",
         "operationId": "ddm_apply",
         "requestBody": {
           "content": {
@@ -79,6 +81,8 @@
     },
     "/interfaces": {
       "get": {
+        "summary": "Query interfaces known to DDM.",
+        "description": "Exposes configured interfaces, regardless of peer discovery.",
         "operationId": "get_interfaces",
         "responses": {
           "200": {
