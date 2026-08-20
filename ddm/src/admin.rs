@@ -211,7 +211,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 .iter()
                 .map(|ctx| ctx.config.aobj_name.clone())
                 .collect();
-            let new: BTreeSet<String> = _request.into_inner().ddm_interfaces;
+            // XXX: SMF tells DDM about addr objects, not ifnames, so for now
+            //      we append "/ll" to the end of the ifname. Eventually this
+            //      endpoint and SMF should move over to using a stronger type.
+            let new: BTreeSet<String> = _request
+                .into_inner()
+                .ddm_interfaces
+                .into_iter()
+                .map(|ifname| format!("{ifname}/ll"))
+                .collect();
             let to_add: BTreeSet<String> =
                 new.difference(&old).cloned().collect();
             let to_del: BTreeSet<String> =
