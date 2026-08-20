@@ -475,7 +475,7 @@ fn start_bfd_sessions(context: Arc<HandlerContext>) {
     dlog!(context.log, info, "starting persisted bfd sessions");
     context
         .bfd
-        .restore_peers(context.db.clone())
+        .restore_db_peers(context.db.clone())
         .unwrap_or_else(|e| panic!("failed to restore bfd peers: {e}"));
 }
 

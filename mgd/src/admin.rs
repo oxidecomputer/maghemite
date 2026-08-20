@@ -131,7 +131,8 @@ impl MgAdminApi for MgAdminApiImpl {
         request: TypedBody<BfdPeerConfig>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = ctx.context();
-        ctx.bfd.add_new_peer(ctx.db.clone(), request)
+        ctx.bfd.add_new_peer(ctx.db.clone(), request.into_inner())?;
+        Ok(HttpResponseUpdatedNoContent())
     }
 
     async fn remove_bfd_peer(
@@ -139,9 +140,9 @@ impl MgAdminApi for MgAdminApiImpl {
         params: Path<DeleteBfdPeerPathParams>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = ctx.context();
-        ctx.bfd
-            .remove_peer(ctx.db.clone(), params.into_inner())
-            .await
+        let peer = params.into_inner().addr;
+        ctx.bfd.remove_peer(ctx.db.clone(), peer).await?;
+        Ok(HttpResponseUpdatedNoContent())
     }
 
     async fn read_routers(

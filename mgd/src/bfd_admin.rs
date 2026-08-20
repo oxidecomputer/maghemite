@@ -6,10 +6,9 @@ use anyhow::Result;
 use bfd::Daemon;
 use bfd::Session;
 use bfd::SessionCounters;
-use dropshot::{HttpError, HttpResponseUpdatedNoContent, TypedBody};
+use dropshot::HttpError;
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bfd::BfdPeerInfo;
-use mg_api_types::bfd::DeleteBfdPeerPathParams;
 use mg_common::lock;
 use slog::Logger;
 use slog_error_chain::InlineErrorChain;
@@ -27,6 +26,13 @@ impl BfdContext {
     pub fn new(log: Logger) -> Self {
         Self {
             daemon: Arc::new(Mutex::new(Daemon::new(log.clone()))),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_for_test(log: Logger) -> Self {
+        Self {
+            daemon: Arc::new(Mutex::new(Daemon::new_for_test(log))),
         }
     }
 
@@ -74,7 +80,7 @@ impl BfdContext {
     ///
     /// This reads the peer configs from the DB itself so callers cannot start
     /// an unpersisted peer through the production API.
-    pub fn restore_peers(
+    pub fn restore_db_peers(
         &self,
         db: rdb::Db,
     ) -> Result<(), crate::error::Error> {
@@ -94,10 +100,8 @@ impl BfdContext {
     pub fn add_new_peer(
         &self,
         db: rdb::Db,
-        request: TypedBody<BfdPeerConfig>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        let rq = request.into_inner();
-
+        rq: BfdPeerConfig,
+    ) -> Result<(), HttpError> {
         let mut daemon = lock!(self.daemon);
 
         db.clone()
@@ -113,7 +117,7 @@ impl BfdContext {
             return Err(crate::error::Error::Bfd(e).into());
         }
 
-        Ok(HttpResponseUpdatedNoContent())
+        Ok(())
     }
 
     /// Remove a BFD peer from the persistent DB and the running daemon.
@@ -121,16 +125,16 @@ impl BfdContext {
     pub async fn remove_peer(
         &self,
         db: rdb::Db,
-        peer: DeleteBfdPeerPathParams,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        peer: IpAddr,
+    ) -> Result<(), HttpError> {
         let handle = {
             let mut daemon = lock!(self.daemon);
-            db.remove_bfd_neighbor(peer.addr).map_err(|e| {
+            db.remove_bfd_neighbor(peer).map_err(|e| {
                 HttpError::for_internal_error(
                     InlineErrorChain::new(&e).to_string(),
                 )
             })?;
-            daemon.remove_peer(peer.addr)
+            daemon.remove_peer(peer)
         };
 
         if let Some(handle) = handle {
@@ -147,7 +151,7 @@ impl BfdContext {
             handle.shutdown().await;
         }
 
-        Ok(HttpResponseUpdatedNoContent {})
+        Ok(())
     }
 
     pub fn session_counters(&self) -> Vec<(IpAddr, Arc<SessionCounters>)> {
@@ -155,5 +159,143 @@ impl BfdContext {
             .sessions_iter()
             .map(|(ip, session)| (*ip, Arc::clone(session.counters())))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BfdContext;
+    use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
+    use mg_common::lock;
+    use slog::Logger;
+    use std::net::Ipv4Addr;
+    use std::num::NonZeroU8;
+    use tempfile::TempDir;
+
+    fn setup() -> (BfdContext, rdb::Db, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db = rdb::Db::new(temp_dir.path().to_str().unwrap(), log.clone())
+            .unwrap();
+        (BfdContext::new_for_test(log), db, temp_dir)
+    }
+
+    fn peer_config(host: u8, mode: SessionMode) -> BfdPeerConfig {
+        BfdPeerConfig {
+            peer: Ipv4Addr::new(127, 0, 1, host).into(),
+            listen: Ipv4Addr::LOCALHOST.into(),
+            required_rx: 100_000,
+            detection_threshold: NonZeroU8::new(3).unwrap(),
+            mode,
+        }
+    }
+
+    fn start_runtime_peer(
+        bfd: &BfdContext,
+        db: rdb::Db,
+        config: BfdPeerConfig,
+    ) {
+        lock!(bfd.daemon).add_peer(db, config.into()).unwrap();
+    }
+
+    fn persisted_and_running_configs(
+        bfd: &BfdContext,
+        db: &rdb::Db,
+    ) -> (Vec<BfdPeerConfig>, Vec<BfdPeerConfig>) {
+        let persisted = db.get_bfd_neighbors().unwrap();
+        let running = bfd
+            .get_peers()
+            .unwrap()
+            .into_iter()
+            .map(|peer| peer.config)
+            .collect();
+        (persisted, running)
+    }
+
+    #[tokio::test]
+    async fn add_peer_writes_db() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(1, SessionMode::SingleHop);
+
+        bfd.add_new_peer(db.clone(), config).unwrap();
+
+        assert_eq!(db.get_bfd_neighbors().unwrap(), vec![config]);
+        bfd.remove_peer(db, config.peer).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_peer_deletes_db_entry() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(2, SessionMode::MultiHop);
+        db.add_bfd_neighbor(config).unwrap();
+        start_runtime_peer(&bfd, db.clone(), config);
+
+        bfd.remove_peer(db.clone(), config.peer).await.unwrap();
+
+        assert!(db.get_bfd_neighbors().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_peer_rolls_back_db_on_runtime_error() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(3, SessionMode::SingleHop);
+        start_runtime_peer(&bfd, db.clone(), config);
+
+        bfd.add_new_peer(db.clone(), config).unwrap_err();
+
+        assert_eq!(
+            persisted_and_running_configs(&bfd, &db),
+            (vec![], vec![config]),
+        );
+        bfd.remove_peer(db, config.peer).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn add_peer_skips_runtime_on_db_conflict() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(4, SessionMode::SingleHop);
+        db.add_bfd_neighbor(config).unwrap();
+
+        bfd.add_new_peer(db.clone(), config).unwrap_err();
+
+        assert_eq!(
+            persisted_and_running_configs(&bfd, &db),
+            (vec![config], vec![]),
+        );
+        bfd.remove_peer(db, config.peer).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn restore_peers_leaves_db_unchanged() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(5, SessionMode::SingleHop);
+        db.add_bfd_neighbor(config).unwrap();
+
+        bfd.restore_db_peers(db.clone()).unwrap();
+
+        assert_eq!(db.get_bfd_neighbors().unwrap(), vec![config]);
+        bfd.remove_peer(db, config.peer).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_peer_cleans_up_db_only_peer() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(6, SessionMode::SingleHop);
+        db.add_bfd_neighbor(config).unwrap();
+
+        bfd.remove_peer(db.clone(), config.peer).await.unwrap();
+
+        assert_eq!(persisted_and_running_configs(&bfd, &db), (vec![], vec![]));
+    }
+
+    #[tokio::test]
+    async fn remove_peer_cleans_up_runtime_only_peer() {
+        let (bfd, db, _temp_dir) = setup();
+        let config = peer_config(7, SessionMode::SingleHop);
+        start_runtime_peer(&bfd, db.clone(), config);
+
+        bfd.remove_peer(db.clone(), config.peer).await.unwrap();
+
+        assert_eq!(persisted_and_running_configs(&bfd, &db), (vec![], vec![]));
     }
 }
