@@ -1,0 +1,22 @@
+name: macOS binaries
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+
+    - run: cargo build -p mgd --release --no-default-features
+
+    - name: Upload mgd binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: mgd-${{ github.sha }}
+        path: target/release/mgd
