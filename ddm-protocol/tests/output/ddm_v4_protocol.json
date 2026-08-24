@@ -205,6 +205,7 @@
       }
     },
     "PullResponse": {
+      "description": "One page of a peer's route snapshot.\n\nThe underlay and tunnel sections are bounded by the fabric's prefix and tunnel endpoint counts, so they are carried whole on the first page. The multicast section has no such bound, since it grows with the product of groups, VNIs, sources, and path length, and is therefore paged.",
       "type": "object",
       "properties": {
         "multicast": {
@@ -216,6 +217,14 @@
             "$ref": "#/definitions/MulticastPathVector"
           },
           "uniqueItems": true
+        },
+        "next_page_token": {
+          "description": "Token for resuming multicast keyset pagination, or `None` on the final page.\n\nA responder that never pages omits the field, so an unpaged snapshot deserializes as a single final page. The token is produced and interpreted by the same responder and is opaque to the reader, so its encoding is not part of the negotiated protocol.\n\nReading every page matters because a withdrawal is synthesized from the difference between what the reader has imported from this peer and what the snapshot announces. A partial snapshot would read as a withdrawal of everything the unread pages hold.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tunnel": {
           "type": [

@@ -7,7 +7,7 @@
 //! plumbing that drains received updates into the local DB and the
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
-use super::{ExchangeError, reconcile_multicast_withdrawals};
+use super::{ExchangeError, paging, reconcile_multicast_withdrawals};
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
@@ -24,14 +24,17 @@ use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
+use dropshot::EmptyScanParams;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
+use dropshot::PaginationParams;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use dropshot::WhichPage;
 use dropshot::{ApiDescriptionRegisterError, endpoint};
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Limited};
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -46,11 +49,6 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
-
-/// Bound on an entire pull request, from dispatch through to reading the full
-/// response. Pulls run on state machine threads, so a stalled peer must not
-/// block event handling.
-const PULL_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 pub struct HandlerContext {
@@ -88,10 +86,11 @@ impl ExchangeHandle {
         self.thread.abort();
     }
 
-    /// Rebind the handler's peer address after a renumber. The handler
-    /// assigns this address as the nexthop on every route it imports, so it
-    /// must track the state machine's view of the peer or else, post-renumber
-    /// imports leak under the prior address.
+    /// Rebind the peer address used by the handler after a renumber.
+    ///
+    /// The handler assigns this address as the nexthop on every route it
+    /// imports, so it must track the state machine's view of the peer or else,
+    /// post-renumber imports leak under the prior address.
     pub fn renumber_peer(&self, peer: Ipv6Addr) {
         // Safe to block: callers run on state machine threads, outside
         // the runtime.
@@ -109,7 +108,17 @@ pub(crate) fn announce_underlay(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::announce(prefixes);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(
+        SendCtx {
+            ctx,
+            config,
+            addr,
+            version,
+            rt,
+            log,
+        },
+        update.into(),
+    )
 }
 
 pub(crate) fn announce_tunnel(
@@ -122,7 +131,17 @@ pub(crate) fn announce_tunnel(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(
+        SendCtx {
+            ctx,
+            config,
+            addr,
+            version,
+            rt,
+            log,
+        },
+        update.into(),
+    )
 }
 
 pub(crate) fn withdraw_underlay(
@@ -135,7 +154,17 @@ pub(crate) fn withdraw_underlay(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::withdraw(prefixes);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(
+        SendCtx {
+            ctx,
+            config,
+            addr,
+            version,
+            rt,
+            log,
+        },
+        update.into(),
+    )
 }
 
 pub(crate) fn withdraw_tunnel(
@@ -148,7 +177,17 @@ pub(crate) fn withdraw_tunnel(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(
+        SendCtx {
+            ctx,
+            config,
+            addr,
+            version,
+            rt,
+            log,
+        },
+        update.into(),
+    )
 }
 
 pub(crate) fn announce_multicast(
@@ -160,8 +199,18 @@ pub(crate) fn announce_multicast(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = MulticastUpdate::announce(groups);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_multicast(
+        SendCtx {
+            ctx,
+            config,
+            addr,
+            version,
+            rt,
+            log,
+        },
+        groups,
+        MulticastUpdate::announce,
+    )
 }
 
 pub(crate) fn withdraw_multicast(
@@ -173,19 +222,96 @@ pub(crate) fn withdraw_multicast(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = MulticastUpdate::withdraw(groups);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_multicast(
+        SendCtx {
+            ctx,
+            config,
+            addr,
+            version,
+            rt,
+            log,
+        },
+        groups,
+        MulticastUpdate::withdraw,
+    )
 }
 
+/// The peer an update is addressed to, and the resources used to send it.
+#[derive(Clone)]
+struct SendCtx<'a> {
+    ctx: &'a SmContext,
+    config: Config,
+    addr: Ipv6Addr,
+    version: Version,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+}
+
+/// Send a multicast exchange set to a peer, splitting it across as many pushes
+/// as the body limit requires.
+///
+/// Chunking makes an update non-atomic at the receiver, which is safe here
+/// because `reconcile_multicast_withdrawals` partitions origins so that the
+/// announce and withdraw sets are disjoint. No chunk can contradict another,
+/// so a partially applied update converges rather than flapping, and the
+/// peer's periodic V4 pull repairs whatever a failed chunk left behind.
+fn send_multicast(
+    send: SendCtx<'_>,
+    groups: HashSet<MulticastPathVector>,
+    build: fn(HashSet<MulticastPathVector>) -> MulticastUpdate,
+) -> Result<(), ExchangeError> {
+    // Multicast first appears on the wire in V4. For an earlier peer
+    // `send_update` downconverts to an empty payload and skips the send, so
+    // batching would only produce repeated skips.
+    if send.version < Version::V4 {
+        let update = build(groups);
+        return send_update(send, update.into());
+    }
+
+    let batches =
+        paging::batch_multicast(groups, paging::MAX_EXCHANGE_BODY_BYTES)?;
+    let total = batches.len();
+    for (i, batch) in batches.into_iter().enumerate() {
+        let update = build(batch);
+        let chunk = i + 1;
+        if let Err(e) = send_update(send.clone(), update.into()) {
+            err!(
+                send.log,
+                send.config.if_name,
+                "multicast chunk {chunk} of {total} to {}: {e}",
+                send.addr,
+            );
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// Fetch one page of a peer's V4 snapshot, resuming after `page_token` when the
+/// preceding page reported more to read.
+///
+/// The token is echoed back to the peer that issued it. It uses Dropshot's
+/// URL-safe page-token alphabet, including its optional padding.
 pub(crate) fn do_pull_v4(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
+    page_token: Option<&str>,
 ) -> Result<PullResponse, ExchangeError> {
     let if_index = ctx.config.if_index;
     let port = ctx.config.exchange_port;
-    let uri = format!("http://[{addr}%{if_index}]:{port}/v4/pull");
-    let body = do_pull_common(uri, rt)?;
+    let base = format!("http://[{addr}%{if_index}]:{port}/v4/pull");
+    let uri = match page_token {
+        Some(token) => format!("{base}?{}", paging::page_token_query(token)?),
+        None => base,
+    };
+    let timeout = Duration::from_millis(ctx.config.exchange_timeout);
+    let body = do_pull_common(
+        uri,
+        timeout,
+        Some(paging::MAX_EXCHANGE_BODY_BYTES),
+        rt,
+    )?;
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -197,7 +323,8 @@ pub(crate) fn do_pull_v3(
     let if_index = ctx.config.if_index;
     let port = ctx.config.exchange_port;
     let uri = format!("http://[{addr}%{if_index}]:{port}/v3/pull");
-    let body = do_pull_common(uri, rt)?;
+    let timeout = Duration::from_millis(ctx.config.exchange_timeout);
+    let body = do_pull_common(uri, timeout, None, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -210,7 +337,8 @@ pub(crate) fn do_pull_v2(
         "http://[{}%{}]:{}/v2/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
-    let body = do_pull_common(uri, rt)?;
+    let timeout = Duration::from_millis(ctx.config.exchange_timeout);
+    let body = do_pull_common(uri, timeout, None, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -231,6 +359,8 @@ fn require_success<B>(
 /// make a Dropshot JSON error look like an empty route set.
 fn do_pull_common(
     uri: String,
+    timeout_duration: Duration,
+    max_body_bytes: Option<usize>,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<Bytes, ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
@@ -239,16 +369,37 @@ fn do_pull_common(
         .method(hyper::Method::GET)
         .uri(&uri)
         .body(http_body_util::Empty::<Bytes>::new())
-        .unwrap();
+        .map_err(|e| ExchangeError::InvalidUri(e.to_string()))?;
 
     let resp = client.request(req);
 
     // The timeout covers reading the body too, since a peer that stalls
-    // mid-response would otherwise block indefinitely.
+    // mid-response would otherwise block indefinitely. V4 responses are capped
+    // below. V2 and V3 retain the legacy behavior and are read without a size
+    // limit, since neither carries the unbounded multicast section that the
+    // cap exists for.
     rt.block_on(async move {
-        timeout(PULL_TIMEOUT, async {
+        timeout(timeout_duration, async {
             let resp = require_success(resp.await?)?;
-            Ok(resp.into_body().collect().await?.to_bytes())
+            // The Dropshot request cap bounds what a peer may PUT to us. It
+            // does not constrain a pull response, so the V4 reader applies
+            // its own bound here.
+            let body = resp.into_body();
+            match max_body_bytes {
+                Some(limit) => Limited::new(body, limit)
+                    .collect()
+                    .await
+                    .map(|b| b.to_bytes())
+                    .map_err(|e| match e.downcast::<hyper::Error>() {
+                        Ok(e) => ExchangeError::Hyper(*e),
+                        Err(_) => ExchangeError::ResponseTooLarge { limit },
+                    }),
+                None => body
+                    .collect()
+                    .await
+                    .map(|b| b.to_bytes())
+                    .map_err(ExchangeError::Hyper),
+            }
         })
         .await?
     })
@@ -267,6 +418,10 @@ fn do_pull_common(
 /// A non-successful HTTP response aborts the pull before decoding or
 /// reconciliation, leaving the routes previously imported from that peer
 /// unchanged.
+///
+/// Only V4 carries multicast and pages. Earlier versions take the whole
+/// snapshot in one response and have no withdrawals to reconcile, since their
+/// underlay and tunnel imports keep push-only withdraw semantics.
 pub(crate) fn pull(
     ctx: SmContext,
     addr: Ipv6Addr,
@@ -274,86 +429,154 @@ pub(crate) fn pull(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
     mode: UpdateMode,
+    stop: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(), ExchangeError> {
+    if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+        return Ok(());
+    }
+
     let pr: PullResponse = match version {
         Version::V2 => {
             v3::PullResponse::from(do_pull_v2(&ctx, &addr, &rt)?).into()
         }
         Version::V3 => do_pull_v3(&ctx, &addr, &rt)?.into(),
-        Version::V4 => do_pull_v4(&ctx, &addr, &rt)?,
-    };
-
-    // A multicast-capable peer's pull response carries its complete
-    // advertisable multicast set, so an imported multicast route from this
-    // peer that is absent from the response indicates a withdraw we missed.
-    // Therefore, we synthesize withdraws for the absentee vectors so that the
-    // periodic pull repairs subtractive as well as additive drift.
-    //
-    // Underlay and tunnel imports keep their push-only withdraw semantics.
-    // Multicast reconciliation matters more because a stale import holds a
-    // DPD replication member. Reconciliation applies only to peers that
-    // negotiated wire protocol version 4 or later, the first version to
-    // carry multicast. An earlier response has no multicast half, and its
-    // converted empty set must not be read as a full withdraw.
-    let mcast_withdraw: HashSet<MulticastPathVector> = if version < Version::V4
-    {
-        HashSet::new()
-    } else {
-        let announced: HashSet<MulticastOrigin> = pr
-            .multicast
-            .iter()
-            .flatten()
-            .filter_map(|pv| MulticastOrigin::try_from(&pv.origin).ok())
-            .collect();
-        ctx.db
-            .imported_mcast()
-            .iter()
-            .filter(|route| {
-                route.nexthop == addr && !announced.contains(&route.origin)
-            })
-            .map(|route| MulticastPathVector {
-                origin: (&route.origin).into(),
-                path: Vec::new(),
-            })
-            .collect()
-    };
-
-    let mut update = Update::announce(pr);
-    if !mcast_withdraw.is_empty() {
-        dbg!(
-            log,
-            ctx.config.if_name,
-            "pull reconcile: withdrawing {} stale multicast routes",
-            mcast_withdraw.len(),
-        );
-        match update.multicast.as_mut() {
-            Some(m) => m.withdraw = mcast_withdraw,
-            None => {
-                update.multicast =
-                    Some(MulticastUpdate::withdraw(mcast_withdraw))
-            }
+        Version::V4 => {
+            return pull_v4(ctx, addr, rt, log, mode, stop);
         }
-    }
+    };
 
     let handler = HandlerContext {
         ctx,
         peer: addr,
         log,
     };
-    handle_update(&update, &handler, mode);
+    handle_update(&Update::announce(pr), &handler, mode);
 
     Ok(())
 }
 
-fn send_update(
-    ctx: &SmContext,
-    config: Config,
-    update: Update,
+/// A bound on the pages one V4 pull will read.
+///
+/// A responder that keeps issuing tokens would otherwise hold the reader in a
+/// pagination sequence that never ends. At the body limit, this allows a
+/// multicast exchange set far beyond any rack's, so reaching it means the peer
+/// is faulty rather than large.
+const MAX_PULL_PAGES: usize = 64;
+
+/// Read a peer's V4 snapshot using keyset pagination, importing each page and
+/// reconciling withdrawals once pagination completes.
+///
+/// Each page's announcements are imported on arrival rather than accumulated.
+/// Announcements are additive, so aborted pagination leaves a subset of the
+/// peer's snapshot imported and synthesizes no withdrawals, which the next
+/// cycle then repairs. Only the announced group identities are carried across
+/// pages, so the reader holds one page plus that set rather than the whole
+/// snapshot.
+///
+/// Withdrawal synthesis waits for the final page because it reads an imported
+/// route the peer did not announce as one whose withdraw was missed. Against a
+/// partial snapshot that treats every unread group as withdrawn, which would
+/// drain the replication members those groups still need.
+fn pull_v4(
+    ctx: SmContext,
     addr: Ipv6Addr,
-    version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
+    mode: UpdateMode,
+    stop: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(), ExchangeError> {
+    let handler = HandlerContext {
+        ctx: ctx.clone(),
+        peer: addr,
+        log: log.clone(),
+    };
+
+    let mut announced: HashSet<MulticastOrigin> = HashSet::new();
+    let mut page_token: Option<String> = None;
+    let mut pages = 0usize;
+
+    loop {
+        if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+            return Ok(());
+        }
+
+        let pr = do_pull_v4(&ctx, &addr, &rt, page_token.as_deref())?;
+        if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+            return Ok(());
+        }
+        pages += 1;
+
+        announced.extend(
+            pr.multicast
+                .iter()
+                .flatten()
+                .filter_map(|pv| MulticastOrigin::try_from(&pv.origin).ok()),
+        );
+
+        page_token = pr.next_page_token.clone();
+        handle_update(&Update::announce(pr), &handler, mode);
+
+        if page_token.is_none() {
+            break;
+        }
+        if pages >= MAX_PULL_PAGES {
+            return Err(ExchangeError::PullTooManyPages {
+                limit: MAX_PULL_PAGES,
+            });
+        }
+    }
+
+    if pages > 1 {
+        dbg!(
+            log,
+            ctx.config.if_name,
+            "pull read {pages} pages from {addr}"
+        );
+    }
+
+    if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+        return Ok(());
+    }
+
+    let withdraw: HashSet<MulticastPathVector> = ctx
+        .db
+        .imported_mcast()
+        .iter()
+        .filter(|route| {
+            route.nexthop == addr && !announced.contains(&route.origin)
+        })
+        .map(|route| MulticastPathVector {
+            origin: (&route.origin).into(),
+            path: Vec::new(),
+        })
+        .collect();
+
+    if !withdraw.is_empty() {
+        dbg!(
+            log,
+            ctx.config.if_name,
+            "pull reconcile: withdrawing {} stale multicast routes",
+            withdraw.len(),
+        );
+        handle_update(
+            &MulticastUpdate::withdraw(withdraw).into(),
+            &handler,
+            mode,
+        );
+    }
+
+    Ok(())
+}
+
+fn send_update(send: SendCtx<'_>, update: Update) -> Result<(), ExchangeError> {
+    let SendCtx {
+        ctx,
+        config,
+        addr,
+        version,
+        rt,
+        log,
+    } = send;
     // The update arrives in the latest wire form. Downconvert through
     // consecutive versions when a peer negotiated an older protocol.
     // Conversion drops content the peer's version cannot represent (multicast
@@ -440,6 +663,9 @@ pub fn handler(
 
     let config = ConfigDropshot {
         bind_address: sa.into(),
+        // Dropshot's default request body cap is 1 KiB, which is too small for
+        // batched V4 multicast updates.
+        default_request_body_max_bytes: paging::MAX_EXCHANGE_BODY_BYTES,
         ..Default::default()
     };
 
@@ -740,14 +966,54 @@ async fn pull_handler_v3(
 #[endpoint { method = GET, path = "/v4/pull" }]
 async fn pull_handler_v4(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    query: dropshot::Query<
+        PaginationParams<EmptyScanParams, paging::MulticastPageSelector>,
+    >,
 ) -> Result<HttpResponseOk<PullResponse>, HttpError> {
+    let page = query.into_inner();
     let ctx = ctx.context().lock().await.clone();
-    let (underlay, tunnel) = collect_underlay_tunnel(&ctx)?;
-    let multicast = collect_multicast(&ctx)?;
+    let after = match page.page {
+        WhichPage::First(_) => None,
+        WhichPage::Next(selector) => Some(selector.after()),
+    };
+
+    // The bounded sections ride on the first page. Repeating the whole underlay
+    // and tunnel table on every page would cost more than the multicast
+    // continuation it accompanies.
+    let (underlay, tunnel) = if after.is_none() {
+        collect_underlay_tunnel(&ctx)?
+    } else {
+        (HashSet::new(), HashSet::new())
+    };
+
+    let underlay = crate::non_empty(underlay);
+    let tunnel = crate::non_empty(tunnel);
+
+    // The sections already placed on this page leave that much less room for
+    // the multicast page accompanying them.
+    let envelope =
+        paging::response_envelope_len(underlay.as_ref(), tunnel.as_ref())
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let groups = paging::group_by_origin(collect_multicast(&ctx)?);
+    let (multicast, next_page_token) = paging::page_multicast(
+        &groups,
+        after.as_ref(),
+        paging::MAX_EXCHANGE_BODY_BYTES,
+        envelope,
+    )
+    .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let next_page_token = next_page_token
+        .as_ref()
+        .map(paging::encode_page_token)
+        .transpose()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
     Ok(HttpResponseOk(PullResponse {
-        underlay: crate::non_empty(underlay),
-        tunnel: crate::non_empty(tunnel),
+        underlay,
+        tunnel,
         multicast: crate::non_empty(multicast),
+        next_page_token,
     }))
 }
 

@@ -90,10 +90,10 @@
 //! The first byte indicates the version. The second byte is a flags bitfield.
 //! The first position `S` indicates a solicitation. The second position `A`
 //! indicates an advertisement. The third position `C` indicates DDMv4
-//! (multicast) capability, advertised independently of the version byte so old
+//! (multicast) capability, advertised independently of the version byte so
 //! peers that ignore it still peer at the floor version. All other positions
 //! are reserved for future use. The third byte indicates the kind of router.
-//! Current values are 0 for a server router and 1 for a transit routers. The
+//! Current values are 0 for a server router and 1 for a transit router. The
 //! fourth byte is a hostname length followed directly by a hostname of up to
 //! 255 bytes in length.
 

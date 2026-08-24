@@ -15,7 +15,7 @@ impl From<v3::Update> for v4::Update {
         Self {
             underlay: value.underlay,
             tunnel: value.tunnel,
-            // V3 has no multicast half.
+            // V3 has no multicast section.
             multicast: None,
         }
     }
@@ -23,7 +23,7 @@ impl From<v3::Update> for v4::Update {
 
 impl From<v4::Update> for v3::Update {
     fn from(value: v4::Update) -> Self {
-        // The multicast half is not representable in the V3 wire form and is
+        // The multicast section is not representable in the V3 wire form and is
         // dropped here. A V3 peer would likewise ignore the unknown field.
         Self {
             underlay: value.underlay,
@@ -38,6 +38,10 @@ impl From<v3::PullResponse> for v4::PullResponse {
             underlay: value.underlay,
             tunnel: value.tunnel,
             multicast: None,
+            // Only the multicast section pages, and V3 has no multicast
+            // section, so an upconverted response is always a complete
+            // snapshot.
+            next_page_token: None,
         }
     }
 }

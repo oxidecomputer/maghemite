@@ -7,7 +7,7 @@
 //! EXIST BUT THEIR DEFINITIONS SHALL NEVER CHANGE.
 //!
 //! Version 4 extends version 3 with multicast group subscription propagation
-//! (RFD 488). The underlay and tunnel halves are unchanged from version 3 and
+//! (RFD 488). The underlay and tunnel sections are unchanged from version 3
 //! are reused directly. The multicast wire types are defined here as plain,
 //! self-contained structures: this crate must stay free of `omicron-common`,
 //! so the validated forms (`UnderlayMulticastIpv6`, `Vni`) used by the admin
@@ -32,7 +32,7 @@ pub struct Update {
 }
 
 impl Update {
-    /// Build an `Update` whose halves carry the announcements from the
+    /// Build an `Update` whose sections carry the announcements from the
     /// [`PullResponse`] `pr`.
     pub fn announce(pr: PullResponse) -> Self {
         Self {
@@ -73,11 +73,32 @@ impl From<MulticastUpdate> for Update {
     }
 }
 
+/// One page of a peer's route snapshot.
+///
+/// The underlay and tunnel sections are bounded by the fabric's prefix and
+/// tunnel endpoint counts, so they are carried whole on the first page. The
+/// multicast section has no such bound, since it grows with the product of
+/// groups, VNIs, sources, and path length, and is therefore paged.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct PullResponse {
     pub underlay: Option<HashSet<v3::PathVector>>,
     pub tunnel: Option<HashSet<v3::TunnelOrigin>>,
     pub multicast: Option<HashSet<MulticastPathVector>>,
+
+    /// Token for resuming multicast keyset pagination, or `None` on the final
+    /// page.
+    ///
+    /// A responder that never pages omits the field, so an unpaged snapshot
+    /// deserializes as a single final page. The token is produced and
+    /// interpreted by the same responder and is opaque to the reader, so its
+    /// encoding is not part of the negotiated protocol.
+    ///
+    /// Reading every page matters because a withdrawal is synthesized from
+    /// the difference between what the reader has imported from this peer and
+    /// what the snapshot announces. A partial snapshot would read as a
+    /// withdrawal of everything the unread pages hold.
+    #[serde(default)]
+    pub next_page_token: Option<String>,
 }
 
 /// Multicast group subscription updates.
@@ -178,6 +199,30 @@ impl Eq for MulticastOrigin {}
 impl std::hash::Hash for MulticastOrigin {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.identity().hash(state);
+    }
+}
+
+/// Total order over group identities, used for multicast keyset pagination.
+///
+/// Ordering by identity rather than by position is what makes keyset
+/// pagination safe against concurrent change. A cursor names the last group
+/// read, so a group present for the whole scan is read exactly once even if
+/// groups are added or removed around it. An index-based cursor would let an
+/// insertion shift a later group backwards past the cursor, and the reader
+/// would treat the group it never saw as withdrawn.
+///
+/// Ordering agrees with [`PartialEq`], comparing the same identity that
+/// equality and hashing use, so distinct entries never compare equal and a
+/// cursor cannot skip one.
+impl Ord for MulticastOrigin {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.identity().cmp(&other.identity())
+    }
+}
+
+impl PartialOrd for MulticastOrigin {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -306,7 +351,7 @@ mod test {
     }
 
     // A v4 node reading a populated v3 update keeps the underlay and tunnel
-    // halves and defaults the absent multicast half to None.
+    // sections and defaults the absent multicast section to None.
     #[test]
     fn populated_v3_update_deserializes_as_v4() {
         let v3 = v3::Update {
@@ -330,6 +375,7 @@ mod test {
             underlay: None,
             tunnel: None,
             multicast: Some([pv].into_iter().collect()),
+            next_page_token: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: PullResponse = serde_json::from_str(&json).unwrap();
@@ -346,6 +392,7 @@ mod test {
             underlay: None,
             tunnel: None,
             multicast: Some([pv].into_iter().collect()),
+            next_page_token: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         // A v3 peer drops the multicast field.
@@ -386,9 +433,9 @@ mod test {
         v3::TunnelUpdate::announce([origin].into_iter().collect())
     }
 
-    // A v4 update carrying all three halves must keep its underlay and tunnel
-    // halves intact when downconverted for older peers, while the multicast
-    // half (which has no v3 or v2 wire form) is dropped.
+    // A v4 update carrying all three sections must keep its underlay and
+    // tunnel sections intact when downconverted for older peers, while the
+    // multicast section (which has no v3 or v2 wire form) is dropped.
     #[test]
     fn mixed_update_down_conversion_preserves_underlay_and_tunnel() {
         let update = Update {

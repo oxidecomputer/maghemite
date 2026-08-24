@@ -29,10 +29,9 @@ const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
 const SOLICIT: u8 = 1;
 const ADVERTISE: u8 = 1 << 1;
-// Advertises DDMv4 (multicast) capability without raising the discovery version
-// byte past what old peers accept (the byte stays at the V2 floor). Following
-// RFC 5492, peers ignore capability bits they do not understand, so this is
-// backward compatible.
+// Advertises DDMv4 (multicast) capability without raising the discovery
+// version byte past what old peers accept. Following RFC 5492, peers ignore
+// capability bits they do not understand.
 const MCAST_CAPABLE: u8 = 1 << 2;
 
 /// Reinterpret an initialized prefix of `[MaybeUninit<u8>]` as `[u8]`.
@@ -369,9 +368,8 @@ enum NegotiatedVersion {
 /// The version byte is a backward-compatible floor ([`Version::V2`]) that all
 /// deployed peers accept. Capability rides flags rather than the byte:
 /// [`MCAST_CAPABLE`] signals [`Version::V4`], so a peer at the floor that sets
-/// it negotiates V4 while older peers that ignore the flag still session at
-/// the floor. A conforming peer never advertises a byte above the known
-/// maximum.
+/// it negotiates V4 while older peers that ignore the flag still session at the
+/// floor. A conforming peer never advertises a byte above the known maximum.
 ///
 /// A byte outside the known range is therefore a malformed or incompatible
 /// peer, not a capability hint, so it is rejected rather than capped. See
@@ -567,6 +565,8 @@ mod tests {
             (2, MCAST_CAPABLE, Use(Version::V4)),
             (3, MCAST_CAPABLE, Use(Version::V4)),
             (4, MCAST_CAPABLE, Use(Version::V4)),
+            // Reserved flags are ignored rather than rejected.
+            (2, 1 << 3, Use(Version::V2)),
             // Out-of-range bytes are rejected, flag or not.
             (0, 0, Rejected),
             (1, 0, Rejected),
