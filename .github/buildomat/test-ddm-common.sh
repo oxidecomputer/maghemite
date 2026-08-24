@@ -1,8 +1,10 @@
 #!/bin/bash
 
+source .github/buildomat/common.sh
+
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=284c6830722548714128e63ea04bcca78ee27154
-export SIDECAR_LITE_VERSION=6f3311e8acd7e7e95c167aab61188355a93afe72
+export SIDECAR_LITE_VERSION=461cbe1926b93b20c2f43ad5cd9007b193db61a6
 export DENDRITE_VERSION=0d48b5a39dc49d30b228ae01f04b8cc27a161e74
 
 function cleanup {
@@ -57,12 +59,7 @@ popd
 
 banner "install"
 for p in clang-15 pkg-config brand/omicron1 brand/omicron1/tools ; do
-    set +o errexit
-    pkg info $p | grep -qi installed
-    if [[ $? != 0 ]]; then
-        set -o errexit
-        pfexec pkg install $p
-    fi
+    pfexec pkg install $p
 done
 
 pfexec svcadm enable baseline
