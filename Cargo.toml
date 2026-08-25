@@ -92,8 +92,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 hostname = "0.4"
 thiserror = "2.0"
 dropshot = { version = "0.17.1", features = [ "usdt-probes" ] }
-dropshot-api-manager = "0.7.2"
-dropshot-api-manager-types = "0.7.2"
+dropshot-api-manager = "0.8.0"
+dropshot-api-manager-types = "0.8.0"
 expectorate = "1.3.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
