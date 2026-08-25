@@ -5068,9 +5068,9 @@ dependencies = [
 
 [[package]]
 name = "oxnet"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a1d55676fd6e2fe06971c05d176c7aca3d2b7d6ed1244ae8026beb1e7b89058"
+checksum = "2c18d1166306acc00465fd792bab330933eb7587753ff2f15ca3aa0427163dd4"
 dependencies = [
  "ipnetwork",
  "schemars 0.8.22",
@@ -7311,7 +7311,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
