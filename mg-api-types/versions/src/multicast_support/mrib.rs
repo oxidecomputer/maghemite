@@ -21,10 +21,8 @@ use client_common::address::{
     IPV4_SSM_RESERVED_SUBNET, IPV6_MULTICAST_RANGE, UNDERLAY_MULTICAST_SUBNET,
     is_ssm_address,
 };
-use client_common::multicast::UnderlayMulticastError;
 pub use client_common::multicast::UnderlayMulticastIpv6;
-use client_common::vni::VniError;
-pub use client_common::vni::{DEFAULT_MULTICAST_VNI, MAX_VNI, Vni};
+pub use client_common::vni::{Vni, VniError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -44,31 +42,6 @@ pub enum MulticastError {
     /// A database key could not be decoded.
     #[error("db key error {0}")]
     DbKey(String),
-}
-
-// Bridge errors from the shared `client_common` newtypes so call sites using
-// `?` with `UnderlayMulticastIpv6::new` or `Vni::new` continue to surface
-// validation failures through `MulticastError`.
-impl From<UnderlayMulticastError> for MulticastError {
-    fn from(value: UnderlayMulticastError) -> Self {
-        match value {
-            UnderlayMulticastError::NotInSubnet { addr } => {
-                MulticastError::Validation(format!(
-                    "underlay address {addr} is not within \
-                     UNDERLAY_MULTICAST_SUBNET"
-                ))
-            }
-            UnderlayMulticastError::InvalidIpv6(e) => {
-                MulticastError::Validation(format!("invalid IPv6 address: {e}"))
-            }
-        }
-    }
-}
-
-impl From<VniError> for MulticastError {
-    fn from(value: VniError) -> Self {
-        MulticastError::Validation(value.to_string())
-    }
 }
 
 /// Input for adding static multicast routes.

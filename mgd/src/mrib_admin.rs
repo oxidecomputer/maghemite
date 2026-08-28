@@ -30,13 +30,19 @@ fn origin_to_static_only(origin: Option<RouteOriginFilter>) -> Option<bool> {
     }
 }
 
-pub async fn get_mrib_imported(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    query: dropshot::Query<MribQuery>,
-) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
-    let ctx = rqctx.context();
-    let q = query.into_inner();
+/// Which MRIB table a query targets: imported routes (`mrib_in`) or
+/// selected, RPF-validated routes (`mrib_loc`).
+#[derive(Clone, Copy)]
+enum MribTable {
+    Imported,
+    Selected,
+}
 
+fn get_mrib(
+    ctx: &HandlerContext,
+    q: MribQuery,
+    table: MribTable,
+) -> Result<Vec<MulticastRoute>, HttpError> {
     // If group is provided, look up a specific route
     if let Some(group_addr) = q.group {
         let group = MulticastAddr::try_from(group_addr).map_err(|e| {
@@ -47,18 +53,41 @@ pub async fn get_mrib_imported(
         })?;
         let key = MulticastRouteKey::new(q.source, group, q.vni)
             .map_err(|e| HttpError::for_bad_request(None, format!("{e}")))?;
-        let route = ctx.db.get_mcast_route(&key).ok_or_else(|| {
-            HttpError::for_not_found(None, format!("route {key} not found"))
-        })?;
-        return Ok(HttpResponseOk(vec![route]));
+        let route = match table {
+            MribTable::Imported => {
+                ctx.db.get_mcast_route(&key).ok_or_else(|| {
+                    HttpError::for_not_found(
+                        None,
+                        format!("route {key} not found"),
+                    )
+                })?
+            }
+            MribTable::Selected => {
+                ctx.db.get_selected_mcast_route(&key).ok_or_else(|| {
+                    HttpError::for_not_found(
+                        None,
+                        format!("route {key} not found in mrib_loc"),
+                    )
+                })?
+            }
+        };
+        return Ok(vec![route]);
     }
 
     // Otherwise, list all routes with filters
-    let routes = ctx.db.mrib_list(
+    Ok(ctx.db.mrib_list(
         q.address_family,
         origin_to_static_only(q.route_origin),
-        false, // `mrib_in`
-    );
+        matches!(table, MribTable::Selected),
+    ))
+}
+
+pub async fn get_mrib_imported(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    query: dropshot::Query<MribQuery>,
+) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
+    let routes =
+        get_mrib(rqctx.context(), query.into_inner(), MribTable::Imported)?;
     Ok(HttpResponseOk(routes))
 }
 
@@ -66,34 +95,8 @@ pub async fn get_mrib_selected(
     rqctx: RequestContext<Arc<HandlerContext>>,
     query: dropshot::Query<MribQuery>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
-    let ctx = rqctx.context();
-    let q = query.into_inner();
-
-    // If group is provided, look up a specific route
-    if let Some(group_addr) = q.group {
-        let group = MulticastAddr::try_from(group_addr).map_err(|e| {
-            HttpError::for_bad_request(
-                None,
-                format!("invalid group address: {e}"),
-            )
-        })?;
-        let key = MulticastRouteKey::new(q.source, group, q.vni)
-            .map_err(|e| HttpError::for_bad_request(None, format!("{e}")))?;
-        let route = ctx.db.get_selected_mcast_route(&key).ok_or_else(|| {
-            HttpError::for_not_found(
-                None,
-                format!("route {key} not found in mrib_loc"),
-            )
-        })?;
-        return Ok(HttpResponseOk(vec![route]));
-    }
-
-    // Otherwise, list all routes with filters
-    let routes = ctx.db.mrib_list(
-        q.address_family,
-        origin_to_static_only(q.route_origin),
-        true, // `mrib_loc`
-    );
+    let routes =
+        get_mrib(rqctx.context(), query.into_inner(), MribTable::Selected)?;
     Ok(HttpResponseOk(routes))
 }
 
