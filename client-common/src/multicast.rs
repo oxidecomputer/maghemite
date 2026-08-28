@@ -8,6 +8,11 @@
 //! Omicron can share a single definition without depending on
 //! `omicron_common`, which would form a dependency cycle.
 
+// TODO: Consolidate these types into `oxnet`, the cycle-free leaf crate that
+// maghemite, dendrite, and omicron already share, so the duplication can be
+// removed. `dpd_types::mcast::UnderlayMulticastIpv6` in dendrite carries an
+// independent copy today.
+
 use crate::address::UNDERLAY_MULTICAST_SUBNET;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -132,10 +137,6 @@ impl FromStr for OverlayMulticast {
 ///
 /// [RFC 4291 §2.7]: https://www.rfc-editor.org/rfc/rfc4291#section-2.7
 /// [RFD 488]: https://rfd.shared.oxide.computer/rfd/488
-// TODO: `dpd_types::mcast::UnderlayMulticastIpv6` in dendrite carries an
-// independent copy. Consolidate into `oxnet`, the cycle-free leaf crate that
-// maghemite, dendrite, and omicron already share, so the duplication can be
-// removed.
 #[derive(
     Debug,
     Copy,

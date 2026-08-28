@@ -8,6 +8,11 @@
 //! Omicron can share a single definition without depending on
 //! `omicron_common`, which would form a dependency cycle.
 
+// TODO: `omicron_common::api::external::Vni` and `oxide_vpc::api::Vni` carry
+// independent copies, forcing consumers to assert their constants stay equal.
+// Consolidate into `oxnet`, the cycle-free leaf crate that maghemite,
+// dendrite, and omicron already share, so the duplication can be removed.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Formatter};
