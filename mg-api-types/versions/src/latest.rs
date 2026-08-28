@@ -177,8 +177,6 @@ pub mod rdb {
 }
 
 pub mod mrib {
-    pub use crate::v13::mrib::DEFAULT_MULTICAST_VNI;
-    pub use crate::v13::mrib::MAX_VNI;
     pub use crate::v13::mrib::MribAddStaticRequest;
     pub use crate::v13::mrib::MribDeleteStaticRequest;
     pub use crate::v13::mrib::MribQuery;
@@ -197,6 +195,7 @@ pub mod mrib {
     pub use crate::v13::mrib::UnicastAddrV4;
     pub use crate::v13::mrib::UnicastAddrV6;
     pub use crate::v13::mrib::Vni;
+    pub use crate::v13::mrib::VniError;
 }
 
 pub mod ndp {
