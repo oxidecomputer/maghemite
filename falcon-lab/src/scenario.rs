@@ -43,6 +43,8 @@ use std::{
 };
 use tokio::time::timeout;
 
+mod bgp_md5;
+
 // Falcon derives dladm link names from the deployment name by appending the
 // node, endpoint kind, and link type, and illumos reserves one byte of
 // MAXLINKNAMELEN (32) for the NUL terminator. Check every deployment name at
@@ -206,12 +208,14 @@ impl Scenario for InteropScenario {
 #[derive(Copy, Clone, Debug, ValueEnum, strum::VariantArray)]
 pub(crate) enum Interop3LinkScenario {
     Bare,
+    BgpMd5,
 }
 
 impl Interop3LinkScenario {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Bare => "interop3_bare",
+            Self::BgpMd5 => "interop3_md5",
         }
     }
 }
@@ -225,6 +229,15 @@ impl Scenario for Interop3LinkScenario {
                 clear_staged_routing_configs()
                     .context("clear stale Junos config")?;
                 self.run_bare(options.persistent).await
+            }
+            Self::BgpMd5 => {
+                bgp_md5::run(
+                    self,
+                    options.persistent,
+                    options.diag_on_fail,
+                    options.commits,
+                )
+                .await
             }
         }
     }
@@ -304,7 +317,7 @@ struct BootedInterop {
     dpd: DpdClient,
     #[allow(dead_code)]
     mgmt_addr: IpAddr,
-    scenario: InteropScenario,
+    layout: InteropLayout,
     protocols: ProtocolDiagnostics,
 }
 
@@ -313,6 +326,35 @@ struct InteropRouters {
     cr1: FrrNode,
     cr2: EosNode,
     cr3: JuniperNode,
+}
+
+#[derive(Copy, Clone)]
+enum InteropLayout {
+    SingleLink(InteropScenario),
+    ThreeLinks(Interop3LinkScenario),
+}
+
+impl InteropLayout {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::SingleLink(scenario) => scenario.name(),
+            Self::ThreeLinks(scenario) => scenario.name(),
+        }
+    }
+
+    const fn front_ports(self) -> usize {
+        match self {
+            Self::SingleLink(_) => 4,
+            Self::ThreeLinks(_) => 12,
+        }
+    }
+
+    const fn peer_mgmt_addr(self) -> &'static str {
+        match self {
+            Self::SingleLink(_) => HELIOS_MGMT_ADDR,
+            Self::ThreeLinks(_) => "vioif3/dhcp",
+        }
+    }
 }
 
 struct InteropPeerStates<T> {
@@ -366,7 +408,7 @@ where
     };
     let mgd = bt.mgd.clone();
     let peer_mgd = bt.peer_mgd.clone();
-    let topo_name = bt.scenario.name();
+    let topo_name = bt.layout.name();
     let protocols = bt.protocols;
     let result = body(bt).await;
     if let Err(e) = &result {
@@ -503,7 +545,7 @@ async fn boot_mgd_duo(
 /// supplies a closure that populates a `JoinSet` with vendor-peer setup futures
 /// so that they run concurrently with the npuvm install.
 async fn boot_interop<F>(
-    scenario: InteropScenario,
+    layout: InteropLayout,
     persistent: bool,
     diag_on_fail: bool,
     commits: NpuvmCommits,
@@ -518,15 +560,31 @@ where
         Arc<Runner>,
     ) -> tokio::task::JoinSet<Result<()>>,
 {
-    let Interop {
-        mut d,
-        ox,
-        peer,
-        cr1,
-        cr2,
-        cr3,
-    } = Interop::build(scenario)?;
-    let topo_name = scenario.name();
+    let (mut d, ox, peer, cr1, cr2, cr3) = match layout {
+        InteropLayout::SingleLink(scenario) => {
+            let Interop {
+                d,
+                ox,
+                peer,
+                cr1,
+                cr2,
+                cr3,
+            } = Interop::build(scenario)?;
+            (d, ox, peer, cr1, cr2, cr3)
+        }
+        InteropLayout::ThreeLinks(scenario) => {
+            let Interop3Link {
+                d,
+                ox,
+                peer,
+                cr1,
+                cr2,
+                cr3,
+            } = Interop3Link::build(scenario)?;
+            (d, ox, peer, cr1, cr2, cr3)
+        }
+    };
+    let topo_name = layout.name();
     d.persistent = persistent;
     clear_staged_routing_configs().context("clear stale Junos config")?;
     info!(d.log, "{topo_name}: launching interop topology");
@@ -546,6 +604,7 @@ where
         peer,
         InteropRouters { cr1, cr2, cr3 },
         commits,
+        layout,
         spawn_peer_setups,
     )
     .await;
@@ -562,7 +621,7 @@ where
             peer_mgd,
             dpd,
             mgmt_addr,
-            scenario,
+            layout,
             protocols,
         }),
         Err(e) => {
@@ -588,6 +647,7 @@ async fn boot_interop_inner<F>(
     peer: MgdNode,
     routers: InteropRouters,
     commits: NpuvmCommits,
+    layout: InteropLayout,
     spawn_peer_setups: F,
 ) -> Result<(MgdClient, MgdClient, DpdClient, IpAddr)>
 where
@@ -603,14 +663,14 @@ where
     let peer_illumos = peer.illumos();
     let (mgmt_addr, peer_mgmt_addr) = tokio::try_join!(
         ox_illumos.dhcp(ad, HELIOS_MGMT_ADDR),
-        peer_illumos.dhcp(ad, HELIOS_MGMT_ADDR),
+        peer_illumos.dhcp(ad, layout.peer_mgmt_addr()),
     )?;
 
     let mut js = spawn_peer_setups(cr1, cr2, cr3, ad.clone());
     let npuvm_ad = ad.clone();
     js.spawn(async move {
         ox.dendrite()
-            .npuvm(npuvm_ad, 4, 0, commits)
+            .npuvm(npuvm_ad, layout.front_ports(), 0, commits)
             .await
             .context("setup ox npuvm")
     });
@@ -632,18 +692,15 @@ where
         .await
         .context("wait_for_dpd")?;
 
-    for link in ["qsfp0", "qsfp1", "qsfp2", "qsfp3"] {
-        softnpu_link_create(&dpd, link)
+    for port in 0..layout.front_ports() {
+        let link = format!("qsfp{port}");
+        softnpu_link_create(&dpd, &link)
             .await
             .context(format!("create {link}"))?;
     }
-    for link in [
-        "tfportqsfp0_0",
-        "tfportqsfp1_0",
-        "tfportqsfp2_0",
-        "tfportqsfp3_0",
-    ] {
-        ox.illumos().wait_for_link(ad, link, OP_TIMEOUT).await?;
+    for port in 0..layout.front_ports() {
+        let link = format!("tfportqsfp{port}_0");
+        ox.illumos().wait_for_link(ad, &link, OP_TIMEOUT).await?;
     }
 
     Ok((mgd, peer_mgd, dpd, mgmt_addr))
@@ -793,7 +850,7 @@ async fn run_interop_unnumbered(
     commits: NpuvmCommits,
 ) -> Result<()> {
     let bt = boot_interop(
-        scenario,
+        InteropLayout::SingleLink(scenario),
         persistent,
         diag_on_fail,
         commits,
@@ -1384,7 +1441,7 @@ async fn run_interop_bfd_static(
     commits: NpuvmCommits,
 ) -> Result<()> {
     let bt = boot_interop(
-        scenario,
+        InteropLayout::SingleLink(scenario),
         persistent,
         diag_on_fail,
         commits,
