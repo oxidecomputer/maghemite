@@ -153,13 +153,20 @@ base-image dataset destroyed/replaced so the new image is used.
 
 ## Running with diagnostics disabled
 
-Failure diagnostics are enabled by default. For faster local iteration while
-preserving the failed topology, use:
+Failure diagnostics are enabled by default. Before collecting them, falcon-lab
+attempts to start FRR and unpause cEOS and cRPD so their normal CLI and API
+paths are available. `--no-cleanup` preserves the topology after the run, but
+does not prevent this diagnostic recovery.
+
+To preserve the exact failure state for manual inspection, including peers
+that the scenario left paused or stopped, disable diagnostics as well as
+cleanup:
 
 ```sh
 pfexec target/release/falcon-lab run interop bfd-static-routing \
   --no-cleanup --no-diag-on-fail
 ```
 
-Even with `--no-diag-on-fail`, interop scenarios make a best-effort attempt to
-restart FRR and unpause cEOS/cRPD before returning the failure.
+Use this combination when automated recovery would disturb the state being
+investigated, such as when inspecting one node while its peer remains paused.
+Without `--no-cleanup`, disabling diagnostics does not preserve the topology.
