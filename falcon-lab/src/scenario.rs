@@ -10,7 +10,7 @@ use crate::{
     frr::FrrNode,
     juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
-    topo::{Interop, MgdDuo, Topology},
+    topo::{Interop, Interop3Link, MgdDuo, Topology},
     wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result};
@@ -68,6 +68,11 @@ const _: () = {
     let mut i = 0;
     while i < InteropScenario::VARIANTS.len() {
         assert_falcon_compatible(InteropScenario::VARIANTS[i].name());
+        i += 1;
+    }
+    let mut i = 0;
+    while i < Interop3LinkScenario::VARIANTS.len() {
+        assert_falcon_compatible(Interop3LinkScenario::VARIANTS[i].name());
         i += 1;
     }
 };
@@ -195,6 +200,37 @@ impl Scenario for InteropScenario {
 
     fn cleanup(self) -> Result<()> {
         cleanup_interop_deployment(self)
+    }
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum, strum::VariantArray)]
+pub(crate) enum Interop3LinkScenario {
+    Bare,
+}
+
+impl Interop3LinkScenario {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Bare => "interop3_bare",
+        }
+    }
+}
+
+impl Scenario for Interop3LinkScenario {
+    type Topology = Interop3Link;
+
+    async fn run(self, options: ScenarioOptions) -> Result<()> {
+        match self {
+            Self::Bare => {
+                clear_staged_routing_configs()
+                    .context("clear stale Junos config")?;
+                self.run_bare(options.persistent).await
+            }
+        }
+    }
+
+    fn cleanup(self) -> Result<()> {
+        cleanup_interop_3link_deployment(self)
     }
 }
 
@@ -617,6 +653,16 @@ where
 /// filesystem error must not leave a persistent Falcon deployment running.
 fn cleanup_interop_deployment(scenario: InteropScenario) -> Result<()> {
     let deployment_result = Interop::build(scenario).map(drop);
+    let config_result =
+        clear_staged_routing_configs().context("clear stale Junos config");
+    deployment_result?;
+    config_result
+}
+
+fn cleanup_interop_3link_deployment(
+    scenario: Interop3LinkScenario,
+) -> Result<()> {
+    let deployment_result = Interop3Link::build(scenario).map(drop);
     let config_result =
         clear_staged_routing_configs().context("clear stale Junos config");
     deployment_result?;
