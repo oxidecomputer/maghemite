@@ -2,9 +2,9 @@
 
 `falcon-lab` runs Maghemite integration topologies under Falcon. A topology
 defines the VM graph, while a scenario configures and tests that topology. The
-topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS, and
-Junos/cRPD nodes, plus a per-run `cargo-bay/` 9p share for binaries and runtime
-configuration.
+topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS,
+Junos/cRPD, and BIRD 2 nodes, plus a per-run `cargo-bay/` 9p share for binaries
+and runtime configuration.
 
 ## Topologies and scenarios
 
@@ -16,10 +16,32 @@ mgd-duo  bgp-unnumbered
 interop  bare
 interop  bgp-unnumbered
 interop  bfd-static-routing
+interop-3-link  bare
+interop-3-link  bgp-md5
 ```
 
 `mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
-FRR, Arista EOS, Juniper cRPD, and a second Maghemite node.
+FRR, Arista EOS, Juniper cRPD, a second Maghemite node, and BIRD 2 (AS 48,
+router ID 1.2.3.3). BIRD is appended on DUT port `qsfp4`, preserving existing
+ports. `interop-3-link` gives each peer three links; BIRD uses `qsfp12`–`qsfp14`
+and the existing Maghemite peer remains on `qsfp9`–`qsfp11`.
+
+`interop bgp-unnumbered` checks five imported/selected paths and five ECMP
+targets for both `1.2.3.0/24` and `fd99::/64`, plus each peer's imports of DUT
+prefixes `4.5.6.0/24` and `fdee::/64`. BIRD uses TCP MD5 on every session;
+the other peers' authentication settings are unchanged.
+
+`interop-3-link bgp-md5` retains the passive-DUT/active-Maghemite numbered
+IPv4 accepted-socket regression on `qsfp9` (including TCP port roles and
+13 seconds without FSM transitions). It then tests all three BIRD unnumbered
+links with TCP MD5, bidirectional dual-stack prefix exchange, three-way DUT
+ECMP, and another 13-second stability observation. It does not substitute
+numbered or unauthenticated BIRD sessions.
+
+`interop bfd-static-routing` includes BIRD's IPv4 and IPv6 BFD sessions
+(`10.0.4.1`/`.2`, `fd00:5::1`/`::2`) with 1-second intervals and multiplier 3.
+Failure/recovery phases verify each peer, BIRD as the last surviving path,
+all peers down, and all five peers restored, including peer-side Up checks.
 
 Run and cleanup commands both take a topology and scenario:
 
@@ -30,6 +52,59 @@ pfexec target/release/falcon-lab cleanup interop bgp-unnumbered
 
 The `bare` scenarios launch their topology without applying protocol
 configuration.
+
+## BIRD image and launch contract
+
+The node image is `voxel-bird2`, fetched and imported by Falcon's **normal
+base-image preflight**, just like the other images, from:
+
+```text
+https://oxide-falcon-assets.s3.us-west-2.amazonaws.com/voxel-bird2_0.raw.xz
+```
+
+No custom downloader, manual image import, or launch-time package installation
+is needed. The Debian image must already contain BIRD 2, `birdc`, `iproute2`,
+`bird.service`, and `/opt/oxide/voxel-init` with its `bird` subcommand.
+Falcon's normal setup stays enabled, with an explicit Linux 9p mount.
+
+Data NICs are resolved from `ip -j link` by the MACs assigned in the topology,
+not guessed from Debian interface order. After IPv6 DAD, falcon-lab reads both
+ends' actual link-local addresses, stages `cargo-bay/bird-bird.conf`, and runs
+`voxel-init bird --config /opt/cargo-bay/bird-bird.conf`. It verifies both command
+success and `/run/voxel-bird-ready`, since Falcon exec alone only reports
+transport success. Configuration is explicitly copied/applied after launch;
+there is no guest auto-apply service and stale staged files are not consumed.
+
+Each link gets a scoped BGP protocol and a data-only RAdv interface. The
+shared test password `falcon-bgp-md5-test-key` is configured on **both** BIRD
+and DUT. IPv4 uses extended IPv6 next hops. Export policies allow only the
+fixture static prefixes with IGP origin, never management/default routes or
+reflected DUT routes. BIRD import checks query its RIB by prefix and BGP
+protocol; no kernel-route installation is assumed on BIRD.
+
+Failure diagnostics include the baked version marker, BIRD protocol/routes/BFD
+state, Linux networking, and the BIRD journal. BIRD is restarted before normal
+failure diagnostics, just as the other peer daemons are restored.
+
+For parser-only validation, export the exact single-link, three-link, and
+BFD configs:
+
+```sh
+BIRD_CONFIG_DIR=/tmp/bird-configs \
+  cargo test -p falcon-lab export_parser_fixtures --locked
+```
+
+The config/CLI-format tests also run without Falcon's illumos linker libraries
+(from the repository root, including on macOS):
+
+```sh
+rustc --edition 2024 --test falcon-lab/src/bird/config.rs -o /tmp/bird-config-tests
+BIRD_CONFIG_DIR=/tmp/bird-configs /tmp/bird-config-tests
+```
+
+On Linux, validate each with
+`bird -p -c <file>`. This does not replace running the Falcon scenarios on an
+illumos host with the baked image.
 
 ## Runtime cargo-bay contents
 
@@ -154,9 +229,9 @@ base-image dataset destroyed/replaced so the new image is used.
 ## Running with diagnostics disabled
 
 Failure diagnostics are enabled by default. Before collecting them, falcon-lab
-attempts to start FRR and unpause cEOS and cRPD so their normal CLI and API
-paths are available. `--no-cleanup` preserves the topology after the run, but
-does not prevent this diagnostic recovery.
+attempts to start FRR and BIRD and unpause cEOS and cRPD so their normal CLI
+and API paths are available. `--no-cleanup` preserves the topology after the
+run, but does not prevent this diagnostic recovery.
 
 To preserve the exact failure state for manual inspection, including peers
 that the scenario left paused or stopped, disable diagnostics as well as
