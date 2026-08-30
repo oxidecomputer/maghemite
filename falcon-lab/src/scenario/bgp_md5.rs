@@ -5,13 +5,15 @@ use super::{
     boot_interop, run_with_optional_diagnostics,
 };
 use crate::{
-    dendrite::NpuvmCommits, diagnostics::ProtocolDiagnostics, mgd::wait_for_mgd,
+    bird::MD5_KEY, dendrite::NpuvmCommits, diagnostics::ProtocolDiagnostics,
+    mgd::wait_for_mgd, wait_for_eq,
 };
 use anyhow::{Context, Result};
 use dpd_client::types::{Ipv4Entry, LinkId, PortId};
 use mg_admin_client::{Client as MgdClient, types::Neighbor};
 use mg_api_types::bgp::{
-    config::{Ipv4UnicastConfig, PeerInfo, Router},
+    config::{Ipv4UnicastConfig, Origin4, PeerInfo, Router},
+    history::Origin6,
     policy::ImportExportPolicy4,
     session::FsmStateKind,
 };
@@ -27,7 +29,6 @@ const DUT_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 3, 1);
 const PEER_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 3, 2);
 const DUT_LINK: &str = "tfportqsfp9_0";
 const PEER_LINK: &str = "vioif0";
-const TEST_KEY: &str = "falcon-bgp-md5-test-key";
 const STABILITY_INTERVAL: Duration = Duration::from_secs(13);
 
 pub(super) async fn run(
@@ -42,16 +43,21 @@ pub(super) async fn run(
         diag_on_fail,
         commits,
         ProtocolDiagnostics::Bgp,
-        |_cr1, _cr2, _cr3, _ad| tokio::task::JoinSet::new(),
+        |_cr1, _cr2, _cr3, _bird, _ad| tokio::task::JoinSet::new(),
     )
     .await?;
     run_with_optional_diagnostics(bt, diag_on_fail, body).await
 }
 
-// This fixture proves session establishment only. Do not reuse it for
+async fn body(bt: BootedInterop) -> Result<()> {
+    numbered_body(&bt).await?;
+    bird_unnumbered_body(&bt).await
+}
+
+// The numbered fixture proves session establishment only. Do not reuse it for
 // route-installation testing: peers such as FRR may select numbered or
 // IPv4-mapped-IPv6 next hops.
-async fn body(bt: BootedInterop) -> Result<()> {
+async fn numbered_body(bt: &BootedInterop) -> Result<()> {
     let BootedInterop {
         ad,
         ox,
@@ -73,20 +79,19 @@ async fn body(bt: BootedInterop) -> Result<()> {
     .await
     .context("dpd: program 10.0.3.1 on qsfp9/0")?;
     ox.illumos()
-        .staticaddr(&ad, &format!("{DUT_LINK}/v4"), "10.0.3.1/24")
+        .staticaddr(ad, &format!("{DUT_LINK}/v4"), "10.0.3.1/24")
         .await
         .context("assign DUT IPv4 address")?;
     peer.illumos()
-        .staticaddr(&ad, &format!("{PEER_LINK}/v4"), "10.0.3.2/24")
+        .staticaddr(ad, &format!("{PEER_LINK}/v4"), "10.0.3.2/24")
         .await
         .context("assign peer IPv4 address")?;
 
-    ox.run_mgd(&ad).await?;
-    wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
-    for (client, asn, id, label) in [
-        (&mgd, DUT_ASN, 33, "DUT"),
-        (&peer_mgd, PEER_ASN, 47, "peer"),
-    ] {
+    ox.run_mgd(ad).await?;
+    wait_for_mgd(mgd, OP_TIMEOUT, &ad.log).await?;
+    for (client, asn, id, label) in
+        [(mgd, DUT_ASN, 33, "DUT"), (peer_mgd, PEER_ASN, 47, "peer")]
+    {
         client
             .create_router(&Router {
                 asn,
@@ -110,7 +115,7 @@ async fn body(bt: BootedInterop) -> Result<()> {
         .await
         .context("peer: create active MD5 neighbor")?;
 
-    let (dut, peer) = wait_for_established(&mgd, &peer_mgd).await?;
+    let (dut, peer) = wait_for_established(mgd, peer_mgd).await?;
     anyhow::ensure!(
         dut.local_tcp_port == 179 && dut.remote_tcp_port != 179,
         "DUT did not accept the inbound BGP connection: local port {}, remote port {}",
@@ -128,10 +133,10 @@ async fn body(bt: BootedInterop) -> Result<()> {
     let peer_transitions = transition_counters(&peer);
     let deadline = Instant::now() + STABILITY_INTERVAL;
     while Instant::now() < deadline {
-        let dut = peer_info(&mgd, DUT_ASN, "peer")
+        let dut = peer_info(mgd, DUT_ASN, "peer")
             .await
             .context("DUT PeerInfo disappeared during hold-time observation")?;
-        let peer = peer_info(&peer_mgd, PEER_ASN, "dut").await.context(
+        let peer = peer_info(peer_mgd, PEER_ASN, "dut").await.context(
             "peer PeerInfo disappeared during hold-time observation",
         )?;
         assert_stable(&dut, dut_transitions, "DUT")?;
@@ -139,10 +144,10 @@ async fn body(bt: BootedInterop) -> Result<()> {
         sleep(Duration::from_millis(250)).await;
     }
 
-    let dut = peer_info(&mgd, DUT_ASN, "peer")
+    let dut = peer_info(mgd, DUT_ASN, "peer")
         .await
         .context("DUT PeerInfo disappeared after hold-time observation")?;
-    let peer = peer_info(&peer_mgd, PEER_ASN, "dut")
+    let peer = peer_info(peer_mgd, PEER_ASN, "dut")
         .await
         .context("peer PeerInfo disappeared after hold-time observation")?;
     assert_stable(&dut, dut_transitions, "DUT")?;
@@ -155,6 +160,113 @@ async fn body(bt: BootedInterop) -> Result<()> {
         peer.fsm_state_duration > Duration::from_secs(12),
         "peer was not continuously Established for two hold-time periods"
     );
+    Ok(())
+}
+
+/// Exercise all three BIRD links without weakening the accepted-socket
+/// regression above: these are authenticated IPv6 link-local sessions with
+/// RFC 8950 IPv4 routes, bidirectional imports, and three-way DUT ECMP.
+async fn bird_unnumbered_body(bt: &BootedInterop) -> Result<()> {
+    use mg_api_types::{rdb::rib::AddressFamily, rib::BestpathFanoutRequest};
+    let BootedInterop {
+        ad,
+        ox,
+        bird,
+        mgd,
+        dpd,
+        layout,
+        ..
+    } = bt;
+    ox.ddm().run_ddm(ad).await?;
+    mgd.update_bestpath_fanout(&BestpathFanoutRequest {
+        fanout: std::num::NonZeroU8::new(3).unwrap(),
+    })
+    .await?;
+    mgd.create_origin4(&Origin4 {
+        asn: DUT_ASN,
+        prefixes: vec!["4.5.6.0/24".parse()?],
+    })
+    .await?;
+    mgd.create_origin6(&Origin6 {
+        asn: DUT_ASN,
+        prefixes: vec!["fdee::/64".parse()?],
+    })
+    .await?;
+    super::setup_bird_bgp(ad, *ox, *bird, mgd, *layout).await?;
+    super::expect_bird_bgp(ad, *bird, layout.links_per_peer()).await?;
+
+    wait_for_eq!(
+        mgd.get_neighbors(DUT_ASN)
+            .await
+            .map(|r| r.len())
+            .unwrap_or(0),
+        4,
+        "DUT numbered peer plus three BIRD neighbors"
+    );
+    for (af, prefix) in [
+        (AddressFamily::Ipv4, "1.2.3.0/24"),
+        (AddressFamily::Ipv6, "fd99::/64"),
+    ] {
+        wait_for_eq!(
+            super::mgd_imported_paths(mgd, af, prefix).await,
+            Some(3),
+            &format!("DUT imported three BIRD paths for {prefix}")
+        );
+        wait_for_eq!(
+            super::mgd_selected_paths(mgd, af, prefix).await,
+            Some(3),
+            &format!("DUT selected three BIRD paths for {prefix}")
+        );
+    }
+    let v4 = "1.2.3.0/24".parse()?;
+    let v6 = "fd99::/64".parse()?;
+    wait_for_eq!(
+        super::dpd_v4_targets(dpd, &v4).await.len(),
+        3,
+        "BIRD IPv4 ECMP"
+    );
+    wait_for_eq!(
+        super::dpd_v6_targets(dpd, &v6).await.len(),
+        3,
+        "BIRD IPv6 ECMP"
+    );
+
+    let mut counters = Vec::new();
+    for index in 0..layout.links_per_peer() {
+        let name = format!("bird{index}");
+        let info = peer_info(mgd, DUT_ASN, &name)
+            .await
+            .context("missing BIRD PeerInfo")?;
+        anyhow::ensure!(
+            info.fsm_state == FsmStateKind::Established,
+            "{name} not Established"
+        );
+        counters.push((name, transition_counters(&info)));
+    }
+    let deadline = Instant::now() + STABILITY_INTERVAL;
+    loop {
+        let finished = Instant::now() >= deadline;
+        for (index, (name, transitions)) in counters.iter().enumerate() {
+            let info = peer_info(mgd, DUT_ASN, name)
+                .await
+                .context("BIRD PeerInfo disappeared")?;
+            assert_stable(&info, *transitions, name)?;
+            anyhow::ensure!(
+                bird.bgp_established(ad, index).await?,
+                "BIRD dut{index} left Established"
+            );
+            if finished {
+                anyhow::ensure!(
+                    info.fsm_state_duration > Duration::from_secs(12),
+                    "{name} did not stay Established for two hold periods"
+                );
+            }
+        }
+        if finished {
+            break;
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
     Ok(())
 }
 
@@ -180,7 +292,7 @@ fn md5_neighbor(
         passive,
         remote_asn: Some(remote_asn),
         min_ttl: None,
-        md5_auth_key: Some(TEST_KEY.to_owned()),
+        md5_auth_key: Some(MD5_KEY.to_owned()),
         multi_exit_discriminator: None,
         communities: Vec::new(),
         local_pref: None,
