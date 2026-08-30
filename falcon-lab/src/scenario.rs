@@ -335,19 +335,20 @@ where
     let result = body(bt).await;
     if let Err(e) = &result {
         warn!(ad.log, "{topo_name} failed: {e:#}");
-        // Some failure tests intentionally suspend routing daemons to verify
-        // convergence. Resume them before diagnostics so collection can use
-        // each vendor's normal CLI/API path rather than timing out on the
-        // fault we injected.
-        restore_interop_before_diagnostics(&ad, routers).await;
         if diag_on_fail {
+            // Some failure tests intentionally suspend routing daemons to
+            // verify convergence. Resume them before diagnostics so
+            // collection can use each vendor's normal CLI/API path rather
+            // than timing out on the fault we injected.
+            restore_interop_before_diagnostics(&ad, routers).await;
             collect_interop_diagnostics(
                 &ad, ox, peer, routers, topo_name, protocols,
             )
             .await;
-            ox.collect_ndp_diagnostics(&ad, &mgd, topo_name).await;
-            peer.collect_ndp_diagnostics(&ad, &peer_mgd, topo_name)
-                .await;
+            tokio::join!(
+                ox.collect_ndp_diagnostics(&ad, &mgd, topo_name),
+                peer.collect_ndp_diagnostics(&ad, &peer_mgd, topo_name),
+            );
         }
     }
     result
@@ -358,7 +359,12 @@ async fn restore_interop_before_diagnostics(
     routers: InteropRouters,
 ) {
     let InteropRouters { cr1, cr2, cr3 } = routers;
-    match timeout(OP_TIMEOUT, cr1.start_frr(ad)).await {
+    let (cr1_result, cr2_result, cr3_result) = tokio::join!(
+        timeout(OP_TIMEOUT, cr1.start_frr(ad)),
+        timeout(OP_TIMEOUT, cr2.unpause(ad)),
+        timeout(OP_TIMEOUT, cr3.unpause(ad)),
+    );
+    match cr1_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
             warn!(ad.log, "failed to start cr1 frr before diagnostics: {e:#}")
@@ -367,14 +373,14 @@ async fn restore_interop_before_diagnostics(
             warn!(ad.log, "timed out starting cr1 frr before diagnostics")
         }
     }
-    match timeout(OP_TIMEOUT, cr2.unpause(ad)).await {
+    match cr2_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
             warn!(ad.log, "failed to unpause cr2 before diagnostics: {e:#}")
         }
         Err(_) => warn!(ad.log, "timed out unpausing cr2 before diagnostics"),
     }
-    match timeout(OP_TIMEOUT, cr3.unpause(ad)).await {
+    match cr3_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
             warn!(ad.log, "failed to unpause cr3 before diagnostics: {e:#}")
@@ -695,33 +701,39 @@ async fn mgd_unnumbered_body(bt: BootedMgdDuo) -> Result<()> {
     )
     .context("mgd: create unnumbered neighbors")?;
 
-    wait_for_eq!(
-        mgd1.get_neighbors(OX1_ASN)
-            .await
-            .map(|x| x.into_inner().len())
-            .unwrap_or(0),
-        1,
-        "mgd1 neighbor count"
-    );
-    wait_for_eq!(
-        mgd2.get_neighbors(OX2_ASN)
-            .await
-            .map(|x| x.into_inner().len())
-            .unwrap_or(0),
-        1,
-        "mgd2 neighbor count"
-    );
-
-    wait_for_eq!(
-        neighbor_fsm_state(&mgd1, OX1_ASN, "ox2").await,
-        Some(FsmStateKind::Established),
-        "mgd1 bgp ox2 established"
-    );
-    wait_for_eq!(
-        neighbor_fsm_state(&mgd2, OX2_ASN, "ox1").await,
-        Some(FsmStateKind::Established),
-        "mgd2 bgp ox1 established"
-    );
+    let mgd1_ready = async {
+        wait_for_eq!(
+            mgd1.get_neighbors(OX1_ASN)
+                .await
+                .map(|x| x.into_inner().len())
+                .unwrap_or(0),
+            1,
+            "mgd1 neighbor count"
+        );
+        wait_for_eq!(
+            neighbor_fsm_state(&mgd1, OX1_ASN, "ox2").await,
+            Some(FsmStateKind::Established),
+            "mgd1 bgp ox2 established"
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+    let mgd2_ready = async {
+        wait_for_eq!(
+            mgd2.get_neighbors(OX2_ASN)
+                .await
+                .map(|x| x.into_inner().len())
+                .unwrap_or(0),
+            1,
+            "mgd2 neighbor count"
+        );
+        wait_for_eq!(
+            neighbor_fsm_state(&mgd2, OX2_ASN, "ox1").await,
+            Some(FsmStateKind::Established),
+            "mgd2 bgp ox1 established"
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::try_join!(mgd1_ready, mgd2_ready)?;
 
     info!(ad.log, "mgd-to-mgd bgp unnumbered test passed 🎉");
 
@@ -989,74 +1001,91 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
     // Each peer should have imported ox's originated prefixes.
     let ox_v4: Ipv4Net = OX_V4_ORIGIN.parse().expect("parse ox v4 origin");
     let ox_v6: Ipv6Net = OX_V6_ORIGIN.parse().expect("parse ox v6 origin");
-    wait_for_eq!(
-        peers
-            .cr1
-            .bgp_ipv4_imported(&ad)
-            .await
-            .map(|r| r.all().any(|(p, _)| *p == ox_v4))
-            .unwrap_or(false),
-        true,
-        "cr1 imported 4.5.6.0/24"
-    );
-    wait_for_eq!(
-        peers
-            .cr1
-            .bgp_ipv6_imported(&ad)
-            .await
-            .map(|r| r.all().any(|(p, _)| *p == ox_v6))
-            .unwrap_or(false),
-        true,
-        "cr1 imported fdee::/64"
-    );
-    wait_for_eq!(
-        peers
-            .cr2
-            .bgp_ipv4_imported(&ad)
-            .await
-            .map(|r| r.all().any(|(p, _)| *p == ox_v4))
-            .unwrap_or(false),
-        true,
-        "cr2 imported 4.5.6.0/24"
-    );
-    wait_for_eq!(
-        peers
-            .cr2
-            .bgp_ipv6_imported(&ad)
-            .await
-            .map(|r| r.all().any(|(p, _)| *p == ox_v6))
-            .unwrap_or(false),
-        true,
-        "cr2 imported fdee::/64"
-    );
-    wait_for_eq!(
-        peers
-            .cr3
-            .bgp_route_imported(&ad, OX_V4_ORIGIN)
-            .await
-            .unwrap_or(false),
-        true,
-        "cr3 imported 4.5.6.0/24"
-    );
-    wait_for_eq!(
-        peers
-            .cr3
-            .bgp_route_imported(&ad, OX_V6_ORIGIN)
-            .await
-            .unwrap_or(false),
-        true,
-        "cr3 imported fdee::/64"
-    );
-    wait_for_eq!(
-        mgd_imported_paths(&peer_mgd, AddressFamily::Ipv4, OX_V4_ORIGIN).await,
-        Some(1),
-        "peer imported 4.5.6.0/24"
-    );
-    wait_for_eq!(
-        mgd_imported_paths(&peer_mgd, AddressFamily::Ipv6, OX_V6_ORIGIN).await,
-        Some(1),
-        "peer imported fdee::/64"
-    );
+    // Run peers concurrently, but keep address-family checks on each vendor
+    // serial because they share that VM's console.
+    let cr1_imports = async {
+        wait_for_eq!(
+            peers
+                .cr1
+                .bgp_ipv4_imported(&ad)
+                .await
+                .map(|r| r.all().any(|(p, _)| *p == ox_v4))
+                .unwrap_or(false),
+            true,
+            "cr1 imported 4.5.6.0/24"
+        );
+        wait_for_eq!(
+            peers
+                .cr1
+                .bgp_ipv6_imported(&ad)
+                .await
+                .map(|r| r.all().any(|(p, _)| *p == ox_v6))
+                .unwrap_or(false),
+            true,
+            "cr1 imported fdee::/64"
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+    let cr2_imports = async {
+        wait_for_eq!(
+            peers
+                .cr2
+                .bgp_ipv4_imported(&ad)
+                .await
+                .map(|r| r.all().any(|(p, _)| *p == ox_v4))
+                .unwrap_or(false),
+            true,
+            "cr2 imported 4.5.6.0/24"
+        );
+        wait_for_eq!(
+            peers
+                .cr2
+                .bgp_ipv6_imported(&ad)
+                .await
+                .map(|r| r.all().any(|(p, _)| *p == ox_v6))
+                .unwrap_or(false),
+            true,
+            "cr2 imported fdee::/64"
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+    let cr3_imports = async {
+        wait_for_eq!(
+            peers
+                .cr3
+                .bgp_route_imported(&ad, OX_V4_ORIGIN)
+                .await
+                .unwrap_or(false),
+            true,
+            "cr3 imported 4.5.6.0/24"
+        );
+        wait_for_eq!(
+            peers
+                .cr3
+                .bgp_route_imported(&ad, OX_V6_ORIGIN)
+                .await
+                .unwrap_or(false),
+            true,
+            "cr3 imported fdee::/64"
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+    let peer_imports = async {
+        wait_for_eq!(
+            mgd_imported_paths(&peer_mgd, AddressFamily::Ipv4, OX_V4_ORIGIN)
+                .await,
+            Some(1),
+            "peer imported 4.5.6.0/24"
+        );
+        wait_for_eq!(
+            mgd_imported_paths(&peer_mgd, AddressFamily::Ipv6, OX_V6_ORIGIN)
+                .await,
+            Some(1),
+            "peer imported fdee::/64"
+        );
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::try_join!(cr1_imports, cr2_imports, cr3_imports, peer_imports)?;
 
     info!(ad.log, "interop bgp unnumbered test passed 🎉");
 
@@ -1077,17 +1106,22 @@ async fn collect_interop_diagnostics(
 ) {
     let InteropRouters { cr1, cr2, cr3 } = routers;
     warn!(d.log, "collecting diagnostics for {topo_name}");
-    // ox VM: illumos network state, plus each daemon's log via its lens.
-    ox.illumos().collect_diagnostics(d, topo_name).await;
-    ox.dendrite().collect_diagnostics(d, topo_name).await;
-    ox.ddm().collect_diagnostics(d, topo_name).await;
-    ox.collect_diagnostics(d, topo_name).await;
-    peer.illumos().collect_diagnostics(d, topo_name).await;
-    peer.collect_diagnostics(d, topo_name).await;
-    // Peer routers.
-    cr1.collect_diagnostics(d, topo_name, protocols).await;
-    cr2.collect_diagnostics(d, topo_name, protocols).await;
-    cr3.collect_diagnostics(d, topo_name, protocols).await;
+    tokio::join!(
+        async {
+            // ox VM: illumos network state, plus each daemon's log via its lens.
+            ox.illumos().collect_diagnostics(d, topo_name).await;
+            ox.dendrite().collect_diagnostics(d, topo_name).await;
+            ox.ddm().collect_diagnostics(d, topo_name).await;
+            ox.collect_diagnostics(d, topo_name).await;
+        },
+        async {
+            peer.illumos().collect_diagnostics(d, topo_name).await;
+            peer.collect_diagnostics(d, topo_name).await;
+        },
+        cr1.collect_diagnostics(d, topo_name, protocols),
+        cr2.collect_diagnostics(d, topo_name, protocols),
+        cr3.collect_diagnostics(d, topo_name, protocols),
+    );
 }
 
 /// Boot/setup failures happen before the topology is fully configured, so avoid
@@ -1102,47 +1136,61 @@ async fn collect_interop_boot_diagnostics(
 ) {
     let InteropRouters { cr1, cr2, cr3 } = routers;
     warn!(d.log, "collecting boot diagnostics for {topo_name}");
-    crate::diagnostics::capture(d, ox.0, topo_name, "ox-svcs-xv", "svcs -xv")
-        .await;
-    ox.dendrite().collect_diagnostics(d, topo_name).await;
-    crate::diagnostics::capture(
-        d,
-        peer.0,
-        topo_name,
-        "peer-svcs-xv",
-        "svcs -xv",
-    )
-    .await;
-    peer.collect_diagnostics(d, topo_name).await;
-
-    crate::diagnostics::capture(
-        d,
-        cr1.0,
-        topo_name,
-        "cr1-frr-status",
-        "systemctl status frr --no-pager || true",
-    )
-    .await;
-    crate::diagnostics::capture(
-        d,
-        cr1.0,
-        topo_name,
-        "cr1-frr-journal",
-        "journalctl -u frr --no-pager -n 200 || true",
-    )
-    .await;
-
-    for (label, cmd) in [
-        ("cr2-docker-ps", "docker ps -a"),
-        (
-            "cr2-docker-logs",
-            "timeout 5s docker logs --tail 500 ceos || true",
-        ),
-    ] {
-        crate::diagnostics::capture(d, cr2.0, topo_name, label, cmd).await;
-    }
-
-    cr3.collect_boot_diagnostics(d, topo_name).await;
+    tokio::join!(
+        async {
+            crate::diagnostics::capture(
+                d,
+                ox.0,
+                topo_name,
+                "ox-svcs-xv",
+                "svcs -xv",
+            )
+            .await;
+            ox.dendrite().collect_diagnostics(d, topo_name).await;
+        },
+        async {
+            crate::diagnostics::capture(
+                d,
+                peer.0,
+                topo_name,
+                "peer-svcs-xv",
+                "svcs -xv",
+            )
+            .await;
+            peer.collect_diagnostics(d, topo_name).await;
+        },
+        async {
+            crate::diagnostics::capture(
+                d,
+                cr1.0,
+                topo_name,
+                "cr1-frr-status",
+                "systemctl status frr --no-pager || true",
+            )
+            .await;
+            crate::diagnostics::capture(
+                d,
+                cr1.0,
+                topo_name,
+                "cr1-frr-journal",
+                "journalctl -u frr --no-pager -n 200 || true",
+            )
+            .await;
+        },
+        async {
+            for (label, cmd) in [
+                ("cr2-docker-ps", "docker ps -a"),
+                (
+                    "cr2-docker-logs",
+                    "timeout 5s docker logs --tail 500 ceos || true",
+                ),
+            ] {
+                crate::diagnostics::capture(d, cr2.0, topo_name, label, cmd)
+                    .await;
+            }
+        },
+        cr3.collect_boot_diagnostics(d, topo_name),
+    );
 }
 
 /// Snapshot logs and live state from both Helios mgd peers in the mgd-duo
@@ -1154,10 +1202,16 @@ async fn collect_mgd_duo_diagnostics(
     topo_name: &str,
 ) {
     warn!(d.log, "collecting diagnostics for {topo_name}");
-    for ox in [ox1, ox2] {
-        ox.illumos().collect_diagnostics(d, topo_name).await;
-        ox.collect_diagnostics(d, topo_name).await;
-    }
+    tokio::join!(
+        async {
+            ox1.illumos().collect_diagnostics(d, topo_name).await;
+            ox1.collect_diagnostics(d, topo_name).await;
+        },
+        async {
+            ox2.illumos().collect_diagnostics(d, topo_name).await;
+            ox2.collect_diagnostics(d, topo_name).await;
+        },
+    );
 }
 
 /// Boot/setup diagnostics for the mgd-duo topology, intentionally excluding
@@ -1169,17 +1223,18 @@ async fn collect_mgd_duo_boot_diagnostics(
     topo_name: &str,
 ) {
     warn!(d.log, "collecting boot diagnostics for {topo_name}");
-    for ox in [ox1, ox2] {
-        let name = d.get_node(ox.0).name.clone();
+    let ox1_name = d.get_node(ox1.0).name.clone();
+    let ox2_name = d.get_node(ox2.0).name.clone();
+    let ox1_label = format!("{ox1_name}-svcs-xv");
+    let ox2_label = format!("{ox2_name}-svcs-xv");
+    tokio::join!(
         crate::diagnostics::capture(
-            d,
-            ox.0,
-            topo_name,
-            &format!("{name}-svcs-xv"),
-            "svcs -xv",
-        )
-        .await;
-    }
+            d, ox1.0, topo_name, &ox1_label, "svcs -xv",
+        ),
+        crate::diagnostics::capture(
+            d, ox2.0, topo_name, &ox2_label, "svcs -xv",
+        ),
+    );
 }
 
 async fn frr_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
@@ -1783,9 +1838,11 @@ async fn expect_bfd(
     mgd: &MgdClient,
     peer_mgd: &MgdClient,
     peers: InteropRouters,
-    d: &Runner,
+    d: &Arc<Runner>,
     states: InteropPeerStates<BfdPeerState>,
 ) -> Result<()> {
+    let mut checks = tokio::task::JoinSet::new();
+
     for (peer, want) in [
         (IpAddr::V4(CR1_V4), states.cr1),
         (IpAddr::V6(CR1_V6), states.cr1),
@@ -1796,58 +1853,81 @@ async fn expect_bfd(
         (IpAddr::V4(PEER_V4), states.peer),
         (IpAddr::V6(PEER_V6), states.peer),
     ] {
-        let desc = format!("mgd bfd {peer} -> {want:?}");
-        wait_for_eq_stable!(
-            bfd_state(mgd, peer).await,
-            Some(want),
-            BFD_STABLE_SAMPLES,
-            &desc
-        );
+        let mgd = (*mgd).clone();
+        checks.spawn(async move {
+            let desc = format!("mgd bfd {peer} -> {want:?}");
+            wait_for_eq_stable!(
+                bfd_state(&mgd, peer).await,
+                Some(want),
+                BFD_STABLE_SAMPLES,
+                &desc
+            );
+            Ok(())
+        });
     }
 
+    // Query each vendor once per sample because both address families share
+    // a VM console and each command returns the complete BFD table.
     if matches!(states.cr1, BfdPeerState::Up) {
-        for peer in [IpAddr::V4(OX_CR1_V4), IpAddr::V6(OX_CR1_V6)] {
-            let desc = format!("cr1 bfd {peer} -> Up");
+        let cr1 = peers.cr1;
+        let d = Arc::clone(d);
+        checks.spawn(async move {
+            let wanted = [IpAddr::V4(OX_CR1_V4), IpAddr::V6(OX_CR1_V6)];
             wait_for_eq_stable!(
-                peers.cr1.bfd_peer_up(d, peer).await.unwrap_or(false),
+                cr1.bfd_peers_up(&d, &wanted).await.unwrap_or(false),
                 true,
                 BFD_STABLE_SAMPLES,
-                &desc
+                "cr1 bfd peers -> Up"
             );
-        }
+            Ok(())
+        });
     }
     if matches!(states.cr2, BfdPeerState::Up) {
-        for peer in [IpAddr::V4(OX_CR2_V4), IpAddr::V6(OX_CR2_V6)] {
-            let desc = format!("cr2 bfd {peer} -> Up");
+        let cr2 = peers.cr2;
+        let d = Arc::clone(d);
+        checks.spawn(async move {
+            let wanted = [IpAddr::V4(OX_CR2_V4), IpAddr::V6(OX_CR2_V6)];
             wait_for_eq_stable!(
-                peers.cr2.bfd_peer_up(d, peer).await.unwrap_or(false),
+                cr2.bfd_peers_up(&d, &wanted).await.unwrap_or(false),
                 true,
                 BFD_STABLE_SAMPLES,
-                &desc
+                "cr2 bfd peers -> Up"
             );
-        }
+            Ok(())
+        });
     }
     if matches!(states.cr3, BfdPeerState::Up) {
-        for peer in [IpAddr::V4(OX_CR3_V4), IpAddr::V6(OX_CR3_V6)] {
-            let desc = format!("cr3 bfd {peer} -> Up");
+        let cr3 = peers.cr3;
+        let d = Arc::clone(d);
+        checks.spawn(async move {
+            let wanted = [IpAddr::V4(OX_CR3_V4), IpAddr::V6(OX_CR3_V6)];
             wait_for_eq_stable!(
-                peers.cr3.bfd_peer_up(d, peer).await.unwrap_or(false),
+                cr3.bfd_peers_up(&d, &wanted).await.unwrap_or(false),
                 true,
                 BFD_STABLE_SAMPLES,
-                &desc
+                "cr3 bfd peers -> Up"
             );
-        }
+            Ok(())
+        });
     }
     if matches!(states.peer, BfdPeerState::Up) {
         for remote in [IpAddr::V4(OX_PEER_V4), IpAddr::V6(OX_PEER_V6)] {
-            let desc = format!("peer bfd {remote} -> Up");
-            wait_for_eq_stable!(
-                bfd_state(peer_mgd, remote).await,
-                Some(BfdPeerState::Up),
-                BFD_STABLE_SAMPLES,
-                &desc
-            );
+            let peer_mgd = (*peer_mgd).clone();
+            checks.spawn(async move {
+                let desc = format!("peer bfd {remote} -> Up");
+                wait_for_eq_stable!(
+                    bfd_state(&peer_mgd, remote).await,
+                    Some(BfdPeerState::Up),
+                    BFD_STABLE_SAMPLES,
+                    &desc
+                );
+                Ok(())
+            });
         }
+    }
+
+    while let Some(result) = checks.join_next().await {
+        result??;
     }
     Ok(())
 }
