@@ -4,6 +4,7 @@ use anyhow::Result;
 use libfalcon::{NodeRef, Runner, node, unit::gb};
 
 use crate::{
+    bird::BirdNode,
     eos::EosNode,
     frr::FrrNode,
     juniper::JuniperNode,
@@ -60,6 +61,7 @@ pub struct Interop {
     pub cr1: FrrNode,
     pub cr2: EosNode,
     pub cr3: JuniperNode,
+    pub bird: BirdNode,
 }
 
 pub struct Interop3Link {
@@ -69,6 +71,7 @@ pub struct Interop3Link {
     pub cr1: FrrNode,
     pub cr2: EosNode,
     pub cr3: JuniperNode,
+    pub bird: BirdNode,
 }
 
 struct InteropNodes {
@@ -78,6 +81,7 @@ struct InteropNodes {
     cr1: NodeRef,
     cr2: NodeRef,
     cr3: NodeRef,
+    bird: NodeRef,
 }
 
 fn build_interop(name: &str, links_per_peer: usize) -> Result<InteropNodes> {
@@ -88,6 +92,7 @@ fn build_interop(name: &str, links_per_peer: usize) -> Result<InteropNodes> {
     node!(d, cr2, "eos-4.35", 4, gb(4));
     node!(d, cr3, "junos-23.2", 4, gb(4));
     node!(d, peer, "helios-3.0", 4, gb(4));
+    node!(d, bird, "bird2", 4, gb(4));
 
     let mut mac_counter = 0;
     let mut new_mac = || {
@@ -100,18 +105,24 @@ fn build_interop(name: &str, links_per_peer: usize) -> Result<InteropNodes> {
             d.softnpu_link(ox, remote, Some(new_mac()), None);
         }
     }
+    // Append BIRD: existing DUT ports and remote NIC indices stay unchanged.
+    for index in 0..links_per_peer {
+        d.softnpu_link(ox, bird, Some(BirdNode::data_mac(index)), None);
+    }
 
     d.default_ext_link(ox)?;
     d.default_ext_link(cr1)?;
     d.default_ext_link(cr2)?;
     d.default_ext_link(cr3)?;
     d.default_ext_link(peer)?;
+    d.default_ext_link(bird)?;
 
     d.mount("cargo-bay", "/opt/cargo-bay", ox)?;
     d.mount_linux("cargo-bay", "/opt/cargo-bay", cr1)?;
     d.mount("cargo-bay", "/opt/cargo-bay", cr2)?;
     d.mount_linux("cargo-bay", "/opt/cargo-bay", cr3)?;
     d.mount("cargo-bay", "/opt/cargo-bay", peer)?;
+    d.mount_linux("cargo-bay", "/opt/cargo-bay", bird)?;
     // The Junos image mounts cargo-bay and applies staged configuration
     // from guest-side systemd services. Keep the 9p device in the spec,
     // but avoid Falcon's serial-driven setup/mount path for this node.
@@ -124,6 +135,7 @@ fn build_interop(name: &str, links_per_peer: usize) -> Result<InteropNodes> {
         cr1,
         cr2,
         cr3,
+        bird,
     })
 }
 
@@ -139,6 +151,7 @@ impl Topology for Interop {
             cr1: FrrNode(nodes.cr1),
             cr2: EosNode(nodes.cr2),
             cr3: JuniperNode(nodes.cr3),
+            bird: BirdNode(nodes.bird),
         })
     }
 
@@ -159,6 +172,7 @@ impl Topology for Interop3Link {
             cr1: FrrNode(nodes.cr1),
             cr2: EosNode(nodes.cr2),
             cr3: JuniperNode(nodes.cr3),
+            bird: BirdNode(nodes.bird),
         })
     }
 
