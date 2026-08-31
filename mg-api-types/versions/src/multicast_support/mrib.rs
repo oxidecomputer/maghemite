@@ -242,25 +242,35 @@ impl UnicastAddrV4 {
                 "{value} is loopback, not a valid source"
             )));
         }
-        // 0/8 "this network" per RFC 791
+        // The 0.0.0.0/8 block ("this host on this network") is marked
+        // "Source: True" in the IANA special-purpose registry (RFC 6890),
+        // since RFC 1122 §3.2.1.3 allows it before a host learns its
+        // address, but it is rejected on separate grounds: an (S,G) source
+        // must be a specific unicast address that reverse-path forwarding
+        // can resolve to an incoming interface, which 0.0.0.0/8 never is.
         if value.is_unspecified() || value.octets()[0] == 0 {
             return Err(MulticastError::Validation(format!(
-                "{value} is in 0/8 (this-network), not a valid source"
+                "{value} is in 0/8 (this host on this network), not a valid \
+                 source"
             )));
         }
-        // 169.254/16 per RFC 3927 Section 7: not forwarded by routers
+        // 169.254/16 per RFC 3927 Section 2.7: not forwarded by routers
         if value.is_link_local() {
             return Err(MulticastError::Validation(format!(
                 "{value} is link-local, not routable"
             )));
         }
-        // Class E reserved (240/4) per RFC 1112 Section 4.
-        // Replace with Ipv4Addr::is_reserved() when stabilized.
+        // The IANA special-purpose registry (RFC 6890) marks class E
+        // (240.0.0.0/4, reserved by RFC 1112 §4) as "Source: False", so it
+        // may never appear as a source.
         if value.octets()[0] >= 240 {
             return Err(MulticastError::Validation(format!(
                 "{value} is in the reserved Class E range (240/4)"
             )));
         }
+        // Shared address space (100.64.0.0/10, RFC 6598) is "Source: True"
+        // and not globally reachable, so it stays allowed: it can source
+        // traffic inside an operator network.
         Ok(Self(value))
     }
 
@@ -332,6 +342,34 @@ impl UnicastAddrV6 {
         if value.is_unicast_link_local() {
             return Err(MulticastError::Validation(format!(
                 "{value} is link-local, not routable"
+            )));
+        }
+
+        // Reject addresses that embed an IPv4 address in an IPv6 source. The
+        // IPv4-mapped and IPv4-compatible forms convert to an Ipv4Addr, so
+        // they would carry IPv4 semantics past the IPv4 source checks. The
+        // NAT64 well-known prefix does not convert; instead, it is refused
+        // because no standard path yields a multicast source inside it.
+        //
+        // Note: RFC 6052 §3.1 network-specific prefixes are drawn from the
+        // operator's own address space, so recognizing one would require
+        // knowing the configured prefix.
+        let embedded = match value.segments() {
+            [0, 0, 0, 0, 0, 0xffff, ..] => {
+                Some("IPv4-mapped (::ffff:0:0/96, RFC 4291 §2.5.5.2)")
+            }
+            [0, 0, 0, 0, 0, 0, ..] => {
+                Some("IPv4-compatible (::/96, RFC 4291 §2.5.5.1)")
+            }
+            [0x0064, 0xff9b, 0, 0, 0, 0, ..] => {
+                Some("NAT64 well-known (64:ff9b::/96, RFC 6052 §2.1)")
+            }
+            _ => None,
+        };
+        if let Some(form) = embedded {
+            return Err(MulticastError::Validation(format!(
+                "{value} embeds an IPv4 address, {form}, not a valid IPv6 \
+                 source"
             )));
         }
         Ok(Self(value))
@@ -492,7 +530,8 @@ impl MulticastAddrV6 {
         // Ethernet realm definition. This matches DPD's
         // validate_ipv6_multicast.
         let segs = value.segments();
-        let scope_name = match segs[0] & 0x000f {
+        let scope = segs[0] & 0x000f;
+        let scope_name = match scope {
             0x0 | 0xf => Some("reserved"),
             0x1 => Some("interface-local"),
             0x2 => Some("link-local"),
@@ -502,8 +541,10 @@ impl MulticastAddrV6 {
         };
         if let Some(scope_name) = scope_name {
             return Err(MulticastError::Validation(format!(
-                "IPv6 address {value} has {scope_name} multicast scope and \
-                 cannot be used for group creation"
+                "IPv6 address {value} has {scope_name} multicast scope \
+                 ({scope:#x}), which cannot be used for multicast groups. \
+                 Allowed scopes are 0x4 (admin-local), 0x5 (site-local), \
+                 0x8 (organization-local), and 0xe (global)"
             )));
         }
 
