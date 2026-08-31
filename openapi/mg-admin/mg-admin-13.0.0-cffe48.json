@@ -4086,7 +4086,7 @@
             ]
           },
           "underlay_group": {
-            "description": "Underlay multicast group address (ff04::/64).\n\nOverlay multicast addresses are mapped 1:1 to admin-local scope underlay addresses. Switches replicate to this address via the PRE (with tofino_asic).\n\nOPTE handles the overlay/underlay translation at sled boundaries, while sled membership is managed by Omicron and programmed to DPD/OPTE directly.",
+            "description": "Underlay multicast group address (ff04::/64).\n\nOverlay multicast addresses are mapped 1:1 to admin-local scope underlay addresses. Switches replicate to this address via the PRE (with tofino_asic).\n\nOPTE maps overlay groups to underlay groups for guest-originated traffic. The switch performs that mapping for external ingress.\n\nOmicron owns group creation, deletion, and NAT configuration. ddmd programs underlay members in DPD from imported DDM subscriptions.",
             "type": "string",
             "format": "ipv6"
           },
