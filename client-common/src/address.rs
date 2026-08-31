@@ -158,10 +158,6 @@ mod tests {
     #[test]
     fn constants_match_canonical_values() {
         assert_eq!(IPV4_SSM_SUBNET, canonical::IPV4_SSM_SUBNET);
-        // TODO: Compare IPV4_SSM_RESERVED_SUBNET, IPV6_SSM_SUBNETS, and
-        // is_ssm_address against their canonical originals once the Omicron
-        // change replacing the ff30::/12 IPV6_SSM_SUBNET with per-scope /32
-        // blocks lands on main and the pinned revision picks it up.
         assert_eq!(IPV4_MULTICAST_RANGE, canonical::IPV4_MULTICAST_RANGE);
         assert_eq!(
             IPV4_LINK_LOCAL_MULTICAST_SUBNET,

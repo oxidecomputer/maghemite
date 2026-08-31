@@ -702,6 +702,51 @@ mod test {
     }
 
     #[test]
+    fn ipv4_mapped_source_rejected_v6() {
+        // ::ffff:192.0.2.1 per RFC 4291 §2.5.5.2
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::new(
+                0, 0, 0, 0, 0, 0xffff, 0xc000, 0x0201
+            ))
+            .is_err(),
+            "IPv4-mapped address should be rejected as source"
+        );
+    }
+
+    #[test]
+    fn ipv4_compatible_source_rejected_v6() {
+        // ::192.0.2.1 per RFC 4291 §2.5.5.1
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xc000, 0x0201))
+                .is_err(),
+            "IPv4-compatible address should be rejected as source"
+        );
+    }
+
+    #[test]
+    fn nat64_well_known_source_rejected_v6() {
+        // 64:ff9b::192.0.2.1 per RFC 6052 §2.1
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::new(
+                0x0064, 0xff9b, 0, 0, 0, 0, 0xc000, 0x0201
+            ))
+            .is_err(),
+            "NAT64 well-known prefix should be rejected as source"
+        );
+
+        // A network-specific prefix that starts with 64:ff9b but is not the
+        // well-known /96 remains a valid source.
+        assert!(
+            UnicastAddrV6::new(Ipv6Addr::new(
+                0x0064, 0xff9b, 0, 1, 0, 0, 0xc000, 0x0201
+            ))
+            .is_ok(),
+            "64:ff9b:0:1::/96 is a network-specific prefix, not the \
+             well-known one"
+        );
+    }
+
+    #[test]
     fn unicast_rpf_valid_v4() {
         let group = MulticastAddrV4::new(TEST_GROUP_V4).unwrap();
         let key = MulticastRouteKey::any_source(group.into());
