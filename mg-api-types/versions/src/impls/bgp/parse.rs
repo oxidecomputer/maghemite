@@ -59,6 +59,8 @@ pub enum UpdateParseErrorReason {
     InvalidOriginValue { value: u8 },
     /// AS_PATH attribute is malformed
     MalformedAsPath { detail: String },
+    /// Reserved AS 0 found in an AS path or aggregator attribute (RFC 7607)
+    ReservedAsZero { type_code: PathAttributeTypeCode },
     /// Attribute flags are invalid for this type
     InvalidAttributeFlags { type_code: u8, flags: u8 },
 
@@ -158,6 +160,13 @@ impl Display for UpdateParseErrorReason {
             }
             Self::InvalidOriginValue { value } => {
                 write!(f, "invalid ORIGIN value: {}", value)
+            }
+            Self::ReservedAsZero { type_code } => {
+                write!(
+                    f,
+                    "reserved AS 0 in {:?} attribute (RFC 7607)",
+                    type_code
+                )
             }
             Self::MalformedAsPath { detail } => {
                 write!(f, "malformed AS_PATH: {}", detail)
