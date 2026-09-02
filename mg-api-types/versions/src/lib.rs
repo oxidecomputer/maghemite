@@ -39,6 +39,8 @@ pub mod v10;
 pub mod v11;
 #[path = "bfd_nonzero_detect_mult/mod.rs"]
 pub mod v12;
+#[path = "multi_router/mod.rs"]
+pub mod v13;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

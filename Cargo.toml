@@ -159,3 +159,17 @@ rev = "aa4714289cbf28010a821c49d9b73ec94074fb91"
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
 rev = "803f6899e3bc64780a965d625e248e1d77e37d43"
+
+# POC (RFD 662): build against the local dendrite checkout (nsk/poc-662,
+# dpd API v14 multi-router endpoints). Replace with a rev bump once the
+# dendrite branch is pushed.
+[patch."https://github.com/oxidecomputer/dendrite"]
+common = { path = "../dendrite/common" }
+dpd-client = { path = "../dendrite/dpd-client" }
+
+# POC (RFD 662): build against the local opte checkout (nsk/poc-662,
+# API_VERSION 42 router-scoped V2B). Replace with a rev bump once the
+# opte branch is pushed.
+[patch."https://github.com/oxidecomputer/opte"]
+opte-ioctl = { path = "../opte/lib/opte-ioctl" }
+oxide-vpc = { path = "../opte/lib/oxide-vpc" }

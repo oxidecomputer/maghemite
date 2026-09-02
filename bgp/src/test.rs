@@ -329,7 +329,14 @@ where
         let db_path =
             format!("/tmp/{}.{actual_test_name}.db", logical_router.name);
         let _ = std::fs::remove_dir_all(&db_path);
-        let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
+        let db = rdb::Db::new(&db_path, log.clone())
+            .expect("create db")
+            .create_router(rdb::types::RouterInfo {
+                id: rdb::types::RouterId::new_random(),
+                name: logical_router.name.clone(),
+                tep: std::net::Ipv6Addr::UNSPECIFIED,
+            })
+            .expect("create router");
 
         // Create shared session map
         let sessions: Arc<Mutex<SessionMap<Cnx>>> =
@@ -1924,7 +1931,7 @@ fn unnumbered_peering_helper(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -1933,7 +1940,7 @@ fn unnumbered_peering_helper(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
 
@@ -2711,7 +2718,7 @@ fn unnumbered_pair(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -2720,7 +2727,7 @@ fn unnumbered_pair(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
 
@@ -2977,7 +2984,7 @@ fn unnumbered_three_router_chain(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -2986,7 +2993,7 @@ fn unnumbered_three_router_chain(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
     let router3 = Arc::new(Router::new(
@@ -2995,7 +3002,7 @@ fn unnumbered_three_router_chain(
             id: 3,
         },
         log.clone(),
-        db3.db().clone(),
+        db3.router().clone(),
         sessions3.clone(),
     ));
 
@@ -3937,7 +3944,7 @@ fn test_unnumbered_interface_lifecycle() {
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -3946,7 +3953,7 @@ fn test_unnumbered_interface_lifecycle() {
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
 
@@ -4257,7 +4264,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
             id: 1,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
     let router_b = Arc::new(Router::new(
@@ -4266,7 +4273,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
             id: 2,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4382,7 +4389,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let old_router = Arc::new(Router::new(
         config,
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4433,7 +4440,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let new_router = Arc::new(Router::new(
         config,
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4510,7 +4517,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
             id: 1,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
     let router_b = Arc::new(Router::new(
@@ -4519,7 +4526,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
             id: 2,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4704,4 +4711,145 @@ fn admin_events_do_not_reach_other_routers_sessions() {
     router_a.delete_session(session_a1.peer_id());
     router_a.delete_session(session_a2.peer_id());
     router_b.delete_session(session_b.peer_id());
+}
+
+/// Two logical routers with the same ASN sharing one `rdb::Db`, as they do
+/// in mgd: each peers with its own remote speaker over channel connections,
+/// and routes learned over one logical router's session must land only in
+/// that router's RIB.
+#[test]
+#[serial_test::parallel]
+fn test_multi_router_rib_isolation() {
+    let log = init_file_logger("multi_router_rib_isolation.log");
+
+    // One shared database holding both logical routers. The test db comes
+    // with the "default" router pre-created; use it as l1 and add l2.
+    let db = rdb::test::get_test_db("bgp_multi_router_rib", log.clone())
+        .expect("create shared db");
+    let l1_db = db.router().clone();
+    let l2_db = db
+        .db()
+        .create_router(rdb::types::RouterInfo {
+            id: rdb::types::RouterId::new_random(),
+            name: "l2".to_string(),
+            tep: "fd00::2".parse().unwrap(),
+        })
+        .expect("create l2");
+
+    // The remote speakers are plain single-router setups.
+    let p1_db = rdb::test::get_test_db("bgp_multi_router_rib_p1", log.clone())
+        .expect("create p1 db");
+    let p2_db = rdb::test::get_test_db("bgp_multi_router_rib_p2", log.clone())
+        .expect("create p2 db");
+
+    let l1_addr = sockaddr!(&format!("45.0.0.1:{TEST_BGP_PORT}"));
+    let l2_addr = sockaddr!(&format!("45.0.0.2:{TEST_BGP_PORT}"));
+    let p1_addr = sockaddr!(&format!("45.0.0.101:{TEST_BGP_PORT}"));
+    let p2_addr = sockaddr!(&format!("45.0.0.102:{TEST_BGP_PORT}"));
+
+    let spawn = |asn: u32, id: u32, listen: SocketAddr, rdb: rdb::RouterDb| {
+        let sessions = Arc::new(Mutex::new(SessionMap::new()));
+        let dispatcher = Arc::new(Dispatcher::new(
+            sessions.clone(),
+            listen.to_string(),
+            log.clone(),
+            None,
+        ));
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(asn),
+                id,
+            },
+            log.clone(),
+            rdb,
+            sessions,
+        ));
+        let tr = TestRouter { router, dispatcher };
+        tr.run::<BgpListenerChannel>();
+        tr
+    };
+
+    // The two logical routers share an ASN; the remote speakers do not.
+    let l1 = spawn(65001, 1, l1_addr, l1_db);
+    let l2 = spawn(65001, 2, l2_addr, l2_db);
+    let p1 = spawn(64512, 3, p1_addr, p1_db.router().clone());
+    let p2 = spawn(64513, 4, p2_addr, p2_db.router().clone());
+
+    let connect = |tr: &TestRouter<BgpConnectionChannel>,
+                   local: SocketAddr,
+                   remote: SocketAddr| {
+        let (event_tx, event_rx) = channel();
+        let peer_config = PeerConfig {
+            name: remote.to_string(),
+            group: String::new(),
+            id: PeerId::Ip(remote.ip()),
+            port: NonZeroU16::new(remote.port()).unwrap(),
+            hold_time: 6,
+            idle_hold_time: 0,
+            delay_open: 0,
+            connect_retry: 1,
+            keepalive: 3,
+            resolution: 100,
+        };
+        let session_info = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            remote,
+            false,
+        );
+        tr.router
+            .new_session(
+                peer_config,
+                Some(SocketAddr::new(local.ip(), 0)),
+                event_tx.clone(),
+                event_rx,
+                session_info,
+                None,
+            )
+            .expect("new session");
+        event_tx
+            .send(FsmEvent::Admin(AdminEvent::ManualStart))
+            .expect("manual start");
+    };
+
+    connect(&l1, l1_addr, p1_addr);
+    connect(&p1, p1_addr, l1_addr);
+    connect(&l2, l2_addr, p2_addr);
+    connect(&p2, p2_addr, l2_addr);
+
+    for (tr, peer) in [
+        (&l1, p1_addr),
+        (&p1, l1_addr),
+        (&l2, p2_addr),
+        (&p2, l2_addr),
+    ] {
+        let session = tr.router.get_session(peer.ip()).expect("get session");
+        wait_for_eq!(session.state(), FsmStateKind::Established);
+    }
+
+    let p1_prefix = IpNet::V4(cidr!("10.10.0.0/24"));
+    let p2_prefix = IpNet::V4(cidr!("10.20.0.0/24"));
+    p1.router
+        .create_origin4(vec![cidr!("10.10.0.0/24")])
+        .expect("originate on p1");
+    p2.router
+        .create_origin4(vec![cidr!("10.20.0.0/24")])
+        .expect("originate on p2");
+
+    wait_for!(!l1.router.db.get_prefix_paths(&p1_prefix).is_empty());
+    wait_for!(!l2.router.db.get_prefix_paths(&p2_prefix).is_empty());
+
+    // Each prefix lands only in the RIB of the logical router that
+    // learned it.
+    assert!(l1.router.db.get_prefix_paths(&p2_prefix).is_empty());
+    assert!(l2.router.db.get_prefix_paths(&p1_prefix).is_empty());
+
+    // A withdrawal on one logical router must not disturb the other.
+    p1.shutdown();
+    wait_for!(l1.router.db.get_prefix_paths(&p1_prefix).is_empty());
+    assert!(!l2.router.db.get_prefix_paths(&p2_prefix).is_empty());
+
+    l1.shutdown();
+    l2.shutdown();
+    p2.shutdown();
 }

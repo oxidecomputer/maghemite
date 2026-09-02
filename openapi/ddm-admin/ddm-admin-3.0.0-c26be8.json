@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -605,6 +605,12 @@
           },
           "overlay_prefix": {
             "$ref": "#/components/schemas/IpNet"
+          },
+          "router_id": {
+            "nullable": true,
+            "description": "Identity of the router instance that originated this tunnel endpoint. `None` when the origin came from a peer or client that predates multi-router support.\n\nSkipped when absent so that the serialized form of an id-less origin is byte-identical to the v3 form (ddmd persists origins keyed by their JSON serialization).",
+            "type": "string",
+            "format": "uuid"
           },
           "vni": {
             "type": "integer",

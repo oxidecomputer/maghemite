@@ -10,6 +10,7 @@ ddm-api-types-versions.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 colored.workspace = true
+uuid.workspace = true
 oxide-tokio-rt.workspace = true
 oxnet.workspace = true
 slog-async.workspace = true

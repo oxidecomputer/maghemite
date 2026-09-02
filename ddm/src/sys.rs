@@ -238,20 +238,21 @@ pub fn add_routes_dendrite(
 #[cfg(target_os = "illumos")]
 fn tunnel_route_update_map(
     routes: &HashSet<TunnelRoute>,
-) -> HashMap<IpNet, Vec<TunnelEndpoint>> {
-    let mut m: HashMap<IpNet, Vec<TunnelEndpoint>> = HashMap::new();
+) -> HashMap<(IpNet, Option<uuid::Uuid>), Vec<TunnelEndpoint>> {
+    let mut m: HashMap<(IpNet, Option<uuid::Uuid>), Vec<TunnelEndpoint>> =
+        HashMap::new();
     for r in routes {
-        let pfx = r.origin.overlay_prefix;
+        let key = (r.origin.overlay_prefix, r.origin.router_id);
         let tep = TunnelEndpoint {
             ip: r.origin.boundary_addr.into(),
             vni: oxide_vpc::api::Vni::new(r.origin.vni).unwrap(),
         };
-        match m.get_mut(&pfx) {
+        match m.get_mut(&key) {
             Some(entry) => {
                 entry.push(tep);
             }
             None => {
-                m.insert(pfx, vec![tep]);
+                m.insert(key, vec![tep]);
             }
         }
     }
@@ -279,15 +280,16 @@ pub fn add_tunnel_routes(
     };
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
 
-    for (pfx, tep) in tunnel_route_update_map(routes) {
+    for ((pfx, router_id), tep) in tunnel_route_update_map(routes) {
         for t in &tep {
             inf!(
                 log,
                 ifname,
-                "adding tunnel route {} -[{}]-> {}",
+                "adding tunnel route {} -[{}]-> {} (router {:?})",
                 pfx,
                 t.vni,
                 t.ip,
+                router_id,
             );
         }
         let vip = match pfx {
@@ -300,7 +302,7 @@ pub fn add_tunnel_routes(
                 Ipv6PrefixLen::new(p.width()).unwrap(),
             )),
         };
-        let req = SetVirt2BoundaryReq { vip, tep };
+        let req = SetVirt2BoundaryReq { router_id, vip, tep };
         if let Err(e) = hdl.set_v2b(&req) {
             err!(log, ifname, "failed to set v2p route: {:?}: {}", req, e);
         }
@@ -329,15 +331,16 @@ pub fn remove_tunnel_routes(
         Ipv6PrefixLen,
     };
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
-    for (pfx, tep) in tunnel_route_update_map(routes) {
+    for ((pfx, router_id), tep) in tunnel_route_update_map(routes) {
         for t in &tep {
             inf!(
                 log,
                 ifname,
-                "removing tunnel route {} -[{}]-> {}",
+                "removing tunnel route {} -[{}]-> {} (router {:?})",
                 pfx,
                 t.vni,
                 t.ip,
+                router_id,
             );
         }
         let vip = match pfx {
@@ -350,7 +353,7 @@ pub fn remove_tunnel_routes(
                 Ipv6PrefixLen::new(p.width()).unwrap(),
             )),
         };
-        let req = ClearVirt2BoundaryReq { vip, tep };
+        let req = ClearVirt2BoundaryReq { router_id, vip, tep };
         if let Err(e) = hdl.clear_v2b(&req) {
             err!(log, ifname, "failed to clear v2p route: {:?}: {}", req, e);
         }

@@ -267,35 +267,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        let ctx = lock!(ctx.context());
-        let endpoints = request.into_inner();
-        slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
-        ctx.db
-            .originate_tunnel(&endpoints)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        do_advertise_tunnel_endpoints(ctx, request.into_inner())
+    }
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
-
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunnel endpoints stat: {e}"
-                )
-            }
-        }
-        Ok(HttpResponseUpdatedNoContent())
+    async fn advertise_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<
+            HashSet<ddm_api_types_versions::v1::net::TunnelOrigin>,
+        >,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let endpoints =
+            request.into_inner().into_iter().map(Into::into).collect();
+        do_advertise_tunnel_endpoints(ctx, endpoints)
     }
 
     async fn withdraw_prefixes(
@@ -337,36 +320,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        let ctx = lock!(ctx.context());
-        let endpoints = request.into_inner();
-        slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
-        ctx.db
-            .withdraw_tunnel(&endpoints)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        do_withdraw_tunnel_endpoints(ctx, request.into_inner())
+    }
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
-
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunel endpoints stat: {e}"
-                )
-            }
-        }
-
-        Ok(HttpResponseUpdatedNoContent())
+    async fn withdraw_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<
+            HashSet<ddm_api_types_versions::v1::net::TunnelOrigin>,
+        >,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let endpoints =
+            request.into_inner().into_iter().map(Into::into).collect();
+        do_withdraw_tunnel_endpoints(ctx, endpoints)
     }
 
     async fn sync(
@@ -429,6 +394,75 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         Ok(HttpResponseUpdatedNoContent())
     }
+}
+
+fn do_advertise_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    endpoints: HashSet<TunnelOrigin>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = lock!(ctx.context());
+    ctx.db
+        .originate_tunnel(&endpoints)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+            endpoints.clone(),
+        ))))
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
+    }
+
+    match ctx.db.originated_tunnel_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_tunnel_endpoints
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated tunnel endpoints stat: {e}"
+            )
+        }
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+fn do_withdraw_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    endpoints: HashSet<TunnelOrigin>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = lock!(ctx.context());
+    slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
+    ctx.db
+        .withdraw_tunnel(&endpoints)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+            endpoints.clone(),
+        ))))
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
+    }
+
+    match ctx.db.originated_tunnel_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_tunnel_endpoints
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated tunnel endpoints stat: {e}"
+            )
+        }
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub fn api_description()

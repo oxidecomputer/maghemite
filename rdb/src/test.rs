@@ -4,7 +4,8 @@
 
 //! Test utilities for rdb tests.
 
-use crate::{Db, error::Error};
+use crate::types::{RouterId, RouterInfo};
+use crate::{Db, RouterDb, error::Error};
 use client_common::eprintln_nopipe;
 use slog::Logger;
 use std::ops::{Deref, DerefMut};
@@ -16,15 +17,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// If the test panics (fails), the database is left in /tmp for debugging.
 /// This allows you to examine the database state after a test failure.
 ///
-/// The wrapper implements `Deref` and `DerefMut`, so you can use it exactly
-/// like a regular `Db`.
+/// The wrapper holds a [`Db`] with a single `"default"` router and implements
+/// `Deref` and `DerefMut` to that router's [`RouterDb`], so you can use it
+/// like a regular `RouterDb`.
 ///
-/// Cloning a `TestDb` clones the underlying `Db` (which is cheap since `Db`
-/// uses `Arc` internally) but shares the same database path. Only the last
-/// `TestDb` instance to be dropped will clean up the database.
+/// Cloning a `TestDb` clones the underlying handles (which is cheap since
+/// they use `Arc` internally) but shares the same database path. Only the
+/// last `TestDb` instance to be dropped will clean up the database.
 #[derive(Clone)]
 pub struct TestDb {
     db: Db,
+    router: RouterDb,
     path: String,
 }
 
@@ -34,6 +37,11 @@ impl TestDb {
         &self.db
     }
 
+    /// Get the default router's RouterDb reference
+    pub fn router(&self) -> &RouterDb {
+        &self.router
+    }
+
     /// Get the database path
     pub fn path(&self) -> &str {
         &self.path
@@ -41,16 +49,16 @@ impl TestDb {
 }
 
 impl Deref for TestDb {
-    type Target = Db;
+    type Target = RouterDb;
 
     fn deref(&self) -> &Self::Target {
-        &self.db
+        &self.router
     }
 }
 
 impl DerefMut for TestDb {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.db
+        &mut self.router
     }
 }
 
@@ -135,5 +143,14 @@ pub fn get_test_db(test_name: &str, log: Logger) -> Result<TestDb, Error> {
     }
 
     let db = Db::new(&db_path, log)?;
-    Ok(TestDb { db, path: db_path })
+    let router = db.create_router(RouterInfo {
+        id: RouterId::new_random(),
+        name: "default".to_string(),
+        tep: std::net::Ipv6Addr::UNSPECIFIED,
+    })?;
+    Ok(TestDb {
+        db,
+        router,
+        path: db_path,
+    })
 }

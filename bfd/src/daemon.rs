@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 pub struct Daemon {
     dispatcher: Dispatcher,
-    sessions: HashMap<IpAddr, Session>,
+    /// Sessions indexed by peer address, tagged with the name of the router
+    /// whose RIB the session's liveness state feeds.
+    sessions: HashMap<IpAddr, (String, Session)>,
     egress_src_port: Arc<EgressSrcPortIter>,
     log: Logger,
 }
@@ -42,8 +44,24 @@ impl Daemon {
         }
     }
 
-    pub fn sessions_iter(&self) -> hash_map::Iter<'_, IpAddr, Session> {
-        self.sessions.iter()
+    pub fn sessions_iter(&self) -> impl Iterator<Item = (&IpAddr, &Session)> {
+        self.sessions.iter().map(|(ip, (_, s))| (ip, s))
+    }
+
+    /// Iterate the sessions belonging to the named router.
+    pub fn router_sessions_iter(
+        &self,
+        router: &str,
+    ) -> impl Iterator<Item = (&IpAddr, &Session)> {
+        self.sessions
+            .iter()
+            .filter(move |(_, (r, _))| r == router)
+            .map(|(ip, (_, s))| (ip, s))
+    }
+
+    /// The name of the router a peer's session belongs to, if the peer exists.
+    pub fn router_for_peer(&self, peer: &IpAddr) -> Option<&str> {
+        self.sessions.get(peer).map(|(r, _)| r.as_str())
     }
 
     pub fn listen_addr_for_peer(&self, peer: &IpAddr) -> Option<SocketAddr> {
@@ -52,7 +70,7 @@ impl Daemon {
 
     pub fn add_peer(
         &mut self,
-        db: rdb::Db,
+        db: rdb::RouterDb,
         rq: AddPeerRequest,
     ) -> Result<(), AddPeerError> {
         let peer = rq.remote_addr.ip();
@@ -87,6 +105,7 @@ impl Daemon {
                     &self.log,
                 )?;
 
+                let router = db.name().to_string();
                 let session = Session::new(
                     db,
                     rq,
@@ -96,7 +115,7 @@ impl Daemon {
                     &self.log,
                 );
 
-                entry.insert(session);
+                entry.insert((router, session));
                 Ok(())
             }
         }

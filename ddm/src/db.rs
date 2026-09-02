@@ -407,6 +407,7 @@ mod test {
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:a::1".parse().unwrap(),
         });
@@ -416,6 +417,7 @@ mod test {
                 boundary_addr: "fd00:b::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:b::1".parse().unwrap(),
         });
@@ -428,6 +430,7 @@ mod test {
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:a::1".parse().unwrap(),
         });
@@ -437,6 +440,7 @@ mod test {
                 boundary_addr: "fd00:b::1".parse().unwrap(),
                 vni: 99,
                 metric: 100,
+                router_id: None,
             },
             nexthop: "fe80:b::1".parse().unwrap(),
         });
@@ -462,6 +466,7 @@ mod test {
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:a::1".parse().unwrap(),
         });

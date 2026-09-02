@@ -21,7 +21,9 @@ pub struct BfdPeerConfig {
     pub mode: SessionMode,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
 pub enum SessionMode {
     SingleHop,
     MultiHop,
