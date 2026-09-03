@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
+use crate::sm::{AdminEvent, Event, PrefixSet, StateMachine};
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
@@ -28,18 +28,19 @@ use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use {
-    crate::sm::{InterfaceState, StateMachine},
+    crate::sm::{InterfaceState, SmContext},
     mg_common::write_lock,
     std::collections::BTreeSet,
     std::sync::mpsc::channel,
@@ -59,7 +60,9 @@ pub struct RouterStats {
 pub struct HandlerContext {
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Arc<RwLock<IdOrdMap<SmContext>>>,
+    pub peers: Arc<RwLock<IdOrdMap<StateMachine>>>,
+    pub mesh: Arc<RwLock<BTreeMap<String, Sender<Event>>>>,
+    pub apply_lock: Arc<Mutex<()>>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
     pub hostname: String,
@@ -74,47 +77,76 @@ impl HandlerContext {
         &self,
         interfaces: impl IntoIterator<Item = String>,
     ) {
+        let mut peers = write_lock!(self.peers);
         interfaces
             .into_iter()
-            .for_each(|ifname| self.start_state_machine(ifname));
+            .for_each(|ifname| self.start_state_machine(&mut peers, ifname));
     }
 
     /// Build, wire, and start one routing state machine for an interface.
-    pub fn start_state_machine(&self, ifname: String) {
+    fn start_state_machine(
+        &self,
+        peers: &mut IdOrdMap<StateMachine>,
+        ifname: String,
+    ) {
         let (tx, rx) = channel();
         let mut config = self.base_fsm_config.clone();
-        config.aobj_name = ifname;
+        config.aobj_name = ifname.clone();
         let ctx = SmContext {
             config,
             db: self.db.clone(),
             tx: tx.clone(),
-            event_channels: Arc::new(RwLock::new(Vec::new())),
+            event_channels: self.mesh.clone(),
             rt: self.rt.clone(),
             hostname: self.hostname.clone(),
             iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(crate::sm::SessionStats::default()),
             log: self.log.clone(),
         };
-        let mut sm = StateMachine { ctx, rx: Some(rx) };
-        for peer in read_lock!(self.peers).iter() {
-            // push all existing peers' FSM handles to the new FSM
-            write_lock!(sm.ctx.event_channels).push(peer.tx.clone());
-            // push the new FSM handle to all existing peers
-            write_lock!(peer.event_channels).push(tx.clone());
+        let sm = StateMachine::new(ctx, rx);
+        if peers.insert_unique(sm).is_err() {
+            error!(self.log, "state machine {ifname} already exists");
+            return;
         }
-        sm.run().unwrap();
-        write_lock!(self.peers).insert_overwrite(sm.ctx.clone());
+        write_lock!(self.mesh).insert(ifname.clone(), tx);
+        peers.get_mut(ifname.as_str()).unwrap().run().unwrap();
     }
 
-    /// Stop and remove the state machine for a set of interfaces.
-    pub fn stop_state_machines(
-        &self,
-        interfaces: impl IntoIterator<Item = String>,
-    ) {
-        let mut peers = write_lock!(self.peers);
-        interfaces.into_iter().for_each(|ifname| {
-            peers.remove(ifname.as_str());
-        });
+    /// Reconcile the running FSMs with `desired`, including full teardown.
+    pub fn apply(&self, desired: BTreeSet<String>) {
+        let _guard = lock!(self.apply_lock);
+        let departing = {
+            let mut peers = write_lock!(self.peers);
+            let current = peers
+                .iter()
+                .map(|sm| sm.ctx.config.aobj_name.clone())
+                .collect::<BTreeSet<_>>();
+            let to_del =
+                current.difference(&desired).cloned().collect::<Vec<_>>();
+            let to_add =
+                desired.difference(&current).cloned().collect::<Vec<_>>();
+            let departing = to_del
+                .iter()
+                .filter_map(|name| peers.remove(name.as_str()))
+                .collect::<Vec<_>>();
+            {
+                let mut mesh = write_lock!(self.mesh);
+                for sm in &departing {
+                    mesh.remove(sm.ctx.config.aobj_name.as_str());
+                }
+            }
+            for name in to_add {
+                self.start_state_machine(&mut peers, name);
+            }
+            departing
+        };
+
+        for sm in &departing {
+            sm.signal_stop();
+        }
+        for sm in departing {
+            sm.join();
+        }
     }
 }
 
@@ -195,7 +227,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
         for sm in read_lock!(ctx.peers).iter() {
-            result.insert(*lock!(sm.iface.if_index), sm.interface_info());
+            result
+                .insert(*lock!(sm.ctx.iface.if_index), sm.ctx.interface_info());
         }
         Ok(HttpResponseOk(result))
     }
@@ -206,26 +239,21 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
-            let ctx = lock!(_ctx.context());
-            let old: BTreeSet<String> = read_lock!(ctx.peers)
-                .iter()
-                .map(|ctx| ctx.config.aobj_name.clone())
-                .collect();
+            let ctx = lock!(_ctx.context()).clone();
             // XXX: SMF tells DDM about addr objects, not ifnames, so for now
             //      we append "/ll" to the end of the ifname. Eventually this
             //      endpoint and SMF should move over to using a stronger type.
-            let new: BTreeSet<String> = _request
+            let desired = _request
                 .into_inner()
                 .ddm_interfaces
                 .into_iter()
                 .map(|ifname| format!("{ifname}/ll"))
                 .collect();
-            let to_add: BTreeSet<String> =
-                new.difference(&old).cloned().collect();
-            let to_del: BTreeSet<String> =
-                old.difference(&new).cloned().collect();
-            ctx.start_state_machines(to_add);
-            ctx.stop_state_machines(to_del);
+            tokio::task::spawn_blocking(move || ctx.apply(desired))
+                .await
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!("ddm_apply: {e}"))
+                })?;
         }
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -240,9 +268,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 .filter_map(|sm| {
                     // Compute status first so peer_status() never runs while we
                     // hold any of the InterfaceState mutexes below.
-                    let status = sm.iface.peer_status();
-                    let if_index = *lock!(sm.iface.if_index);
-                    let peer = lock!(sm.iface.peer_identity).clone()?;
+                    let status = sm.ctx.iface.peer_status();
+                    let if_index = *lock!(sm.ctx.iface.if_index);
+                    let peer = lock!(sm.ctx.iface.peer_identity).clone()?;
                     Some((
                         if_index,
                         PeerInfo {
@@ -265,7 +293,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
 
         for peer in read_lock!(ctx.peers).iter() {
-            peer.tx
+            peer.ctx
+                .tx
                 .send(Event::Admin(AdminEvent::Expire(addr)))
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
@@ -345,7 +374,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
         for peer in read_lock!(ctx.peers).iter() {
-            peer.tx
+            peer.ctx
+                .tx
                 .send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                     prefixes.clone(),
                 ))))
@@ -384,7 +414,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
         for peer in read_lock!(ctx.peers).iter() {
-            peer.tx
+            peer.ctx
+                .tx
                 .send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                     endpoints.clone(),
                 ))))
@@ -421,7 +452,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
         for peer in read_lock!(ctx.peers).iter() {
-            peer.tx
+            peer.ctx
+                .tx
                 .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                     prefixes.clone(),
                 ))))
@@ -460,7 +492,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
         for peer in read_lock!(ctx.peers).iter() {
-            peer.tx
+            peer.ctx
+                .tx
                 .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                     endpoints.clone(),
                 ))))
@@ -493,9 +526,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
 
         for peer in read_lock!(ctx.peers).iter() {
-            peer.tx.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Sync))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         Ok(HttpResponseUpdatedNoContent())

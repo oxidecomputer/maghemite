@@ -6,11 +6,12 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
-use ddm::sm::{DpdConfig, SmContext};
+use ddm::sm::{DpdConfig, StateMachine};
 use ddm_api_types::db::RouterKind;
 use iddqd::IdOrdMap;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
@@ -173,8 +174,9 @@ async fn run() {
     };
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Arc<RwLock<IdOrdMap<SmContext>>> =
+    let peers: Arc<RwLock<IdOrdMap<StateMachine>>> =
         Arc::new(RwLock::new(IdOrdMap::new()));
+    let mesh = Arc::new(RwLock::new(BTreeMap::new()));
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
@@ -205,6 +207,8 @@ async fn run() {
         db,
         stats: router_stats,
         peers,
+        mesh,
+        apply_lock: Arc::new(Mutex::new(())),
         stats_handler: Arc::new(Mutex::new(stats_handler)),
         log: log.clone(),
         hostname,

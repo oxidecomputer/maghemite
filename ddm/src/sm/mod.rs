@@ -14,14 +14,14 @@ use ddm_api_types::db::{
 };
 use ddm_api_types::net::TunnelOrigin;
 use iddqd::{IdOrdItem, id_upcast};
-use mg_common::lock;
+use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::Logger;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -66,6 +66,8 @@ pub enum Event {
     Neighbor(NeighborEvent),
     Peer(PeerEvent),
     Admin(AdminEvent),
+    /// Tear this state machine down and exit its thread.
+    Shutdown,
 }
 
 impl From<NeighborEvent> for Event {
@@ -276,7 +278,7 @@ pub struct SmContext {
     pub config: Config,
     pub db: Db,
     pub tx: Sender<Event>,
-    pub event_channels: Arc<RwLock<Vec<Sender<Event>>>>,
+    pub event_channels: Arc<RwLock<BTreeMap<String, Sender<Event>>>>,
     pub rt: tokio::runtime::Handle,
     pub hostname: String,
     pub iface: Arc<InterfaceState>,
@@ -284,17 +286,16 @@ pub struct SmContext {
     pub log: Logger,
 }
 
-impl IdOrdItem for SmContext {
-    type Key<'a> = &'a str;
-
-    fn key(&self) -> Self::Key<'_> {
-        &self.config.aobj_name
+impl SmContext {
+    /// Snapshot the event senders for every other state machine.
+    pub fn peer_channels(&self) -> Vec<(String, Sender<Event>)> {
+        read_lock!(self.event_channels)
+            .iter()
+            .filter(|(name, _)| name.as_str() != self.config.aobj_name)
+            .map(|(name, tx)| (name.clone(), tx.clone()))
+            .collect()
     }
 
-    id_upcast!();
-}
-
-impl SmContext {
     pub fn interface_info(&self) -> InterfaceInfo {
         let status = self.iface.peer_status();
         let peer = lock!(self.iface.peer_identity).clone();
@@ -310,7 +311,66 @@ impl SmContext {
 
 pub struct StateMachine {
     pub ctx: SmContext,
-    pub rx: Option<Receiver<Event>>,
+    // Receiver is only present until `run`, but the mutex keeps this owner
+    // type `Sync` while it is stored behind the admin's shared peers map.
+    pub rx: Mutex<Option<Receiver<Event>>>,
+    #[cfg_attr(
+        not(all(feature = "backend", target_os = "illumos")),
+        allow(dead_code)
+    )]
+    thread: Option<std::thread::JoinHandle<()>>,
+    #[cfg_attr(
+        not(all(feature = "backend", target_os = "illumos")),
+        allow(dead_code)
+    )]
+    stop: Stop,
+}
+
+impl StateMachine {
+    pub fn new(ctx: SmContext, rx: Receiver<Event>) -> Self {
+        Self {
+            ctx,
+            rx: Mutex::new(Some(rx)),
+            thread: None,
+            stop: Stop::default(),
+        }
+    }
+}
+
+impl IdOrdItem for StateMachine {
+    type Key<'a> = &'a str;
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.ctx.config.aobj_name
+    }
+
+    id_upcast!();
+}
+
+/// A cancellation flag that wakes sleeping threads when set.
+#[derive(Clone, Default)]
+pub struct Stop(Arc<(Mutex<bool>, Condvar)>);
+
+impl Stop {
+    pub fn set(&self) {
+        *lock!(self.0.0) = true;
+        self.0.1.notify_all();
+    }
+
+    pub fn is_set(&self) -> bool {
+        *lock!(self.0.0)
+    }
+
+    /// Wait for up to `duration`, returning whether the flag was set.
+    pub fn wait(&self, duration: Duration) -> bool {
+        let guard = lock!(self.0.0);
+        let (guard, _) = self
+            .0
+            .1
+            .wait_timeout_while(guard, duration, |stopped| !*stopped)
+            .expect("stop condvar");
+        *guard
+    }
 }
 
 #[cfg(test)]
@@ -351,7 +411,7 @@ mod tests {
             },
             db: crate::db::Db::new_for_test(),
             tx,
-            event_channels: Arc::new(RwLock::new(Vec::new())),
+            event_channels: Arc::new(RwLock::new(BTreeMap::new())),
             rt: rt_handle(),
             hostname: String::new(),
             iface: Arc::new(InterfaceState::default()),
@@ -371,10 +431,8 @@ mod tests {
         assert_eq!(info.addr, addr);
     }
 
-    // event_channels is Arc<RwLock<...>>, so all clones of an SmContext share
-    // the same channel list. This is the property that makes start_state_machine
-    // wiring correct: pushing a sender through the clone in HandlerContext::peers
-    // is immediately visible to the running FSM.
+    // event_channels is Arc<RwLock<...>>, so all clones of an SmContext see
+    // updates to the shared sender mesh.
 
     #[test]
     fn event_channels_shared_across_clones() {
@@ -382,19 +440,39 @@ mod tests {
         let clone = ctx.clone();
 
         let (tx, _rx) = mpsc::channel::<Event>();
-        write_lock!(ctx.event_channels).push(tx);
+        write_lock!(ctx.event_channels).insert("eth1".to_string(), tx);
 
         assert_eq!(read_lock!(clone.event_channels).len(), 1);
     }
 
     #[test]
-    fn event_channels_independent_across_distinct_contexts() {
-        let a = make_ctx("eth0");
-        let b = make_ctx("eth1");
+    fn peer_channels_excludes_self() {
+        let mut a = make_ctx("eth0");
+        let mut b = make_ctx("eth1");
+        let mesh = Arc::new(RwLock::new(BTreeMap::new()));
+        a.event_channels = mesh.clone();
+        b.event_channels = mesh.clone();
+        write_lock!(mesh).insert("eth0".to_string(), a.tx.clone());
+        write_lock!(mesh).insert("eth1".to_string(), b.tx.clone());
 
-        let (tx, _rx) = mpsc::channel::<Event>();
-        write_lock!(a.event_channels).push(tx);
+        assert_eq!(a.peer_channels()[0].0, "eth1");
+        assert_eq!(b.peer_channels()[0].0, "eth0");
+    }
 
-        assert_eq!(read_lock!(b.event_channels).len(), 0);
+    #[test]
+    fn stop_wait_wakes_when_set() {
+        let stop = Stop::default();
+        let waiter = stop.clone();
+        let thread =
+            std::thread::spawn(move || waiter.wait(Duration::from_secs(5)));
+        std::thread::sleep(Duration::from_millis(10));
+        stop.set();
+
+        assert!(thread.join().unwrap());
+    }
+
+    #[test]
+    fn stop_wait_times_out_when_unset() {
+        assert!(!Stop::default().wait(Duration::from_millis(1)));
     }
 }
