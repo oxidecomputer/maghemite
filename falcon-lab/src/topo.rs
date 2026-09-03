@@ -3,7 +3,20 @@
 use anyhow::Result;
 use libfalcon::{Runner, node, unit::gb};
 
-use crate::{eos::EosNode, frr::FrrNode, juniper::JuniperNode, mgd::MgdNode};
+use crate::{
+    eos::EosNode,
+    frr::FrrNode,
+    juniper::JuniperNode,
+    mgd::MgdNode,
+    scenario::{InteropScenario, MgdDuoScenario},
+};
+
+pub(crate) trait Topology: Sized {
+    type Scenario;
+
+    fn build(scenario: Self::Scenario) -> Result<Self>;
+    fn runner_mut(&mut self) -> &mut Runner;
+}
 
 pub struct MgdDuo {
     pub d: Runner,
@@ -11,74 +24,94 @@ pub struct MgdDuo {
     pub ox2: MgdNode,
 }
 
-pub struct Quartet {
+impl Topology for MgdDuo {
+    type Scenario = MgdDuoScenario;
+
+    fn build(scenario: MgdDuoScenario) -> Result<Self> {
+        let mut d = Runner::new(scenario.name());
+
+        node!(d, ox1, "helios-3.0", 4, gb(4));
+        node!(d, ox2, "helios-3.0", 4, gb(4));
+
+        d.link(ox1, ox2);
+
+        d.default_ext_link(ox1)?;
+        d.default_ext_link(ox2)?;
+
+        d.mount("cargo-bay", "/opt/cargo-bay", ox1)?;
+        d.mount("cargo-bay", "/opt/cargo-bay", ox2)?;
+
+        Ok(Self {
+            d,
+            ox1: MgdNode(ox1),
+            ox2: MgdNode(ox2),
+        })
+    }
+
+    fn runner_mut(&mut self) -> &mut Runner {
+        &mut self.d
+    }
+}
+
+pub struct Interop {
     pub d: Runner,
     pub ox: MgdNode,
+    pub peer: MgdNode,
     pub cr1: FrrNode,
     pub cr2: EosNode,
     pub cr3: JuniperNode,
 }
 
-pub fn mgd_duo(name: &str) -> Result<MgdDuo> {
-    let mut d = Runner::new(name);
+impl Topology for Interop {
+    type Scenario = InteropScenario;
 
-    node!(d, ox1, "helios-3.0", 4, gb(4));
-    node!(d, ox2, "helios-3.0", 4, gb(4));
+    fn build(scenario: InteropScenario) -> Result<Self> {
+        let mut d = Runner::new(scenario.name());
 
-    d.link(ox1, ox2);
+        node!(d, ox, "helios-3.0", 4, gb(4));
+        node!(d, cr1, "debian-13.2", 4, gb(4));
+        node!(d, cr2, "eos-4.35", 4, gb(4));
+        node!(d, cr3, "junos-23.2", 4, gb(4));
+        node!(d, peer, "helios-3.0", 4, gb(4));
 
-    d.default_ext_link(ox1)?;
-    d.default_ext_link(ox2)?;
+        let mut mac_counter = 0;
+        let mut new_mac = || {
+            mac_counter += 1;
+            format!("a8:40:25:00:00:{mac_counter:02}")
+        };
 
-    d.mount("cargo-bay", "/opt/cargo-bay", ox1)?;
-    d.mount("cargo-bay", "/opt/cargo-bay", ox2)?;
+        d.softnpu_link(ox, cr1, Some(new_mac()), None);
+        d.softnpu_link(ox, cr2, Some(new_mac()), None);
+        d.softnpu_link(ox, cr3, Some(new_mac()), None);
+        d.softnpu_link(ox, peer, Some(new_mac()), None);
 
-    Ok(MgdDuo {
-        d,
-        ox1: MgdNode(ox1),
-        ox2: MgdNode(ox2),
-    })
-}
+        d.default_ext_link(ox)?;
+        d.default_ext_link(cr1)?;
+        d.default_ext_link(cr2)?;
+        d.default_ext_link(cr3)?;
+        d.default_ext_link(peer)?;
 
-pub fn quartet(name: &str) -> Result<Quartet> {
-    let mut d = Runner::new(name);
+        d.mount("cargo-bay", "/opt/cargo-bay", ox)?;
+        d.mount_linux("cargo-bay", "/opt/cargo-bay", cr1)?;
+        d.mount("cargo-bay", "/opt/cargo-bay", cr2)?;
+        d.mount_linux("cargo-bay", "/opt/cargo-bay", cr3)?;
+        d.mount("cargo-bay", "/opt/cargo-bay", peer)?;
+        // The Junos image mounts cargo-bay and applies staged configuration
+        // from guest-side systemd services. Keep the 9p device in the spec,
+        // but avoid Falcon's serial-driven setup/mount path for this node.
+        d.do_setup(cr3, false);
 
-    // nodes
-    node!(d, ox, "helios-3.0", 4, gb(4));
-    node!(d, cr1, "debian-13.2", 4, gb(4));
-    node!(d, cr2, "eos-4.35", 4, gb(4));
-    node!(d, cr3, "junos-23.2", 4, gb(4));
+        Ok(Self {
+            d,
+            ox: MgdNode(ox),
+            peer: MgdNode(peer),
+            cr1: FrrNode(cr1),
+            cr2: EosNode(cr2),
+            cr3: JuniperNode(cr3),
+        })
+    }
 
-    // links
-    let mut mac_counter = 0;
-    let mut new_mac = || {
-        mac_counter += 1;
-        format!("a8:40:25:00:00:{mac_counter:02}")
-    };
-
-    d.softnpu_link(ox, cr1, Some(new_mac()), None);
-    d.softnpu_link(ox, cr2, Some(new_mac()), None);
-    d.softnpu_link(ox, cr3, Some(new_mac()), None);
-
-    d.default_ext_link(ox)?;
-    d.default_ext_link(cr1)?;
-    d.default_ext_link(cr2)?;
-    d.default_ext_link(cr3)?;
-
-    d.mount("cargo-bay", "/opt/cargo-bay", ox)?;
-    d.mount_linux("cargo-bay", "/opt/cargo-bay", cr1)?;
-    d.mount("cargo-bay", "/opt/cargo-bay", cr2)?;
-    d.mount_linux("cargo-bay", "/opt/cargo-bay", cr3)?;
-    // The Junos image mounts cargo-bay and applies staged configuration from
-    // guest-side systemd services. Keep the 9p device in the spec, but avoid
-    // Falcon's serial-driven setup/mount path for this node.
-    d.do_setup(cr3, false);
-
-    Ok(Quartet {
-        d,
-        ox: MgdNode(ox),
-        cr1: FrrNode(cr1),
-        cr2: EosNode(cr2),
-        cr3: JuniperNode(cr3),
-    })
+    fn runner_mut(&mut self) -> &mut Runner {
+        &mut self.d
+    }
 }
