@@ -4,7 +4,7 @@
 
 use crate::{
     bgp::basic_unnumbered_neighbor,
-    ddm::DdmNode,
+    ddm::{DdmNode, RouterKind},
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     diagnostics::ProtocolDiagnostics,
     eos::EosNode,
@@ -15,7 +15,10 @@ use crate::{
     wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result};
-use ddm_admin_client::{Client as DdmClient, types::ApplyRequest};
+use ddm_admin_client::{
+    Client as DdmClient,
+    types::{ApplyRequest, PathVector},
+};
 use dpd_client::{
     Client as DpdClient,
     types::{Ipv4Entry, Ipv6Entry, LinkId, PortId},
@@ -37,7 +40,7 @@ use mg_api_types::static_routes::{
 use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU8,
     sync::Arc,
@@ -61,10 +64,10 @@ const MGD_DUO_MGMT_ADDR: &str = "vioif1/dhcp";
 
 // The hub's two peer links are created before its management link. Each leaf
 // has one peer link followed by management.
-const DDM_HUB_PEER1_ADDR: &str = "vioif0/ll";
-const DDM_HUB_PEER2_ADDR: &str = "vioif1/ll";
+const DDM_HUB_PEER1_IF: &str = "vioif0";
+const DDM_HUB_PEER2_IF: &str = "vioif1";
 const DDM_HUB_MGMT_ADDR: &str = "vioif2/dhcp";
-const DDM_LEAF_PEER_ADDR: &str = "vioif0/ll";
+const DDM_LEAF_PEER_IF: &str = "vioif0";
 const DDM_LEAF_MGMT_ADDR: &str = "vioif1/dhcp";
 const DDM_PEER1_PREFIX: &str = "fd00:dd01::/64";
 const DDM_PEER2_PREFIX: &str = "fd00:dd02::/64";
@@ -171,6 +174,8 @@ struct DdmObservedState {
     peer1_peers: usize,
     peer2_peers: usize,
     hub_prefixes: BTreeSet<Ipv6Net>,
+    peer1_prefixes: BTreeSet<Ipv6Net>,
+    peer2_prefixes: BTreeSet<Ipv6Net>,
 }
 
 /// Run a test body against a booted topology and dump diagnostics from every
@@ -315,20 +320,23 @@ async fn boot_ddm_trio(
             peer1_illumos.dhcp(&ad, DDM_LEAF_MGMT_ADDR),
             peer2_illumos.dhcp(&ad, DDM_LEAF_MGMT_ADDR),
         )?;
+        let hub_peer1_ll = format!("{DDM_HUB_PEER1_IF}/ll");
+        let hub_peer2_ll = format!("{DDM_HUB_PEER2_IF}/ll");
+        let leaf_peer_ll = format!("{DDM_LEAF_PEER_IF}/ll");
         tokio::try_join!(
-            hub_illumos.addrconf(&ad, DDM_HUB_PEER1_ADDR),
-            hub_illumos.addrconf(&ad, DDM_HUB_PEER2_ADDR),
-            peer1_illumos.addrconf(&ad, DDM_LEAF_PEER_ADDR),
-            peer2_illumos.addrconf(&ad, DDM_LEAF_PEER_ADDR),
+            hub_illumos.addrconf(&ad, &hub_peer1_ll),
+            hub_illumos.addrconf(&ad, &hub_peer2_ll),
+            peer1_illumos.addrconf(&ad, &leaf_peer_ll),
+            peer2_illumos.addrconf(&ad, &leaf_peer_ll),
         )?;
 
         let hub_client = hub.client(&ad, hub_addr).await?;
         let peer1_client = peer1.client(&ad, peer1_addr).await?;
         let peer2_client = peer2.client(&ad, peer2_addr).await?;
         tokio::try_join!(
-            hub.run_ddm(&ad),
-            peer1.run_ddm(&ad),
-            peer2.run_ddm(&ad),
+            hub.run_ddm(&ad, RouterKind::Transit),
+            peer1.run_ddm(&ad, RouterKind::Server),
+            peer2.run_ddm(&ad, RouterKind::Server),
         )?;
         tokio::try_join!(
             hub.wait_for_api(&hub_client, OP_TIMEOUT, &ad),
@@ -567,8 +575,8 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
     let prefix2: Ipv6Net = DDM_PEER2_PREFIX.parse()?;
 
     info!(ad.log, "starting the first DDM interface through ddm_apply");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER1_ADDR]).await?;
-    apply_ddm(&peer1_client, &[DDM_LEAF_PEER_ADDR]).await?;
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF]).await?;
+    apply_ddm(&peer1_client, &[DDM_LEAF_PEER_IF]).await?;
     peer1_client.advertise_prefixes(&vec![prefix1]).await?;
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
@@ -577,6 +585,8 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
             peer1_peers: 1,
             peer2_peers: 0,
             hub_prefixes: BTreeSet::from([prefix1]),
+            peer1_prefixes: BTreeSet::new(),
+            peer2_prefixes: BTreeSet::new(),
         }),
         3,
         1,
@@ -585,14 +595,16 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
     );
 
     info!(ad.log, "adding an independent second DDM interface");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER1_ADDR, DDM_HUB_PEER2_ADDR]).await?;
-    apply_ddm(&peer2_client, &[DDM_LEAF_PEER_ADDR]).await?;
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF, DDM_HUB_PEER2_IF]).await?;
+    apply_ddm(&peer2_client, &[DDM_LEAF_PEER_IF]).await?;
     peer2_client.advertise_prefixes(&vec![prefix2]).await?;
     let both_up = DdmObservedState {
         hub_peers: 2,
         peer1_peers: 1,
         peer2_peers: 1,
         hub_prefixes: BTreeSet::from([prefix1, prefix2]),
+        peer1_prefixes: BTreeSet::from([prefix2]),
+        peer2_prefixes: BTreeSet::from([prefix1]),
     };
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
@@ -604,7 +616,7 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
     );
 
     info!(ad.log, "reapplying identical desired state");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER1_ADDR, DDM_HUB_PEER2_ADDR]).await?;
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF, DDM_HUB_PEER2_IF]).await?;
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
         Some(both_up.clone()),
@@ -615,7 +627,7 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
     );
 
     info!(ad.log, "removing only the first DDM interface");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER2_ADDR]).await?;
+    apply_ddm(&hub_client, &[DDM_HUB_PEER2_IF]).await?;
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
         Some(DdmObservedState {
@@ -623,11 +635,13 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
             peer1_peers: 0,
             peer2_peers: 1,
             hub_prefixes: BTreeSet::from([prefix2]),
+            peer1_prefixes: BTreeSet::new(),
+            peer2_prefixes: BTreeSet::new(),
         }),
         3,
         1,
         30,
-        "removed interface loses adjacency/routes while the other remains"
+        "removed interface withdraws redistributed routes while the other remains"
     );
 
     info!(
@@ -642,6 +656,8 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
             peer1_peers: 0,
             peer2_peers: 0,
             hub_prefixes: BTreeSet::new(),
+            peer1_prefixes: BTreeSet::new(),
+            peer2_prefixes: BTreeSet::new(),
         }),
         3,
         1,
@@ -670,21 +686,35 @@ async fn observe_ddm_state(
     peer1: &DdmClient,
     peer2: &DdmClient,
 ) -> Option<DdmObservedState> {
-    let (hub_peers, peer1_peers, peer2_peers, prefixes) = tokio::join!(
+    let (
+        hub_peers,
+        peer1_peers,
+        peer2_peers,
+        hub_prefixes,
+        peer1_prefixes,
+        peer2_prefixes,
+    ) = tokio::join!(
         hub.get_peers(),
         peer1.get_peers(),
         peer2.get_peers(),
         hub.get_prefixes(),
+        peer1.get_prefixes(),
+        peer2.get_prefixes(),
     );
+    let destinations = |prefixes: HashMap<String, Vec<PathVector>>| {
+        prefixes
+            .into_values()
+            .flatten()
+            .map(|path| path.destination)
+            .collect()
+    };
     Some(DdmObservedState {
         hub_peers: hub_peers.ok()?.len(),
         peer1_peers: peer1_peers.ok()?.len(),
         peer2_peers: peer2_peers.ok()?.len(),
-        hub_prefixes: prefixes
-            .ok()?
-            .values()
-            .flat_map(|paths| paths.iter().map(|path| path.destination))
-            .collect(),
+        hub_prefixes: destinations(hub_prefixes.ok()?.into_inner()),
+        peer1_prefixes: destinations(peer1_prefixes.ok()?.into_inner()),
+        peer2_prefixes: destinations(peer2_prefixes.ok()?.into_inner()),
     })
 }
 
@@ -868,7 +898,7 @@ async fn quartet_unnumbered_body(bt: BootedQuartet) -> Result<()> {
     }
 
     ox.run_mgd(&ad).await?;
-    ox.ddm().run_ddm(&ad).await?;
+    ox.ddm().run_ddm(&ad, RouterKind::Server).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Fanout of 3 so all peer paths survive best-path selection and we can
@@ -1405,7 +1435,7 @@ async fn quartet_bfd_static_body(bt: BootedQuartet) -> Result<()> {
     // mg-lower's sync loop queries ddm on every prefix change and bails the
     // whole sync when ddm is unreachable. We don't exercise DDM here, but
     // ddmd has to be up for static routes to lower into dpd.
-    ox.ddm().run_ddm(&ad).await?;
+    ox.ddm().run_ddm(&ad, RouterKind::Server).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Default fanout is 1, which collapses the static paths into a single

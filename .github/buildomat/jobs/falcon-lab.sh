@@ -117,5 +117,4 @@ run_test() {
 run_test mgd-unnumbered
 run_test quartet-unnumbered
 run_test quartet-bfd-static-routing
-# XXX: uncomment after adding lifecycle plumbing
-# run_test ddm-apply-lifecycle
+run_test ddm-apply-lifecycle

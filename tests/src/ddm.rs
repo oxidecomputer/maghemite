@@ -4,7 +4,7 @@
 
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
-use ddm_admin_client::Client;
+use ddm_admin_client::{Client, types::ApplyRequest};
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use slog::{Drain, Logger};
 use std::env;
@@ -191,12 +191,6 @@ impl<'a> RouterZone<'a> {
     }
 
     fn start_router(&self, restart_dpd: bool) -> Result<()> {
-        let addrs = self.ifx[1..]
-            .iter()
-            .map(|x| format!("-a {}/v6", x))
-            .collect::<Vec<String>>()
-            .join(" ");
-
         let ddm = "/opt/ddmd";
         let extra_args = format!(
             "--rack-uuid {} --sled-uuid {}",
@@ -237,18 +231,40 @@ impl<'a> RouterZone<'a> {
                 self.zone.zexec("svcadm enable tfport")?;
             }
             self.zone.zexec(&format!(
-                "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",
-                "RUST_LOG=trace RUST_BACKTRACE=1", extra_args, addrs
+                "{} {ddm} --kind transit --dendrite {} &> /opt/ddmd.log &",
+                "RUST_LOG=trace RUST_BACKTRACE=1", extra_args
             ))?;
 
             self.zone.zexec("ipadm")?;
         } else {
             self.zone.zexec(&format!(
-                "{} {ddm} --kind server {} {} &> /opt/ddmd.log &",
-                "RUST_LOG=trace RUST_BACKTRACE=1", extra_args, addrs
+                "{} {ddm} --kind server {} &> /opt/ddmd.log &",
+                "RUST_LOG=trace RUST_BACKTRACE=1", extra_args
             ))?;
         }
         Ok(())
+    }
+
+    /// The peering interfaces (everything after the management link).
+    fn ifnames(&self) -> Vec<String> {
+        self.ifx[1..].iter().map(|ifx| ifx.to_string()).collect()
+    }
+
+    async fn apply(&self, client: &Client, ifnames: &[String]) -> Result<()> {
+        let req = ApplyRequest {
+            ddm_interfaces: ifnames.to_vec(),
+        };
+        let mut last_error = None;
+        for _ in 0..30 {
+            match client.ddm_apply(&req).await {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Err(last_error
+            .expect("ddm_apply attempted at least once")
+            .into())
     }
 
     fn setup(&self, index: u8) -> Result<()> {
@@ -461,6 +477,10 @@ async fn run_trio_tests(
     let s2 = Client::new("http://10.0.0.2:8000", log.clone());
     let t1 = Client::new("http://10.0.0.3:8000", log.clone());
 
+    zs1.apply(&s1, &zs1.ifnames()).await?;
+    zs2.apply(&s2, &zs2.ifnames()).await?;
+    zt1.apply(&t1, &zt1.ifnames()).await?;
+
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
     wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
@@ -491,10 +511,49 @@ async fn run_trio_tests(
 
     println_nopipe!("connectivity test passed");
 
+    // Remove t1's interface toward s1. Apply is synchronous: when it returns,
+    // t1 must already have withdrawn s1's routes locally and pushed the
+    // withdraw to s2.
+    let sr0 = zt1.ifx[1].to_string();
+    let sr1 = zt1.ifx[2].to_string();
+
+    let start = std::time::Instant::now();
+    zt1.apply(&t1, std::slice::from_ref(&sr1)).await?;
+    println_nopipe!("ddm_apply(remove) took {:?}", start.elapsed());
+
+    assert_eq!(t1.get_peers().await?.len(), 1);
+    assert_eq!(prefix_count(&t1).await?, 1);
+    let dpd_routes = zt1.zexec("/opt/oxide/dendrite/bin/swadm route list")?;
+    assert!(
+        !dpd_routes.contains("fd00:1::"),
+        "stale dpd route: {dpd_routes}"
+    );
+
+    wait_for_eq!(prefix_count(&s2).await?, 0);
+    let kernel_count =
+        zs2.zexec("netstat -nrf inet6 | grep fd00:1: | wc -l")?;
+    assert_eq!(kernel_count, "0");
+
+    wait_for_eq!(s1.get_peers().await?.len(), 0);
+    wait_for_eq!(prefix_count(&s1).await?, 0);
+
+    println_nopipe!("transit interface removal passed");
+
+    zt1.apply(&t1, &[sr0, sr1]).await?;
+    wait_for_eq!(t1.get_peers().await?.len(), 2);
+    wait_for_eq!(prefix_count(&t1).await?, 2);
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
+    retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
+
+    println_nopipe!("transit interface re-add passed");
+
     zt1.stop_router()?;
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 0);
     zt1.start_router(false)?;
+    zt1.apply(&t1, &zt1.ifnames()).await?;
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await.unwrap_or(99), 2);
@@ -509,6 +568,7 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&t1).await?, 1);
     softnpu_dump!(softnpu);
     zs1.start_router(false)?;
+    zs1.apply(&s1, &zs1.ifnames()).await?;
 
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
@@ -629,6 +689,7 @@ async fn run_trio_tests(
     zs1.start_router(false)?;
     sleep(Duration::from_secs(5));
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    zs1.apply(&s1, &zs1.ifnames()).await?;
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
 
     println_nopipe!("tunnel router restart passed");
@@ -743,16 +804,21 @@ async fn test_quartet() -> Result<()> {
 }
 
 async fn run_quartet_tests(
-    _zs1: &RouterZone<'_>,
-    _zs2: &RouterZone<'_>,
+    zs1: &RouterZone<'_>,
+    zs2: &RouterZone<'_>,
     zs3: &RouterZone<'_>,
-    _zt1: &RouterZone<'_>,
+    zt1: &RouterZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
     let s2 = Client::new("http://10.0.0.2:8000", log.clone());
     let s3 = Client::new("http://10.0.0.3:8000", log.clone());
     let t1 = Client::new("http://10.0.0.4:8000", log.clone());
+
+    zs1.apply(&s1, &zs1.ifnames()).await?;
+    zs2.apply(&s2, &zs2.ifnames()).await?;
+    zs3.apply(&s3, &zs3.ifnames()).await?;
+    zt1.apply(&t1, &zt1.ifnames()).await?;
 
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
