@@ -73,7 +73,10 @@ const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
 
 #[derive(Clone)]
 pub struct BgpContext {
-    pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
+    /// BGP routers keyed on (logical router name, ASN). ASNs may repeat
+    /// across logical routers; names are unique.
+    pub(crate) router:
+        Arc<Mutex<BTreeMap<(String, u32), Arc<Router<BgpConnectionTcp>>>>>,
     pub(crate) sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
     pub(crate) unnumbered_manager: Arc<UnnumberedManagerNdp>,
 }
@@ -94,9 +97,9 @@ impl BgpContext {
 }
 
 macro_rules! get_router {
-    ($ctx:expr, $asn:expr) => {
+    ($ctx:expr, $router:expr, $asn:expr) => {
         lock!($ctx.bgp.router)
-            .get(&$asn)
+            .get(&(($router).to_string(), $asn))
             .ok_or(Error::NotFound("no bgp router configured".into()))
     };
 }
@@ -132,7 +135,7 @@ pub async fn create_router(
     let rdb = ctx.rdb()?;
 
     let mut guard = lock!(ctx.bgp.router);
-    if guard.get(&rq.asn).is_some() {
+    if guard.get(&(rdb.name().to_string(), rq.asn)).is_some() {
         return Err(HttpError::for_client_error_with_status(
             Some("bgp router with specified ASN exists".into()),
             ClientErrorStatusCode::CONFLICT,
@@ -229,7 +232,7 @@ async fn do_delete_router(
     rdb.remove_bgp_router(asn).map_err(Error::Db)?;
 
     let mut routers = lock!(ctx.bgp.router);
-    if let Some(r) = routers.remove(&asn) {
+    if let Some(r) = routers.remove(&(rdb.name().to_string(), asn)) {
         r.shutdown()
     };
 
@@ -756,7 +759,7 @@ pub async fn create_origin4(
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .create_origin4(prefixes)
         .map_err(Error::Bgp)?;
 
@@ -770,7 +773,9 @@ pub async fn read_origin4(
     let rq = request.into_inner();
     let ctx = ctx.context();
     let mut originated =
-        get_router!(ctx, rq.asn)?.originated4().map_err(Error::Db)?;
+        get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
+            .originated4()
+            .map_err(Error::Db)?;
 
     // stable output order for clients
     originated.sort();
@@ -792,7 +797,7 @@ pub async fn update_origin4(
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .set_origin4(prefixes)
         .map_err(Error::Bgp)?;
 
@@ -806,7 +811,7 @@ pub async fn delete_origin4(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .clear_origin4()
         .map_err(Error::Bgp)?;
 
@@ -824,7 +829,7 @@ pub async fn create_origin6(
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .create_origin6(prefixes)
         .map_err(Error::Bgp)?;
 
@@ -838,7 +843,9 @@ pub async fn read_origin6(
     let rq = request.into_inner();
     let ctx = ctx.context();
     let mut originated =
-        get_router!(ctx, rq.asn)?.originated6().map_err(Error::Db)?;
+        get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
+            .originated6()
+            .map_err(Error::Db)?;
 
     // stable output order for clients
     originated.sort();
@@ -860,7 +867,7 @@ pub async fn update_origin6(
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .set_origin6(prefixes)
         .map_err(Error::Bgp)?;
 
@@ -874,7 +881,7 @@ pub async fn delete_origin6(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .clear_origin6()
         .map_err(Error::Bgp)?;
 
@@ -891,7 +898,7 @@ pub async fn get_exported_v1(
 > {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let r = get_router!(ctx, rq.asn)?.clone();
+    let r = get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?.clone();
     let orig4: Vec<v1::rdb::prefix::Prefix> = r
         .originated4()
         .map_err(Error::Db)?
@@ -954,7 +961,7 @@ pub async fn get_exported_v5(
 > {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let r = get_router!(ctx, rq.asn)?.clone();
+    let r = get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?.clone();
 
     // Get originated prefixes for both address families
     let orig4 = r.originated4().map_err(Error::Db)?;
@@ -1008,7 +1015,7 @@ pub async fn get_exported(
 ) -> Result<HttpResponseOk<HashMap<String, Vec<IpNet>>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let r = get_router!(ctx, rq.asn)?.clone();
+    let r = get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?.clone();
 
     // Determine which address families to process
     let process_ipv4 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv4);
@@ -1066,7 +1073,7 @@ pub async fn get_imported_v1(
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?
+    let imported = get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .db
         .full_rib(Some(AddressFamily::Ipv4));
     Ok(HttpResponseOk(v1::rib::Rib::from(
@@ -1080,12 +1087,42 @@ pub async fn get_selected_v1(
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let selected = get_router!(ctx, rq.asn)?
+    let selected = get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
         .db
         .loc_rib(Some(AddressFamily::Ipv4));
     Ok(HttpResponseOk(v1::rib::Rib::from(
         selected.into_latest_api_rib(),
     )))
+}
+
+/// The session map is daemon-global (shared with the connection dispatcher),
+/// so a router's sessions are attributed via its own rdb neighbor lists,
+/// optionally narrowed to one ASN — the same pattern teardown uses.
+pub(crate) fn rdb_attributed_sessions(
+    ctx: &Arc<HandlerContext>,
+    rdb: &rdb::RouterDb,
+    asn: Option<u32>,
+) -> Result<Vec<Arc<SessionRunner<BgpConnectionTcp>>>, HttpError> {
+    let wanted = |a: u32| asn.is_none_or(|x| x == a);
+    let peers: Vec<PeerId> = rdb
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::from(Error::Db(e)))?
+        .into_iter()
+        .filter(|n| wanted(n.asn))
+        .map(|n| PeerId::Ip(n.host.ip()))
+        .chain(
+            rdb.get_unnumbered_bgp_neighbors()
+                .map_err(|e| HttpError::from(Error::Db(e)))?
+                .into_iter()
+                .filter(|n| wanted(n.asn))
+                .map(|n| PeerId::Interface(n.interface)),
+        )
+        .collect();
+    let sessions = lock!(ctx.bgp.sessions);
+    Ok(peers
+        .iter()
+        .filter_map(|p| sessions.get(p).cloned())
+        .collect())
 }
 
 pub async fn get_neighbors_v1(
@@ -1096,13 +1133,17 @@ pub async fn get_neighbors_v1(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
-    let routers = lock!(ctx.bgp.router);
-    let r = routers
-        .get(&rq.asn)
-        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ));
+    }
 
-    for s in lock!(r.sessions).values() {
+    let mut peers = HashMap::new();
+    for s in rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))? {
         let dur =
             s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
@@ -1164,13 +1205,17 @@ pub async fn get_neighbors_v2(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
-    let routers = lock!(ctx.bgp.router);
-    let r = routers
-        .get(&rq.asn)
-        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ));
+    }
 
-    for s in lock!(r.sessions).values() {
+    let mut peers = HashMap::new();
+    for s in rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))? {
         let dur =
             s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
@@ -1228,17 +1273,17 @@ pub async fn get_neighbors_v4(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
-
-    // Clone sessions while holding locks, then release them
-    let sessions: Vec<_> = {
-        let routers = lock!(ctx.bgp.router);
-        let r = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
             None,
             "ASN not found".to_string(),
-        ))?;
-        lock!(r.sessions).values().cloned().collect()
-    };
+        ));
+    }
+
+    let mut peers = HashMap::new();
+    let sessions = rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))?;
 
     for s in sessions.iter() {
         let peer_ip = match s.neighbor.peer {
@@ -1258,17 +1303,17 @@ pub async fn get_neighbors(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let mut peers = HashMap::new();
-
-    // Clone sessions while holding locks, then release them
-    let sessions: Vec<_> = {
-        let routers = lock!(ctx.bgp.router);
-        let r = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+    if !lock!(ctx.bgp.router)
+        .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
+        return Err(HttpError::for_not_found(
             None,
             "ASN not found".to_string(),
-        ))?;
-        lock!(r.sessions).values().cloned().collect()
-    };
+        ));
+    }
+
+    let mut peers = HashMap::new();
+    let sessions = rdb_attributed_sessions(ctx, &ctx.rdb()?, Some(rq.asn))?;
 
     for s in sessions.iter() {
         // Use PeerId Display impl as HashMap key
@@ -1365,6 +1410,17 @@ async fn do_bgp_apply(
             listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
             graceful_shutdown: false,               // TODO as parameter
         },
+    )
+    .await?;
+
+    // The request's checker/shaper carry their own asn field; the apply is
+    // scoped to rq.asn, so that field is ignored here.
+    helpers::apply_policy(
+        ctx,
+        rdb.name(),
+        rq.asn,
+        rq.checker.as_ref().map(|c| c.code.clone()),
+        rq.shaper.as_ref().map(|s| s.code.clone()),
     )
     .await?;
 
@@ -1548,11 +1604,11 @@ async fn do_bgp_apply(
         }
     }
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, rdb.name(), rq.asn)?
         .set_origin4(rq.originate.clone().into_iter().collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-    get_router!(ctx, rq.asn)?
+    get_router!(ctx, rdb.name(), rq.asn)?
         .set_origin6(rq.originate.clone().into_iter().collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -1571,13 +1627,15 @@ fn get_message_history_filtered(
 
     // Determine which peers to fetch history for
     let peers_to_query: Vec<PeerId> = if let Some(peer_id) = peer {
-        if lock!(get_router!(ctx, asn)?.sessions).contains_key(&peer_id) {
+        if lock!(get_router!(ctx, crate::admin::DEFAULT_ROUTER, asn)?.sessions)
+            .contains_key(&peer_id)
+        {
             vec![peer_id]
         } else {
             vec![]
         }
     } else {
-        lock!(get_router!(ctx, asn)?.sessions)
+        lock!(get_router!(ctx, crate::admin::DEFAULT_ROUTER, asn)?.sessions)
             .keys()
             .cloned()
             .collect()
@@ -1586,7 +1644,8 @@ fn get_message_history_filtered(
     // Fetch history for each peer
     for peer_id in peers_to_query {
         if let Some(session) =
-            lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
+            lock!(get_router!(ctx, crate::admin::DEFAULT_ROUTER, asn)?.sessions)
+                .get(&peer_id)
         {
             let mut history = lock!(session.message_history).clone();
 
@@ -1620,7 +1679,8 @@ pub async fn message_history_v1(
 
     let mut result = HashMap::new();
 
-    let router = get_router!(ctx, rq.asn)?.clone();
+    let router =
+        get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?.clone();
     for (key, session) in lock!(router.sessions).iter() {
         // Only include IP-based sessions in the history
         if let PeerId::Ip(addr) = key {
@@ -1732,7 +1792,8 @@ fn get_fsm_history_filtered(
 
     if let Some(peer_id) = peer {
         if let Some(session) =
-            lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
+            lock!(get_router!(ctx, crate::admin::DEFAULT_ROUTER, asn)?.sessions)
+                .get(&peer_id)
         {
             let full_history = lock!(session.fsm_event_history).clone();
             let events = if use_all_buffer {
@@ -1743,7 +1804,8 @@ fn get_fsm_history_filtered(
             result.insert(peer_id.to_string(), events);
         }
     } else {
-        let router = get_router!(ctx, asn)?.clone();
+        let router =
+            get_router!(ctx, crate::admin::DEFAULT_ROUTER, asn)?.clone();
         for (peer_id, session) in lock!(router.sessions).iter() {
             let full_history = lock!(session.fsm_event_history).clone();
             let events = if use_all_buffer {
@@ -1803,8 +1865,14 @@ pub async fn create_checker(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    helpers::load_policy(ctx, rq.asn, PolicySource::Checker(rq.code), false)
-        .await
+    helpers::load_policy(
+        ctx,
+        crate::admin::DEFAULT_ROUTER,
+        rq.asn,
+        PolicySource::Checker(rq.code),
+        false,
+    )
+    .await
 }
 
 pub async fn read_checker(
@@ -1813,7 +1881,9 @@ pub async fn read_checker(
 ) -> Result<HttpResponseOk<CheckerSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match lock!(ctx.bgp.router).get(&rq.asn) {
+    match lock!(ctx.bgp.router)
+        .get(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
         None => Err(HttpError::for_not_found(
             None,
             String::from("ASN not found"),
@@ -1837,8 +1907,14 @@ pub async fn update_checker(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    helpers::load_policy(ctx, rq.asn, PolicySource::Checker(rq.code), true)
-        .await
+    helpers::load_policy(
+        ctx,
+        crate::admin::DEFAULT_ROUTER,
+        rq.asn,
+        PolicySource::Checker(rq.code),
+        true,
+    )
+    .await
 }
 
 pub async fn delete_checker(
@@ -1847,7 +1923,13 @@ pub async fn delete_checker(
 ) -> Result<HttpResponseDeleted, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    helpers::unload_policy(ctx, rq.asn, PolicyKind::Checker).await
+    helpers::unload_policy(
+        ctx,
+        crate::admin::DEFAULT_ROUTER,
+        rq.asn,
+        PolicyKind::Checker,
+    )
+    .await
 }
 
 pub async fn create_shaper(
@@ -1856,8 +1938,14 @@ pub async fn create_shaper(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    helpers::load_policy(ctx, rq.asn, PolicySource::Shaper(rq.code), false)
-        .await
+    helpers::load_policy(
+        ctx,
+        crate::admin::DEFAULT_ROUTER,
+        rq.asn,
+        PolicySource::Shaper(rq.code),
+        false,
+    )
+    .await
 }
 
 pub async fn read_shaper(
@@ -1866,7 +1954,9 @@ pub async fn read_shaper(
 ) -> Result<HttpResponseOk<ShaperSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match lock!(ctx.bgp.router).get(&rq.asn) {
+    match lock!(ctx.bgp.router)
+        .get(&(crate::admin::DEFAULT_ROUTER.to_string(), rq.asn))
+    {
         None => Err(HttpError::for_not_found(
             None,
             String::from("ASN not found"),
@@ -1890,7 +1980,14 @@ pub async fn update_shaper(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    helpers::load_policy(ctx, rq.asn, PolicySource::Shaper(rq.code), true).await
+    helpers::load_policy(
+        ctx,
+        crate::admin::DEFAULT_ROUTER,
+        rq.asn,
+        PolicySource::Shaper(rq.code),
+        true,
+    )
+    .await
 }
 
 pub async fn delete_shaper(
@@ -1899,7 +1996,13 @@ pub async fn delete_shaper(
 ) -> Result<HttpResponseDeleted, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    helpers::unload_policy(ctx, rq.asn, PolicyKind::Shaper).await
+    helpers::unload_policy(
+        ctx,
+        crate::admin::DEFAULT_ROUTER,
+        rq.asn,
+        PolicyKind::Shaper,
+    )
+    .await
 }
 
 pub(crate) mod helpers {
@@ -1914,7 +2017,7 @@ pub(crate) mod helpers {
         rq: mg_api_types::bgp::config::Router,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let mut guard = lock!(ctx.bgp.router);
-        if let Some(current) = guard.get(&rq.asn) {
+        if let Some(current) = guard.get(&(rdb.name().to_string(), rq.asn)) {
             current.graceful_shutdown(rq.graceful_shutdown)?;
             return Ok(HttpResponseUpdatedNoContent());
         }
@@ -1932,7 +2035,7 @@ pub(crate) mod helpers {
 
         rdb.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
         rdb.remove_bgp_neighbor(asn.into(), addr)?;
-        get_router!(&ctx, asn)?.delete_session(addr);
+        get_router!(&ctx, rdb.name(), asn)?.delete_session(addr);
 
         Ok(HttpResponseDeleted())
     }
@@ -1951,7 +2054,7 @@ pub(crate) mod helpers {
 
         // Delete the BGP session for this unnumbered neighbor.
         // Unnumbered sessions are keyed by interface name, not IP address.
-        get_router!(&ctx, asn)?
+        get_router!(&ctx, rdb.name(), asn)?
             .delete_session(PeerId::Interface(interface.to_string()));
 
         // Unregister the interface from NDP peer discovery
@@ -1987,7 +2090,7 @@ pub(crate) mod helpers {
         let info = SessionInfo::from(&rq.parameters);
 
         let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_session(
+            match get_router!(&ctx, rdb.name(), rq.asn)?.ensure_session(
                 rq.clone().into(),
                 None,
                 event_tx.clone(),
@@ -1999,7 +2102,7 @@ pub(crate) mod helpers {
                 EnsureSessionResult::Updated(_) => false,
             }
         } else {
-            get_router!(&ctx, rq.asn)?.new_session(
+            get_router!(&ctx, rdb.name(), rq.asn)?.new_session(
                 rq.clone().into(),
                 None,
                 event_tx.clone(),
@@ -2080,7 +2183,7 @@ pub(crate) mod helpers {
         let info = SessionInfo::from(&rq.parameters);
 
         let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_session(
+            match get_router!(&ctx, rdb.name(), rq.asn)?.ensure_session(
                 rq.clone().into(),
                 info.bind_addr,
                 event_tx.clone(),
@@ -2092,7 +2195,7 @@ pub(crate) mod helpers {
                 EnsureSessionResult::Updated(_) => false,
             }
         } else {
-            get_router!(&ctx, rq.asn)?.new_session(
+            get_router!(&ctx, rdb.name(), rq.asn)?.new_session(
                 rq.clone().into(),
                 info.bind_addr,
                 event_tx.clone(),
@@ -2197,7 +2300,7 @@ pub(crate) mod helpers {
         let info = SessionInfo::from(&rq.parameters);
 
         let start_session = if ensure {
-            match get_router!(&ctx, rq.asn)?.ensure_session(
+            match get_router!(&ctx, rdb.name(), rq.asn)?.ensure_session(
                 PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
@@ -2209,7 +2312,7 @@ pub(crate) mod helpers {
                 EnsureSessionResult::Updated(_) => false,
             }
         } else {
-            get_router!(&ctx, rq.asn)?.new_session(
+            get_router!(&ctx, rdb.name(), rq.asn)?.new_session(
                 PeerConfig::from_unnumbered_neighbor(&rq),
                 None,
                 event_tx.clone(),
@@ -2389,7 +2492,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         bgp_log!(ctx.log, info, "clear {rq}");
 
-        let session = get_router!(ctx, rq.asn)?
+        let session = get_router!(ctx, crate::admin::DEFAULT_ROUTER, rq.asn)?
             .get_session(rq.addr)
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
@@ -2407,9 +2510,11 @@ pub(crate) mod helpers {
             "op" => format!("{op:?}")
         );
 
-        let session = get_router!(ctx, asn)?.get_session(interface).ok_or(
-            Error::NotFound("session for unnumbered neighbor not found".into()),
-        )?;
+        let session = get_router!(ctx, crate::admin::DEFAULT_ROUTER, asn)?
+            .get_session(interface)
+            .ok_or(Error::NotFound(
+                "session for unnumbered neighbor not found".into(),
+            ))?;
 
         reset_session(&session, op)?;
         Ok(HttpResponseUpdatedNoContent())
@@ -2419,7 +2524,7 @@ pub(crate) mod helpers {
         ctx: Arc<HandlerContext>,
         rdb: &rdb::RouterDb,
         rq: mg_api_types::bgp::config::Router,
-        routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
+        routers: &mut BTreeMap<(String, u32), Arc<Router<BgpConnectionTcp>>>,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let cfg = RouterConfig {
             asn: Asn::FourOctet(rq.asn),
@@ -2437,7 +2542,7 @@ pub(crate) mod helpers {
 
         router.run();
 
-        routers.insert(rq.asn, router);
+        routers.insert((rdb.name().to_string(), rq.asn), router);
         db.add_bgp_router(
             rq.asn,
             BgpRouterInfo {
@@ -2464,11 +2569,12 @@ pub(crate) mod helpers {
 
     pub async fn load_policy(
         ctx: &Arc<HandlerContext>,
+        router: &str,
         asn: u32,
         policy: PolicySource,
         overwrite: bool,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        match lock!(ctx.bgp.router).get(&asn) {
+        match lock!(ctx.bgp.router).get(&(router.to_string(), asn)) {
             None => {
                 return Err(HttpError::for_not_found(
                     None,
@@ -2529,10 +2635,11 @@ pub(crate) mod helpers {
 
     pub async fn unload_policy(
         ctx: &Arc<HandlerContext>,
+        router: &str,
         asn: u32,
         policy: PolicyKind,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        match lock!(ctx.bgp.router).get(&asn) {
+        match lock!(ctx.bgp.router).get(&(router.to_string(), asn)) {
             None => {
                 return Err(HttpError::for_not_found(
                     None,
@@ -2552,10 +2659,15 @@ pub(crate) mod helpers {
                         ));
                     }
                     Ok(previous) => {
-                        rtr.send_admin_event(AdminEvent::ShaperChanged(Some(
-                            previous,
-                        )))
-                        .map_err(|e| {
+                        let event = match policy {
+                            PolicyKind::Checker => {
+                                AdminEvent::CheckerChanged(Some(previous))
+                            }
+                            PolicyKind::Shaper => {
+                                AdminEvent::ShaperChanged(Some(previous))
+                            }
+                        };
+                        rtr.send_admin_event(event).map_err(|e| {
                             HttpError::for_internal_error(format!(
                                 "send event: {e}"
                             ))
@@ -2565,6 +2677,68 @@ pub(crate) mod helpers {
             }
         }
         Ok(HttpResponseDeleted())
+    }
+
+    /// Reconcile a BGP router's checker/shaper policy with the desired
+    /// sources: load what differs, unload what the request omits. Unchanged
+    /// sources are left alone so a periodic apply does not recompile policy
+    /// and re-evaluate every session.
+    pub async fn apply_policy(
+        ctx: &Arc<HandlerContext>,
+        router: &str,
+        asn: u32,
+        checker: Option<String>,
+        shaper: Option<String>,
+    ) -> Result<(), HttpError> {
+        let (current_checker, current_shaper) =
+            match lock!(ctx.bgp.router).get(&(router.to_string(), asn)) {
+                None => {
+                    return Err(HttpError::for_not_found(
+                        None,
+                        String::from("ASN not found"),
+                    ));
+                }
+                Some(rtr) => {
+                    (rtr.policy.checker_source(), rtr.policy.shaper_source())
+                }
+            };
+
+        if checker != current_checker {
+            match checker {
+                Some(code) => {
+                    load_policy(
+                        ctx,
+                        router,
+                        asn,
+                        PolicySource::Checker(code),
+                        true,
+                    )
+                    .await?;
+                }
+                None => {
+                    unload_policy(ctx, router, asn, PolicyKind::Checker)
+                        .await?;
+                }
+            }
+        }
+        if shaper != current_shaper {
+            match shaper {
+                Some(code) => {
+                    load_policy(
+                        ctx,
+                        router,
+                        asn,
+                        PolicySource::Shaper(code),
+                        true,
+                    )
+                    .await?;
+                }
+                None => {
+                    unload_policy(ctx, router, asn, PolicyKind::Shaper).await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Calculate exported routes for a single session.
@@ -2876,7 +3050,7 @@ fn update(message, asn, addr) {
     ) {
         let routers = ctx.bgp.router.lock().unwrap();
         routers
-            .get(&asn)
+            .get(&(crate::admin::DEFAULT_ROUTER.to_string(), asn))
             .expect("router should exist")
             .create_origin4(vec![IpNet::V4(prefix)])
             .expect("create origin4");
@@ -2889,7 +3063,7 @@ fn update(message, asn, addr) {
     ) {
         let routers = ctx.bgp.router.lock().unwrap();
         routers
-            .get(&asn)
+            .get(&(crate::admin::DEFAULT_ROUTER.to_string(), asn))
             .expect("router should exist")
             .create_origin6(vec![IpNet::V6(prefix)])
             .expect("create origin6");
@@ -2966,8 +3140,14 @@ fn update(message, asn, addr) {
                 .collect::<Vec<u32>>(),
             vec![456],
         );
-        assert!(!routers.contains_key(&123));
-        assert!(routers.contains_key(&456));
+        assert!(
+            !routers
+                .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), 123))
+        );
+        assert!(
+            routers
+                .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), 456))
+        );
     }
 
     /// Regression test for https://github.com/oxidecomputer/maghemite/issues/772
@@ -3022,6 +3202,7 @@ fn update(message, asn, addr) {
         create_origin6_for_router(&ctx, 123, first_prefix6);
         super::helpers::load_policy(
             &ctx,
+            crate::admin::DEFAULT_ROUTER,
             123,
             PolicySource::Checker(POLICY_SOURCE.to_string()),
             false,
@@ -3030,6 +3211,7 @@ fn update(message, asn, addr) {
         .expect("load checker");
         super::helpers::load_policy(
             &ctx,
+            crate::admin::DEFAULT_ROUTER,
             123,
             PolicySource::Shaper(POLICY_SOURCE.to_string()),
             false,
@@ -3047,7 +3229,9 @@ fn update(message, asn, addr) {
         );
         {
             let routers = ctx.bgp.router.lock().unwrap();
-            let router = routers.get(&123).expect("router should exist");
+            let router = routers
+                .get(&(crate::admin::DEFAULT_ROUTER.to_string(), 123))
+                .expect("router should exist");
             assert!(router.policy.checker_source().is_some());
             assert!(router.policy.shaper_source().is_some());
         }
@@ -3057,7 +3241,13 @@ fn update(message, asn, addr) {
             .expect("delete router");
 
         assert!(rdb(&ctx).get_bgp_routers().expect("get routers").is_empty());
-        assert!(!ctx.bgp.router.lock().unwrap().contains_key(&123));
+        assert!(
+            !ctx.bgp
+                .router
+                .lock()
+                .unwrap()
+                .contains_key(&(crate::admin::DEFAULT_ROUTER.to_string(), 123))
+        );
         assert_neighbor_counts(&ctx, 0, 0);
         assert!(
             rdb(&ctx)
@@ -3081,7 +3271,9 @@ fn update(message, asn, addr) {
             .expect("recreate asn 123");
         {
             let routers = ctx.bgp.router.lock().unwrap();
-            let router = routers.get(&123).expect("router should exist");
+            let router = routers
+                .get(&(crate::admin::DEFAULT_ROUTER.to_string(), 123))
+                .expect("router should exist");
             assert!(router.policy.checker_source().is_none());
             assert!(router.policy.shaper_source().is_none());
         }

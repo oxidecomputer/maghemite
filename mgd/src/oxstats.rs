@@ -281,7 +281,7 @@ impl Stats {
         let routers = lock!(self.bgp.router);
         let mut router_counters = BTreeMap::new();
         let mut session_count: usize = 0;
-        for (asn, r) in &*routers {
+        for ((_, asn), r) in &*routers {
             let mut session_counters = BTreeMap::new();
             let sessions = lock!(r.sessions);
             for (key, session) in sessions.iter() {
@@ -291,7 +291,12 @@ impl Stats {
                     session_count += 1;
                 }
             }
-            router_counters.insert(*asn, session_counters);
+            // ASNs may repeat across logical routers; peer addresses are
+            // globally unique, so merging per-ASN maps is lossless.
+            router_counters
+                .entry(*asn)
+                .or_insert_with(BTreeMap::new)
+                .extend(session_counters);
         }
         drop(routers);
 
