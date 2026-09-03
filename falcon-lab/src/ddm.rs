@@ -22,11 +22,23 @@ const DDM_LOG: &str = "/tmp/ddm.log";
 #[derive(Copy, Clone)]
 pub struct DdmNode(pub NodeRef);
 
+#[derive(Copy, Clone)]
+pub enum RouterKind {
+    Server,
+    Transit,
+}
+
 impl DdmNode {
-    pub async fn run_ddm(&self, d: &Runner) -> Result<()> {
+    pub async fn run_ddm(&self, d: &Runner, kind: RouterKind) -> Result<()> {
+        let kind = match kind {
+            RouterKind::Server => "server",
+            RouterKind::Transit => "transit",
+        };
         d.exec(
             self.0,
-            &format!("chmod +x {DDMD_BIN} && {DDMD_BIN} &> {DDM_LOG} &"),
+            &format!(
+                "chmod +x {DDMD_BIN} && {DDMD_BIN} --kind {kind} &> {DDM_LOG} &"
+            ),
         )
         .await?;
         Ok(())
