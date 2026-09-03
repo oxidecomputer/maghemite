@@ -6040,6 +6040,7 @@ dependencies = [
  "sled",
  "slog",
  "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

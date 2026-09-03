@@ -41,6 +41,9 @@ impl From<Error> for HttpError {
                     ClientErrorStatusCode::CONFLICT,
                 )
             }
+            Error::Db(rdb::error::Error::NotFound(_)) => {
+                Self::for_not_found(None, value.to_string())
+            }
             Error::Db(_) => Self::for_internal_error(value.to_string()),
             Error::Conflict(_) => Self::for_client_error_with_status(
                 Some(value.to_string()),

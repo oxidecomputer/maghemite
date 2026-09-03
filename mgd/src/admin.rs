@@ -48,6 +48,9 @@ use tokio::task::JoinHandle;
 
 const UNIT_API_SERVER: &str = "api_server";
 
+/// The router that endpoints predating the multi-router API operate on.
+pub use rdb::DEFAULT_ROUTER;
+
 pub struct HandlerContext {
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     pub tep: Ipv6Addr, // tunnel endpoint address
@@ -58,6 +61,14 @@ pub struct HandlerContext {
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,
+}
+
+impl HandlerContext {
+    /// The default router's RIB handle. Endpoints predating the multi-router
+    /// API operate on this router.
+    pub fn rdb(&self) -> Result<rdb::RouterDb, crate::error::Error> {
+        Ok(self.db.router(DEFAULT_ROUTER)?)
+    }
 }
 
 pub fn start_server(

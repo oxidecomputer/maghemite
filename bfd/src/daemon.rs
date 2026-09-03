@@ -52,7 +52,7 @@ impl Daemon {
 
     pub fn add_peer(
         &mut self,
-        db: rdb::Db,
+        db: rdb::RouterDb,
         rq: AddPeerRequest,
     ) -> Result<(), AddPeerError> {
         let peer = rq.remote_addr.ip();

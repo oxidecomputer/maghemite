@@ -9,12 +9,9 @@ use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
-use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::config::{
     BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig,
 };
-use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
-use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
@@ -22,7 +19,7 @@ use mg_common::stats::MgLowerStats;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use signal::handle_signals;
 use slog::Logger;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread::Builder;
@@ -132,7 +129,11 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
     let bgp = init_bgp(&args, &log);
 
-    let tep_ula = get_tunnel_endpoint_ula(&db);
+    ensure_default_router(&db);
+    let tep_ula = db
+        .router(admin::DEFAULT_ROUTER)
+        .expect("default router exists")
+        .tep();
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
@@ -167,7 +168,7 @@ async fn run(args: RunArgs) {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = context.clone();
         let log = log.clone();
-        let db = ctx.db.clone();
+        let db = ctx.rdb().expect("default router exists");
         let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
             client: mg_lower::new_dpd_client(&log),
@@ -184,23 +185,15 @@ async fn run(args: RunArgs) {
             .expect("failed to start mg-lower");
     }
 
-    start_bgp_routers(
-        context.clone(),
-        db.get_bgp_routers()
-            .expect("get BGP routers from datastore"),
-        db.get_bgp_neighbors()
-            .expect("get BGP neighbors from data store"),
-        db.get_unnumbered_bgp_neighbors()
-            .expect("get BGP unnumbered neighbors from data store"),
-    );
+    start_bgp_routers(context.clone());
+    start_bfd_sessions(context.clone());
 
-    start_bfd_sessions(
-        context.clone(),
-        db.get_bfd_neighbors()
-            .expect("get BFD neighbors from data store"),
-    );
-
-    initialize_static_routes(&db, &context.log);
+    for info in db.list_routers() {
+        let rdb = db
+            .router(&info.name)
+            .expect("router disappeared during startup");
+        initialize_static_routes(&rdb, &context.log);
+    }
 
     let hostname = hostname::get()
         .expect("failed to get hostname")
@@ -307,17 +300,38 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
     bgp_context
 }
 
-fn start_bgp_routers(
-    context: Arc<HandlerContext>,
-    routers: BTreeMap<u32, BgpRouterInfo>,
-    neighbors: Vec<BgpNeighborInfo>,
-    uneighbors: Vec<BgpUnnumberedNeighborInfo>,
-) {
-    dlog!(context.log, info, "starting bgp routers: {routers:#?}");
+fn start_bgp_routers(context: Arc<HandlerContext>) {
+    for rinfo in context.db.list_routers() {
+        let rdb = context
+            .db
+            .router(&rinfo.name)
+            .expect("router disappeared during startup");
+        start_router_bgp(&context, &rdb);
+    }
+}
+
+fn start_router_bgp(context: &Arc<HandlerContext>, rdb: &rdb::RouterDb) {
+    let routers = rdb
+        .get_bgp_routers()
+        .expect("get BGP routers from datastore");
+    let neighbors = rdb
+        .get_bgp_neighbors()
+        .expect("get BGP neighbors from data store");
+    let uneighbors = rdb
+        .get_unnumbered_bgp_neighbors()
+        .expect("get BGP unnumbered neighbors from data store");
+
+    dlog!(
+        context.log,
+        info,
+        "starting bgp routers for {}: {routers:#?}",
+        rdb.name()
+    );
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
             context.clone(),
+            rdb,
             mg_api_types::bgp::config::Router {
                 asn,
                 id: info.id,
@@ -333,6 +347,7 @@ fn start_bgp_routers(
     for nbr in neighbors {
         bgp_admin::helpers::add_neighbor(
             context.clone(),
+            rdb,
             mg_api_types::bgp::config::Neighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
@@ -405,6 +420,7 @@ fn start_bgp_routers(
     for nbr in uneighbors {
         bgp_admin::helpers::add_unnumbered_neighbor(
             context.clone(),
+            rdb,
             mg_api_types::bgp::config::UnnumberedNeighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
@@ -476,14 +492,25 @@ fn start_bgp_routers(
     }
 }
 
-fn start_bfd_sessions(
-    context: Arc<HandlerContext>,
-    configs: Vec<BfdPeerConfig>,
-) {
-    dlog!(context.log, info, "starting bfd sessions: {configs:#?}");
-    for config in configs {
-        bfd_admin::add_peer(context.clone(), config)
-            .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
+fn start_bfd_sessions(context: Arc<HandlerContext>) {
+    for rinfo in context.db.list_routers() {
+        let rdb = context
+            .db
+            .router(&rinfo.name)
+            .expect("router disappeared during startup");
+        let configs = rdb
+            .get_bfd_neighbors()
+            .expect("get BFD neighbors from data store");
+        dlog!(
+            context.log,
+            info,
+            "starting bfd sessions for {}: {configs:#?}",
+            rinfo.name
+        );
+        for config in configs {
+            bfd_admin::add_peer(context.clone(), rdb.clone(), config)
+                .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
+        }
     }
 }
 
@@ -492,7 +519,7 @@ fn start_bfd_sessions(
 // the rib). This handles migration from old versions where host bits weren't
 // automatically zeroed, and consolidates routes that differ only in host bits
 // into ECMP routes.
-fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
+fn initialize_static_routes(db: &rdb::RouterDb, log: &Logger) {
     let routes = db
         .get_static(None)
         .expect("failed to get static routes from db");
@@ -547,21 +574,26 @@ fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
     }
 }
 
-fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
-    if let Some(addr) = db.get_tep_addr().unwrap() {
-        return addr;
+/// Seed the "default" router if the router table is empty of it, so
+/// single-router setups and the pre-multi-router API surface keep working.
+fn ensure_default_router(db: &rdb::Db) {
+    if db.router(admin::DEFAULT_ROUTER).is_ok() {
+        return;
     }
 
-    // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
+    // create the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
     let mut r = [0u8; 7];
     rand::fill(&mut r);
     let tep_ula = Ipv6Addr::from([
         0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
     ]);
 
-    db.set_tep_addr(tep_ula).unwrap();
-
-    tep_ula
+    db.create_router(rdb::types::RouterInfo {
+        id: rdb::types::RouterId::new_random(),
+        name: admin::DEFAULT_ROUTER.to_string(),
+        tep: tep_ula,
+    })
+    .expect("create default router");
 }
 
 #[cfg(test)]
@@ -572,10 +604,17 @@ mod tests {
     use std::str::FromStr;
     use tempfile::TempDir;
 
-    fn setup_test_db() -> (rdb::Db, TempDir, Logger) {
+    fn setup_test_db() -> (rdb::RouterDb, TempDir, Logger) {
         let temp_dir = TempDir::new().unwrap();
         let log = mg_common::log::init_logger();
         let db = rdb::Db::new(temp_dir.path().to_str().unwrap(), log.clone())
+            .unwrap();
+        let db = db
+            .create_router(rdb::types::RouterInfo {
+                id: rdb::types::RouterId::new_random(),
+                name: admin::DEFAULT_ROUTER.to_string(),
+                tep: Ipv6Addr::UNSPECIFIED,
+            })
             .unwrap();
         (db, temp_dir, log)
     }

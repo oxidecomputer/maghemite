@@ -686,7 +686,16 @@ impl Stats {
     fn static_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
-        match self.db.get_static4_count() {
+        // Stats are reported for the default router only (POC).
+        let rdb = match self.db.router(crate::admin::DEFAULT_ROUTER) {
+            Ok(rdb) => rdb,
+            Err(e) => {
+                olog!(self.log, warn, "no default router for stats: {e}");
+                return Ok(samples);
+            }
+        };
+
+        match rdb.get_static4_count() {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
@@ -701,7 +710,7 @@ impl Stats {
                 olog!(self.log, warn, "failed to produce static4 count: {e}");
             }
         }
-        match self.db.get_static_nexthop4_count() {
+        match rdb.get_static_nexthop4_count() {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
@@ -727,8 +736,17 @@ impl Stats {
     fn rib_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
+        // Stats are reported for the default router only (POC).
+        let rdb = match self.db.router(crate::admin::DEFAULT_ROUTER) {
+            Ok(rdb) => rdb,
+            Err(e) => {
+                olog!(self.log, warn, "no default router for stats: {e}");
+                return Ok(samples);
+            }
+        };
+
         let mut count = 0usize;
-        for paths in self.db.full_rib(None).values() {
+        for paths in rdb.full_rib(None).values() {
             count += paths.len();
         }
         samples.push(rib_quantity!(

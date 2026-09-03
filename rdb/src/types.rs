@@ -38,6 +38,8 @@ use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 // type Ipv6Container = TypedContainer<Ipv6Marker>;
 // ```
 
+pub use mg_api_types::router::{RouterId, RouterInfo};
+
 /// IPv4 address family marker (zero-sized type)
 #[derive(Clone, Copy, Debug)]
 pub struct Ipv4Marker;

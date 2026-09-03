@@ -22,7 +22,7 @@ pub async fn get_rib_imported_v2(
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let imported = ctx.db.full_rib(query.address_family);
+    let imported = ctx.rdb()?.full_rib(query.address_family);
     let filtered = imported.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(v1::rib::Rib::from(
         filtered.into_latest_api_rib(),
@@ -35,7 +35,7 @@ pub async fn get_rib_selected_v2(
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let selected = ctx.db.loc_rib(query.address_family);
+    let selected = ctx.rdb()?.loc_rib(query.address_family);
     let filtered = selected.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(v1::rib::Rib::from(
         filtered.into_latest_api_rib(),
@@ -49,7 +49,7 @@ pub async fn get_rib_imported(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let imported = ctx.db.full_rib(query.address_family);
+    let imported = ctx.rdb()?.full_rib(query.address_family);
     let filtered = imported.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(filtered.into_latest_api_rib()))
 }
@@ -60,7 +60,7 @@ pub async fn get_rib_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let selected = ctx.db.loc_rib(query.address_family);
+    let selected = ctx.rdb()?.loc_rib(query.address_family);
     let filtered = selected.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(filtered.into_latest_api_rib()))
 }
@@ -70,7 +70,7 @@ pub async fn read_bestpath_fanout(
 ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
     let ctx = ctx.context();
     let fanout = ctx
-        .db
+        .rdb()?
         .get_bestpath_fanout()
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
 
@@ -84,7 +84,7 @@ pub async fn update_bestpath_fanout(
     let ctx = ctx.context();
     let rq = request.into_inner();
 
-    ctx.db
+    ctx.rdb()?
         .set_bestpath_fanout(rq.fanout)
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
 
