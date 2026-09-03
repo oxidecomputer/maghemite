@@ -282,6 +282,7 @@ pub(crate) fn sync_prefix(
         .clone()
         .into_iter()
         .map(|x| TunnelOrigin {
+            router_id: None,
             boundary_addr: tep,
             overlay_prefix: x.cidr,
             metric: DEFAULT_ROUTE_PRIORITY,

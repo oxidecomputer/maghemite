@@ -48,7 +48,7 @@ pub enum PrefixSet {
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(ddm_protocol::v3::Update),
+    Push(ddm_protocol::v4::Update),
 }
 
 #[derive(Debug)]

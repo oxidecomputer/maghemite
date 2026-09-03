@@ -150,11 +150,11 @@ iddqd = "0.4"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "aa4714289cbf28010a821c49d9b73ec94074fb91"
+rev = "ab03ab6bdb250883b3bfbab0eb84744b620dc3e1"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "aa4714289cbf28010a821c49d9b73ec94074fb91"
+rev = "ab03ab6bdb250883b3bfbab0eb84744b620dc3e1"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"

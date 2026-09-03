@@ -217,18 +217,21 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
 
     // Add three initial prefixes to ddm
     ddm.tunnel_originated.lock().unwrap().push(TunnelOrigin {
+        router_id: None,
         boundary_addr: tep,
         metric: 0,
         overlay_prefix: "1.0.0.0/24".parse().unwrap(),
         vni: 1701,
     });
     ddm.tunnel_originated.lock().unwrap().push(TunnelOrigin {
+        router_id: None,
         boundary_addr: tep,
         metric: 0,
         overlay_prefix: "2.0.0.0/24".parse().unwrap(),
         vni: 1701,
     });
     ddm.tunnel_originated.lock().unwrap().push(TunnelOrigin {
+        router_id: None,
         boundary_addr: tep,
         metric: 0,
         overlay_prefix: "3.0.0.0/24".parse().unwrap(),
@@ -386,6 +389,7 @@ async fn sync_v4_over_v6_idempotent() {
 
         // Need a ddm tunnel entry so the overlay bookkeeping is satisfied.
         ddm.tunnel_originated.lock().unwrap().push(TunnelOrigin {
+            router_id: None,
             boundary_addr: tep,
             metric: 0,
             overlay_prefix: "5.0.0.0/24".parse().unwrap(),
@@ -564,6 +568,7 @@ async fn sync_mixed_v4_and_v4_over_v6() {
 
         // DDM tunnel entry for the prefix.
         ddm.tunnel_originated.lock().unwrap().push(TunnelOrigin {
+            router_id: None,
             boundary_addr: tep,
             metric: 0,
             overlay_prefix: "5.0.0.0/24".parse().unwrap(),

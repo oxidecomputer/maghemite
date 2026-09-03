@@ -28,6 +28,7 @@ sled.workspace = true
 mg-common.workspace = true
 port-file.workspace = true
 ddm-api-types.workspace = true
+ddm-api-types-versions.workspace = true
 ddm-protocol.workspace = true
 chrono.workspace = true
 omicron-common.workspace = true

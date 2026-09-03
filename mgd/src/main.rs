@@ -248,11 +248,8 @@ fn detect_switch_slot(
 
         loop {
             // check in with gateway
-            let gateway_client::types::SpIdentifier { slot, .. } = match client
-                .sp_local_switch_id()
-                .await
-            {
-                Ok(v) => *v,
+            let slot = match client.sp_local_switch_id().await {
+                Ok(v) => v.slot,
                 Err(e) => {
                     slog::error!(ctx.log, "failed to resolve switch slot"; "error" => %e);
                     tokio::time::sleep(tokio::time::Duration::from_secs(10))

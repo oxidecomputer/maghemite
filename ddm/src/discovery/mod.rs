@@ -104,11 +104,19 @@ mod runtime;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum Version {
     V2 = 2,
     V3 = 3,
+    /// Adds `TunnelOrigin::router_id` (multi-router attribution).
+    V4 = 4,
+}
+
+impl Version {
+    /// The highest protocol version this daemon speaks, advertised in
+    /// discovery hellos.
+    pub const MAX: Self = Self::V4;
 }
 
 #[derive(Error, Debug)]
