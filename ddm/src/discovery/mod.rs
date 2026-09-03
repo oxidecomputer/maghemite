@@ -102,7 +102,7 @@ use thiserror::Error;
 mod runtime;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-pub(crate) use runtime::handler;
+pub(crate) use runtime::{DiscoveryHandle, handler};
 
 #[derive(Debug, Copy, Clone)]
 #[repr(u8)]

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::RouterStats, sm::SmContext};
+use crate::{admin::RouterStats, sm::StateMachine};
 use chrono::{DateTime, Utc};
 use iddqd::IdOrdMap;
 use mg_common::{
@@ -49,7 +49,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    peers: Arc<RwLock<IdOrdMap<SmContext>>>,
+    peers: Arc<RwLock<IdOrdMap<StateMachine>>>,
     router_stats: Arc<RouterStats>,
 }
 
@@ -155,7 +155,7 @@ impl Producer for Stats {
         ));
 
         for peer in read_lock!(self.peers).iter() {
-            let if_name = lock!(peer.iface.if_name).clone();
+            let if_name = lock!(peer.ctx.iface.if_name).clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
@@ -163,7 +163,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 SolicitationsSent,
-                peer.stats.solicitations_sent
+                peer.ctx.stats.solicitations_sent
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -172,7 +172,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 SolicitationsReceived,
-                peer.stats.solicitations_received
+                peer.ctx.stats.solicitations_received
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -181,7 +181,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 AdvertisementsSent,
-                peer.stats.advertisements_sent
+                peer.ctx.stats.advertisements_sent
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -190,7 +190,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 AdvertisementsReceived,
-                peer.stats.advertisements_received
+                peer.ctx.stats.advertisements_received
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -199,7 +199,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 PeerExpirations,
-                peer.stats.peer_expirations
+                peer.ctx.stats.peer_expirations
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -208,7 +208,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 PeerAddressChanges,
-                peer.stats.peer_address_changes
+                peer.ctx.stats.peer_address_changes
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -217,7 +217,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 PeerSessionsEstablished,
-                peer.stats.peer_established
+                peer.ctx.stats.peer_established
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -226,7 +226,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 UpdatesSent,
-                peer.stats.updates_sent
+                peer.ctx.stats.updates_sent
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -235,7 +235,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 UpdatesReceived,
-                peer.stats.updates_received
+                peer.ctx.stats.updates_received
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -244,7 +244,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 UpdateSendFail,
-                peer.stats.update_send_fail
+                peer.ctx.stats.update_send_fail
             ));
             samples.push(ddm_session_quantity!(
                 self.hostname.clone().into(),
@@ -252,7 +252,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 ImportedUnderlayPrefixes,
-                peer.stats.imported_underlay_prefixes
+                peer.ctx.stats.imported_underlay_prefixes
             ));
             samples.push(ddm_session_quantity!(
                 self.hostname.clone().into(),
@@ -260,7 +260,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 ImportedTunnelEndpoints,
-                peer.stats.imported_tunnel_endpoints
+                peer.ctx.stats.imported_tunnel_endpoints
             ));
         }
 
@@ -271,7 +271,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    peers: Arc<RwLock<IdOrdMap<SmContext>>>,
+    peers: Arc<RwLock<IdOrdMap<StateMachine>>>,
     router_stats: Arc<RouterStats>,
     hostname: String,
     rack_id: Uuid,
