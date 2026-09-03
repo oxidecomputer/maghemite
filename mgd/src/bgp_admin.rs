@@ -2885,8 +2885,6 @@ fn update(message, asn, addr) {
         // The test db comes with the default router already created.
         let db = get_test_db(name, log.clone()).unwrap();
         Arc::new(HandlerContext {
-            #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-            tep: Ipv6Addr::UNSPECIFIED,
             bgp: BgpContext::new(
                 Arc::new(Mutex::new(SessionMap::new())),
                 log.clone(),
@@ -2894,6 +2892,7 @@ fn update(message, asn, addr) {
             bfd: BfdContext::new(log.clone()),
             log: log.clone(),
             db: db.db().clone(),
+            lower: crate::lower::LowerContext::default(),
             mg_lower_stats: Arc::new(MgLowerStats::default()),
             stats_server_running: Mutex::new(false),
             oximeter_port: 0,

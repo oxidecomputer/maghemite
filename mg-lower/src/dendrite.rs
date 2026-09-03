@@ -12,6 +12,7 @@ use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
 use oxnet::IpNet;
+use rdb::types::RouterId;
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -66,16 +67,20 @@ impl RouteHash {
 }
 
 pub(crate) fn ensure_tep_addr(
+    router: RouterId,
     tep: Ipv6Addr,
     dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
     if let Err(e) = rt.block_on(async {
-        dpd.loopback_ipv6_create(&types::Ipv6Entry {
-            tag: MG_LOWER_TAG.into(),
-            addr: tep,
-        })
+        dpd.loopback_ipv6_create(
+            router,
+            &types::Ipv6Entry {
+                tag: MG_LOWER_TAG.into(),
+                addr: tep,
+            },
+        )
         .await
     }) && e.status() != Some(reqwest::StatusCode::CONFLICT)
     {
@@ -87,6 +92,31 @@ pub(crate) fn ensure_tep_addr(
             "prefix" => format!("{tep}")
         );
     }
+}
+
+/// Returns true if dpd confirmed the TEP address is gone (deleted or already
+/// absent).
+pub(crate) fn withdraw_tep_addr(
+    router: RouterId,
+    tep: Ipv6Addr,
+    dpd: &impl Dpd,
+    rt: Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) -> bool {
+    if let Err(e) =
+        rt.block_on(async { dpd.loopback_ipv6_delete(router, &tep).await })
+        && e.status() != Some(reqwest::StatusCode::NOT_FOUND)
+    {
+        dpd_log!(
+            log,
+            warn,
+            "failed to withdraw TEP address {tep} from ASIC: {e}";
+            "error" => format!("{e}"),
+            "prefix" => format!("{tep}")
+        );
+        return false;
+    }
+    true
 }
 
 pub(crate) fn link_is_up(
@@ -137,6 +167,7 @@ fn get_local_addrs(
 
 /// Perform a set of route additions and deletions via the Dendrite API.
 pub(crate) fn update_dendrite<'a, I>(
+    router: RouterId,
     to_add: I,
     to_del: I,
     dpd: &impl Dpd,
@@ -186,9 +217,9 @@ where
                     target,
                     replace: false,
                 };
-                if let Err(e) =
-                    rt.block_on(async { dpd.route_ipv4_add(&update).await })
-                {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv4_add(router, &update).await
+                }) {
                     dpd_log!(log,
                         error,
                         "failed to create route {r:?} {e}";
@@ -228,9 +259,9 @@ where
                     target,
                     replace: false,
                 };
-                if let Err(e) =
-                    rt.block_on(async { dpd.route_ipv6_add(&update).await })
-                {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv6_add(router, &update).await
+                }) {
                     dpd_log!(log,
                         error,
                         "failed to create route {r:?} {e}";
@@ -253,9 +284,9 @@ where
                     target,
                     replace: false,
                 };
-                if let Err(e) =
-                    rt.block_on(async { dpd.route_ipv4_add(&update).await })
-                {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv4_add(router, &update).await
+                }) {
                     dpd_log!(log,
                         error,
                         "failed to create route {r:?} {e}";
@@ -283,7 +314,7 @@ where
             (IpNet::V4(cidr), tgt_ip) => {
                 if let Err(e) = rt.block_on(async {
                     dpd.route_ipv4_delete_target(
-                        &cidr, &port_id, &link_id, &tgt_ip,
+                        router, &cidr, &port_id, &link_id, &tgt_ip,
                     )
                     .await
                 }) {
@@ -300,7 +331,7 @@ where
             (IpNet::V6(cidr), IpAddr::V6(tgt_ip)) => {
                 if let Err(e) = rt.block_on(async {
                     dpd.route_ipv6_delete_target(
-                        &cidr, &port_id, &link_id, &tgt_ip,
+                        router, &cidr, &port_id, &link_id, &tgt_ip,
                     )
                     .await
                 }) {
@@ -453,6 +484,7 @@ fn resolve_port_and_link(
 }
 
 pub(crate) fn get_routes_for_prefix(
+    router: RouterId,
     dpd: &impl Dpd,
     prefix: &IpNet,
     rt: Arc<tokio::runtime::Handle>,
@@ -460,17 +492,18 @@ pub(crate) fn get_routes_for_prefix(
 ) -> Result<HashSet<RouteHash>, Error> {
     let result = match prefix {
         IpNet::V4(cidr) => {
-            let dpd_routes =
-                match rt.block_on(async { dpd.route_ipv4_get(cidr).await }) {
-                    Ok(routes) => routes,
-                    Err(e) => {
-                        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                            return Ok(HashSet::new());
-                        }
-                        return Err(e.into());
+            let dpd_routes = match rt
+                .block_on(async { dpd.route_ipv4_get(router, cidr).await })
+            {
+                Ok(routes) => routes,
+                Err(e) => {
+                    if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                        return Ok(HashSet::new());
                     }
+                    return Err(e.into());
                 }
-                .into_inner();
+            }
+            .into_inner();
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
@@ -517,17 +550,18 @@ pub(crate) fn get_routes_for_prefix(
             result
         }
         IpNet::V6(cidr) => {
-            let dpd_routes =
-                match rt.block_on(async { dpd.route_ipv6_get(cidr).await }) {
-                    Ok(routes) => routes,
-                    Err(e) => {
-                        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                            return Ok(HashSet::new());
-                        }
-                        return Err(e.into());
+            let dpd_routes = match rt
+                .block_on(async { dpd.route_ipv6_get(router, cidr).await })
+            {
+                Ok(routes) => routes,
+                Err(e) => {
+                    if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                        return Ok(HashSet::new());
                     }
+                    return Err(e.into());
                 }
-                .into_inner();
+            }
+            .into_inner();
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {

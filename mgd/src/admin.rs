@@ -40,8 +40,6 @@ use rdb::Db;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
 use std::collections::HashMap;
-#[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-use std::net::Ipv6Addr;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
@@ -52,12 +50,14 @@ const UNIT_API_SERVER: &str = "api_server";
 pub use rdb::DEFAULT_ROUTER;
 
 pub struct HandlerContext {
-    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-    pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub bfd: BfdContext,
     pub log: Logger,
+    /// Global routing database: router table and switch slot. Route and
+    /// config state lives in per-router [`rdb::RouterDb`] handles.
     pub db: Db,
+    /// Per-router mg-lower thread registry.
+    pub lower: crate::lower::LowerContext,
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,

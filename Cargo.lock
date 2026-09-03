@@ -898,10 +898,11 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=803f6899e3bc64780a965d625e248e1d77e37d43#803f6899e3bc64780a965d625e248e1d77e37d43"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=8fce5b10599f625bebc6b3fac9f54a376fb4be5b#8fce5b10599f625bebc6b3fac9f54a376fb4be5b"
 dependencies = [
  "anyhow",
  "chrono",
+ "dpd-types",
  "oxnet",
  "rand 0.9.5",
  "schemars 0.8.22",
@@ -1663,7 +1664,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=803f6899e3bc64780a965d625e248e1d77e37d43#803f6899e3bc64780a965d625e248e1d77e37d43"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=8fce5b10599f625bebc6b3fac9f54a376fb4be5b#8fce5b10599f625bebc6b3fac9f54a376fb4be5b"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1681,6 +1682,30 @@ dependencies = [
  "slog",
  "tokio",
  "transceiver-controller",
+ "uuid",
+]
+
+[[package]]
+name = "dpd-types"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=8fce5b10599f625bebc6b3fac9f54a376fb4be5b#8fce5b10599f625bebc6b3fac9f54a376fb4be5b"
+dependencies = [
+ "dpd-types-versions",
+]
+
+[[package]]
+name = "dpd-types-versions"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=8fce5b10599f625bebc6b3fac9f54a376fb4be5b#8fce5b10599f625bebc6b3fac9f54a376fb4be5b"
+dependencies = [
+ "chrono",
+ "dropshot",
+ "omicron-common",
+ "oxnet",
+ "rand 0.9.5",
+ "schemars 0.8.22",
+ "serde",
+ "thiserror 2.0.20",
  "uuid",
 ]
 

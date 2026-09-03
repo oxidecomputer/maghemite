@@ -34,6 +34,7 @@ mod bfd_admin;
 mod bgp_admin;
 mod error;
 mod log;
+mod lower;
 mod oxstats;
 mod rib_admin;
 mod signal;
@@ -130,18 +131,13 @@ async fn run(args: RunArgs) {
     let bgp = init_bgp(&args, &log);
 
     ensure_default_router(&db);
-    let tep_ula = db
-        .router(admin::DEFAULT_ROUTER)
-        .expect("default router exists")
-        .tep();
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
-        #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-        tep: tep_ula,
         log: log.clone(),
         bgp,
         bfd,
+        lower: lower::LowerContext::default(),
         mg_lower_stats: Arc::new(MgLowerStats::default()),
         db: db.clone(),
         stats_server_running: Mutex::new(false),
@@ -156,33 +152,18 @@ async fn run(args: RunArgs) {
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         dlog!(log, error, "error sending handler context to signal handler: {e}";
-            "params" => format!("tep {tep_ula}, dir {}, oximeter_port {}",
+            "params" => format!("dir {}, oximeter_port {}",
                 args.data_dir.clone(), args.oximeter_port
             ),
             "error" => format!("{e}")
         );
     }
 
-    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-    {
-        let rt = Arc::new(tokio::runtime::Handle::current());
-        let ctx = context.clone();
-        let log = log.clone();
-        let db = ctx.rdb().expect("default router exists");
-        let stats = context.mg_lower_stats.clone();
-        let dpd = mg_lower::ProductionDpd {
-            client: mg_lower::new_dpd_client(&log),
-        };
-        let ddm = mg_lower::ProductionDdm {
-            client: mg_lower::new_ddm_client(&log),
-        };
-        let sw = mg_lower::ProductionSwitchZone {};
-        Builder::new()
-            .name("mg-lower".to_string())
-            .spawn(move || {
-                mg_lower::run(ctx.tep, db, log, stats, rt, &dpd, &ddm, &sw);
-            })
-            .expect("failed to start mg-lower");
+    for info in db.list_routers() {
+        let rdb = db
+            .router(&info.name)
+            .expect("router disappeared during startup");
+        context.lower.ensure(&rdb, &log, &context.mg_lower_stats);
     }
 
     start_bgp_routers(context.clone());
