@@ -37,6 +37,7 @@ mod log;
 mod lower;
 mod oxstats;
 mod rib_admin;
+mod router_admin;
 mod signal;
 mod smf;
 mod static_admin;
@@ -559,17 +560,10 @@ fn ensure_default_router(db: &rdb::Db) {
         return;
     }
 
-    // create the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
-    let mut r = [0u8; 7];
-    rand::fill(&mut r);
-    let tep_ula = Ipv6Addr::from([
-        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
-    ]);
-
     db.create_router(rdb::types::RouterInfo {
         id: rdb::types::RouterId::new_random(),
         name: admin::DEFAULT_ROUTER.to_string(),
-        tep: tep_ula,
+        tep: router_admin::random_tep_ula(),
     })
     .expect("create default router");
 }

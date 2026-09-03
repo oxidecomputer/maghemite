@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, rib_admin, router_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use camino::Utf8PathBuf;
@@ -27,6 +27,9 @@ use mg_api_types::bgp::session::{
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
+};
+use mg_api_types::router::{
+    MultiRouterApplyRequest, RouterInfo, RouterSelector,
 };
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
@@ -130,6 +133,44 @@ pub enum MgAdminApiImpl {}
 
 impl MgAdminApi for MgAdminApiImpl {
     type Context = Arc<HandlerContext>;
+
+    // Multi-router ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    async fn multi_router_apply(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<MultiRouterApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        router_admin::multi_router_apply(ctx, request).await
+    }
+
+    async fn list_routers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
+        router_admin::list_routers(ctx).await
+    }
+
+    async fn get_router_rib_imported(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        router_admin::get_router_rib_imported(ctx, path, request).await
+    }
+
+    async fn get_router_rib_selected(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        router_admin::get_router_rib_selected(ctx, path, request).await
+    }
+
+    async fn get_router_neighbors(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        router_admin::get_router_neighbors(ctx, path).await
+    }
 
     async fn get_bfd_peers(
         ctx: RequestContext<Self::Context>,

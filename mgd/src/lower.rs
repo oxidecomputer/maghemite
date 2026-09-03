@@ -22,7 +22,6 @@ pub struct LowerContext {
     handles: Mutex<BTreeMap<String, LowerHandle>>,
 }
 
-#[expect(dead_code)]
 struct LowerHandle {
     shutdown: Arc<AtomicBool>,
     /// Resolves to mg-lower's report of whether dpd confirmed the router's
@@ -94,7 +93,6 @@ impl LowerContext {
     /// clean (or when there was no thread, i.e. nothing was ever
     /// programmed). On false, the router's switch table index must not be
     /// reused: keep it tombstoned and retry the cleanup later.
-    #[expect(dead_code)]
     pub async fn stop(&self, name: &str) -> bool {
         let handle = lock!(self.handles).remove(name);
         let Some(handle) = handle else {
@@ -114,7 +112,6 @@ impl LowerContext {
     /// table is clean. Failures are logged; the tombstone stays for the
     /// next attempt.
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-    #[expect(dead_code)]
     pub async fn scrub_orphaned_switch_indexes(
         &self,
         db: &rdb::Db,
@@ -165,7 +162,6 @@ impl LowerContext {
     /// Without a lower half nothing is ever programmed into a switch, so
     /// tombstoned indexes can be released directly.
     #[cfg(not(all(feature = "mg-lower", target_os = "illumos")))]
-    #[expect(dead_code)]
     pub async fn scrub_orphaned_switch_indexes(
         &self,
         db: &rdb::Db,

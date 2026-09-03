@@ -55,6 +55,13 @@ progenitor::generate_api!(
         // RIB shapes.
         BestpathFanoutRequest = mg_api_types_versions::latest::rib::BestpathFanoutRequest,
 
+        // Multi-router shapes.
+        BgpSpec = mg_api_types_versions::latest::router::BgpSpec,
+        MultiRouterApplyRequest = mg_api_types_versions::latest::router::MultiRouterApplyRequest,
+        RouterId = mg_api_types_versions::latest::router::RouterId,
+        RouterInfo = mg_api_types_versions::latest::router::RouterInfo,
+        RouterSpec = mg_api_types_versions::latest::router::RouterSpec,
+
         // Static-route shapes.
         AddStaticRoute4Request = mg_api_types_versions::latest::static_routes::AddStaticRoute4Request,
         AddStaticRoute6Request = mg_api_types_versions::latest::static_routes::AddStaticRoute6Request,

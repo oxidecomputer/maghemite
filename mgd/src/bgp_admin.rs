@@ -191,7 +191,7 @@ pub async fn delete_router(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-async fn do_delete_router(
+pub(crate) async fn do_delete_router(
     ctx: &Arc<HandlerContext>,
     rdb: &rdb::RouterDb,
     asn: u32,
@@ -1333,7 +1333,7 @@ pub async fn bgp_apply(
     do_bgp_apply(ctx, &rdb, request.into_inner()).await
 }
 
-async fn do_bgp_apply(
+pub(crate) async fn do_bgp_apply(
     ctx: &Arc<HandlerContext>,
     rdb: &rdb::RouterDb,
     rq: ApplyRequest,
@@ -2838,7 +2838,7 @@ pub(crate) mod helpers {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{do_bgp_apply, do_delete_router};
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
@@ -2861,7 +2861,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    const POLICY_SOURCE: &str = r#"
+    pub(crate) const POLICY_SOURCE: &str = r#"
 fn open(message, asn, addr) {
     CheckerResult::Accept
 }
@@ -2872,7 +2872,7 @@ fn update(message, asn, addr) {
 "#;
 
     /// Build a fresh handler context backed by an isolated on-disk test db.
-    fn test_ctx(name: &str) -> Arc<HandlerContext> {
+    pub(crate) fn test_ctx(name: &str) -> Arc<HandlerContext> {
         let tmpdir = temp_dir();
         let tmpdir =
             format!("{}/maghemite-test/{name}", tmpdir.to_str().unwrap());
@@ -2940,7 +2940,11 @@ fn update(message, asn, addr) {
         }
     }
 
-    fn numbered(ip: &str, name: &str, hold_time: u64) -> BgpPeerConfig {
+    pub(crate) fn numbered(
+        ip: &str,
+        name: &str,
+        hold_time: u64,
+    ) -> BgpPeerConfig {
         BgpPeerConfig {
             host: oxnet::SocketAddrJson(SocketAddr::new(
                 ip.parse().unwrap(),
@@ -2951,7 +2955,7 @@ fn update(message, asn, addr) {
         }
     }
 
-    fn unnumbered(
+    pub(crate) fn unnumbered(
         interface: &str,
         name: &str,
         hold_time: u64,
@@ -2986,7 +2990,7 @@ fn update(message, asn, addr) {
 
     /// Apply request carrying both a numbered and an unnumbered peer under
     /// `asn`, so a single test exercises both code paths at once.
-    fn mixed_req(asn: u32, hold_time: u64) -> ApplyRequest {
+    pub(crate) fn mixed_req(asn: u32, hold_time: u64) -> ApplyRequest {
         apply_req(
             asn,
             HashMap::from([(
