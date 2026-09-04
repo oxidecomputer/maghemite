@@ -5,6 +5,7 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::{Client, types::ApplyRequest};
+use ddm_api_types_versions::latest::db::InterfaceLifetime;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use slog::{Drain, Logger};
 use std::env;
@@ -134,6 +135,10 @@ struct RouterZone<'a> {
     zfs: &'a Zfs,
     zone: Zone,
     transit: bool,
+    /// Pass every peering interface to ddmd as `-a`, making them static.
+    /// Otherwise ddmd starts with no interfaces and tests add them through
+    /// `ddm_apply`.
+    static_ifx: bool,
     testname: String,
 }
 
@@ -144,7 +149,17 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, false, "")
+        Self::new(name, zfs, mgmt, rtr_ifx, false, false, "")
+    }
+
+    /// A server router whose peering interfaces are static (`ddmd -a`).
+    fn static_server(
+        name: &str,
+        zfs: &'a Zfs,
+        mgmt: &'a str,
+        rtr_ifx: &[&'a str],
+    ) -> Result<Self> {
+        Self::new(name, zfs, mgmt, rtr_ifx, false, true, "")
     }
 
     fn transit(
@@ -154,7 +169,7 @@ impl<'a> RouterZone<'a> {
         rtr_ifx: &[&'a str],
         testname: &str,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, true, testname)
+        Self::new(name, zfs, mgmt, rtr_ifx, true, false, testname)
     }
 
     fn new(
@@ -163,6 +178,7 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
         transit: bool,
+        static_ifx: bool,
         testname: &str,
     ) -> Result<Self> {
         let mut ifx = vec![mgmt];
@@ -182,6 +198,7 @@ impl<'a> RouterZone<'a> {
             zfs,
             zone,
             transit,
+            static_ifx,
             testname: testname.into(),
         })
     }
@@ -192,11 +209,16 @@ impl<'a> RouterZone<'a> {
 
     fn start_router(&self, restart_dpd: bool) -> Result<()> {
         let ddm = "/opt/ddmd";
-        let extra_args = format!(
+        let mut extra_args = format!(
             "--rack-uuid {} --sled-uuid {}",
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),
         );
+        if self.static_ifx {
+            for ifname in self.ifnames() {
+                extra_args.push_str(&format!(" -a {ifname}"));
+            }
+        }
 
         if self.transit {
             if restart_dpd {
@@ -444,8 +466,15 @@ async fn test_trio() -> Result<()> {
 
     println_nopipe!("start zone s1");
     let s1 = RouterZone::server("s1.trio", &zfs, &mg2.name, &[&sl0_sw0.end_a])?;
+    // s2's interface is static so the trio also covers ddm_apply leaving
+    // command-line interfaces alone.
     println_nopipe!("start zone s2");
-    let s2 = RouterZone::server("s2.trio", &zfs, &mg3.name, &[&sl1_sw1.end_a])?;
+    let s2 = RouterZone::static_server(
+        "s2.trio",
+        &zfs,
+        &mg3.name,
+        &[&sl1_sw1.end_a],
+    )?;
     println_nopipe!("start zone t1");
     let t1 = RouterZone::transit(
         "t1.trio",
@@ -478,13 +507,16 @@ async fn run_trio_tests(
     let t1 = Client::new("http://10.0.0.3:8000", log.clone());
 
     zs1.apply(&s1, &zs1.ifnames()).await?;
-    zs2.apply(&s2, &zs2.ifnames()).await?;
+    // s2's interface is static. An apply that knows nothing about it (as
+    // Omicron's will) must not remove it.
+    zs2.apply(&s2, &[]).await?;
     zt1.apply(&t1, &zt1.ifnames()).await?;
 
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
     wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
     wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 2);
+    assert_static_interfaces(&s2, &zs2.ifnames()).await?;
 
     println_nopipe!("initial peering test passed");
 
@@ -505,6 +537,20 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
     println_nopipe!("advertise from two passed");
+
+    // Naming the static interface in ddm_apply, then omitting it again, is a
+    // no-op. Apply is synchronous, so a restarted FSM would already show up
+    // here as a missing peer (a fresh FSM starts in Init with no peer).
+    zs2.apply(&s2, &zs2.ifnames()).await?;
+    assert_eq!(s2.get_peers().await?.len(), 1);
+    assert_eq!(prefix_count(&s2).await?, 1);
+    assert_static_interfaces(&s2, &zs2.ifnames()).await?;
+    zs2.apply(&s2, &[]).await?;
+    assert_eq!(s2.get_peers().await?.len(), 1);
+    assert_eq!(prefix_count(&s2).await?, 1);
+    assert_static_interfaces(&s2, &zs2.ifnames()).await?;
+
+    println_nopipe!("static interface survives ddm_apply passed");
 
     retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
@@ -865,6 +911,33 @@ async fn run_quartet_tests(
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
     retry_cmd!(zs3.zexec("ping fd00:1::1"), 1, 10);
 
+    Ok(())
+}
+
+/// Assert that `c` reports exactly `ifnames`, all static.
+async fn assert_static_interfaces(
+    c: &Client,
+    ifnames: &[String],
+) -> Result<()> {
+    let mut found = c
+        .get_interfaces()
+        .await?
+        .into_inner()
+        .into_values()
+        .map(|info| {
+            assert_eq!(
+                info.lifetime,
+                InterfaceLifetime::Static,
+                "{} should be static",
+                info.name
+            );
+            info.name
+        })
+        .collect::<Vec<_>>();
+    found.sort();
+    let mut expected = ifnames.to_vec();
+    expected.sort();
+    assert_eq!(found, expected);
     Ok(())
 }
 

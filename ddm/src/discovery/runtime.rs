@@ -13,7 +13,6 @@ use crate::sm::{
 };
 use crate::{dbg, err, inf, trc, wrn};
 use ddm_api_types::db::{PeerIdentity, RouterKind};
-use mg_common::lock;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -471,10 +470,7 @@ fn handle_advertisement(
         hostname,
         kind,
     };
-    let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
-        *info = Some(new_peer);
-        drop(info);
+    if ctx.iface.set_peer(new_peer) {
         emit_nbr_update(ctx, sender, version);
     }
 }
