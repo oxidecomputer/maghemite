@@ -830,6 +830,10 @@ version = "0.1.0"
 dependencies = [
  "omicron-common",
  "oxnet",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -1367,10 +1371,12 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
  "dropshot",
  "expectorate",
+ "futures",
  "hostname 0.4.2",
  "http-body-util",
  "hyper",
@@ -1386,6 +1392,7 @@ dependencies = [
  "oxnet",
  "port-file",
  "pretty_assertions",
+ "reqwest 0.13.4",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -1393,6 +1400,7 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "socket2",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "uuid",
@@ -1432,11 +1440,14 @@ dependencies = [
 name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
+ "client-common",
  "ddm-protocol",
  "oxnet",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "serde_repr",
+ "thiserror 2.0.20",
  "uuid",
 ]
 
@@ -3921,13 +3932,16 @@ dependencies = [
  "backoff",
  "clap",
  "ddm-api-types",
+ "dpd-client",
  "libc",
  "libnet",
  "oximeter",
  "oximeter-producer",
  "oxnet",
+ "proptest",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-bunyan",

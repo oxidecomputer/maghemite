@@ -14,7 +14,6 @@
 
 use std::fmt::{self, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use client_common::address::{
@@ -22,6 +21,8 @@ use client_common::address::{
     IPV4_SSM_RESERVED_SUBNET, IPV6_MULTICAST_RANGE, UNDERLAY_MULTICAST_SUBNET,
     is_ssm_address,
 };
+pub use client_common::multicast::UnderlayMulticastIpv6;
+pub use client_common::vni::{Vni, VniError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -41,98 +42,6 @@ pub enum MulticastError {
     /// A database key could not be decoded.
     #[error("db key error {0}")]
     DbKey(String),
-}
-
-/// Error raised while validating a [`Vni`].
-#[derive(thiserror::Error, Debug)]
-pub enum VniError {
-    /// The value exceeds the 24-bit Geneve maximum.
-    #[error("VNI {value} exceeds the maximum 24-bit value {}", Vni::MAX_VNI)]
-    OutOfRange { value: u32 },
-}
-
-/// A validated Geneve Virtual Network Identifier.
-///
-/// Wraps a 24-bit VNI, rejecting any value above [`Vni::MAX_VNI`] at
-/// construction and deserialization so an out-of-range identifier is
-/// unrepresentable.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(try_from = "u32", into = "u32")]
-#[schemars(transparent)]
-pub struct Vni(u32);
-
-impl Vni {
-    /// Maximum Geneve VNI value.
-    ///
-    /// Virtual Network Identifiers are constrained to 24-bit values per the
-    /// Geneve specification (RFC 8926 Section 3.3).
-    pub const MAX_VNI: u32 = 0xFF_FFFF;
-
-    /// Default VNI for fleet-wide multicast routing.
-    ///
-    /// A low-numbered VNI chosen to avoid colliding with user VNIs, though
-    /// it is not yet within the Oxide-reserved range.
-    pub const DEFAULT_MULTICAST: Self = Self(77);
-
-    /// Create a validated VNI.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VniError::OutOfRange`] if `value` exceeds [`Vni::MAX_VNI`],
-    /// the largest 24-bit Geneve VNI.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mg_api_types_versions::latest::mrib::Vni;
-    ///
-    /// assert!(Vni::new(77).is_ok());
-    /// assert!(Vni::new(Vni::MAX_VNI + 1).is_err());
-    /// ```
-    pub fn new(value: u32) -> Result<Self, VniError> {
-        if value > Self::MAX_VNI {
-            return Err(VniError::OutOfRange { value });
-        }
-        Ok(Self(value))
-    }
-
-    /// Return the underlying 24-bit value.
-    #[inline]
-    pub const fn as_u32(self) -> u32 {
-        self.0
-    }
-}
-
-impl fmt::Display for Vni {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<u32> for Vni {
-    type Error = VniError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<Vni> for u32 {
-    fn from(vni: Vni) -> Self {
-        vni.0
-    }
 }
 
 /// Input for adding static multicast routes.
@@ -604,92 +513,6 @@ impl TryFrom<Ipv6Addr> for MulticastAddrV6 {
 impl From<MulticastAddrV6> for Ipv6Addr {
     fn from(addr: MulticastAddrV6) -> Self {
         addr.0
-    }
-}
-
-/// A validated underlay multicast IPv6 address within ff04::/64.
-///
-/// The Oxide rack maps overlay multicast groups 1:1 to admin-local scoped
-/// IPv6 multicast addresses in `UNDERLAY_MULTICAST_SUBNET` (ff04::/64).
-/// This type enforces that invariant at construction time.
-// TODO: Duplicates `dpd_types::mcast::UnderlayMulticastIpv6` in dendrite.
-// Both should be consolidated into `oxnet`, the cycle-free leaf crate that
-// maghemite, dendrite, and omicron already share.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
-#[schemars(transparent)]
-pub struct UnderlayMulticastIpv6(Ipv6Addr);
-
-impl UnderlayMulticastIpv6 {
-    /// Create a new validated underlay multicast address.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the address is not within `UNDERLAY_MULTICAST_SUBNET`
-    /// (ff04::/64).
-    pub fn new(value: Ipv6Addr) -> Result<Self, MulticastError> {
-        if !UNDERLAY_MULTICAST_SUBNET.contains(value) {
-            return Err(MulticastError::Validation(format!(
-                "underlay address {value} is not within \
-                 {UNDERLAY_MULTICAST_SUBNET}"
-            )));
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the underlying IPv6 address.
-    #[inline]
-    pub const fn ip(&self) -> Ipv6Addr {
-        self.0
-    }
-}
-
-impl fmt::Display for UnderlayMulticastIpv6 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<Ipv6Addr> for UnderlayMulticastIpv6 {
-    type Error = MulticastError;
-
-    fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<UnderlayMulticastIpv6> for Ipv6Addr {
-    fn from(addr: UnderlayMulticastIpv6) -> Self {
-        addr.0
-    }
-}
-
-impl From<UnderlayMulticastIpv6> for IpAddr {
-    fn from(addr: UnderlayMulticastIpv6) -> Self {
-        IpAddr::V6(addr.0)
-    }
-}
-
-impl FromStr for UnderlayMulticastIpv6 {
-    type Err = MulticastError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let addr: Ipv6Addr = s.parse().map_err(|_| {
-            MulticastError::Validation(format!("invalid IPv6 address: {s}"))
-        })?;
-        Self::new(addr)
     }
 }
 
@@ -1186,31 +1009,15 @@ pub enum MulticastSourceProtocol {
 
 #[cfg(test)]
 mod tests {
-    use omicron_common::api::external::Vni as CanonicalVni;
-
     use super::*;
 
-    /// Assert the locally copied VNI literals equal their
-    /// `omicron_common::api::external::Vni` originals so they cannot drift.
-    ///
-    /// `omicron_common` is a dev-dependency only, so it does not appear in the
-    /// normal dependency tree the no-omicron CI check inspects.
     #[test]
-    fn vni_constants_match_canonical_values() {
-        assert_eq!(Vni::MAX_VNI, CanonicalVni::MAX_VNI);
-        assert_eq!(
-            Vni::DEFAULT_MULTICAST.as_u32(),
-            CanonicalVni::DEFAULT_MULTICAST_VNI.as_u32()
-        );
-    }
-
-    /// The [`Vni`] newtype accepts in-range values and rejects values above
-    /// [`Vni::MAX_VNI`], enforcing the 24-bit invariant at construction.
-    #[test]
-    fn vni_rejects_out_of_range() {
-        assert_eq!(Vni::new(0).unwrap().as_u32(), 0);
-        assert_eq!(Vni::new(Vni::MAX_VNI).unwrap().as_u32(), Vni::MAX_VNI);
-        assert!(Vni::new(Vni::MAX_VNI + 1).is_err());
-        assert!(Vni::new(u32::MAX).is_err());
+    fn unicast_rejects_non_routable_sources() {
+        // 0/8 "this network" (RFC 791).
+        assert!(UnicastAddrV4::new(Ipv4Addr::new(0, 1, 2, 3)).is_err());
+        // Link-local, 169.254/16 (RFC 3927): not router-forwarded.
+        assert!(UnicastAddrV4::new(Ipv4Addr::new(169, 254, 0, 1)).is_err());
+        // Link-local, fe80::/10 (RFC 4291): not forwarded.
+        assert!(UnicastAddrV6::new("fe80::1".parse().unwrap()).is_err());
     }
 }

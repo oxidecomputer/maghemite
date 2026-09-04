@@ -13,20 +13,33 @@ use super::{
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
-use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
+use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate};
+use ddm_protocol::v4::{MulticastPathHop, MulticastPathVector, Update};
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::{sleep, spawn};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::discovery::Version;
-use ddm_api_types::net::TunnelOrigin;
 use std::net::Ipv6Addr;
+
+/// Cadence for the periodic pull in the [`Exchange`] state. The initial pull
+/// is one-shot, so a neighbor that originates routes after we pull it, late
+/// multicast group memberships for instance, would otherwise never be
+/// imported absent a push from that neighbor. Pulling on this cadence
+/// repairs that drift without operator intervention. It matches the
+/// multicast sweep reconcile interval so both repair loops converge on the
+/// same cadence. Pre-V4 peers are skipped, since their responses carry no
+/// multicast section. The exchange loop checks a fixed deadline before
+/// receiving another event, so a busy event queue cannot postpone the pull
+/// indefinitely.
+const EXCHANGE_RESYNC_INTERVAL: Duration = crate::mcast::RECONCILE_INTERVAL;
 
 impl StateMachine {
     pub fn run(&mut self) -> Result<(), SmError> {
@@ -77,9 +90,8 @@ impl State for Init {
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "failed to get IPv6 address for interface {}: {}",
+                        "failed to get IPv6 address for interface {}: {e}",
                         &self.ctx.config.aobj_name,
-                        e
                     );
                     sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
                     continue;
@@ -156,8 +168,7 @@ impl State for Solicit {
                     err!(
                         self.log,
                         self.ctx.config.if_name,
-                        "solicit event recv: {}",
-                        e
+                        "solicit event recv: {e}",
                     );
                     continue;
                 }
@@ -168,6 +179,15 @@ impl State for Solicit {
                         self.log,
                         self.ctx.config.if_name,
                         "transition solicit -> exchange"
+                    );
+
+                    // The peer is now established on this link, so wake the
+                    // multicast sweep for any of its groups whose import raced
+                    // ahead of resolution.
+                    crate::mcast::notify_peer_groups(
+                        &self.ctx.db,
+                        addr,
+                        &self.ctx.mcast_notify,
                     );
                     return (
                         Box::new(Exchange::new(
@@ -234,7 +254,20 @@ impl Exchange {
         }
     }
 
-    fn initial_pull(&self, stop: Arc<AtomicBool>) {
+    fn start_pull(
+        &self,
+        stop: Arc<AtomicBool>,
+        active: Arc<AtomicBool>,
+        mode: exchange::UpdateMode,
+        retry: bool,
+    ) {
+        if active
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+
         let ctx = self.ctx.clone();
         let peer = self.peer;
         let version = self.version;
@@ -244,20 +277,56 @@ impl Exchange {
         let if_name = self.ctx.config.if_name.clone();
 
         spawn(move || {
-            while let Err(e) = crate::exchange::pull(
-                ctx.clone(),
-                peer,
-                version,
-                rt.clone(),
-                log.clone(),
-            ) {
-                sleep(Duration::from_millis(interval));
-                wrn!(log, if_name, "exchange pull: {}", e);
+            loop {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
+
+                match crate::exchange::pull(
+                    ctx.clone(),
+                    peer,
+                    version,
+                    rt.clone(),
+                    log.clone(),
+                    mode,
+                    Some(stop.as_ref()),
+                ) {
+                    Ok(()) => break,
+                    Err(e) => {
+                        wrn!(log, if_name, "exchange pull: {e}");
+                        if !retry || stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        sleep(Duration::from_millis(interval));
+                    }
+                }
             }
+            active.store(false, Ordering::Release);
         });
+    }
+
+    fn initial_pull(&self, stop: Arc<AtomicBool>, active: Arc<AtomicBool>) {
+        self.start_pull(stop, active, exchange::UpdateMode::Redistribute, true);
+    }
+
+    fn periodic_pull(&self, stop: Arc<AtomicBool>, active: Arc<AtomicBool>) {
+        // The resync exists to repair multicast drift, and multicast first
+        // appears on the wire in V4. An earlier peer's response has no
+        // multicast section, so a pull would only replay the full underlay and
+        // tunnel tables while holding the route_update lock.
+        if self.version < Version::V4 {
+            return;
+        }
+        self.start_pull(stop, active, exchange::UpdateMode::ImportOnly, false);
+    }
+
+    fn sync_pull(&self, stop: Arc<AtomicBool>, active: Arc<AtomicBool>) {
+        self.start_pull(
+            stop,
+            active,
+            exchange::UpdateMode::Redistribute,
+            false,
+        );
     }
 
     fn wait_for_exchange_server_to_start(&self) {
@@ -268,11 +337,30 @@ impl Exchange {
         );
         let interval = 250; // TODO as parameter
         loop {
-            match exchange::do_pull(
-                &self.ctx,
-                &self.ctx.config.addr,
-                &self.ctx.rt,
-            ) {
+            let res = match self.version {
+                Version::V2 => exchange::do_pull_v2(
+                    &self.ctx,
+                    &self.ctx.config.addr,
+                    &self.ctx.rt,
+                )
+                .map(|_| ()),
+                Version::V3 => exchange::do_pull_v3(
+                    &self.ctx,
+                    &self.ctx.config.addr,
+                    &self.ctx.rt,
+                )
+                .map(|_| ()),
+                // This probe only establishes that the server answers, so it
+                // reads the first page and stops.
+                Version::V4 => exchange::do_pull_v4(
+                    &self.ctx,
+                    &self.ctx.config.addr,
+                    &self.ctx.rt,
+                    None,
+                )
+                .map(|_| ()),
+            };
+            match res {
                 Ok(_) => break,
                 Err(e) => {
                     wrn!(
@@ -293,13 +381,35 @@ impl Exchange {
 
     fn expire_peer(
         &mut self,
-        exchange_thread: &tokio::task::JoinHandle<()>,
+        exchange_handle: &exchange::ExchangeHandle,
         pull_stop: &AtomicBool,
     ) {
-        exchange_thread.abort();
+        exchange_handle.abort();
         self.ctx.iface.clear_peer();
-        let (to_remove, to_remove_tnl) =
-            self.ctx.db.remove_nexthop_routes(self.peer);
+        self.withdraw_peer_routes(self.peer);
+        pull_stop.store(true, Ordering::Relaxed);
+    }
+
+    /// Remove all routes imported via `peer`, clean up the forwarding state
+    /// derived from them, and, on transit routers, propagate withdraws to the
+    /// remaining peers.
+    ///
+    /// Called on peer expiry and on renumber, where a re-advertisement
+    /// carries a new peer address and `peer` is the prior one.
+    fn withdraw_peer_routes(&self, peer: Ipv6Addr) {
+        // Exchange updates take the same lock. If an old-peer update is
+        // already running, cleanup follows it and removes its imports. If
+        // cleanup wins, the update subsequently observes the changed peer
+        // identity and is discarded.
+        let _route_update = mg_common::lock!(self.ctx.iface.route_update);
+        let removed = self.ctx.db.remove_nexthop_routes(peer);
+        self.redistribute_removed_routes(&removed);
+        let crate::db::RemovedNexthopRoutes {
+            underlay: to_remove,
+            tunnel: to_remove_tnl,
+            multicast: to_remove_mcast,
+            ..
+        } = removed;
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
@@ -325,21 +435,34 @@ impl Exchange {
                 to_remove_tnl
             );
         }
-        // if we're a transit router propagate withdraws for the
-        // expired peer.
+
+        // The peer's routes are gone from the imported set, so we notify the
+        // multicast sweep of each affected underlay group. The sweep drops the
+        // peer's replication membership from DPD.
+        crate::mcast::notify_affected_groups(
+            to_remove_mcast.iter(),
+            &self.ctx.mcast_notify,
+        );
+    }
+
+    fn redistribute_removed_routes(
+        &self,
+        removed: &crate::db::RemovedNexthopRoutes,
+    ) {
+        // If we're a transit router propagate withdraws for the
+        // removed routes.
         if self.ctx.config.kind == RouterKind::Transit {
             dbg!(
                 self.log,
                 self.ctx.config.if_name,
-                "redistributing expire to {} peers",
+                "redistributing withdraws to {} peers",
                 self.ctx.event_channels.len()
             );
 
-            let underlay = if to_remove.is_empty() {
-                None
-            } else {
-                Some(UnderlayUpdate::withdraw(
-                    to_remove
+            let underlay = (!removed.underlay.is_empty()).then(|| {
+                UnderlayUpdate::withdraw(
+                    removed
+                        .underlay
                         .iter()
                         .map(|x| PathVector {
                             destination: x.destination,
@@ -350,23 +473,61 @@ impl Exchange {
                             },
                         })
                         .collect(),
-                ))
-            };
+                )
+            });
 
-            let tunnel = if to_remove_tnl.is_empty() {
+            let tunnel = (!removed.tunnel.is_empty()).then(|| {
+                TunnelUpdate::withdraw(
+                    removed.tunnel.iter().cloned().map(Into::into).collect(),
+                )
+            });
+
+            // Downstream peers collapse all paths through us into one route.
+            // For each removed origin, either withdraw the final path or
+            // refresh the peer with a remaining imported/local path.
+            let multicast = if removed.multicast.is_empty() {
                 None
             } else {
-                Some(TunnelUpdate::withdraw(
-                    to_remove_tnl.iter().cloned().map(Into::into).collect(),
-                ))
+                let withdrawals: HashSet<_> = removed
+                    .multicast
+                    .iter()
+                    .map(|route| MulticastPathVector {
+                        origin: (&route.origin).into(),
+                        path: Vec::new(),
+                    })
+                    .collect();
+                let update = crate::exchange::reconcile_multicast_withdrawals(
+                    &withdrawals,
+                    &removed.mcast_reachability,
+                    &MulticastPathHop::new(
+                        self.ctx.hostname.clone(),
+                        self.ctx.config.addr,
+                    ),
+                );
+                if update.announce.is_empty() && update.withdraw.is_empty() {
+                    None
+                } else {
+                    Some(update)
+                }
             };
 
-            let push = Update { underlay, tunnel };
+            let push = Arc::new(Update {
+                underlay,
+                tunnel,
+                multicast,
+            });
             for ec in &self.ctx.event_channels {
-                ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+                if let Err(e) =
+                    ec.send(Event::Peer(PeerEvent::Push(Arc::clone(&push))))
+                {
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "deliver redistributed withdraw: {e}",
+                    );
+                }
             }
         }
-        pull_stop.store(true, Ordering::Relaxed);
     }
 }
 
@@ -376,7 +537,7 @@ impl State for Exchange {
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Exchange);
-        let exchange_thread = loop {
+        let exchange_handle = loop {
             match exchange::handler(
                 self.ctx.clone(),
                 self.ctx.config.addr,
@@ -399,22 +560,31 @@ impl State for Exchange {
 
         self.wait_for_exchange_server_to_start();
 
-        let pull_stop = Arc::new(AtomicBool::new(false));
+        let mut pull_stop = Arc::new(AtomicBool::new(false));
+        let mut pull_active = Arc::new(AtomicBool::new(false));
 
         // Do an initial pull, in the event that exchange events are fired while
         // this pull is taking place, they will be queued and handled in the
         // loop below.
-        self.initial_pull(pull_stop.clone());
+        self.initial_pull(pull_stop.clone(), pull_active.clone());
 
+        let mut resync_deadline = Instant::now() + EXCHANGE_RESYNC_INTERVAL;
         loop {
-            let e = match event.recv() {
+            if Instant::now() >= resync_deadline {
+                self.periodic_pull(pull_stop.clone(), pull_active.clone());
+                resync_deadline = Instant::now() + EXCHANGE_RESYNC_INTERVAL;
+            }
+
+            let wait =
+                resync_deadline.saturating_duration_since(Instant::now());
+            let e = match event.recv_timeout(wait) {
                 Ok(e) => e,
+                Err(RecvTimeoutError::Timeout) => continue,
                 Err(e) => {
                     err!(
                         self.log,
                         self.ctx.config.if_name,
-                        "exchange event recv: {}",
-                        e
+                        "exchange event recv: {e}",
                     );
                     continue;
                 }
@@ -442,8 +612,7 @@ impl State for Exchange {
                         err!(
                             self.log,
                             self.ctx.config.if_name,
-                            "announce: {}",
-                            e,
+                            "announce: {e}",
                         );
                         wrn!(
                             self.log,
@@ -451,7 +620,7 @@ impl State for Exchange {
                             "expiring peer {} due to failed announce",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(&exchange_handle, &pull_stop);
                         return (
                             Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -477,8 +646,7 @@ impl State for Exchange {
                         err!(
                             self.log,
                             self.ctx.config.if_name,
-                            "announce tunnel: {}",
-                            e,
+                            "announce tunnel: {e}",
                         );
                         wrn!(
                             self.log,
@@ -486,7 +654,7 @@ impl State for Exchange {
                             "expiring peer {} due to failed tunnel announce",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(&exchange_handle, &pull_stop);
                         return (
                             Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -518,8 +686,7 @@ impl State for Exchange {
                         err!(
                             self.log,
                             self.ctx.config.if_name,
-                            "withdraw: {}",
-                            e,
+                            "withdraw: {e}",
                         );
                         wrn!(
                             self.log,
@@ -527,7 +694,7 @@ impl State for Exchange {
                             "expiring peer {} due to failed withdraw",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(&exchange_handle, &pull_stop);
                         return (
                             Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -553,8 +720,7 @@ impl State for Exchange {
                         err!(
                             self.log,
                             self.ctx.config.if_name,
-                            "withdraw tunnel: {}",
-                            e,
+                            "withdraw tunnel: {e}",
                         );
                         wrn!(
                             self.log,
@@ -562,7 +728,7 @@ impl State for Exchange {
                             "expiring peer {} due to failed tunnel withdraw",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(&exchange_handle, &pull_stop);
                         return (
                             Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -570,6 +736,151 @@ impl State for Exchange {
                             )),
                             event,
                         );
+                    }
+                }
+                Event::Admin(AdminEvent::AnnounceMulticast(groups)) => {
+                    // Build a `MulticastPathVector` for each origin, recording
+                    // our hop in the path.
+                    let hop = MulticastPathHop::new(
+                        self.ctx.hostname.clone(),
+                        self.ctx.config.addr,
+                    );
+                    let path_vectors: HashSet<_> = groups
+                        .iter()
+                        .map(|origin| {
+                            ddm_api_types::exchange::MulticastPathVector {
+                                origin: origin.into(),
+                                path: vec![hop.clone()],
+                            }
+                        })
+                        .collect();
+
+                    if let Err(e) = crate::exchange::announce_multicast(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        path_vectors,
+                        self.peer,
+                        self.version,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "announce multicast: {e}",
+                        );
+                        if e.expires_peer() {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed multicast announce",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_handle, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
+                    }
+                }
+                Event::Admin(AdminEvent::WithdrawMulticast(origins)) => {
+                    // The persistent local origins were removed by the
+                    // modification that preceded this event. The reachability
+                    // snapshot is read here, at processing time, so an
+                    // import that raced the admin request is observed and
+                    // produces a replacement announcement rather than a
+                    // stale final withdrawal. Whenever an imported path to
+                    // an origin remains, replace the local announcement with
+                    // that path. Otherwise, propagate the final withdrawal.
+                    let hop = MulticastPathHop::new(
+                        self.ctx.hostname.clone(),
+                        self.ctx.config.addr,
+                    );
+                    let withdrawals: HashSet<_> = origins
+                        .iter()
+                        .map(|origin| MulticastPathVector {
+                            origin: origin.into(),
+                            path: Vec::new(),
+                        })
+                        .collect();
+                    let reachability = self.ctx.db.multicast_reachability();
+                    let update =
+                        crate::exchange::reconcile_multicast_withdrawals(
+                            &withdrawals,
+                            &reachability,
+                            &hop,
+                        );
+
+                    if !update.announce.is_empty()
+                        && let Err(e) = crate::exchange::announce_multicast(
+                            &self.ctx,
+                            self.ctx.config.clone(),
+                            update.announce,
+                            self.peer,
+                            self.version,
+                            self.ctx.rt.clone(),
+                            self.log.clone(),
+                        )
+                    {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "replace withdrawn multicast path: {e}",
+                        );
+                        if e.expires_peer() {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed multicast replacement",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_handle, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
+                    }
+
+                    if !update.withdraw.is_empty()
+                        && let Err(e) = crate::exchange::withdraw_multicast(
+                            &self.ctx,
+                            self.ctx.config.clone(),
+                            update.withdraw,
+                            self.peer,
+                            self.version,
+                            self.ctx.rt.clone(),
+                            self.log.clone(),
+                        )
+                    {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "withdraw multicast: {e}",
+                        );
+                        if e.expires_peer() {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed multicast withdraw",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_handle, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
                     }
                 }
                 Event::Admin(AdminEvent::Expire(peer)) => {
@@ -580,7 +891,7 @@ impl State for Exchange {
                             "administratively expiring peer {}",
                             peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(&exchange_handle, &pull_stop);
                         return (
                             Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -591,20 +902,7 @@ impl State for Exchange {
                     }
                 }
                 Event::Admin(AdminEvent::Sync) => {
-                    if let Err(e) = crate::exchange::pull(
-                        self.ctx.clone(),
-                        self.peer,
-                        self.version,
-                        self.ctx.rt.clone(),
-                        self.log.clone(),
-                    ) {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "exchange pull: {}",
-                            e
-                        );
-                    }
+                    self.sync_pull(pull_stop.clone(), pull_active.clone());
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
                     inf!(
@@ -614,6 +912,8 @@ impl State for Exchange {
                         self.peer,
                         update,
                     );
+                    let update = Arc::try_unwrap(update)
+                        .unwrap_or_else(|arc| (*arc).clone());
                     if let Some(push) = update.underlay {
                         if !push.announce.is_empty()
                             && let Err(e) = crate::exchange::announce_underlay(
@@ -629,8 +929,7 @@ impl State for Exchange {
                             err!(
                                 self.log,
                                 self.ctx.config.if_name,
-                                "announce: {}",
-                                e,
+                                "announce: {e}",
                             );
                             wrn!(
                                 self.log,
@@ -638,7 +937,7 @@ impl State for Exchange {
                                 "expiring peer {} due to failed announce",
                                 self.peer,
                             );
-                            self.expire_peer(&exchange_thread, &pull_stop);
+                            self.expire_peer(&exchange_handle, &pull_stop);
                             return (
                                 Box::new(Solicit::new(
                                     self.ctx.clone(),
@@ -647,6 +946,7 @@ impl State for Exchange {
                                 event,
                             );
                         }
+
                         if !push.withdraw.is_empty()
                             && let Err(e) = crate::exchange::withdraw_underlay(
                                 &self.ctx,
@@ -661,8 +961,7 @@ impl State for Exchange {
                             err!(
                                 self.log,
                                 self.ctx.config.if_name,
-                                "withdraw: {}",
-                                e,
+                                "withdraw: {e}",
                             );
                             wrn!(
                                 self.log,
@@ -670,7 +969,7 @@ impl State for Exchange {
                                 "expiring peer {} due to failed withdraw",
                                 self.peer,
                             );
-                            self.expire_peer(&exchange_thread, &pull_stop);
+                            self.expire_peer(&exchange_handle, &pull_stop);
                             return (
                                 Box::new(Solicit::new(
                                     self.ctx.clone(),
@@ -678,6 +977,76 @@ impl State for Exchange {
                                 )),
                                 event,
                             );
+                        }
+                    }
+
+                    if let Some(push) = update.multicast {
+                        if !push.announce.is_empty()
+                            && let Err(e) = crate::exchange::announce_multicast(
+                                &self.ctx,
+                                self.ctx.config.clone(),
+                                push.announce,
+                                self.peer,
+                                self.version,
+                                self.ctx.rt.clone(),
+                                self.log.clone(),
+                            )
+                        {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "announce multicast: {e}",
+                            );
+                            if e.expires_peer() {
+                                wrn!(
+                                    self.log,
+                                    self.ctx.config.if_name,
+                                    "expiring peer {} due to failed multicast announce",
+                                    self.peer,
+                                );
+                                self.expire_peer(&exchange_handle, &pull_stop);
+                                return (
+                                    Box::new(Solicit::new(
+                                        self.ctx.clone(),
+                                        self.log.clone(),
+                                    )),
+                                    event,
+                                );
+                            }
+                        }
+
+                        if !push.withdraw.is_empty()
+                            && let Err(e) = crate::exchange::withdraw_multicast(
+                                &self.ctx,
+                                self.ctx.config.clone(),
+                                push.withdraw,
+                                self.peer,
+                                self.version,
+                                self.ctx.rt.clone(),
+                                self.log.clone(),
+                            )
+                        {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "withdraw multicast: {e}",
+                            );
+                            if e.expires_peer() {
+                                wrn!(
+                                    self.log,
+                                    self.ctx.config.if_name,
+                                    "expiring peer {} due to failed multicast withdraw",
+                                    self.peer,
+                                );
+                                self.expire_peer(&exchange_handle, &pull_stop);
+                                return (
+                                    Box::new(Solicit::new(
+                                        self.ctx.clone(),
+                                        self.log.clone(),
+                                    )),
+                                    event,
+                                );
+                            }
                         }
                     }
                 }
@@ -688,7 +1057,7 @@ impl State for Exchange {
                         "expiring peer {} due to discovery event",
                         self.peer,
                     );
-                    self.expire_peer(&exchange_thread, &pull_stop);
+                    self.expire_peer(&exchange_handle, &pull_stop);
                     return (
                         Box::new(Solicit::new(
                             self.ctx.clone(),
@@ -704,15 +1073,51 @@ impl State for Exchange {
                         "expiring peer {} due to failed solicit",
                         self.peer,
                     );
-                    self.expire_peer(&exchange_thread, &pull_stop);
+                    self.expire_peer(&exchange_handle, &pull_stop);
                     return (
                         Box::new(Init::new(self.ctx.clone(), self.log.clone())),
                         event,
                     );
                 }
                 Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
+                    let peer_changed =
+                        addr != self.peer || version != self.version;
+                    if peer_changed {
+                        // Any worker still using the prior peer identity must
+                        // stop before a new pull starts.
+                        pull_stop.store(true, Ordering::Relaxed);
+                        pull_stop = Arc::new(AtomicBool::new(false));
+                        pull_active = Arc::new(AtomicBool::new(false));
+                    }
+                    if addr != self.peer {
+                        // A re-advertisement carrying a new address renumbers
+                        // the peer. Expiry removes routes keyed on the
+                        // current address only, so routes under the prior
+                        // address would otherwise persist indefinitely.
+                        // Withdraw them as if that address expired.
+                        inf!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "peer renumbered from {} to {}",
+                            self.peer,
+                            addr,
+                        );
+                        // Rebind the running exchange handler so that
+                        // pushes arriving under the new address cannot
+                        // recreate routes keyed by the prior peer after
+                        // cleanup.
+                        exchange_handle.renumber_peer(addr);
+                        self.withdraw_peer_routes(self.peer);
+                    }
                     self.peer = addr;
                     self.version = version;
+                    // Wake the multicast sweep for the peer's groups under
+                    // the advertised address.
+                    crate::mcast::notify_peer_groups(
+                        &self.ctx.db,
+                        addr,
+                        &self.ctx.mcast_notify,
+                    );
                 }
             }
         }

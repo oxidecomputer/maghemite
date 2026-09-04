@@ -2,8 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2026 Oxide Computer Company
-
 //! Proptest `Arbitrary` impls and strategy helpers for the latest MRIB types.
 
 use std::net::{Ipv4Addr, Ipv6Addr};

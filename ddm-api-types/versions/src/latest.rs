@@ -13,15 +13,21 @@ pub mod admin {
 pub mod db {
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
-
-    pub use crate::v2::db::PeerInfo;
     pub use crate::v2::db::PeerStatus;
+    pub use crate::v3::db::MulticastRoute;
+    pub use crate::v3::db::PeerInfo;
 }
 
 pub mod exchange {
     pub use crate::v1::exchange::PathVector;
+    pub use crate::v3::exchange::MulticastPathHop;
+    pub use crate::v3::exchange::MulticastPathVector;
 }
 
 pub mod net {
     pub use crate::v1::net::TunnelOrigin;
+    pub use crate::v3::net::MulticastOrigin;
+    pub use crate::v3::net::OverlayMulticast;
+    pub use crate::v3::net::UnderlayMulticastIpv6;
+    pub use crate::v3::net::Vni;
 }

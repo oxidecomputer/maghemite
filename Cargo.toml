@@ -97,6 +97,7 @@ dropshot-api-manager-types = "0.8.0"
 expectorate = "1.3.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.52.1", features = ["full"] }
+futures = "0.3"
 serde_repr = "0.1"
 anyhow = "1.0.104"
 port-file = "0.1.0"

@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+client-common.workspace = true
+ddm-protocol.workspace = true
 oxnet.workspace = true
 schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde_repr.workspace = true
+thiserror.workspace = true
 uuid.workspace = true
-ddm-protocol.workspace = true

@@ -8,6 +8,52 @@ use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
 pub mod v2;
 pub mod v3;
+pub mod v4;
+
+impl From<v3::Update> for v4::Update {
+    fn from(value: v3::Update) -> Self {
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+            // V3 has no multicast section.
+            multicast: None,
+        }
+    }
+}
+
+impl From<v4::Update> for v3::Update {
+    fn from(value: v4::Update) -> Self {
+        // The multicast section is not representable in the V3 wire form and is
+        // dropped here. A V3 peer would likewise ignore the unknown field.
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+        }
+    }
+}
+
+impl From<v3::PullResponse> for v4::PullResponse {
+    fn from(value: v3::PullResponse) -> Self {
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+            multicast: None,
+            // Only the multicast section pages, and V3 has no multicast
+            // section, so an upconverted response is always a complete
+            // snapshot.
+            next_page_token: None,
+        }
+    }
+}
+
+impl From<v4::PullResponse> for v3::PullResponse {
+    fn from(value: v4::PullResponse) -> Self {
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+        }
+    }
+}
 
 impl From<v2::Update> for v3::Update {
     fn from(value: v2::Update) -> Self {

@@ -8,6 +8,7 @@ use ddm_api_types::db::TunnelRoute;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use dpd_client::types;
+use mg_common::tfport::{TfportKind, parse_tfport_name, tfport_port_id};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,9 @@ use ::{
     std::collections::HashMap,
 };
 
-const DDM_DPD_TAG: &str = "ddmd";
+/// Client identity tag carried in `dpd_client::ClientState` to identify
+/// `ddmd` to DPD, distinct from any per-group authorization tag DPD owns.
+pub(crate) const DDM_DPD_TAG: &str = "ddmd";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
@@ -176,25 +179,25 @@ pub fn add_routes_dendrite(
             }
         };
 
-        // TODO this is gross, use link type properties rather than futzing
-        // around with strings.
-        let Some(egress_port_num) = ifname
-            .strip_prefix("tfportrear")
-            .and_then(|x| x.strip_suffix("_0"))
-            .map(|x| x.trim())
-            .and_then(|x| x.parse::<u8>().ok())
-        else {
-            err!(log, ifname, "expected tfportrear");
-            continue;
+        let tfport = match parse_tfport_name(ifname) {
+            Ok(tfport) => tfport,
+            Err(e) => {
+                err!(log, ifname, "{e}");
+                continue;
+            }
         };
 
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
-        let port_name = format!("rear{}", egress_port_num);
-        let port_id = match types::Rear::try_from(&port_name) {
-            Ok(rear) => PortId::Rear(rear),
+        if tfport.kind != TfportKind::Rear {
+            err!(log, ifname, "expected rear tfport, got {:?}", tfport.kind);
+            continue;
+        }
+
+        let port_id = match tfport_port_id(tfport.kind, tfport.port) {
+            Ok(port_id) => port_id,
             Err(e) => {
-                err!(log, ifname, "bad port name ({port_name}): {e}");
+                err!(log, ifname, "{e}");
                 continue;
             }
         };
@@ -206,11 +209,10 @@ pub fn add_routes_dendrite(
             r.dest,
             r.gw,
             port_id,
-            0,
+            tfport.link,
         );
 
-        // TODO breakout considerations
-        let link_id = types::LinkId(0);
+        let link_id = types::LinkId(tfport.link);
 
         let target = types::Ipv6Route {
             tag: DDM_DPD_TAG.into(),

@@ -114,6 +114,20 @@ struct RunArgs {
     /// SocketAddr for the BGP Dispatcher to listen on.
     #[arg(long, default_value = "[::]:179")]
     bgp_dispatcher_addr: SocketAddr,
+
+    /// SocketAddr the Dendrite (DPD) API is listening on. When unset, the lower
+    /// half targets DPD at its default port on localhost (the co-located switch
+    /// zone). Set this to point the lower half at a DPD elsewhere, such as a
+    /// dynamically assigned port in an integration harness.
+    #[arg(long)]
+    dendrite_addr: Option<SocketAddr>,
+
+    /// SocketAddr the DDM admin API is listening on. When unset, the lower half
+    /// targets DDM at its default localhost address (the co-located switch
+    /// zone). Set this to point the lower half at a DDM elsewhere, such as a
+    /// dynamically assigned port in an integration harness.
+    #[arg(long)]
+    ddm_addr: Option<SocketAddr>,
 }
 
 fn main() {
@@ -167,24 +181,44 @@ async fn run(args: RunArgs) {
 
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     {
-        let rt = Arc::new(tokio::runtime::Handle::current());
-        let ctx = context.clone();
-        let log = log.clone();
-        let db = ctx.db.clone();
-        let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
-            client: mg_lower::new_dpd_client(&log),
+            client: mg_lower::new_dpd_client(&log, args.dendrite_addr),
         };
         let ddm = mg_lower::ProductionDdm {
-            client: mg_lower::new_ddm_client(&log),
+            client: mg_lower::new_ddm_client(&log, args.ddm_addr),
         };
-        let sw = mg_lower::ProductionSwitchZone {};
-        Builder::new()
-            .name("mg-lower".to_string())
-            .spawn(move || {
-                mg_lower::run(ctx.tep, db, log, stats, rt, &dpd, &ddm, &sw);
-            })
-            .expect("failed to start mg-lower");
+
+        // Unicast lower-half: sync the unicast RIB to Dendrite and
+        // advertise tunnel endpoint routes to DDM.
+        {
+            let rt = Arc::new(tokio::runtime::Handle::current());
+            let ctx = context.clone();
+            let log = log.clone();
+            let db = ctx.db.clone();
+            let stats = context.mg_lower_stats.clone();
+            let ddm = ddm.clone();
+            let sw = mg_lower::ProductionSwitchZone {};
+            Builder::new()
+                .name("mg-lower".to_string())
+                .spawn(move || {
+                    mg_lower::run(ctx.tep, db, log, stats, rt, &dpd, &ddm, &sw);
+                })
+                .expect("failed to start mg-lower");
+        }
+
+        // Multicast lower-half: advertise locally originated MRIB groups to
+        // DDM. Underlay replication membership is reconciled in `ddmd`.
+        {
+            let rt = Arc::new(tokio::runtime::Handle::current());
+            let log = log.clone();
+            let mrib = context.db.mrib().clone();
+            Builder::new()
+                .name("mg-lower-mrib".to_string())
+                .spawn(move || {
+                    mg_lower::mrib::run(mrib, log, rt, &ddm);
+                })
+                .expect("failed to start mg-lower mrib sync");
+        }
     }
 
     start_bgp_routers(
