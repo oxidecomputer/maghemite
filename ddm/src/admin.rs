@@ -133,12 +133,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, InterfaceInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let mut result = HashMap::new();
-        for sm in read_lock!(ctx.overseer).iter() {
-            result
-                .insert(*lock!(sm.ctx.iface.if_index), sm.ctx.interface_info());
-        }
-        Ok(HttpResponseOk(result))
+        Ok(HttpResponseOk(
+            read_lock!(ctx.overseer)
+                .iter()
+                .map(|sm| {
+                    let info = sm.interface_info();
+                    (info.ifindex, info)
+                })
+                .collect(),
+        ))
     }
 
     async fn ddm_apply(
@@ -149,19 +152,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
         {
             let desired = _request.into_inner().ddm_interfaces;
             let overseer = lock!(_ctx.context()).overseer.clone();
-            // Overseer::apply blocks for the full teardown of every departing
-            // FSM, and teardown re-enters this runtime: close_session calls
-            // rt.block_on(server.close()), while remove_underlay_routes calls
-            // rt.block_on(client.route_ipv6_delete(..)). Handle::block_on from
-            // an FSM thread parks that thread and needs a free Tokio worker to
-            // drive its future. Running apply directly on this handler's
-            // worker could leave every worker waiting in join() on an FSM
-            // whose block_on needs a worker, deadlocking teardown and leaving
-            // the Overseer write lock held so all readers wedge too. The
-            // blocking pool guarantees the waiter is not a runtime worker and
-            // leaves the runtime free to serve admin requests and other FSMs'
-            // exchange servers while teardown, potentially delayed for
-            // seconds by unreachable DPD, completes.
+            // Run apply on the blocking pool, not on this Tokio worker.
+            //
+            // apply() joins every departing FSM thread, and FSM teardown
+            // re-enters this runtime via Handle::block_on (closing the
+            // exchange server, deleting routes through DPD). Those futures
+            // need a free worker to make progress. If the join itself sat on
+            // a worker, teardown could starve the runtime and deadlock while
+            // holding the Overseer write lock.
             tokio::task::spawn_blocking(move || {
                 write_lock!(overseer).apply(desired)
             })
@@ -181,15 +179,12 @@ impl DdmAdminApi for DdmAdminApiImpl {
             read_lock!(ctx.overseer)
                 .iter()
                 .filter_map(|sm| {
-                    // Compute status first so peer_status() never runs while we
-                    // hold any of the InterfaceState mutexes below.
-                    let status = sm.ctx.iface.peer_status();
-                    let if_index = *lock!(sm.ctx.iface.if_index);
-                    let peer = lock!(sm.ctx.iface.peer_identity).clone()?;
+                    let info = sm.interface_info();
+                    let peer = info.peer?;
                     Some((
-                        if_index,
+                        info.ifindex,
                         PeerInfo {
-                            status,
+                            status: info.status,
                             addr: peer.addr,
                             host: peer.hostname,
                             kind: peer.kind,

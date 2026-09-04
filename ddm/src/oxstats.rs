@@ -5,7 +5,6 @@
 use crate::{admin::RouterStats, sm::Overseer};
 use chrono::{DateTime, Utc};
 use mg_common::{
-    lock,
     nexus::{local_underlay_address, run_oximeter},
     read_lock,
 };
@@ -154,7 +153,7 @@ impl Producer for Stats {
         ));
 
         for peer in read_lock!(self.overseer).iter() {
-            let if_name = lock!(peer.ctx.iface.if_name).clone();
+            let if_name = peer.ctx.config.if_name.clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),

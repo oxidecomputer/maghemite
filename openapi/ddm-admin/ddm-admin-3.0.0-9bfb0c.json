@@ -420,7 +420,7 @@
         "type": "object",
         "properties": {
           "ddm_interfaces": {
-            "description": "The complete set of interface names DDM should peer over. Each interface must carry an IPv6 link-local address. Interfaces not in this set are torn down and their routes withdrawn.",
+            "description": "The complete set of dynamically managed interface names DDM should peer over. Dynamic interfaces not in this set are torn down and their routes withdrawn. Interfaces supplied on the ddmd command line are static and unaffected by this request.",
             "type": "array",
             "items": {
               "type": "string"
@@ -495,6 +495,14 @@
             "type": "string",
             "format": "ipv6"
           },
+          "ifindex": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "lifetime": {
+            "$ref": "#/components/schemas/InterfaceLifetime"
+          },
           "name": {
             "type": "string"
           },
@@ -515,9 +523,30 @@
         },
         "required": [
           "addr",
+          "ifindex",
+          "lifetime",
           "name",
           "stats",
           "status"
+        ]
+      },
+      "InterfaceLifetime": {
+        "description": "How long a DDM interface lives, and therefore who may remove it.",
+        "oneOf": [
+          {
+            "description": "Supplied on the ddmd command line. Lives for the life of the daemon; `ddm_apply` neither adds nor removes it.",
+            "type": "string",
+            "enum": [
+              "static"
+            ]
+          },
+          {
+            "description": "Managed by `ddm_apply`, which adds and removes it to match the requested set.",
+            "type": "string",
+            "enum": [
+              "dynamic"
+            ]
+          }
         ]
       },
       "InterfaceStats": {

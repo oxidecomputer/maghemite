@@ -75,6 +75,7 @@ impl Db {
             log: slog::Logger::root(slog::Discard, slog::o!()),
         }
     }
+
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
     }
@@ -231,18 +232,16 @@ impl Db {
         Ok(())
     }
 
-    /// Remove imported routes learned from `nexthop` on `ifname`.
-    pub fn remove_peer_routes(
+    pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
-        ifname: &str,
     ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
         let mut data = lock!(self.data);
         // Routes are generally held in sets to prevent duplication and provide
         // handy set-algebra operations.
         let mut removed = HashSet::new();
         for x in &data.imported {
-            if x.nexthop == nexthop && x.ifname == ifname {
+            if x.nexthop == nexthop {
                 removed.insert(x.clone());
             }
         }
@@ -260,21 +259,6 @@ impl Db {
             data.imported_tunnel.remove(x);
         }
         (removed, tnl_removed)
-    }
-
-    /// Remove every imported underlay route attributed to `ifname`.
-    pub fn remove_interface_routes(&self, ifname: &str) -> HashSet<Route> {
-        let mut data = lock!(self.data);
-        let removed = data
-            .imported
-            .iter()
-            .filter(|route| route.ifname == ifname)
-            .cloned()
-            .collect::<HashSet<_>>();
-        for route in &removed {
-            data.imported.remove(route);
-        }
-        removed
     }
 
     pub fn routes_by_vector(
@@ -427,49 +411,6 @@ mod test {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
-
-    fn route(destination: &str, nexthop: Ipv6Addr, ifname: &str) -> Route {
-        Route {
-            destination: destination.parse().unwrap(),
-            nexthop,
-            ifname: ifname.to_string(),
-            path: vec![],
-        }
-    }
-
-    #[test]
-    fn remove_peer_routes_scopes_link_local_nexthop_by_interface() {
-        let db = Db::new_for_test();
-        let nexthop = "fe80::1".parse().unwrap();
-        let net0 = route("fd00::/64", nexthop, "net0");
-        let net1 = route("fd01::/64", nexthop, "net1");
-        db.import(&HashSet::from([net0.clone(), net1.clone()]));
-
-        let (removed, tunnels) = db.remove_peer_routes(nexthop, "net0");
-
-        assert_eq!(removed, HashSet::from([net0]));
-        assert!(tunnels.is_empty());
-        assert_eq!(db.imported(), HashSet::from([net1]));
-    }
-
-    #[test]
-    fn remove_interface_routes_returns_only_matching_interface() {
-        let db = Db::new_for_test();
-        let net0_a = route("fd00::/64", "fe80::1".parse().unwrap(), "net0");
-        let net0_b = route("fd01::/64", "fe80::2".parse().unwrap(), "net0");
-        let net1 = route("fd02::/64", "fe80::3".parse().unwrap(), "net1");
-        db.import(&HashSet::from([
-            net0_a.clone(),
-            net0_b.clone(),
-            net1.clone(),
-        ]));
-
-        assert_eq!(
-            db.remove_interface_routes("net0"),
-            HashSet::from([net0_a, net0_b])
-        );
-        assert_eq!(db.imported(), HashSet::from([net1]));
-    }
 
     #[test]
     fn test_effective_tunnel_route_set() {

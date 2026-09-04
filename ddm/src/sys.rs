@@ -8,12 +8,12 @@ use ddm_api_types::db::TunnelRoute;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use dpd_client::types;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net, UnicastLinkLocalIpv6Addr};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use types::PortId;
 
 #[cfg(target_os = "illumos")]
@@ -563,7 +563,7 @@ pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
 pub fn link_local_addr(
     log: &Logger,
     ifname: &str,
-) -> Result<(u32, Ipv6Addr), String> {
+) -> Result<(u32, UnicastLinkLocalIpv6Addr), String> {
     let addrinfo = libnet::get_ipaddrs().map_err(|e| e.to_string())?;
     let mut candidates = addrinfo
         .into_iter()
@@ -573,10 +573,10 @@ pub fn link_local_addr(
         })
         .flat_map(|(_, infos)| infos)
         .filter_map(|info| match info.addr {
-            IpAddr::V6(addr) if addr.is_unicast_link_local() => {
-                Some((info.index as u32, addr))
-            }
-            _ => None,
+            IpAddr::V6(addr) => UnicastLinkLocalIpv6Addr::new(addr)
+                .ok()
+                .map(|addr| (info.index as u32, addr)),
+            IpAddr::V4(_) => None,
         });
 
     let Some(selected) = candidates.next() else {

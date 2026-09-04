@@ -598,7 +598,7 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
                 wrn!(
                     ctx.log,
                     ctx.ctx.config.if_name,
-                    "redistribute to {name}: {e}"
+                    "failed to redistribute update to {name}: {e}"
                 );
             }
         }

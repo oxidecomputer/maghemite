@@ -11,11 +11,27 @@ use std::net::Ipv6Addr;
 /// Information about a DDM interface and its FSM state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InterfaceInfo {
+    pub ifindex: u32,
     pub name: String,
+    pub lifetime: InterfaceLifetime,
     pub addr: Ipv6Addr,
     pub status: PeerStatus,
     pub peer: Option<PeerIdentity>,
     pub stats: InterfaceStats,
+}
+
+/// How long a DDM interface lives, and therefore who may remove it.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceLifetime {
+    /// Supplied on the ddmd command line. Lives for the life of the daemon;
+    /// `ddm_apply` neither adds nor removes it.
+    Static,
+    /// Managed by `ddm_apply`, which adds and removes it to match the
+    /// requested set.
+    Dynamic,
 }
 
 /// Information about a DDM peer.

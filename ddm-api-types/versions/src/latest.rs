@@ -22,6 +22,7 @@ pub mod db {
     pub use crate::v2::db::PeerStatus;
 
     pub use crate::v3::db::InterfaceInfo;
+    pub use crate::v3::db::InterfaceLifetime;
     pub use crate::v3::db::InterfaceStats;
     pub use crate::v3::db::PeerIdentity;
 }

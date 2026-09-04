@@ -23,7 +23,8 @@ ddm-trio ddm-apply-lifecycle
 `mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
 FRR, Arista EOS, Juniper cRPD, and a second Maghemite node. `ddm-trio` connects
 a transit ddmd hub to two server ddmd leaves over separate links so the hub's
-interfaces can be added and removed independently through `ddm_apply`.
+interfaces can be added and removed independently through `ddm_apply`, and so a
+static (`ddmd -a`) hub interface can be shown to survive `ddm_apply`.
 
 Run and cleanup commands both take a topology and scenario:
 

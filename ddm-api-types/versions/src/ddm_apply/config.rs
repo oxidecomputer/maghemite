@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ApplyRequest {
-    /// The complete set of interface names DDM should peer over. Each
-    /// interface must carry an IPv6 link-local address. Interfaces not in
-    /// this set are torn down and their routes withdrawn.
+    /// The complete set of dynamically managed interface names DDM should
+    /// peer over. Dynamic interfaces not in this set are torn down and their
+    /// routes withdrawn. Interfaces supplied on the ddmd command line are
+    /// static and unaffected by this request.
     pub ddm_interfaces: BTreeSet<String>,
 }

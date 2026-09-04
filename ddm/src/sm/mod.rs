@@ -10,7 +10,8 @@
 use crate::db::Db;
 use crate::discovery::Version;
 use ddm_api_types::db::{
-    InterfaceInfo, InterfaceStats, PeerIdentity, PeerStatus, RouterKind,
+    InterfaceInfo, InterfaceLifetime, InterfaceStats, PeerIdentity, PeerStatus,
+    RouterKind,
 };
 use ddm_api_types::net::TunnelOrigin;
 use iddqd::{IdOrdItem, id_upcast};
@@ -168,47 +169,90 @@ impl FsmState {
     }
 }
 
-pub struct InterfaceState {
-    pub if_index: Mutex<u32>,
-    pub if_name: Mutex<String>,
-    pub addr: Mutex<Ipv6Addr>,
-    pub fsm_state: Mutex<FsmState>,
-    pub last_fsm_state_change: Mutex<Instant>,
-    pub peer_identity: Mutex<Option<PeerIdentity>>,
+/// Observable state of one interface's FSM, shared between the FSM thread
+/// (writer) and admin/stats readers. Everything lives under a single mutex so
+/// readers get a consistent snapshot with one lock and writers cannot be
+/// observed halfway through a multi-field update.
+pub struct InterfaceState(Mutex<InterfaceStateInner>);
+
+struct InterfaceStateInner {
+    if_index: u32,
+    addr: Ipv6Addr,
+    fsm_state: FsmState,
+    last_fsm_state_change: Instant,
+    peer_identity: Option<PeerIdentity>,
 }
 
 impl InterfaceState {
     pub fn transition(&self, state: FsmState) {
-        *lock!(self.fsm_state) = state;
-        *lock!(self.last_fsm_state_change) = Instant::now();
+        let mut inner = lock!(self.0);
+        inner.fsm_state = state;
+        inner.last_fsm_state_change = Instant::now();
     }
 
     pub fn clear_peer(&self) {
-        *lock!(self.peer_identity) = None;
+        lock!(self.0).peer_identity = None;
     }
 
-    pub fn set_if_info(&self, index: u32, name: String, addr: Ipv6Addr) {
-        *lock!(self.if_index) = index;
-        *lock!(self.if_name) = name;
-        *lock!(self.addr) = addr;
+    /// Record the peer discovered on this interface. Returns whether the
+    /// identity differs from the previously recorded one.
+    pub fn set_peer(&self, peer: PeerIdentity) -> bool {
+        let mut inner = lock!(self.0);
+        if inner.peer_identity.as_ref() == Some(&peer) {
+            return false;
+        }
+        inner.peer_identity = Some(peer);
+        true
+    }
+
+    pub fn set_if_info(&self, index: u32, addr: Ipv6Addr) {
+        let mut inner = lock!(self.0);
+        inner.if_index = index;
+        inner.addr = addr;
     }
 
     pub fn peer_status(&self) -> PeerStatus {
-        let elapsed = lock!(self.last_fsm_state_change).elapsed();
-        lock!(self.fsm_state).to_peer_status(elapsed)
+        lock!(self.0).peer_status()
+    }
+
+    /// Snapshot this interface for the admin API. `name` is the interface
+    /// name and `stats` its session counters, both owned by [`SmContext`];
+    /// `lifetime` is owned by the [`StateMachine`].
+    fn interface_info(
+        &self,
+        name: &str,
+        lifetime: InterfaceLifetime,
+        stats: InterfaceStats,
+    ) -> InterfaceInfo {
+        let inner = lock!(self.0);
+        InterfaceInfo {
+            ifindex: inner.if_index,
+            name: name.to_string(),
+            lifetime,
+            addr: inner.addr,
+            status: inner.peer_status(),
+            peer: inner.peer_identity.clone(),
+            stats,
+        }
+    }
+}
+
+impl InterfaceStateInner {
+    fn peer_status(&self) -> PeerStatus {
+        self.fsm_state
+            .to_peer_status(self.last_fsm_state_change.elapsed())
     }
 }
 
 impl Default for InterfaceState {
     fn default() -> Self {
-        Self {
-            if_index: Mutex::new(0),
-            if_name: Mutex::new(String::new()),
-            addr: Mutex::new(Ipv6Addr::UNSPECIFIED),
-            fsm_state: Mutex::new(FsmState::Init),
-            last_fsm_state_change: Mutex::new(Instant::now()),
-            peer_identity: Mutex::new(None),
-        }
+        Self(Mutex::new(InterfaceStateInner {
+            if_index: 0,
+            addr: Ipv6Addr::UNSPECIFIED,
+            fsm_state: FsmState::Init,
+            last_fsm_state_change: Instant::now(),
+            peer_identity: None,
+        }))
     }
 }
 
@@ -285,31 +329,32 @@ impl SmContext {
             .collect()
     }
 
-    pub fn interface_info(&self) -> InterfaceInfo {
-        let status = self.iface.peer_status();
-        let peer = lock!(self.iface.peer_identity).clone();
-        InterfaceInfo {
-            name: lock!(self.iface.if_name).clone(),
-            addr: *lock!(self.iface.addr),
-            status,
-            peer,
-            stats: self.stats.snapshot(),
-        }
+    pub fn interface_info(&self, lifetime: InterfaceLifetime) -> InterfaceInfo {
+        self.iface.interface_info(
+            &self.config.if_name,
+            lifetime,
+            self.stats.snapshot(),
+        )
     }
 }
 
+/// Handle to a running FSM thread. The thread itself is only spawned on
+/// illumos (see [`state`]), so the join handle and stop flag exist only there.
 pub struct StateMachine {
     pub ctx: SmContext,
-    #[cfg_attr(
-        not(all(feature = "backend", target_os = "illumos")),
-        allow(dead_code)
-    )]
+    /// How long this interface lives, and therefore who may remove it. The
+    /// FSM never reads this; only the [`Overseer`] and admin API do.
+    pub lifetime: InterfaceLifetime,
+    #[cfg(all(feature = "backend", target_os = "illumos"))]
     thread: Option<std::thread::JoinHandle<()>>,
-    #[cfg_attr(
-        not(all(feature = "backend", target_os = "illumos")),
-        allow(dead_code)
-    )]
+    #[cfg(all(feature = "backend", target_os = "illumos"))]
     stop: Stop,
+}
+
+impl StateMachine {
+    pub fn interface_info(&self) -> InterfaceInfo {
+        self.ctx.interface_info(self.lifetime)
+    }
 }
 
 impl IdOrdItem for StateMachine {
@@ -324,24 +369,30 @@ impl IdOrdItem for StateMachine {
 
 /// A cancellation flag that wakes sleeping threads when set.
 #[derive(Clone, Default)]
-pub struct Stop(Arc<(Mutex<bool>, Condvar)>);
+pub struct Stop(Arc<StopInner>);
+
+#[derive(Default)]
+struct StopInner {
+    stopped: Mutex<bool>,
+    wake: Condvar,
+}
 
 impl Stop {
     pub fn set(&self) {
-        *lock!(self.0.0) = true;
-        self.0.1.notify_all();
+        *lock!(self.0.stopped) = true;
+        self.0.wake.notify_all();
     }
 
     pub fn is_set(&self) -> bool {
-        *lock!(self.0.0)
+        *lock!(self.0.stopped)
     }
 
     /// Wait for up to `duration`, returning whether the flag was set.
     pub fn wait(&self, duration: Duration) -> bool {
-        let guard = lock!(self.0.0);
+        let guard = lock!(self.0.stopped);
         let (guard, _) = self
             .0
-            .1
+            .wake
             .wait_timeout_while(guard, duration, |stopped| !*stopped)
             .expect("stop condvar");
         *guard
@@ -398,11 +449,29 @@ mod tests {
     fn interface_info_uses_shared_initialized_address() {
         let ctx = make_ctx("eth0");
         let addr = "fe80::1234".parse().unwrap();
-        ctx.iface.set_if_info(7, "net0".to_string(), addr);
+        ctx.iface.set_if_info(7, addr);
 
-        let info = ctx.interface_info();
-        assert_eq!(info.name, "net0");
+        let info = ctx.interface_info(InterfaceLifetime::Dynamic);
+        assert_eq!(info.name, "eth0");
+        assert_eq!(info.lifetime, InterfaceLifetime::Dynamic);
+        assert_eq!(info.ifindex, 7);
         assert_eq!(info.addr, addr);
+    }
+
+    #[test]
+    fn set_peer_reports_identity_change() {
+        let ctx = make_ctx("eth0");
+        let peer = PeerIdentity {
+            addr: "fe80::1".parse().unwrap(),
+            hostname: "peer".to_string(),
+            kind: RouterKind::Server,
+        };
+        assert!(ctx.iface.set_peer(peer.clone()));
+        assert!(!ctx.iface.set_peer(peer.clone()));
+        let lifetime = InterfaceLifetime::Static;
+        assert_eq!(ctx.interface_info(lifetime).peer, Some(peer));
+        ctx.iface.clear_peer();
+        assert_eq!(ctx.interface_info(lifetime).peer, None);
     }
 
     // event_channels is Arc<RwLock<...>>, so all clones of an SmContext see

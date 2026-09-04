@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sys::Route;
+use {ddm::sys::Route, ddm_api_types::db::InterfaceLifetime};
 
 mod signal;
 mod smf;
@@ -23,8 +23,8 @@ mod smf;
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
-    /// Interfaces to route over. Each interface must carry an IPv6 link-local
-    /// address.
+    /// Interfaces to route over. These are static: `ddm_apply` cannot remove
+    /// them.
     #[arg(short = 'a', long = "addr", name = "addr")]
     interfaces: Vec<String>,
 
@@ -185,7 +185,9 @@ async fn run() {
     #[cfg(all(feature = "backend", target_os = "illumos"))]
     let overseer = {
         let mut overseer = overseer;
-        overseer.apply(arg.interfaces.into_iter().collect());
+        for ifname in arg.interfaces {
+            overseer.add_state_machine(ifname, InterfaceLifetime::Static);
+        }
         overseer
     };
     let overseer = Arc::new(RwLock::new(overseer));
