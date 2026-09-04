@@ -4,7 +4,7 @@
 
 use crate::{
     bgp::basic_unnumbered_neighbor,
-    ddm::{DdmNode, RouterKind},
+    ddm::DdmNode,
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     diagnostics::ProtocolDiagnostics,
     eos::EosNode,
@@ -20,6 +20,7 @@ use ddm_admin_client::{
     Client as DdmClient,
     types::{ApplyRequest, PathVector},
 };
+use ddm_api_types::db::{InterfaceLifetime, RouterKind};
 use dpd_client::{
     Client as DpdClient,
     types::{Ipv4Entry, Ipv6Entry, LinkId, PortId},
@@ -41,7 +42,7 @@ use mg_api_types::static_routes::{
 use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU8,
     sync::Arc,
@@ -510,12 +511,14 @@ where
 }
 
 /// Launch the ddm-trio topology, bring up link-local addresses on every peer
-/// link, start ddmd (transit hub, server leaves) with no interfaces, and wait
-/// for each admin API to answer.
+/// link, start ddmd (transit hub, server leaves) and wait for each admin API
+/// to answer. The hub gets `hub_static_ifaces` on its command line; the
+/// leaves start with no interfaces.
 async fn boot_ddm_trio(
     scenario: DdmTrioScenario,
     persistent: bool,
     diag_on_fail: bool,
+    hub_static_ifaces: &[&str],
 ) -> Result<BootedDdmTrio> {
     let topo_name = scenario.name();
     let DdmTrio {
@@ -554,9 +557,9 @@ async fn boot_ddm_trio(
         let peer1_client = peer1.client(&ad, peer1_addr).await?;
         let peer2_client = peer2.client(&ad, peer2_addr).await?;
         tokio::try_join!(
-            hub.run_ddm(&ad, RouterKind::Transit),
-            peer1.run_ddm(&ad, RouterKind::Server),
-            peer2.run_ddm(&ad, RouterKind::Server),
+            hub.run_ddm(&ad, RouterKind::Transit, hub_static_ifaces),
+            peer1.run_ddm(&ad, RouterKind::Server, &[]),
+            peer2.run_ddm(&ad, RouterKind::Server, &[]),
         )?;
         tokio::try_join!(
             hub.wait_for_api(&hub_client, OP_TIMEOUT, &ad),
@@ -808,7 +811,9 @@ async fn run_ddm_apply_lifecycle(
     persistent: bool,
     diag_on_fail: bool,
 ) -> Result<()> {
-    let bt = boot_ddm_trio(scenario, persistent, diag_on_fail).await?;
+    let bt =
+        boot_ddm_trio(scenario, persistent, diag_on_fail, &[DDM_HUB_PEER2_IF])
+            .await?;
     run_ddm_trio_with_optional_diagnostics(
         bt,
         diag_on_fail,
@@ -817,6 +822,9 @@ async fn run_ddm_apply_lifecycle(
     .await
 }
 
+/// The hub starts with a static (`-a`) interface toward peer2 and no dynamic
+/// interfaces. Everything toward peer1, and both leaves' interfaces, are
+/// driven through `ddm_apply`.
 async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
     let BootedDdmTrio {
         ad,
@@ -827,31 +835,45 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
     } = bt;
     let prefix1: Ipv6Net = DDM_PEER1_PREFIX.parse()?;
     let prefix2: Ipv6Net = DDM_PEER2_PREFIX.parse()?;
+    let hub_static_only = BTreeMap::from([(
+        DDM_HUB_PEER2_IF.to_string(),
+        InterfaceLifetime::Static,
+    )]);
 
-    info!(ad.log, "starting the first DDM interface through ddm_apply");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF]).await?;
-    apply_ddm(&peer1_client, &[DDM_LEAF_PEER_IF]).await?;
-    peer1_client.advertise_prefixes(&vec![prefix1]).await?;
+    info!(ad.log, "peering over the hub's static DDM interface");
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(hub_static_only.clone()),
+        1,
+        10,
+        "hub reports its command-line interface as static"
+    );
+    apply_ddm(&peer2_client, &[DDM_LEAF_PEER_IF]).await?;
+    peer2_client.advertise_prefixes(&vec![prefix2]).await?;
+    let static_only_up = DdmObservedState {
+        hub_peers: 1,
+        peer1_peers: 0,
+        peer2_peers: 1,
+        hub_prefixes: BTreeSet::from([prefix2]),
+        peer1_prefixes: BTreeSet::new(),
+        peer2_prefixes: BTreeSet::new(),
+    };
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
-        Some(DdmObservedState {
-            hub_peers: 1,
-            peer1_peers: 1,
-            peer2_peers: 0,
-            hub_prefixes: BTreeSet::from([prefix1]),
-            peer1_prefixes: BTreeSet::new(),
-            peer2_prefixes: BTreeSet::new(),
-        }),
+        Some(static_only_up.clone()),
         3,
         1,
         30,
-        "one dynamic DDM interface exchanges routes"
+        "static DDM interface exchanges routes with a dynamic peer"
     );
 
-    info!(ad.log, "adding an independent second DDM interface");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF, DDM_HUB_PEER2_IF]).await?;
-    apply_ddm(&peer2_client, &[DDM_LEAF_PEER_IF]).await?;
-    peer2_client.advertise_prefixes(&vec![prefix2]).await?;
+    info!(
+        ad.log,
+        "adding a dynamic DDM interface alongside the static one"
+    );
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF]).await?;
+    apply_ddm(&peer1_client, &[DDM_LEAF_PEER_IF]).await?;
+    peer1_client.advertise_prefixes(&vec![prefix1]).await?;
     let both_up = DdmObservedState {
         hub_peers: 2,
         peer1_peers: 1,
@@ -866,11 +888,21 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
         3,
         1,
         30,
-        "two dynamic DDM interfaces exchange independent routes"
+        "static and dynamic DDM interfaces exchange independent routes"
+    );
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(BTreeMap::from([
+            (DDM_HUB_PEER1_IF.to_string(), InterfaceLifetime::Dynamic),
+            (DDM_HUB_PEER2_IF.to_string(), InterfaceLifetime::Static),
+        ])),
+        1,
+        10,
+        "hub reports one dynamic and one static interface"
     );
 
     info!(ad.log, "reapplying identical desired state");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF, DDM_HUB_PEER2_IF]).await?;
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF]).await?;
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
         Some(both_up.clone()),
@@ -880,29 +912,53 @@ async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
         "identical ddm_apply is idempotent"
     );
 
-    info!(ad.log, "removing only the first DDM interface");
-    apply_ddm(&hub_client, &[DDM_HUB_PEER2_IF]).await?;
+    info!(ad.log, "naming the static interface in ddm_apply");
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF, DDM_HUB_PEER2_IF]).await?;
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
-        Some(DdmObservedState {
-            hub_peers: 1,
-            peer1_peers: 0,
-            peer2_peers: 1,
-            hub_prefixes: BTreeSet::from([prefix2]),
-            peer1_prefixes: BTreeSet::new(),
-            peer2_prefixes: BTreeSet::new(),
-        }),
+        Some(both_up.clone()),
         3,
         1,
-        30,
-        "removed interface withdraws redistributed routes while the other remains"
+        10,
+        "a static interface named in ddm_apply is left alone"
+    );
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(BTreeMap::from([
+            (DDM_HUB_PEER1_IF.to_string(), InterfaceLifetime::Dynamic),
+            (DDM_HUB_PEER2_IF.to_string(), InterfaceLifetime::Static),
+        ])),
+        1,
+        10,
+        "naming a static interface does not change its lifetime"
     );
 
     info!(
         ad.log,
-        "removing the final DDM interface with ddm_apply({{}})"
+        "removing every dynamic hub interface with ddm_apply({{}})"
     );
     apply_ddm(&hub_client, &[]).await?;
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(static_only_up.clone()),
+        3,
+        1,
+        30,
+        "removed dynamic interface withdraws its routes while the static one remains"
+    );
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(hub_static_only.clone()),
+        1,
+        10,
+        "empty ddm_apply leaves only the static interface"
+    );
+
+    info!(
+        ad.log,
+        "removing peer2's dynamic interface with ddm_apply({{}})"
+    );
+    apply_ddm(&peer2_client, &[]).await?;
     wait_for_eq_stable!(
         observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
         Some(DdmObservedState {
@@ -933,6 +989,22 @@ async fn apply_ddm(client: &DdmClient, interfaces: &[&str]) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+/// Every interface ddmd knows about, keyed by name, with its lifetime.
+async fn observe_ddm_interfaces(
+    client: &DdmClient,
+) -> Option<BTreeMap<String, InterfaceLifetime>> {
+    Some(
+        client
+            .get_interfaces()
+            .await
+            .ok()?
+            .into_inner()
+            .into_values()
+            .map(|info| (info.name, info.lifetime))
+            .collect(),
+    )
 }
 
 async fn observe_ddm_state(
@@ -1153,7 +1225,7 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
         .context(format!("create {peer_addr}"))?;
 
     ox.run_mgd(&ad).await?;
-    ox.ddm().run_ddm(&ad, RouterKind::Server).await?;
+    ox.ddm().run_ddm(&ad, RouterKind::Server, &[]).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Fanout of 4 so all peer paths survive best-path selection and we can
@@ -1780,7 +1852,7 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
     // mg-lower's sync loop queries ddm on every prefix change and bails the
     // whole sync when ddm is unreachable. We don't exercise DDM here, but
     // ddmd has to be up for static routes to lower into dpd.
-    ox.ddm().run_ddm(&ad, RouterKind::Server).await?;
+    ox.ddm().run_ddm(&ad, RouterKind::Server, &[]).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Default fanout is 1, which collapses the static paths into a single

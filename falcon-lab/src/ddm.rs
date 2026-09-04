@@ -5,6 +5,7 @@
 use crate::{dendrite::DendriteNode, illumos::IllumosNode};
 use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
+use ddm_api_types::db::RouterKind;
 use libfalcon::{NodeRef, Runner};
 use std::net::IpAddr;
 use std::time::Duration;
@@ -22,22 +23,25 @@ const DDM_LOG: &str = "/tmp/ddm.log";
 #[derive(Copy, Clone)]
 pub struct DdmNode(pub NodeRef);
 
-#[derive(Copy, Clone)]
-pub enum RouterKind {
-    Server,
-    Transit,
-}
-
 impl DdmNode {
-    pub async fn run_ddm(&self, d: &Runner, kind: RouterKind) -> Result<()> {
-        let kind = match kind {
-            RouterKind::Server => "server",
-            RouterKind::Transit => "transit",
-        };
+    /// Start ddmd in the background. `static_ifaces` are passed as `-a`
+    /// arguments, so ddmd peers over them for its whole life and `ddm_apply`
+    /// cannot remove them.
+    pub async fn run_ddm(
+        &self,
+        d: &Runner,
+        kind: RouterKind,
+        static_ifaces: &[&str],
+    ) -> Result<()> {
+        let addrs = static_ifaces
+            .iter()
+            .map(|ifname| format!(" -a {ifname}"))
+            .collect::<String>();
         d.exec(
             self.0,
             &format!(
-                "chmod +x {DDMD_BIN} && {DDMD_BIN} --kind {kind} &> {DDM_LOG} &"
+                "chmod +x {DDMD_BIN} && {DDMD_BIN} --kind {kind}{addrs} \
+                 &> {DDM_LOG} &"
             ),
         )
         .await?;
