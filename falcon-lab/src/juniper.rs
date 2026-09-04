@@ -231,18 +231,25 @@ impl JuniperNode {
         Ok(output.contains(prefix) && output.contains("BGP"))
     }
 
-    /// Query cRPD for the local status of a BFD session to `peer`. Returns
-    /// true iff Junos reports the session as `Up`.
-    pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {
+    /// Query cRPD for the local status of multiple BFD sessions. Returns true
+    /// iff Junos reports every requested session as `Up`.
+    pub async fn bfd_peers_up(
+        &self,
+        d: &Runner,
+        wanted: &[IpAddr],
+    ) -> Result<bool> {
         let output = self.shell(d, "show bfd session | display json").await?;
         let resp: JunosBfdResponse = serde_json::from_str(&output)
             .context("parse juniper bfd session json")?;
-        let peer = peer.to_string();
-        Ok(resp
+        let sessions = resp
             .bfd_session_information
-            .into_iter()
-            .flat_map(|info| info.bfd_session)
-            .any(|session| session.is_up_for(&peer)))
+            .iter()
+            .flat_map(|info| &info.bfd_session)
+            .collect::<Vec<_>>();
+        Ok(wanted.iter().all(|wanted| {
+            let wanted = wanted.to_string();
+            sessions.iter().any(|session| session.is_up_for(&wanted))
+        }))
     }
 
     /// Capture non-secret Juniper diagnostics. Do not add `show configuration`
