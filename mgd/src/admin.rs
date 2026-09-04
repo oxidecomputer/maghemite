@@ -2,7 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+// Copyright 2026 Oxide Computer Company
+
+use crate::{bfd_admin, bgp_admin, mrib_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use camino::Utf8PathBuf;
@@ -23,6 +25,9 @@ use mg_api_types::bgp::history::Origin6;
 use mg_api_types::bgp::session::{
     ExportedSelector, FsmHistoryRequest, FsmHistoryResponse,
     MessageHistoryRequest, MessageHistoryResponse,
+};
+use mg_api_types::mrib::{
+    MribAddStaticRequest, MribDeleteStaticRequest, MribQuery,
 };
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
@@ -675,6 +680,43 @@ impl MgAdminApi for MgAdminApiImpl {
         request: Query<NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
         bgp_admin::get_ndp_interface_detail(ctx, request).await
+    }
+
+    async fn get_mrib_imported(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::get_mrib_imported(rqctx, query).await
+    }
+
+    async fn get_mrib_selected(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::get_mrib_selected(rqctx, query).await
+    }
+
+    async fn static_add_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribAddStaticRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        mrib_admin::static_add_mcast_route(rqctx, request).await
+    }
+
+    async fn static_remove_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribDeleteStaticRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        mrib_admin::static_remove_mcast_route(rqctx, request).await
+    }
+
+    async fn static_list_mcast_routes(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::static_list_mcast_routes(rqctx).await
     }
 }
 

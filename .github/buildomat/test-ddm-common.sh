@@ -3,9 +3,9 @@
 source .github/buildomat/common.sh
 
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
-export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
-export SIDECAR_LITE_VERSION=a95b7a9f78c08125f4e34106f5c885c7e9f2e8d5
-export DENDRITE_VERSION=803f6899e3bc64780a965d625e248e1d77e37d43
+export SOFTNPU_VERSION=284c6830722548714128e63ea04bcca78ee27154
+export SIDECAR_LITE_VERSION=461cbe1926b93b20c2f43ad5cd9007b193db61a6
+export DENDRITE_VERSION=3d49b1314dc111323052ffe4b5b7ec442d9d0f3d
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .

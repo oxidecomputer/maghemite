@@ -191,6 +191,10 @@ pub async fn softnpu_link_create(c: &Client, name: &str) -> Result<()> {
     c.link_create(
         &port,
         &LinkCreate {
+            // Front qsfp ports default to IPv6 disabled and uplink set. The lab
+            // peers BGP unnumbered over link-local addresses on these tfports,
+            // so IPv6 has to stay enabled.
+            allow_ddm_traffic: true,
             autoneg: false,
             fec: None,
             kr: false,

@@ -827,6 +827,10 @@ dependencies = [
 [[package]]
 name = "client-common"
 version = "0.1.0"
+dependencies = [
+ "omicron-common",
+ "oxnet",
+]
 
 [[package]]
 name = "cmake"
@@ -882,7 +886,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -898,10 +902,11 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=803f6899e3bc64780a965d625e248e1d77e37d43#803f6899e3bc64780a965d625e248e1d77e37d43"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=3d49b1314dc111323052ffe4b5b7ec442d9d0f3d#3d49b1314dc111323052ffe4b5b7ec442d9d0f3d"
 dependencies = [
  "anyhow",
  "chrono",
+ "dpd-types",
  "oxnet",
  "rand 0.9.5",
  "schemars 0.8.22",
@@ -1660,7 +1665,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=803f6899e3bc64780a965d625e248e1d77e37d43#803f6899e3bc64780a965d625e248e1d77e37d43"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=3d49b1314dc111323052ffe4b5b7ec442d9d0f3d#3d49b1314dc111323052ffe4b5b7ec442d9d0f3d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1678,6 +1683,30 @@ dependencies = [
  "slog",
  "tokio",
  "transceiver-controller",
+ "uuid",
+]
+
+[[package]]
+name = "dpd-types"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=3d49b1314dc111323052ffe4b5b7ec442d9d0f3d#3d49b1314dc111323052ffe4b5b7ec442d9d0f3d"
+dependencies = [
+ "dpd-types-versions",
+]
+
+[[package]]
+name = "dpd-types-versions"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=3d49b1314dc111323052ffe4b5b7ec442d9d0f3d#3d49b1314dc111323052ffe4b5b7ec442d9d0f3d"
+dependencies = [
+ "chrono",
+ "dropshot",
+ "omicron-common",
+ "oxnet",
+ "rand 0.9.5",
+ "schemars 0.8.22",
+ "serde",
+ "thiserror 2.0.20",
  "uuid",
 ]
 
@@ -1942,7 +1971,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3301,7 +3330,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3869,9 +3898,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "client-common",
  "nom 8.0.0",
  "num_enum 0.7.6",
+ "omicron-common",
  "oxnet",
+ "proptest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -5345,6 +5377,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "poptrie"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/poptrie?branch=main#5bf62f6b889c61e0608d8463ed11da28e130cb34"
+
+[[package]]
 name = "port-file"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5881,7 +5918,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6034,6 +6071,7 @@ dependencies = [
  "mg-common",
  "ndp",
  "oxnet",
+ "poptrie",
  "proptest",
  "schemars 0.8.22",
  "serde",
@@ -6343,7 +6381,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6411,7 +6449,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7612,7 +7650,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7621,7 +7659,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7631,7 +7669,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8195,7 +8233,7 @@ dependencies = [
 [[package]]
 name = "transceiver-controller"
 version = "0.1.1"
-source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#9b21e39af969637c09e1eaf6538c0f32b01733ea"
+source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#1f94d981731f20f553e957752c5027d15be0f49d"
 dependencies = [
  "anyhow",
  "clap",
@@ -8219,7 +8257,7 @@ dependencies = [
 [[package]]
 name = "transceiver-decode"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#9b21e39af969637c09e1eaf6538c0f32b01733ea"
+source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#1f94d981731f20f553e957752c5027d15be0f49d"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -8231,7 +8269,7 @@ dependencies = [
 [[package]]
 name = "transceiver-messages"
 version = "0.1.1"
-source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#9b21e39af969637c09e1eaf6538c0f32b01733ea"
+source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#1f94d981731f20f553e957752c5027d15be0f49d"
 dependencies = [
  "bitflags 2.13.1",
  "clap",
@@ -9009,7 +9047,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
