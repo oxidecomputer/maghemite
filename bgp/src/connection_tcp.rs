@@ -39,8 +39,11 @@ use std::{
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {
-    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void},
-    std::os::fd::AsRawFd,
+    libc::{
+        IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, IPV6_MINHOPCOUNT, c_int, c_void,
+        socklen_t,
+    },
+    std::os::fd::{AsRawFd, RawFd},
 };
 
 #[cfg(target_os = "linux")]
@@ -49,20 +52,24 @@ use crate::connection::MAX_MD5SIG_KEYLEN;
 use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 
 #[cfg(target_os = "illumos")]
-use itertools::Itertools;
-#[cfg(target_os = "illumos")]
-use std::{collections::HashSet, net::IpAddr};
-
-const UNIT_CONNECTION: &str = "connection_tcp";
+use {
+    itertools::Itertools,
+    std::{collections::HashSet, net::IpAddr},
+};
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
 #[cfg(target_os = "illumos")]
-const PFKEY_DURATION: Duration = Duration::from_secs(60 * 2);
-#[cfg(target_os = "illumos")]
 const PFKEY_KEEPALIVE: Duration = Duration::from_secs(60);
+// `Duration * u32` is not const-stable, so derive the doubled lifetime from
+// the keepalive's seconds instead.
+#[cfg(target_os = "illumos")]
+const PFKEY_DURATION: Duration =
+    Duration::from_secs(PFKEY_KEEPALIVE.as_secs() * 2);
+
+const UNIT_CONNECTION: &str = "connection_tcp";
 
 /// Error type for recv_msg operations.
 /// Distinguishes between IO errors (connection issues) and parse errors (bad messages).
@@ -1264,30 +1271,11 @@ fn apply_min_ttl(
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
         let fd = conn.as_raw_fd();
-        let min_ttl = ttl as u32;
-        unsafe {
-            if peer.is_ipv4()
-                && libc::setsockopt(
-                    fd,
-                    IPPROTO_IP,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
-                    std::mem::size_of::<u32>() as u32,
-                ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
-            if peer.is_ipv6()
-                && libc::setsockopt(
-                    fd,
-                    IPPROTO_IPV6,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
-                    std::mem::size_of::<u32>() as u32,
-                ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
+        if peer.is_ipv4() {
+            set_ip_minttl_sockopt(fd, ttl)?;
+        }
+        if peer.is_ipv6() {
+            set_ipv6_minhopcount_sockopt(fd, ttl)?;
         }
     }
     Ok(())
@@ -1314,7 +1302,7 @@ impl Default for TcpMd5Sig {
 /// Apply TCP_MD5SIG socket option to a socket
 #[cfg(target_os = "linux")]
 fn set_md5_sig(
-    fd: i32,
+    fd: RawFd,
     keylen: u16,
     key: [u8; MAX_MD5SIG_KEYLEN],
     peer: SocketAddr,
@@ -1325,21 +1313,12 @@ fn set_md5_sig(
         ..Default::default()
     };
     let addr = socket2::SockAddr::from(peer);
+    // SAFETY: SockAddr stores its address in a sockaddr_storage.
     unsafe {
         sig.tcpm_addr = *addr.as_ptr().cast::<sockaddr_storage>();
-        if libc::setsockopt(
-            fd,
-            IPPROTO_TCP,
-            TCP_MD5SIG,
-            &sig as *const TcpMd5Sig as *const c_void,
-            std::mem::size_of::<TcpMd5Sig>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
     }
 
-    Ok(())
+    set_sockopt(fd, IPPROTO_TCP, TCP_MD5SIG, &sig)
 }
 
 /// Md5 security associations (PF_KEY tracking)
@@ -1483,22 +1462,7 @@ fn init_md5_associations(
     for local in locals.iter() {
         apply_md5_sa_pair(*local, peer, key)?;
     }
-
-    let yes: c_int = 1;
-    unsafe {
-        if libc::setsockopt(
-            fd,
-            IPPROTO_TCP,
-            TCP_MD5SIG,
-            &yes as *const c_int as *const c_void,
-            std::mem::size_of::<c_int>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-    }
-
-    Ok(())
+    set_md5_sockopt(fd)
 }
 
 /// Setup MD5 for outbound Illumos connections: select source addresses and
@@ -1543,4 +1507,97 @@ fn setup_outbound_md5(
     init_md5_associations(fd, key, local.clone(), peer)?;
 
     Ok((key.to_string(), local))
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn set_ipv6_minhopcount_sockopt(
+    fd: RawFd,
+    min_hopcount: u8,
+) -> Result<(), Error> {
+    let min_hopcount = c_int::from(min_hopcount);
+    set_sockopt(fd, IPPROTO_IPV6, IPV6_MINHOPCOUNT, &min_hopcount)
+}
+
+// The get_* sockopt wrappers are not called yet: they are intended for
+// sockopt regression tests that read back what set_* configured. Those tests
+// are blocked on https://www.illumos.org/issues/18351 landing in helios and
+// the CI runner picking up a helios image with the fix. Every set_* wrapper
+// has a get_* counterpart except Linux's set_md5_sig: the Linux kernel does
+// not implement getsockopt for TCP_MD5SIG, so that option cannot be read
+// back there.
+#[allow(dead_code)]
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn get_ipv6_minhopcount_sockopt(fd: RawFd) -> Result<c_int, Error> {
+    get_sockopt(fd, IPPROTO_IPV6, IPV6_MINHOPCOUNT)
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn set_ip_minttl_sockopt(fd: RawFd, min_ttl: u8) -> Result<(), Error> {
+    let min_ttl = c_int::from(min_ttl);
+    set_sockopt(fd, IPPROTO_IP, IP_MINTTL, &min_ttl)
+}
+
+// Unused pending sockopt regression tests; see get_ipv6_minhopcount_sockopt.
+#[allow(dead_code)]
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn get_ip_minttl_sockopt(fd: RawFd) -> Result<c_int, Error> {
+    get_sockopt(fd, IPPROTO_IP, IP_MINTTL)
+}
+
+#[cfg(target_os = "illumos")]
+fn set_md5_sockopt(fd: RawFd) -> Result<(), Error> {
+    let yes: c_int = 1;
+    set_sockopt(fd, IPPROTO_TCP, TCP_MD5SIG, &yes)
+}
+
+// Unused pending sockopt regression tests; see get_ipv6_minhopcount_sockopt.
+#[allow(dead_code)]
+#[cfg(target_os = "illumos")]
+fn get_md5_sockopt(fd: RawFd) -> Result<c_int, Error> {
+    get_sockopt(fd, IPPROTO_TCP, TCP_MD5SIG)
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn set_sockopt<T>(
+    socket: RawFd,
+    level: c_int,
+    name: c_int,
+    value: &T,
+) -> Result<(), Error> {
+    unsafe {
+        if libc::setsockopt(
+            socket,
+            level,
+            name,
+            std::ptr::from_ref(value).cast::<c_void>(),
+            std::mem::size_of_val(value) as socklen_t,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn get_sockopt(
+    socket: RawFd,
+    level: c_int,
+    name: c_int,
+) -> Result<c_int, Error> {
+    let mut readback: c_int = -1;
+    let mut readback_len = std::mem::size_of_val(&readback) as socklen_t;
+    unsafe {
+        if libc::getsockopt(
+            socket,
+            level,
+            name,
+            std::ptr::from_mut(&mut readback).cast::<c_void>(),
+            &mut readback_len,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(readback)
 }
