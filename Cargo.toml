@@ -92,15 +92,15 @@ serde = { version = "1.0.229", features = ["derive"] }
 hostname = "0.4"
 thiserror = "2.0"
 dropshot = { version = "0.17.1", features = [ "usdt-probes" ] }
-dropshot-api-manager = "0.7.2"
-dropshot-api-manager-types = "0.7.2"
-expectorate = "1.2.0"
+dropshot-api-manager = "0.8.0"
+dropshot-api-manager-types = "0.8.0"
+expectorate = "1.3.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0.104"
 port-file = "0.1.0"
-hyper = "1.11.0"
+hyper = "1.11.1"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.151"
 percent-encoding = "2.3.2"
@@ -108,9 +108,10 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 progenitor = "0.14"
 progenitor-client = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
-clap = { version = "4.6.5", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.6.6", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.1"
+strum = { version = "0.28", features = ["derive"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.14"
@@ -130,7 +131,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 oxide-tokio-rt = "0.1.6"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oxnet = { version = "0.1.6", default-features = false, features = ["schemars", "serde"] }
+oxnet = { version = "0.1.7", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 uuid = { version = "1.21", features = ["serde", "v4"] }

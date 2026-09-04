@@ -1,13 +1,10 @@
 //! Falcon test lab
 
 use crate::dendrite::NpuvmCommits;
-use crate::test::{
-    cleanup_ddm_apply_lifecycle_test, cleanup_mgd_unnumbered_test,
-    cleanup_quartet_bfd_static_test, cleanup_quartet_unnumbered_test,
-    run_ddm_apply_lifecycle_test, run_mgd_unnumbered_test,
-    run_quartet_bfd_static_test, run_quartet_unnumbered_test,
+use crate::scenario::{
+    DdmTrioScenario, InteropScenario, MgdDuoScenario, Scenario, ScenarioOptions,
 };
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 mod bgp;
 mod ddm;
@@ -19,61 +16,93 @@ mod illumos;
 mod juniper;
 mod linux;
 mod mgd;
-mod test;
+mod scenario;
 mod topo;
 mod util;
 
+const DEFAULT_NPUVM_COMMIT: &str = "fd2c726815cdb03c2687e1bf2912a9184905557b";
+
 #[derive(Debug, Parser)]
 struct Cli {
-    #[clap(subcommand)]
+    #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Run(Run),
-    Cleanup(Cleanup),
+    Run(TopologyRun),
+    Cleanup(TopologyCleanup),
     Serial(Serial),
 }
 
-#[derive(Debug, Parser)]
-struct Run {
-    #[clap(subcommand)]
-    command: TestCommand,
-
-    #[clap(long)]
-    no_cleanup: bool,
-
-    #[clap(long)]
-    no_diag_on_fail: bool,
-
-    #[clap(long, default_value = "fd2c726815cdb03c2687e1bf2912a9184905557b")]
-    npuvm_commit: String,
-
-    #[clap(long)]
-    dendrite_commit: Option<String>,
-
-    #[clap(long)]
-    sidecar_lite_commit: Option<String>,
-}
-
-#[derive(Debug, Parser)]
-struct Cleanup {
-    #[clap(subcommand)]
-    command: TestCommand,
-}
-
-#[derive(Debug, Parser)]
-struct Serial {
-    node: String,
+#[derive(Debug, Args)]
+struct TopologyRun {
+    #[command(subcommand)]
+    topology: RunTopology,
 }
 
 #[derive(Debug, Subcommand)]
-enum TestCommand {
-    DdmApplyLifecycle,
-    MgdUnnumbered,
-    QuartetUnnumbered,
-    QuartetBfdStaticRouting,
+enum RunTopology {
+    MgdDuo(ScenarioRun<MgdDuoScenario>),
+    Interop(ScenarioRun<InteropScenario>),
+    DdmTrio(ScenarioRun<DdmTrioScenario>),
+}
+
+#[derive(Debug, Args)]
+struct ScenarioRun<S: ValueEnum + Send + Sync + 'static> {
+    #[arg(value_enum)]
+    scenario: S,
+    #[command(flatten)]
+    options: RunOptions,
+}
+
+#[derive(Debug, Args)]
+struct RunOptions {
+    #[arg(long)]
+    no_cleanup: bool,
+    #[arg(long)]
+    no_diag_on_fail: bool,
+    #[arg(long, default_value = DEFAULT_NPUVM_COMMIT)]
+    npuvm_commit: String,
+    #[arg(long)]
+    dendrite_commit: Option<String>,
+    #[arg(long)]
+    sidecar_lite_commit: Option<String>,
+}
+
+impl RunOptions {
+    fn scenario_options(self) -> ScenarioOptions {
+        let commits = NpuvmCommits {
+            npuvm: self.npuvm_commit,
+            dendrite: self.dendrite_commit,
+            sidecar_lite: self.sidecar_lite_commit,
+        };
+        ScenarioOptions::new(self.no_cleanup, !self.no_diag_on_fail, commits)
+    }
+}
+
+#[derive(Debug, Args)]
+struct TopologyCleanup {
+    #[command(subcommand)]
+    topology: CleanupTopology,
+}
+
+#[derive(Debug, Subcommand)]
+enum CleanupTopology {
+    MgdDuo(ScenarioCleanup<MgdDuoScenario>),
+    Interop(ScenarioCleanup<InteropScenario>),
+    DdmTrio(ScenarioCleanup<DdmTrioScenario>),
+}
+
+#[derive(Debug, Args)]
+struct ScenarioCleanup<S: ValueEnum + Send + Sync + 'static> {
+    #[arg(value_enum)]
+    scenario: S,
+}
+
+#[derive(Debug, Args)]
+struct Serial {
+    node: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -81,57 +110,27 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Run(cmd) => {
-            let commits = NpuvmCommits {
-                npuvm: cmd.npuvm_commit,
-                dendrite: cmd.dendrite_commit,
-                sidecar_lite: cmd.sidecar_lite_commit,
-            };
-            match cmd.command {
-                TestCommand::DdmApplyLifecycle => {
-                    run_ddm_apply_lifecycle_test(
-                        cmd.no_cleanup,
-                        !cmd.no_diag_on_fail,
-                    )
-                    .await?
-                }
-                TestCommand::MgdUnnumbered => {
-                    run_mgd_unnumbered_test(
-                        cmd.no_cleanup,
-                        !cmd.no_diag_on_fail,
-                    )
-                    .await?
-                }
-                TestCommand::QuartetUnnumbered => {
-                    run_quartet_unnumbered_test(
-                        cmd.no_cleanup,
-                        !cmd.no_diag_on_fail,
-                        commits,
-                    )
-                    .await?
-                }
-                TestCommand::QuartetBfdStaticRouting => {
-                    run_quartet_bfd_static_test(
-                        cmd.no_cleanup,
-                        !cmd.no_diag_on_fail,
-                        commits,
-                    )
-                    .await?
-                }
+    match Cli::parse().command {
+        Command::Run(cmd) => match cmd.topology {
+            RunTopology::MgdDuo(cmd) => {
+                cmd.scenario.run(cmd.options.scenario_options()).await?;
             }
-        }
-        Command::Cleanup(cmd) => match cmd.command {
-            TestCommand::DdmApplyLifecycle => {
-                cleanup_ddm_apply_lifecycle_test().await?
+            RunTopology::Interop(cmd) => {
+                cmd.scenario.run(cmd.options.scenario_options()).await?;
             }
-            TestCommand::MgdUnnumbered => cleanup_mgd_unnumbered_test().await?,
-            TestCommand::QuartetUnnumbered => {
-                cleanup_quartet_unnumbered_test().await?
+            RunTopology::DdmTrio(cmd) => {
+                cmd.scenario.run(cmd.options.scenario_options()).await?;
             }
-            TestCommand::QuartetBfdStaticRouting => {
-                cleanup_quartet_bfd_static_test().await?
+        },
+        Command::Cleanup(cmd) => match cmd.topology {
+            CleanupTopology::MgdDuo(cmd) => {
+                cmd.scenario.cleanup()?;
+            }
+            CleanupTopology::Interop(cmd) => {
+                cmd.scenario.cleanup()?;
+            }
+            CleanupTopology::DdmTrio(cmd) => {
+                cmd.scenario.cleanup()?;
             }
         },
         Command::Serial(cmd) => {
@@ -139,4 +138,67 @@ async fn run() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_options_follow_scenario() {
+        let cli = Cli::try_parse_from([
+            "falcon-lab",
+            "run",
+            "interop",
+            "bare",
+            "--no-cleanup",
+        ])
+        .expect("parse interop bare scenario");
+
+        assert!(matches!(
+            cli.command,
+            Command::Run(TopologyRun {
+                topology: RunTopology::Interop(ScenarioRun {
+                    scenario: InteropScenario::Bare,
+                    options: RunOptions {
+                        no_cleanup: true,
+                        ..
+                    },
+                }),
+            })
+        ));
+    }
+
+    #[test]
+    fn cleanup_uses_topology_and_scenario() {
+        let cli = Cli::try_parse_from([
+            "falcon-lab",
+            "cleanup",
+            "mgd-duo",
+            "bgp-unnumbered",
+        ])
+        .expect("parse mgd-duo cleanup scenario");
+
+        assert!(matches!(
+            cli.command,
+            Command::Cleanup(TopologyCleanup {
+                topology: CleanupTopology::MgdDuo(ScenarioCleanup {
+                    scenario: MgdDuoScenario::BgpUnnumbered,
+                }),
+            })
+        ));
+    }
+
+    #[test]
+    fn scenario_is_rejected_by_wrong_topology() {
+        assert!(
+            Cli::try_parse_from([
+                "falcon-lab",
+                "run",
+                "mgd-duo",
+                "bfd-static-routing",
+            ])
+            .is_err()
+        );
+    }
 }

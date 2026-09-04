@@ -1,17 +1,48 @@
 # Falcon lab
 
-`falcon-lab` runs Maghemite integration topologies under Falcon. The
+`falcon-lab` runs Maghemite integration topologies under Falcon. A topology
+defines the VM graph, while a scenario configures and tests that topology. The
 topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS, and
 Junos/cRPD nodes, plus a per-run `cargo-bay/` 9p share for binaries and runtime
+configuration.
+
+## Topologies and scenarios
+
+Supported topology/scenario pairs are:
+
+```text
+mgd-duo  bare
+mgd-duo  bgp-unnumbered
+interop  bare
+interop  bgp-unnumbered
+interop  bfd-static-routing
+ddm-trio bare
+ddm-trio ddm-apply-lifecycle
+```
+
+`mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
+FRR, Arista EOS, Juniper cRPD, and a second Maghemite node. `ddm-trio` connects
+a transit ddmd hub to two server ddmd leaves over separate links so the hub's
+interfaces can be added and removed independently through `ddm_apply`.
+
+Run and cleanup commands both take a topology and scenario:
+
+```sh
+pfexec target/release/falcon-lab run interop bgp-unnumbered --no-cleanup
+pfexec target/release/falcon-lab cleanup interop bgp-unnumbered
+```
+
+The `bare` scenarios launch their topology without applying protocol
 configuration.
 
 ## Runtime cargo-bay contents
 
 Before running any topology, `cargo-bay/` must contain:
 
-- `mgd` and `ddmd`, staged by local test setup or the Buildomat job.
+- `mgd`, `ddmd`, and `ddmadm`, staged by local test setup or the Buildomat job.
+  `ddmadm` is only used to collect DDM diagnostics when a scenario fails.
 
-Junos topologies additionally require:
+The interop topology additionally requires:
 
 - `falcon-juniper-license.key`, a Juniper license file. This file is a secret:
   do not commit it, print it, include it in diagnostics, or pass its contents in
@@ -23,10 +54,10 @@ Junos CLI input file: it starts with `configure`, contains `set ...` commands,
 and ends with `commit`.
 
 Junos topology config is per-run state. `falcon-lab` removes stale
-`cargo-bay/*-junos.set` files before launching a quartet topology so the
-guest-side apply service cannot consume configuration left behind by an earlier
-topology. Do not put persistent hand-written Junos config in files matching
-that pattern.
+`cargo-bay/*-junos.set` files before launching or cleaning up an interop
+topology so the guest-side apply service cannot consume configuration left by
+an earlier topology. Do not put persistent hand-written Junos config in files
+matching that pattern.
 
 ## Junos license source and connectivity assumptions
 
@@ -131,8 +162,9 @@ Failure diagnostics are enabled by default. For faster local iteration while
 preserving the failed topology, use:
 
 ```sh
-pfexec ./falcon-lab run --no-cleanup --no-diag-on-fail quartet-bfd-static-routing
+pfexec target/release/falcon-lab run interop bfd-static-routing \
+  --no-cleanup --no-diag-on-fail
 ```
 
-Even with `--no-diag-on-fail`, quartet tests make a best-effort attempt to resume
-FRR's `bfdd` and unpause cEOS/cRPD before returning the failure.
+Even with `--no-diag-on-fail`, interop scenarios make a best-effort attempt to
+restart FRR and unpause cEOS/cRPD before returning the failure.
