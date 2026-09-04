@@ -9,12 +9,11 @@
 
 use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
-    SmContext, SmError, StateMachine, Stop,
+    SmContext, StateMachine, Stop,
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
-use mg_common::lock;
 use slog::Logger;
 use std::collections::HashSet;
 use std::sync::mpsc::Receiver;
@@ -26,21 +25,27 @@ use ddm_api_types::net::TunnelOrigin;
 use std::net::Ipv6Addr;
 
 impl StateMachine {
-    pub fn run(&mut self) -> Result<(), SmError> {
-        let ctx = self.ctx.clone();
-        let mut rx = lock!(self.rx).take().unwrap();
-        let log = self.ctx.log.clone();
-        let stop = self.stop.clone();
-        self.thread = Some(spawn(move || {
-            let mut state: Box<dyn State> =
-                Box::new(Init::new(ctx.clone(), log.clone(), stop));
+    pub fn spawn(ctx: SmContext, mut rx: Receiver<Event>) -> Self {
+        let stop = Stop::default();
+        let thread_ctx = ctx.clone();
+        let log = ctx.log.clone();
+        let thread_stop = stop.clone();
+        let thread = spawn(move || {
+            let mut state: Box<dyn State> = Box::new(Init::new(
+                thread_ctx.clone(),
+                log.clone(),
+                thread_stop,
+            ));
             while let Step::Next(next, event) = state.run(rx) {
                 state = next;
                 rx = event;
             }
-        }));
-
-        Ok(())
+        });
+        Self {
+            ctx,
+            thread: Some(thread),
+            stop,
+        }
     }
 
     pub fn signal_stop(&self) {

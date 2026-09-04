@@ -8,7 +8,7 @@
 //! routes via [`crate::sys`] and reads interface addressing through `libnet`.
 
 use crate::db::Db;
-use crate::discovery::{self, Version};
+use crate::discovery::Version;
 use ddm_api_types::db::{
     InterfaceInfo, InterfaceStats, PeerIdentity, PeerStatus, RouterKind,
 };
@@ -20,13 +20,14 @@ use slog::Logger;
 use std::collections::{BTreeMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
+pub mod overseer;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 mod state;
+pub use overseer::Overseer;
 
 #[derive(Debug)]
 pub enum AdminEvent {
@@ -103,15 +104,6 @@ pub enum EventError {
 pub enum EventResponse {
     Success,
     Prefixes(Vec<Ipv6Net>),
-}
-
-#[derive(Error, Debug)]
-pub enum SmError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("discovery error: {0}")]
-    Discovery(#[from] discovery::DiscoveryError),
 }
 
 #[derive(Clone)]
@@ -308,9 +300,6 @@ impl SmContext {
 
 pub struct StateMachine {
     pub ctx: SmContext,
-    // Receiver is only present until `run`, but the mutex keeps this owner
-    // type `Sync` while it is stored behind the admin's shared peers map.
-    pub rx: Mutex<Option<Receiver<Event>>>,
     #[cfg_attr(
         not(all(feature = "backend", target_os = "illumos")),
         allow(dead_code)
@@ -321,17 +310,6 @@ pub struct StateMachine {
         allow(dead_code)
     )]
     stop: Stop,
-}
-
-impl StateMachine {
-    pub fn new(ctx: SmContext, rx: Receiver<Event>) -> Self {
-        Self {
-            ctx,
-            rx: Mutex::new(Some(rx)),
-            thread: None,
-            stop: Stop::default(),
-        }
-    }
 }
 
 impl IdOrdItem for StateMachine {

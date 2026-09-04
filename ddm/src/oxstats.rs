@@ -2,9 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::RouterStats, sm::StateMachine};
+use crate::{admin::RouterStats, sm::Overseer};
 use chrono::{DateTime, Utc};
-use iddqd::IdOrdMap;
 use mg_common::{
     lock,
     nexus::{local_underlay_address, run_oximeter},
@@ -49,7 +48,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    peers: Arc<RwLock<IdOrdMap<StateMachine>>>,
+    overseer: Arc<RwLock<Overseer>>,
     router_stats: Arc<RouterStats>,
 }
 
@@ -154,7 +153,7 @@ impl Producer for Stats {
             self.router_stats.originated_tunnel_endpoints
         ));
 
-        for peer in read_lock!(self.peers).iter() {
+        for peer in read_lock!(self.overseer).iter() {
             let if_name = lock!(peer.ctx.iface.if_name).clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -271,7 +270,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    peers: Arc<RwLock<IdOrdMap<StateMachine>>>,
+    overseer: Arc<RwLock<Overseer>>,
     router_stats: Arc<RouterStats>,
     hostname: String,
     rack_id: Uuid,
@@ -287,7 +286,7 @@ pub fn start_server(
 
     let stats_producer = Stats {
         start_time: chrono::offset::Utc::now(),
-        peers,
+        overseer,
         hostname,
         rack_id,
         sled_id,

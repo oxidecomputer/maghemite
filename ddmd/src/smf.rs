@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use ddm::admin::{DDM_STATS_PORT, HandlerContext};
-use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
+use mg_common::{lock, write_lock};
 use slog::{Logger, error, info, warn};
 use smf::PropertyGroup;
 use std::sync::{Arc, Mutex};
@@ -60,17 +60,18 @@ fn refresh_stats_server(
         }
     };
 
-    let mut context = lock!(ctx);
+    let context = lock!(ctx);
 
-    // keep hostname up-to-date in handler in case it changes
-    context.hostname = hostname.clone();
+    // keep hostname up-to-date for FSMs started after this refresh in case it
+    // changes
+    write_lock!(context.overseer).set_hostname(hostname.clone());
 
     let mut handler = lock!(context.stats_handler);
     if handler.is_none() {
         info!(log, "starting stats server on smf refresh");
         match ddm::oxstats::start_server(
             DDM_STATS_PORT,
-            context.peers.clone(),
+            context.overseer.clone(),
             context.stats.clone(),
             hostname,
             props.rack_uuid,

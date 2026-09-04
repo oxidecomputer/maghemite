@@ -6,18 +6,16 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
-use ddm::sm::{DpdConfig, StateMachine};
+use ddm::sm::{DpdConfig, Overseer};
 use ddm_api_types::db::RouterKind;
-use iddqd::IdOrdMap;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
-use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use {ddm::sys::Route, std::collections::BTreeSet};
+use ddm::sys::Route;
 
 mod signal;
 mod smf;
@@ -174,11 +172,23 @@ async fn run() {
     };
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Arc<RwLock<IdOrdMap<StateMachine>>> =
-        Arc::new(RwLock::new(IdOrdMap::new()));
-    let mesh = Arc::new(RwLock::new(BTreeMap::new()));
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
+
+    let overseer = Overseer::new(
+        log.clone(),
+        db.clone(),
+        rt,
+        hostname.clone(),
+        base_fsm_config,
+    );
+    #[cfg(all(feature = "backend", target_os = "illumos"))]
+    let overseer = {
+        let mut overseer = overseer;
+        overseer.apply(arg.interfaces.into_iter().collect());
+        overseer
+    };
+    let overseer = Arc::new(RwLock::new(overseer));
 
     let stats_handler = if arg.with_stats
         && let (Some(rack_uuid), Some(sled_uuid)) =
@@ -186,7 +196,7 @@ async fn run() {
     {
         match ddm::oxstats::start_server(
             arg.oximeter_port,
-            peers.clone(),
+            overseer.clone(),
             router_stats.clone(),
             hostname.clone(),
             rack_uuid,
@@ -206,20 +216,10 @@ async fn run() {
     let context = HandlerContext {
         db,
         stats: router_stats,
-        peers,
-        mesh,
-        apply_lock: Arc::new(Mutex::new(())),
+        overseer,
         stats_handler: Arc::new(Mutex::new(stats_handler)),
         log: log.clone(),
-        hostname,
-        base_fsm_config,
-        rt,
     };
-
-    #[cfg(all(feature = "backend", target_os = "illumos"))]
-    context.start_state_machines(
-        arg.interfaces.into_iter().collect::<BTreeSet<_>>(),
-    );
 
     let context = Arc::new(Mutex::new(context));
 

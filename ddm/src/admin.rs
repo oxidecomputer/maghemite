@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::sm::{AdminEvent, Event, PrefixSet, StateMachine};
+use crate::sm::{AdminEvent, Event, Overseer, PrefixSet};
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
@@ -23,28 +23,21 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use iddqd::IdOrdMap;
 use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use {
-    crate::sm::{InterfaceState, SmContext},
-    mg_common::write_lock,
-    std::collections::BTreeSet,
-    std::sync::mpsc::channel,
-};
+use mg_common::write_lock;
 
 pub const DDM_STATS_PORT: u16 = 8001;
 
@@ -60,97 +53,9 @@ pub struct RouterStats {
 pub struct HandlerContext {
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Arc<RwLock<IdOrdMap<StateMachine>>>,
-    pub mesh: Arc<RwLock<BTreeMap<String, Sender<Event>>>>,
-    pub apply_lock: Arc<Mutex<()>>,
+    pub overseer: Arc<RwLock<Overseer>>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
-    pub hostname: String,
-    pub base_fsm_config: crate::sm::Config,
-    pub rt: tokio::runtime::Handle,
-}
-
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-impl HandlerContext {
-    /// Build, wire, and start the per-interface routing state machines.
-    pub fn start_state_machines(
-        &self,
-        interfaces: impl IntoIterator<Item = String>,
-    ) {
-        let mut peers = write_lock!(self.peers);
-        interfaces
-            .into_iter()
-            .for_each(|ifname| self.start_state_machine(&mut peers, ifname));
-    }
-
-    /// Build, wire, and start one routing state machine for an interface.
-    fn start_state_machine(
-        &self,
-        peers: &mut IdOrdMap<StateMachine>,
-        ifname: String,
-    ) {
-        let (tx, rx) = channel();
-        let mut config = self.base_fsm_config.clone();
-        config.if_name = ifname.clone();
-        let ctx = SmContext {
-            config,
-            db: self.db.clone(),
-            tx: tx.clone(),
-            event_channels: self.mesh.clone(),
-            rt: self.rt.clone(),
-            hostname: self.hostname.clone(),
-            iface: Arc::new(InterfaceState {
-                if_name: Mutex::new(ifname.clone()),
-                ..Default::default()
-            }),
-            stats: Arc::new(crate::sm::SessionStats::default()),
-            log: self.log.clone(),
-        };
-        let sm = StateMachine::new(ctx, rx);
-        if peers.insert_unique(sm).is_err() {
-            error!(self.log, "state machine {ifname} already exists");
-            return;
-        }
-        write_lock!(self.mesh).insert(ifname.clone(), tx);
-        peers.get_mut(ifname.as_str()).unwrap().run().unwrap();
-    }
-
-    /// Reconcile the running FSMs with `desired`, including full teardown.
-    pub fn apply(&self, desired: BTreeSet<String>) {
-        let _guard = lock!(self.apply_lock);
-        let departing = {
-            let mut peers = write_lock!(self.peers);
-            let current = peers
-                .iter()
-                .map(|sm| sm.ctx.config.if_name.clone())
-                .collect::<BTreeSet<_>>();
-            let to_del =
-                current.difference(&desired).cloned().collect::<Vec<_>>();
-            let to_add =
-                desired.difference(&current).cloned().collect::<Vec<_>>();
-            let departing = to_del
-                .iter()
-                .filter_map(|name| peers.remove(name.as_str()))
-                .collect::<Vec<_>>();
-            {
-                let mut mesh = write_lock!(self.mesh);
-                for sm in &departing {
-                    mesh.remove(sm.ctx.config.if_name.as_str());
-                }
-            }
-            for name in to_add {
-                self.start_state_machine(&mut peers, name);
-            }
-            departing
-        };
-
-        for sm in &departing {
-            sm.signal_stop();
-        }
-        for sm in departing {
-            sm.join();
-        }
-    }
 }
 
 pub fn handler(
@@ -229,7 +134,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashMap<u32, InterfaceInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
-        for sm in read_lock!(ctx.peers).iter() {
+        for sm in read_lock!(ctx.overseer).iter() {
             result
                 .insert(*lock!(sm.ctx.iface.if_index), sm.ctx.interface_info());
         }
@@ -242,13 +147,28 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
-            let ctx = lock!(_ctx.context()).clone();
             let desired = _request.into_inner().ddm_interfaces;
-            tokio::task::spawn_blocking(move || ctx.apply(desired))
-                .await
-                .map_err(|e| {
-                    HttpError::for_internal_error(format!("ddm_apply: {e}"))
-                })?;
+            let overseer = lock!(_ctx.context()).overseer.clone();
+            // Overseer::apply blocks for the full teardown of every departing
+            // FSM, and teardown re-enters this runtime: close_session calls
+            // rt.block_on(server.close()), while remove_underlay_routes calls
+            // rt.block_on(client.route_ipv6_delete(..)). Handle::block_on from
+            // an FSM thread parks that thread and needs a free Tokio worker to
+            // drive its future. Running apply directly on this handler's
+            // worker could leave every worker waiting in join() on an FSM
+            // whose block_on needs a worker, deadlocking teardown and leaving
+            // the Overseer write lock held so all readers wedge too. The
+            // blocking pool guarantees the waiter is not a runtime worker and
+            // leaves the runtime free to serve admin requests and other FSMs'
+            // exchange servers while teardown, potentially delayed for
+            // seconds by unreachable DPD, completes.
+            tokio::task::spawn_blocking(move || {
+                write_lock!(overseer).apply(desired)
+            })
+            .await
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("ddm_apply: {e}"))
+            })?;
         }
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -258,7 +178,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         Ok(HttpResponseOk(
-            read_lock!(ctx.peers)
+            read_lock!(ctx.overseer)
                 .iter()
                 .filter_map(|sm| {
                     // Compute status first so peer_status() never runs while we
@@ -287,7 +207,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for peer in read_lock!(ctx.peers).iter() {
+        for peer in read_lock!(ctx.overseer).iter() {
             peer.ctx
                 .tx
                 .send(Event::Admin(AdminEvent::Expire(addr)))
@@ -368,7 +288,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for peer in read_lock!(ctx.peers).iter() {
+        for peer in read_lock!(ctx.overseer).iter() {
             peer.ctx
                 .tx
                 .send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
@@ -408,7 +328,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for peer in read_lock!(ctx.peers).iter() {
+        for peer in read_lock!(ctx.overseer).iter() {
             peer.ctx
                 .tx
                 .send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
@@ -446,7 +366,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for peer in read_lock!(ctx.peers).iter() {
+        for peer in read_lock!(ctx.overseer).iter() {
             peer.ctx
                 .tx
                 .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
@@ -486,7 +406,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for peer in read_lock!(ctx.peers).iter() {
+        for peer in read_lock!(ctx.overseer).iter() {
             peer.ctx
                 .tx
                 .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
@@ -520,7 +440,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for peer in read_lock!(ctx.peers).iter() {
+        for peer in read_lock!(ctx.overseer).iter() {
             peer.ctx
                 .tx
                 .send(Event::Admin(AdminEvent::Sync))
@@ -550,7 +470,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             *jh = Some(
                 crate::oxstats::start_server(
                     DDM_STATS_PORT,
-                    ctx.peers.clone(),
+                    ctx.overseer.clone(),
                     ctx.stats.clone(),
                     hostname,
                     rq.rack_id,
