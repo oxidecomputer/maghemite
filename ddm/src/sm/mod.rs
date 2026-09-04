@@ -119,12 +119,9 @@ pub struct Config {
     /// Interface this state machine is associated with.
     pub if_index: u32,
 
-    /// Interface name this state machine is associated with.
+    /// Interface name this state machine is associated with. The interface
+    /// must carry an IPv6 link-local address, which is resolved in `Init`.
     pub if_name: String,
-
-    /// Address object name the state machine uses for peering. Must correspond
-    /// to IPv6 link local address.
-    pub aobj_name: String,
 
     /// Link local Ipv6 address this state machine is associated with
     pub addr: Ipv6Addr,
@@ -135,8 +132,8 @@ pub struct Config {
     /// How often to check for link failure while waiting for discovery messges.
     pub discovery_read_timeout: u64,
 
-    /// How long to wait between attempts to get an IP address for a specified
-    /// address object.
+    /// How long to wait between attempts to find a link-local IPv6 address
+    /// on the interface.
     pub ip_addr_wait: u64,
 
     /// How long to wait without a solicitation response before expiring a peer
@@ -291,7 +288,7 @@ impl SmContext {
     pub fn peer_channels(&self) -> Vec<(String, Sender<Event>)> {
         read_lock!(self.event_channels)
             .iter()
-            .filter(|(name, _)| name.as_str() != self.config.aobj_name)
+            .filter(|(name, _)| name.as_str() != self.config.if_name)
             .map(|(name, tx)| (name.clone(), tx.clone()))
             .collect()
     }
@@ -341,7 +338,7 @@ impl IdOrdItem for StateMachine {
     type Key<'a> = &'a str;
 
     fn key(&self) -> Self::Key<'_> {
-        &self.ctx.config.aobj_name
+        &self.ctx.config.if_name
     }
 
     id_upcast!();
@@ -392,12 +389,11 @@ mod tests {
         rt.handle().clone()
     }
 
-    fn make_ctx(aobj_name: &str) -> SmContext {
+    fn make_ctx(if_name: &str) -> SmContext {
         let (tx, _rx) = mpsc::channel();
         SmContext {
             config: Config {
-                aobj_name: aobj_name.to_string(),
-                if_name: String::new(),
+                if_name: if_name.to_string(),
                 if_index: 0,
                 addr: Ipv6Addr::UNSPECIFIED,
                 solicit_interval: 0,

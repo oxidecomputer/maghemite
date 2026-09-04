@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashSet;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use types::PortId;
 
 #[cfg(target_os = "illumos")]
@@ -553,6 +553,54 @@ pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
             err!(log, ifname, "set route: {}", e);
         }
     }
+}
+
+/// Resolve the IPv6 link-local address configured on the interface `ifname`.
+///
+/// Addresses on logical interfaces (`ifname:N`) count as belonging to
+/// `ifname`. Returns the interface index and address. If more than one
+/// link-local address is present the first is used and the rest are logged.
+pub fn link_local_addr(
+    log: &Logger,
+    ifname: &str,
+) -> Result<(u32, Ipv6Addr), String> {
+    let addrinfo = libnet::get_ipaddrs().map_err(|e| e.to_string())?;
+    let mut candidates = addrinfo
+        .into_iter()
+        .filter(|(lif, _)| {
+            lif.strip_prefix(ifname)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+        })
+        .flat_map(|(_, infos)| infos)
+        .filter_map(|info| match info.addr {
+            IpAddr::V6(addr) if addr.is_unicast_link_local() => {
+                Some((info.index as u32, addr))
+            }
+            _ => None,
+        });
+
+    let Some(selected) = candidates.next() else {
+        return Err(format!(
+            "no IPv6 link-local address found on interface {ifname}"
+        ));
+    };
+
+    let others = candidates.map(|(_, addr)| addr).collect::<Vec<_>>();
+    if !others.is_empty() {
+        wrn!(
+            log,
+            ifname,
+            "more than one link-local address on interface; using {}, also found {}",
+            selected.1,
+            others
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+
+    Ok(selected)
 }
 
 fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
