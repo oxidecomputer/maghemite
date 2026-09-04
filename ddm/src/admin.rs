@@ -91,7 +91,7 @@ impl HandlerContext {
     ) {
         let (tx, rx) = channel();
         let mut config = self.base_fsm_config.clone();
-        config.aobj_name = ifname.clone();
+        config.if_name = ifname.clone();
         let ctx = SmContext {
             config,
             db: self.db.clone(),
@@ -99,7 +99,10 @@ impl HandlerContext {
             event_channels: self.mesh.clone(),
             rt: self.rt.clone(),
             hostname: self.hostname.clone(),
-            iface: Arc::new(InterfaceState::default()),
+            iface: Arc::new(InterfaceState {
+                if_name: Mutex::new(ifname.clone()),
+                ..Default::default()
+            }),
             stats: Arc::new(crate::sm::SessionStats::default()),
             log: self.log.clone(),
         };
@@ -119,7 +122,7 @@ impl HandlerContext {
             let mut peers = write_lock!(self.peers);
             let current = peers
                 .iter()
-                .map(|sm| sm.ctx.config.aobj_name.clone())
+                .map(|sm| sm.ctx.config.if_name.clone())
                 .collect::<BTreeSet<_>>();
             let to_del =
                 current.difference(&desired).cloned().collect::<Vec<_>>();
@@ -132,7 +135,7 @@ impl HandlerContext {
             {
                 let mut mesh = write_lock!(self.mesh);
                 for sm in &departing {
-                    mesh.remove(sm.ctx.config.aobj_name.as_str());
+                    mesh.remove(sm.ctx.config.if_name.as_str());
                 }
             }
             for name in to_add {
@@ -240,15 +243,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
             let ctx = lock!(_ctx.context()).clone();
-            // XXX: SMF tells DDM about addr objects, not ifnames, so for now
-            //      we append "/ll" to the end of the ifname. Eventually this
-            //      endpoint and SMF should move over to using a stronger type.
-            let desired = _request
-                .into_inner()
-                .ddm_interfaces
-                .into_iter()
-                .map(|ifname| format!("{ifname}/ll"))
-                .collect();
+            let desired = _request.into_inner().ddm_interfaces;
             tokio::task::spawn_blocking(move || ctx.apply(desired))
                 .await
                 .map_err(|e| {

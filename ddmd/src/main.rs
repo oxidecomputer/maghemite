@@ -25,9 +25,10 @@ mod smf;
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
-    /// Address objects to route over.
-    #[arg(short, long = "addr", name = "addr")]
-    addresses: Vec<String>,
+    /// Interfaces to route over. Each interface must carry an IPv6 link-local
+    /// address.
+    #[arg(short = 'a', long = "addr", name = "addr")]
+    interfaces: Vec<String>,
 
     /// How long to wait between solicitations (milliseconds).
     #[arg(long, default_value_t = 2000)]
@@ -43,8 +44,8 @@ struct Arg {
     #[arg(long, default_value_t = 1000)]
     discovery_read_timeout: u64,
 
-    /// How long to wait between attempts to get an IP address for a specified
-    /// address object (milliseconds).
+    /// How long to wait between attempts to find a link-local IPv6 address
+    /// on a specified interface (milliseconds).
     #[arg(long, default_value_t = 1000)]
     ip_addr_wait: u64,
 
@@ -165,7 +166,6 @@ async fn run() {
         ip_addr_wait: arg.ip_addr_wait,
         exchange_timeout: arg.exchange_timeout,
         exchange_port: arg.exchange_port,
-        aobj_name: String::new(),
         if_name: String::new(),
         if_index: 0,
         kind: arg.kind,
@@ -218,7 +218,7 @@ async fn run() {
 
     #[cfg(all(feature = "backend", target_os = "illumos"))]
     context.start_state_machines(
-        arg.addresses.into_iter().collect::<BTreeSet<_>>(),
+        arg.interfaces.into_iter().collect::<BTreeSet<_>>(),
     );
 
     let context = Arc::new(Mutex::new(context));

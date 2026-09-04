@@ -4,7 +4,7 @@
 
 //! Routing state machine implementation. The `Init` -> `Solicit` ->
 //! `Exchange` lifecycle drives kernel route programming via [`crate::sys`]
-//! and reads interface addressing through `libnet`. This module is
+//! and resolves interface addressing through `libnet`. This module is
 //! illumos-only.
 
 use super::{
@@ -14,11 +14,9 @@ use super::{
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
-use libnet::get_ipaddr_info;
 use mg_common::lock;
 use slog::Logger;
 use std::collections::HashSet;
-use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
 use std::thread::{JoinHandle, spawn};
 use std::time::Duration;
@@ -113,15 +111,16 @@ impl State for Init {
         self.ctx.iface.transition(FsmState::Init);
         self.ctx.iface.clear_peer();
         loop {
-            let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
-                Ok(info) => info,
+            let (if_index, addr) = match crate::sys::link_local_addr(
+                &self.log,
+                &self.ctx.config.if_name,
+            ) {
+                Ok(found) => found,
                 Err(e) => {
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "failed to get IPv6 address for interface {}: {}",
-                        &self.ctx.config.aobj_name,
-                        e
+                        "failed to get IPv6 link-local address: {e}",
                     );
                     if self.stop.wait(Duration::from_millis(
                         self.ctx.config.ip_addr_wait,
@@ -132,30 +131,11 @@ impl State for Init {
                     continue;
                 }
             };
-            let addr = match info.addr {
-                IpAddr::V6(a) => a,
-                IpAddr::V4(_) => {
-                    wrn!(
-                        self.log,
-                        self.ctx.config.if_name,
-                        "specified address {} is not IPv6",
-                        &self.ctx.config.aobj_name
-                    );
-                    if self.stop.wait(Duration::from_millis(
-                        self.ctx.config.ip_addr_wait,
-                    )) {
-                        sweep_interface(&self.ctx, &self.log);
-                        return Step::Stopped;
-                    }
-                    continue;
-                }
-            };
-            self.ctx.config.if_name.clone_from(&info.ifname);
-            self.ctx.config.if_index = info.index as u32;
+            self.ctx.config.if_index = if_index;
             self.ctx.config.addr = addr;
             self.ctx.iface.set_if_info(
-                info.index as u32,
-                info.ifname.clone(),
+                if_index,
+                self.ctx.config.if_name.clone(),
                 addr,
             );
             inf!(
@@ -163,8 +143,8 @@ impl State for Init {
                 self.ctx.config.if_name,
                 "sm initialized with addr {} on if {} index {}",
                 &addr,
-                &info.ifname,
-                info.index,
+                &self.ctx.config.if_name,
+                if_index,
             );
 
             // Now that we have an ip address to run discovery on, start the
