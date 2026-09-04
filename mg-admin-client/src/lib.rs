@@ -65,6 +65,9 @@ progenitor::generate_api!(
         StaticRoute6 = mg_api_types_versions::latest::static_routes::StaticRoute6,
         StaticRoute6List = mg_api_types_versions::latest::static_routes::StaticRoute6List,
 
+        // Unnumbered shapes.
+        DiscoveredRouter = mg_api_types_versions::latest::unnumbered::DiscoveredRouter,
+
         Duration = std::time::Duration,
    }
 );

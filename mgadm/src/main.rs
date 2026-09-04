@@ -14,9 +14,9 @@ use std::net::{IpAddr, SocketAddr};
 
 mod bfd;
 mod bgp;
-mod ndp;
 mod rib;
 mod static_routing;
+mod unnumbered;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -56,10 +56,6 @@ enum Commands {
     /// RIB configuration commands.
     #[command(subcommand)]
     Rib(rib::Commands),
-
-    /// Neighbor Discovery Protocol state for BGP unnumbered
-    #[command(subcommand)]
-    Ndp(ndp::Commands),
 }
 
 fn main() -> Result<()> {
@@ -90,7 +86,6 @@ async fn run() -> Result<()> {
         }
         Commands::Bfd(command) => bfd::commands(command, client).await?,
         Commands::Rib(command) => rib::commands(command, client).await?,
-        Commands::Ndp(command) => ndp::commands(command, client).await?,
     }
     Ok(())
 }
