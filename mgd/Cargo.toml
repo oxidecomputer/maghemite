@@ -41,6 +41,7 @@ socket2.workspace = true
 [dev-dependencies]
 tempfile = "3"
 proptest.workspace = true
+bfd = { workspace = true, features = ["test-support"] }
 
 [features]
 default = ["mg-lower"]
