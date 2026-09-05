@@ -18,9 +18,11 @@ use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
+use dropshot::HandlerTaskMode;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
+use dropshot::HttpServer;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
@@ -33,7 +35,7 @@ use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
@@ -47,13 +49,36 @@ pub struct HandlerContext {
     log: Logger,
 }
 
+/// Owner handle for a running exchange server.
+pub(crate) struct ExchangeServer {
+    server: HttpServer<Arc<Mutex<HandlerContext>>>,
+    exited: Arc<AtomicBool>,
+}
+
+impl ExchangeServer {
+    /// Gracefully close the server and wait for in-flight handlers.
+    pub(crate) fn close(
+        self,
+        rt: &tokio::runtime::Handle,
+        log: &Logger,
+        if_name: &str,
+    ) {
+        if self.exited.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Err(e) = rt.block_on(self.server.close()) {
+            err!(log, if_name, "exchange: server close: {e}");
+        }
+    }
+}
+
 pub(crate) fn announce_underlay(
     ctx: &SmContext,
     config: Config,
     prefixes: HashSet<v3::PathVector>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::announce(prefixes);
@@ -66,7 +91,7 @@ pub(crate) fn announce_tunnel(
     endpoints: HashSet<v3::TunnelOrigin>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
@@ -79,7 +104,7 @@ pub(crate) fn withdraw_underlay(
     prefixes: HashSet<v3::PathVector>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::withdraw(prefixes);
@@ -92,7 +117,7 @@ pub(crate) fn withdraw_tunnel(
     endpoints: HashSet<v3::TunnelOrigin>,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
@@ -102,7 +127,7 @@ pub(crate) fn withdraw_tunnel(
 pub(crate) fn do_pull(
     ctx: &SmContext,
     addr: &Ipv6Addr,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) -> Result<v3::PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/v3/pull",
@@ -115,7 +140,7 @@ pub(crate) fn do_pull(
 pub(crate) fn do_pull_v2(
     ctx: &SmContext,
     addr: &Ipv6Addr,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) -> Result<v2::PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/v2/pull",
@@ -127,7 +152,7 @@ pub(crate) fn do_pull_v2(
 
 fn do_pull_common(
     uri: String,
-    rt: &Arc<tokio::runtime::Handle>,
+    rt: &tokio::runtime::Handle,
 ) -> Result<Bytes, ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
 
@@ -154,7 +179,7 @@ pub(crate) fn pull(
     ctx: SmContext,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let pr: v3::PullResponse = match version {
@@ -180,7 +205,7 @@ fn send_update(
     update: v3::Update,
     addr: Ipv6Addr,
     version: Version,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
@@ -197,7 +222,7 @@ fn send_update_v2(
     config: Config,
     update: v2::Update,
     addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
@@ -213,7 +238,7 @@ fn send_update_v3(
     config: Config,
     update: v3::Update,
     addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
@@ -229,7 +254,7 @@ fn send_update_common(
     uri: String,
     payload: String,
     config: Config,
-    rt: Arc<tokio::runtime::Handle>,
+    rt: tokio::runtime::Handle,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
@@ -268,7 +293,7 @@ pub fn handler(
     addr: Ipv6Addr,
     peer: Ipv6Addr,
     log: Logger,
-) -> Result<tokio::task::JoinHandle<()>, String> {
+) -> Result<ExchangeServer, String> {
     let context = Arc::new(Mutex::new(HandlerContext {
         ctx: ctx.clone(),
         log: log.clone(),
@@ -279,6 +304,8 @@ pub fn handler(
 
     let config = ConfigDropshot {
         bind_address: sa.into(),
+        // Keep in-flight blocking update handlers attached to graceful close.
+        default_handler_task_mode: HandlerTaskMode::Detached,
         ..Default::default()
     };
 
@@ -295,10 +322,8 @@ pub fn handler(
 
     inf!(log, ctx.config.if_name, "exchange: listening on {}", sa);
 
-    let log = log.clone();
-
     let api = api_description().map_err(|e| e.to_string())?;
-    let server = ctx.rt.block_on(async move {
+    let starter = ctx.rt.block_on(async move {
         match HttpServerStarter::new(&config, api, context, &ds_log) {
             Ok(s) => Ok(s),
             Err(e) => {
@@ -307,21 +332,25 @@ pub fn handler(
         }
     })?;
 
-    Ok(ctx.rt.spawn(async move {
-        match server.start().await {
-            Ok(_) => wrn!(
-                log,
-                ctx.config.if_name,
-                "exchange: unexpected server exit"
-            ),
-            Err(e) => err!(
-                log,
-                ctx.config.if_name,
-                "exchange: server start error {:?}",
-                e
-            ),
+    // `start` spawns the accept loop with `tokio::spawn`, which needs a runtime
+    // context. This runs on the FSM's std thread, so enter the runtime first.
+    let server = {
+        let _guard = ctx.rt.enter();
+        starter.start()
+    };
+    let exited = Arc::new(AtomicBool::new(false));
+    let watch = server.wait_for_shutdown();
+    let flag = exited.clone();
+    let if_name = ctx.config.if_name.clone();
+    ctx.rt.spawn(async move {
+        let result = watch.await;
+        flag.store(true, Ordering::Relaxed);
+        match result {
+            Ok(()) => dbg!(log, if_name, "exchange: server exited"),
+            Err(e) => err!(log, if_name, "exchange: server task failed: {e}"),
         }
-    }))
+    });
+    Ok(ExchangeServer { server, exited })
 }
 
 pub fn api_description() -> Result<
@@ -550,7 +579,7 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
             ctx.log,
             ctx.ctx.config.if_name,
             "redistributing update to {} peers",
-            ctx.ctx.event_channels.len()
+            ctx.ctx.peer_channels().len()
         );
 
         let underlay = update
@@ -563,8 +592,15 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
             tunnel: update.tunnel.clone(),
         };
 
-        for ec in &ctx.ctx.event_channels {
-            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+        for (name, ec) in ctx.ctx.peer_channels() {
+            if let Err(e) = ec.send(Event::Peer(PeerEvent::Push(push.clone())))
+            {
+                wrn!(
+                    ctx.log,
+                    ctx.ctx.config.if_name,
+                    "failed to redistribute update to {name}: {e}"
+                );
+            }
         }
     }
 }

@@ -4,11 +4,12 @@ use anyhow::Result;
 use libfalcon::{Runner, node, unit::gb};
 
 use crate::{
+    ddm::DdmNode,
     eos::EosNode,
     frr::FrrNode,
     juniper::JuniperNode,
     mgd::MgdNode,
-    scenario::{InteropScenario, MgdDuoScenario},
+    scenario::{DdmTrioScenario, InteropScenario, MgdDuoScenario},
 };
 
 pub(crate) trait Topology: Sized {
@@ -45,6 +46,50 @@ impl Topology for MgdDuo {
             d,
             ox1: MgdNode(ox1),
             ox2: MgdNode(ox2),
+        })
+    }
+
+    fn runner_mut(&mut self) -> &mut Runner {
+        &mut self.d
+    }
+}
+
+pub struct DdmTrio {
+    pub d: Runner,
+    pub hub: DdmNode,
+    pub peer1: DdmNode,
+    pub peer2: DdmNode,
+}
+
+impl Topology for DdmTrio {
+    type Scenario = DdmTrioScenario;
+
+    /// Three DDM routers in a star. The hub's first two interfaces connect to
+    /// one leaf each, allowing their FSM lifecycles to be controlled
+    /// independently.
+    fn build(scenario: DdmTrioScenario) -> Result<Self> {
+        let mut d = Runner::new(scenario.name());
+
+        node!(d, hub, "helios-3.0", 4, gb(4));
+        node!(d, peer1, "helios-3.0", 4, gb(4));
+        node!(d, peer2, "helios-3.0", 4, gb(4));
+
+        d.link(hub, peer1);
+        d.link(hub, peer2);
+
+        d.default_ext_link(hub)?;
+        d.default_ext_link(peer1)?;
+        d.default_ext_link(peer2)?;
+
+        d.mount("cargo-bay", "/opt/cargo-bay", hub)?;
+        d.mount("cargo-bay", "/opt/cargo-bay", peer1)?;
+        d.mount("cargo-bay", "/opt/cargo-bay", peer2)?;
+
+        Ok(Self {
+            d,
+            hub: DdmNode(hub),
+            peer1: DdmNode(peer1),
+            peer2: DdmNode(peer2),
         })
     }
 

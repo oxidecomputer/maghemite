@@ -16,10 +16,15 @@ mgd-duo  bgp-unnumbered
 interop  bare
 interop  bgp-unnumbered
 interop  bfd-static-routing
+ddm-trio bare
+ddm-trio ddm-apply-lifecycle
 ```
 
 `mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
-FRR, Arista EOS, Juniper cRPD, and a second Maghemite node.
+FRR, Arista EOS, Juniper cRPD, and a second Maghemite node. `ddm-trio` connects
+a transit ddmd hub to two server ddmd leaves over separate links so the hub's
+interfaces can be added and removed independently through `ddm_apply`, and so a
+static (`ddmd -a`) hub interface can be shown to survive `ddm_apply`.
 
 Run and cleanup commands both take a topology and scenario:
 
@@ -35,7 +40,8 @@ configuration.
 
 Before running any topology, `cargo-bay/` must contain:
 
-- `mgd` and `ddmd`, staged by local test setup or the Buildomat job.
+- `mgd`, `ddmd`, and `ddmadm`, staged by local test setup or the Buildomat job.
+  `ddmadm` is only used to collect DDM diagnostics when a scenario fails.
 
 The interop topology additionally requires:
 

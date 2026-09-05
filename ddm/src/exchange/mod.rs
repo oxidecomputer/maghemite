@@ -28,7 +28,7 @@ mod runtime;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::{
-    announce_tunnel, announce_underlay, do_pull, handler, pull,
+    ExchangeServer, announce_tunnel, announce_underlay, do_pull, handler, pull,
     withdraw_tunnel, withdraw_underlay,
 };
 
