@@ -117,3 +117,4 @@ run_test() {
 run_test mgd-duo bgp-unnumbered
 run_test interop bgp-unnumbered
 run_test interop bfd-static-routing
+run_test interop-3-link bgp-md5
