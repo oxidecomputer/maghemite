@@ -1587,7 +1587,7 @@ fn test_import_export_policy_filtering() {
         "r1 session should be in Established state before policy update"
     );
     let r1_session_info_no_export = {
-        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        let mut info = lock!(r1_session.session).clone();
         if let Some(ref mut cfg) = info.ipv4_unicast {
             cfg.export_policy = ImportExportPolicy4::NoFiltering;
         }
@@ -1632,7 +1632,7 @@ fn test_import_export_policy_filtering() {
 
     // Now remove r2's import policy - prefix_c should appear via route-refresh
     let r2_session_info_no_import = {
-        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        let mut info = lock!(r2_session.session).clone();
         if let Some(ref mut cfg) = info.ipv4_unicast {
             cfg.import_policy = ImportExportPolicy4::NoFiltering;
         }

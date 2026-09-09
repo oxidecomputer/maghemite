@@ -9029,92 +9029,123 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut refresh_needed6 = false;
         let mut current = lock!(self.session);
 
-        current.passive_tcp_establishment = info.passive_tcp_establishment;
+        let SessionInfo {
+            passive_tcp_establishment,
+            bind_addr,
+            remote_asn,
+            remote_id,
+            min_ttl,
+            md5_auth_key,
+            multi_exit_discriminator,
+            communities,
+            local_pref,
+            enforce_first_as,
+            vlan_id,
+            connect_retry_time: _,
+            keepalive_time: _,
+            hold_time: _,
+            idle_hold_time: _,
+            delay_open_time: _,
+            resolution: _,
+            connect_retry_jitter,
+            idle_hold_jitter,
+            deterministic_collision_resolution: _,
+            ipv4_unicast: info_v4,
+            ipv6_unicast: info_v6,
+        } = info;
 
-        if current.remote_asn != info.remote_asn {
-            current.remote_asn = info.remote_asn;
+        current.passive_tcp_establishment = passive_tcp_establishment;
+
+        if current.bind_addr != bind_addr {
+            current.bind_addr = bind_addr;
             reset_needed = true;
         }
 
-        if current.remote_id != info.remote_id {
-            current.remote_id = info.remote_id;
+        if current.remote_asn != remote_asn {
+            current.remote_asn = remote_asn;
             reset_needed = true;
         }
 
-        if current.min_ttl != info.min_ttl {
-            current.min_ttl = info.min_ttl;
+        if current.remote_id != remote_id {
+            current.remote_id = remote_id;
             reset_needed = true;
         }
 
-        if current.md5_auth_key != info.md5_auth_key {
-            current.md5_auth_key = info.md5_auth_key;
+        if current.min_ttl != min_ttl {
+            current.min_ttl = min_ttl;
             reset_needed = true;
         }
 
-        if current.multi_exit_discriminator != info.multi_exit_discriminator {
-            current.multi_exit_discriminator = info.multi_exit_discriminator;
+        if current.md5_auth_key != md5_auth_key {
+            current.md5_auth_key = md5_auth_key;
+            reset_needed = true;
+        }
+
+        if current.multi_exit_discriminator != multi_exit_discriminator {
+            current.multi_exit_discriminator = multi_exit_discriminator;
             readvertise_needed4 = true;
             readvertise_needed6 = true;
         }
 
-        if current.communities != info.communities {
-            current.communities.clone_from(&info.communities);
+        if current.communities != communities {
+            current.communities = communities;
             readvertise_needed4 = true;
             readvertise_needed6 = true;
         }
 
-        if current.local_pref != info.local_pref {
-            current.local_pref = info.local_pref;
+        if current.local_pref != local_pref {
+            current.local_pref = local_pref;
             refresh_needed4 = true;
             refresh_needed6 = true;
         }
 
-        if current.enforce_first_as != info.enforce_first_as {
-            current.enforce_first_as = info.enforce_first_as;
+        if current.enforce_first_as != enforce_first_as {
+            current.enforce_first_as = enforce_first_as;
             // XXX: handle more gracefully.
             //      disabling = send route refresh
             //      enabling = run rib walker + delete paths failing check
             reset_needed = true;
         }
 
-        if current.vlan_id != info.vlan_id {
-            current.vlan_id = info.vlan_id;
+        if current.vlan_id != vlan_id {
+            current.vlan_id = vlan_id;
             reset_needed = true;
         }
 
         // Update jitter settings (no session reset required)
-        if current.connect_retry_jitter != info.connect_retry_jitter {
-            current.connect_retry_jitter = info.connect_retry_jitter;
+        if current.connect_retry_jitter != connect_retry_jitter {
+            current.connect_retry_jitter = connect_retry_jitter;
             lock!(self.clock.timers.connect_retry)
-                .set_jitter_range(info.connect_retry_jitter);
+                .set_jitter_range(connect_retry_jitter);
         }
 
-        if current.idle_hold_jitter != info.idle_hold_jitter {
-            current.idle_hold_jitter = info.idle_hold_jitter;
+        if current.idle_hold_jitter != idle_hold_jitter {
+            current.idle_hold_jitter = idle_hold_jitter;
             lock!(self.clock.timers.idle_hold)
-                .set_jitter_range(info.idle_hold_jitter);
+                .set_jitter_range(idle_hold_jitter);
         }
 
         // ===== Handle IPv4 Unicast configuration changes =====
-        if current.ipv4_unicast != info.ipv4_unicast {
+        if current.ipv4_unicast != info_v4 {
             let current_v4 = current.ipv4_unicast.as_ref();
-            let info_v4 = info.ipv4_unicast.as_ref();
 
             // Import policy changed - trigger route refresh
             if current_v4.map(|c| &c.import_policy)
-                != info_v4.map(|c| &c.import_policy)
+                != info_v4.as_ref().map(|c| &c.import_policy)
             {
                 refresh_needed4 = true;
             }
 
             // Nexthop override changed - trigger re-advertisement
-            if current_v4.map(|c| c.nexthop) != info_v4.map(|c| c.nexthop) {
+            if current_v4.map(|c| c.nexthop)
+                != info_v4.as_ref().map(|c| c.nexthop)
+            {
                 readvertise_needed4 = true;
             }
 
             // Export policy changed - send FSM notification
             if current_v4.map(|c| &c.export_policy)
-                != info_v4.map(|c| &c.export_policy)
+                != info_v4.as_ref().map(|c| &c.export_policy)
             {
                 let previous4 = current_v4
                     .map(|c| c.export_policy.clone())
@@ -9126,29 +9157,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .map_err(|e| Error::EventSend(e.to_string()))?;
             }
 
-            current.ipv4_unicast = info.ipv4_unicast.clone();
+            current.ipv4_unicast = info_v4;
         }
 
         // ===== Handle IPv6 Unicast configuration changes =====
-        if current.ipv6_unicast != info.ipv6_unicast {
+        if current.ipv6_unicast != info_v6 {
             let current_v6 = current.ipv6_unicast.as_ref();
-            let info_v6 = info.ipv6_unicast.as_ref();
 
             // Import policy changed - trigger route refresh
             if current_v6.map(|c| &c.import_policy)
-                != info_v6.map(|c| &c.import_policy)
+                != info_v6.as_ref().map(|c| &c.import_policy)
             {
                 refresh_needed6 = true;
             }
 
             // Nexthop override changed - trigger re-advertisement
-            if current_v6.map(|c| c.nexthop) != info_v6.map(|c| c.nexthop) {
+            if current_v6.map(|c| c.nexthop)
+                != info_v6.as_ref().map(|c| c.nexthop)
+            {
                 readvertise_needed6 = true;
             }
 
             // Export policy changed - send FSM notification
             if current_v6.map(|c| &c.export_policy)
-                != info_v6.map(|c| &c.export_policy)
+                != info_v6.as_ref().map(|c| &c.export_policy)
             {
                 let previous6 = current_v6
                     .map(|c| c.export_policy.clone())
@@ -9160,7 +9192,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .map_err(|e| Error::EventSend(e.to_string()))?;
             }
 
-            current.ipv6_unicast = info.ipv6_unicast.clone();
+            current.ipv6_unicast = info_v6;
         }
 
         drop(current);
