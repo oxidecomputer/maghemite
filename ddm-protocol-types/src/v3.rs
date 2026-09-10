@@ -12,7 +12,9 @@ use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, Default,
+)]
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
@@ -36,13 +38,17 @@ pub struct PullResponse {
     pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, Default,
+)]
 pub struct UnderlayUpdate {
     pub announce: HashSet<PathVector>,
     pub withdraw: HashSet<PathVector>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, Default,
+)]
 pub struct TunnelUpdate {
     pub announce: HashSet<TunnelOrigin>,
     pub withdraw: HashSet<TunnelOrigin>,

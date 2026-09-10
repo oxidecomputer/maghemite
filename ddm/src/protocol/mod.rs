@@ -6,4 +6,5 @@
 //! performs I/O, spawns threads, reads the clock, or is gated on a target
 //! platform, so all of it is reachable from `cargo test` on any host.
 
+pub mod interface;
 pub mod rib;

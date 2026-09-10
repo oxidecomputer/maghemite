@@ -104,7 +104,7 @@ mod runtime;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Version {
     V2 = 2,

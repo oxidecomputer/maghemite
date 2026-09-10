@@ -157,7 +157,7 @@ pub struct DpdConfig {
     pub port: u16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FsmState {
     Init,
     Solicit,

@@ -15,7 +15,7 @@ use ddm_protocol_types::v3;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RibEvent {
     /// An update arrived from `peer` over the interface named `ifname`.
     Update {
