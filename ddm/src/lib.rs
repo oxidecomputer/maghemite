@@ -5,6 +5,8 @@
 pub mod admin;
 pub mod db;
 pub mod discovery;
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub mod driver;
 pub mod exchange;
 pub mod oxstats;
 pub mod protocol;

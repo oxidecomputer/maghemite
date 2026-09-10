@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! State machine type definitions and the [`StateMachine`] handle. The
-//! routing state machine implementation (discovery, solicit, exchange) lives
-//! in the [`state`] submodule and is illumos-only, since it programs kernel
-//! routes via [`crate::sys`] and reads interface addressing through `libnet`.
+//! Shared state machine types: the configuration the drivers are built from,
+//! the events the admin API injects, and the mutable status the admin API and
+//! oximeter read back.
+//!
+//! The lifecycle itself is [`crate::protocol::interface`], and the task that
+//! drives it is [`crate::driver::interface`].
 
 use crate::db::Db;
-use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
@@ -17,13 +18,8 @@ use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use thiserror::Error;
-
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-mod state;
 
 #[derive(Debug)]
 pub enum AdminEvent {
@@ -44,69 +40,6 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
-}
-
-#[derive(Debug)]
-pub enum PeerEvent {
-    Push(ddm_protocol_types::v3::Update),
-}
-
-#[derive(Debug)]
-pub enum NeighborEvent {
-    Advertise((Ipv6Addr, Version)),
-    SolicitFail,
-    Expire,
-}
-
-#[derive(Debug)]
-pub enum Event {
-    Neighbor(NeighborEvent),
-    Peer(PeerEvent),
-    Admin(AdminEvent),
-}
-
-impl From<NeighborEvent> for Event {
-    fn from(e: NeighborEvent) -> Self {
-        Self::Neighbor(e)
-    }
-}
-
-impl From<PeerEvent> for Event {
-    fn from(e: PeerEvent) -> Self {
-        Self::Peer(e)
-    }
-}
-
-impl From<AdminEvent> for Event {
-    fn from(e: AdminEvent) -> Self {
-        Self::Admin(e)
-    }
-}
-
-#[derive(Debug)]
-pub enum StateType {
-    Solicit,
-    Exchange,
-}
-
-#[derive(Debug)]
-pub enum EventError {
-    InvalidEvent(StateType),
-}
-
-#[derive(Debug)]
-pub enum EventResponse {
-    Success,
-    Prefixes(Vec<Ipv6Net>),
-}
-
-#[derive(Error, Debug)]
-pub enum SmError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("discovery error: {0}")]
-    Discovery(#[from] discovery::DiscoveryError),
 }
 
 #[derive(Clone)]
@@ -245,16 +178,9 @@ pub struct SessionStats {
 pub struct SmContext {
     pub config: Config,
     pub db: Db,
-    pub tx: Sender<Event>,
-    pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub hostname: String,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
-}
-
-pub struct StateMachine {
-    pub ctx: SmContext,
-    pub rx: Option<Receiver<Event>>,
 }

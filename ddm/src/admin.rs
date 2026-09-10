@@ -3,7 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
+use crate::protocol::interface::Input;
+use crate::sm::{AdminEvent, PrefixSet, SmContext};
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
@@ -31,8 +32,8 @@ use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use tokio::spawn;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
 pub const DDM_STATS_PORT: u16 = 8001;
@@ -47,7 +48,8 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    pub event_channels: Vec<Sender<Event>>,
+    /// Ingress into each interface driver.
+    pub interfaces: Vec<UnboundedSender<Input>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
     pub peers: Vec<SmContext>,
@@ -121,6 +123,20 @@ pub fn handler(
     Ok(())
 }
 
+/// Fan an admin event out to every interface driver. [`AdminEvent`] is not
+/// `Clone`, hence the factory.
+fn notify(
+    interfaces: &[UnboundedSender<Input>],
+    event: impl Fn() -> AdminEvent,
+) -> Result<(), HttpError> {
+    for tx in interfaces {
+        tx.send(Input::Admin(event())).map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
+    }
+    Ok(())
+}
+
 pub enum DdmAdminApiImpl {}
 
 impl DdmAdminApi for DdmAdminApiImpl {
@@ -159,14 +175,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Expire(addr)))
-                .map_err(|e| {
-                    HttpError::for_internal_error(format!(
-                        "admin event send: {e}"
-                    ))
-                })?;
-        }
+        notify(&ctx.interfaces, || AdminEvent::Expire(addr))?;
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -238,14 +247,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
+        notify(&ctx.interfaces, || {
+            AdminEvent::Announce(PrefixSet::Underlay(prefixes.clone()))
+        })?;
 
         match ctx.db.originated_count() {
             Ok(count) => ctx
@@ -274,14 +278,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
+        notify(&ctx.interfaces, || {
+            AdminEvent::Announce(PrefixSet::Tunnel(endpoints.clone()))
+        })?;
 
         match ctx.db.originated_tunnel_count() {
             Ok(count) => ctx
@@ -308,14 +307,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
+        notify(&ctx.interfaces, || {
+            AdminEvent::Withdraw(PrefixSet::Underlay(prefixes.clone()))
+        })?;
 
         match ctx.db.originated_count() {
             Ok(count) => ctx
@@ -344,14 +338,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
+        notify(&ctx.interfaces, || {
+            AdminEvent::Withdraw(PrefixSet::Tunnel(endpoints.clone()))
+        })?;
 
         match ctx.db.originated_tunnel_count() {
             Ok(count) => ctx
@@ -374,11 +363,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
+        notify(&ctx.interfaces, || AdminEvent::Sync)?;
 
         Ok(HttpResponseUpdatedNoContent())
     }

@@ -99,10 +99,7 @@
 use thiserror::Error;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-mod runtime;
-
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-pub(crate) use runtime::handler;
+pub(crate) mod runtime;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]

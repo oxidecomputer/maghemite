@@ -6,19 +6,18 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
+use ddm::protocol::interface::Input;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
-#[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::sm::InterfaceState;
+use ddm::sm::{DpdConfig, SmContext};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 mod signal;
@@ -167,13 +166,12 @@ async fn run() {
 
     let rt = Arc::new(tokio::runtime::Handle::current());
 
-    let (sms, event_channels) =
-        start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
+    let (peers, interfaces) =
+        start_interfaces(&arg, &db, &dpd, &hostname, &rt, &log);
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
     let stats_handler = if arg.with_stats {
         if let (Some(rack_uuid), Some(sled_uuid)) =
@@ -202,7 +200,7 @@ async fn run() {
     };
 
     let context = Arc::new(Mutex::new(HandlerContext {
-        event_channels,
+        interfaces,
         db,
         stats: router_stats,
         peers,
@@ -223,104 +221,104 @@ async fn run() {
     )
     .expect("started ddmd admin API server");
 
-    std::thread::park();
+    // Everything past this point runs in a task. Park the main future so the
+    // runtime stays up.
+    std::future::pending::<()>().await
 }
 
-/// Build, wire, and start the per-address routing state machines.
+/// Start the route hub and one driver task per address object.
 ///
-/// Returns the running [`StateMachine`] handles plus the sender side of each
-/// machine's event channel. When `--api-only` is set the function
-/// short-circuits to empty vectors, leaving the daemon to serve only its
-/// admin API. The illumos and non-illumos variants share that early-exit
-/// branch, only the actual machine setup is platform-specific.
+/// Returns the shared status each driver publishes into, for the admin API and
+/// oximeter to read, plus the ingress channel into each driver. When
+/// `--api-only` is set the function short-circuits to empty vectors, leaving
+/// the daemon to serve only its admin API. The illumos and non-illumos
+/// variants share that early-exit branch, only the actual setup is
+/// platform-specific.
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-fn start_state_machines(
+fn start_interfaces(
     arg: &Arg,
     db: &Db,
     dpd: &Option<DpdConfig>,
     hostname: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
+) -> (Vec<SmContext>, Vec<UnboundedSender<Input>>) {
+    use tokio::sync::mpsc::unbounded_channel;
+
     if arg.api_only {
         return (Vec::new(), Vec::new());
     }
 
-    let mut sms = Vec::new();
-    let mut event_channels = Vec::new();
+    // The hub needs every interface's ingress and every interface needs the
+    // hub's, so both channels are created before either task is spawned.
+    let (hub_tx, hub_rx) = unbounded_channel();
+
+    let mut peers = Vec::new();
+    let mut interfaces = Vec::new();
+    let mut receivers = Vec::new();
 
     for name in &arg.addresses {
-        let (tx, rx) = channel();
+        let (tx, rx) = unbounded_channel();
 
-        let config = ddm::sm::Config {
-            solicit_interval: arg.solicit_interval,
-            expire_threshold: arg.expire_threshold,
-            discovery_read_timeout: arg.discovery_read_timeout,
-            ip_addr_wait: arg.ip_addr_wait,
-            exchange_timeout: arg.exchange_timeout,
-            exchange_port: arg.exchange_port,
-            aobj_name: name.clone(),
-            if_name: String::new(),
-            if_index: 0,
-            kind: arg.kind,
-            dpd: dpd.clone(),
-            addr: Ipv6Addr::UNSPECIFIED,
-        };
-
-        let ctx = SmContext {
-            config,
+        peers.push(SmContext {
+            config: ddm::sm::Config {
+                solicit_interval: arg.solicit_interval,
+                expire_threshold: arg.expire_threshold,
+                discovery_read_timeout: arg.discovery_read_timeout,
+                ip_addr_wait: arg.ip_addr_wait,
+                exchange_timeout: arg.exchange_timeout,
+                exchange_port: arg.exchange_port,
+                aobj_name: name.clone(),
+                if_name: String::new(),
+                if_index: 0,
+                kind: arg.kind,
+                dpd: dpd.clone(),
+                addr: Ipv6Addr::UNSPECIFIED,
+            },
             db: db.clone(),
-            event_channels: Vec::new(),
-            tx: tx.clone(),
             log: log.clone(),
             hostname: hostname.to_string(),
             rt: rt.clone(),
             iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
-        };
-
-        let sm = StateMachine { ctx, rx: Some(rx) };
-        sms.push(sm);
-        event_channels.push(tx);
+        });
+        interfaces.push(tx);
+        receivers.push(rx);
     }
 
-    // Add an event channel sender for each state machine to every other state
-    // machine.
-    for (i, sm) in sms.iter_mut().enumerate() {
-        for (j, e) in event_channels.iter().enumerate() {
-            // dont give a state machine an event sender to itself.
-            if i == j {
-                continue;
-            }
-            sm.ctx.event_channels.push(e.clone());
-        }
+    ddm::driver::rib::spawn(
+        db.clone(),
+        interfaces.clone(),
+        hub_rx,
+        rt.clone(),
+        log.clone(),
+    );
+
+    for (index, rx) in receivers.into_iter().enumerate() {
+        ddm::driver::interface::spawn(
+            peers[index].clone(),
+            index,
+            hub_tx.clone(),
+            interfaces[index].clone(),
+            rx,
+        );
     }
 
-    for sm in &mut sms {
-        sm.run().unwrap();
-    }
-
-    (sms, event_channels)
+    (peers, interfaces)
 }
 
-/// Non-illumos variant: the routing state machine depends on illumos
-/// kernel networking, so on every other platform the function returns
-/// empty vectors and the daemon serves only its admin API.
+/// Non-illumos variant: the routing drivers depend on illumos kernel
+/// networking, so on every other platform the function returns empty vectors
+/// and the daemon serves only its admin API.
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-fn start_state_machines(
+fn start_interfaces(
     _arg: &Arg,
     _db: &Db,
     _dpd: &Option<DpdConfig>,
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
+) -> (Vec<SmContext>, Vec<UnboundedSender<Input>>) {
     (Vec::new(), Vec::new())
 }
 
