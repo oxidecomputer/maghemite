@@ -13,7 +13,7 @@ use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
-use ddm_protocol::{v2, v3};
+use ddm_protocol_types::{v2, v3};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;

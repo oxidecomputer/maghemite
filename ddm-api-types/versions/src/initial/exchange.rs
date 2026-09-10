@@ -2,4 +2,4 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub use ddm_protocol::v3::PathVector;
+pub use ddm_protocol_types::v3::PathVector;

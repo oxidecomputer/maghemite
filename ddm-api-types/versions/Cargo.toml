@@ -9,4 +9,4 @@ schemars.workspace = true
 serde.workspace = true
 serde_repr.workspace = true
 uuid.workspace = true
-ddm-protocol.workspace = true
+ddm-protocol-types.workspace = true
