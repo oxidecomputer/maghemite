@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::protocol::interface::Input;
-use crate::sm::{AdminEvent, PrefixSet, SmContext};
+use crate::protocol::interface::{AdminEvent, Input, PrefixSet};
+use crate::status::Interface;
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
@@ -33,7 +33,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::spawn;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
 pub const DDM_STATS_PORT: u16 = 8001;
@@ -48,11 +47,10 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    /// Ingress into each interface driver.
-    pub interfaces: Vec<UnboundedSender<Input>>,
+    /// Handles to the running interface drivers.
+    pub interfaces: Vec<Interface>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
 }
@@ -126,11 +124,11 @@ pub fn handler(
 /// Fan an admin event out to every interface driver. [`AdminEvent`] is not
 /// `Clone`, hence the factory.
 fn notify(
-    interfaces: &[UnboundedSender<Input>],
+    interfaces: &[Interface],
     event: impl Fn() -> AdminEvent,
 ) -> Result<(), HttpError> {
-    for tx in interfaces {
-        tx.send(Input::Admin(event())).map_err(|e| {
+    for i in interfaces {
+        i.ingress.send(Input::Admin(event())).map_err(|e| {
             HttpError::for_internal_error(format!("admin event send: {e}"))
         })?;
     }
@@ -147,18 +145,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
-        for sm in &ctx.peers {
-            // Compute status first so peer_status() never runs while we hold
-            // any of the InterfaceState mutexes below.
-            let status = sm.iface.peer_status();
-            let if_index = *lock!(sm.iface.if_index);
-            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
+        for i in &ctx.interfaces {
+            let status = i.status.borrow();
+            let Some(peer) = status.peer.clone() else {
                 continue;
             };
             result.insert(
-                if_index,
+                status.if_index,
                 PeerInfo {
-                    status,
+                    status: status.state.to_peer_status(status.since.elapsed()),
                     addr: peer.addr,
                     host: peer.hostname,
                     kind: peer.kind,
@@ -384,7 +379,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             *jh = Some(
                 crate::oxstats::start_server(
                     DDM_STATS_PORT,
-                    ctx.peers.clone(),
+                    ctx.interfaces.clone(),
                     ctx.stats.clone(),
                     hostname,
                     rq.rack_id,

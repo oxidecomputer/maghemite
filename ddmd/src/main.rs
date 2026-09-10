@@ -5,11 +5,9 @@
 use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
+use ddm::config::DpdConfig;
 use ddm::db::Db;
-use ddm::protocol::interface::Input;
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::InterfaceState;
-use ddm::sm::{DpdConfig, SmContext};
+use ddm::status::Interface;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
@@ -17,7 +15,6 @@ use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 mod signal;
@@ -166,8 +163,7 @@ async fn run() {
 
     let rt = Arc::new(tokio::runtime::Handle::current());
 
-    let (peers, interfaces) =
-        start_interfaces(&arg, &db, &dpd, &hostname, &rt, &log);
+    let interfaces = start_interfaces(&arg, &db, &dpd, &hostname, &rt, &log);
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
@@ -179,7 +175,7 @@ async fn run() {
         {
             match ddm::oxstats::start_server(
                 arg.oximeter_port,
-                peers.clone(),
+                interfaces.clone(),
                 router_stats.clone(),
                 hostname.clone(),
                 rack_uuid,
@@ -203,7 +199,6 @@ async fn run() {
         interfaces,
         db,
         stats: router_stats,
-        peers,
         stats_handler: Arc::new(Mutex::new(stats_handler)),
         log: log.clone(),
     }));
@@ -226,14 +221,13 @@ async fn run() {
     std::future::pending::<()>().await
 }
 
-/// Start the route hub and one driver task per address object.
+/// Start one driver task per address object, plus the route hub they feed.
 ///
-/// Returns the shared status each driver publishes into, for the admin API and
-/// oximeter to read, plus the ingress channel into each driver. When
-/// `--api-only` is set the function short-circuits to empty vectors, leaving
-/// the daemon to serve only its admin API. The illumos and non-illumos
-/// variants share that early-exit branch, only the actual setup is
-/// platform-specific.
+/// Returns a handle to each driver, which is how the admin API sends it events
+/// and how the admin API and oximeter read its status. When `--api-only` is set
+/// the function short-circuits to an empty vector, leaving the daemon to serve
+/// only its admin API. The illumos and non-illumos variants share that
+/// early-exit branch, only the actual setup is platform-specific.
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 fn start_interfaces(
     arg: &Arg,
@@ -242,73 +236,60 @@ fn start_interfaces(
     hostname: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> (Vec<SmContext>, Vec<UnboundedSender<Input>>) {
-    use tokio::sync::mpsc::unbounded_channel;
-
+) -> Vec<Interface> {
     if arg.api_only {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
 
-    // The hub needs every interface's ingress and every interface needs the
-    // hub's, so both channels are created before either task is spawned.
-    let (hub_tx, hub_rx) = unbounded_channel();
+    // Each interface needs the hub's channel and the hub needs each interface's,
+    // so the hub's is created first and the hub itself is spawned last.
+    let (hub_tx, hub_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let mut peers = Vec::new();
-    let mut interfaces = Vec::new();
-    let mut receivers = Vec::new();
-
-    for name in &arg.addresses {
-        let (tx, rx) = unbounded_channel();
-
-        peers.push(SmContext {
-            config: ddm::sm::Config {
-                solicit_interval: arg.solicit_interval,
-                expire_threshold: arg.expire_threshold,
-                discovery_read_timeout: arg.discovery_read_timeout,
-                ip_addr_wait: arg.ip_addr_wait,
-                exchange_timeout: arg.exchange_timeout,
-                exchange_port: arg.exchange_port,
-                aobj_name: name.clone(),
-                if_name: String::new(),
-                if_index: 0,
-                kind: arg.kind,
-                dpd: dpd.clone(),
-                addr: Ipv6Addr::UNSPECIFIED,
-            },
-            db: db.clone(),
-            log: log.clone(),
-            hostname: hostname.to_string(),
-            rt: rt.clone(),
-            iface: Arc::new(InterfaceState::default()),
-            stats: Arc::new(ddm::sm::SessionStats::default()),
-        });
-        interfaces.push(tx);
-        receivers.push(rx);
-    }
+    let interfaces: Vec<Interface> = arg
+        .addresses
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            ddm::driver::interface::spawn(
+                ddm::driver::interface::Params {
+                    config: ddm::config::Config {
+                        solicit_interval: arg.solicit_interval,
+                        expire_threshold: arg.expire_threshold,
+                        discovery_read_timeout: arg.discovery_read_timeout,
+                        ip_addr_wait: arg.ip_addr_wait,
+                        exchange_timeout: arg.exchange_timeout,
+                        exchange_port: arg.exchange_port,
+                        aobj_name: name.clone(),
+                        if_name: String::new(),
+                        if_index: 0,
+                        kind: arg.kind,
+                        dpd: dpd.clone(),
+                        addr: Ipv6Addr::UNSPECIFIED,
+                    },
+                    db: db.clone(),
+                    hostname: hostname.to_string(),
+                    stats: Arc::new(ddm::status::SessionStats::default()),
+                    log: log.clone(),
+                },
+                index,
+                hub_tx.clone(),
+            )
+        })
+        .collect();
 
     ddm::driver::rib::spawn(
         db.clone(),
-        interfaces.clone(),
+        interfaces.iter().map(|i| i.ingress.clone()).collect(),
         hub_rx,
         rt.clone(),
         log.clone(),
     );
 
-    for (index, rx) in receivers.into_iter().enumerate() {
-        ddm::driver::interface::spawn(
-            peers[index].clone(),
-            index,
-            hub_tx.clone(),
-            interfaces[index].clone(),
-            rx,
-        );
-    }
-
-    (peers, interfaces)
+    interfaces
 }
 
 /// Non-illumos variant: the routing drivers depend on illumos kernel
-/// networking, so on every other platform the function returns empty vectors
+/// networking, so on every other platform the function returns an empty vector
 /// and the daemon serves only its admin API.
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
 fn start_interfaces(
@@ -318,8 +299,8 @@ fn start_interfaces(
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,
-) -> (Vec<SmContext>, Vec<UnboundedSender<Input>>) {
-    (Vec::new(), Vec::new())
+) -> Vec<Interface> {
+    Vec::new()
 }
 
 /// Install a Ctrl-C handler that withdraws ddmd's imported routes from the

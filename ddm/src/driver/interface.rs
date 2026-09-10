@@ -11,22 +11,29 @@
 //! up with the wrong table, and the core only ever asks for one exchange
 //! operation at a time. Waiting here stalls this interface and nothing else.
 
+use crate::config::Config;
+use crate::db::Db;
 use crate::discovery::Version;
 use crate::discovery::runtime::{self as discovery, Sockets};
 use crate::driver::rib::HubEvent;
 use crate::exchange::runtime::{self as exchange, Endpoint, ServerContext};
-use crate::protocol::interface::{Action, IfAddr, Input, InterfaceSm, Outcome};
-use crate::sm::SmContext;
+use crate::protocol::interface::{
+    Action, IfAddr, Input, InterfaceSm, Outcome, Status,
+};
+use crate::status::{Interface, SessionStats};
 use crate::{err, inf, wrn};
 use ddm_protocol_types::v3;
 use libnet::get_ipaddr_info;
-use mg_common::lock;
+use slog::Logger;
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{
+    UnboundedReceiver, UnboundedSender, unbounded_channel,
+};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::timeout_at;
 
@@ -37,47 +44,72 @@ const EXCHANGE_BIND_RETRY: Duration = Duration::from_secs(1);
 /// for it to start answering.
 const EXCHANGE_READY_POLL: Duration = Duration::from_millis(250);
 
+/// Everything a driver needs that is not the core's business.
+pub struct Params {
+    pub config: Config,
+    pub db: Db,
+    pub hostname: String,
+    pub stats: Arc<SessionStats>,
+    pub log: Logger,
+}
+
+/// Start the driver task for one interface, returning the handle the admin API
+/// and oximeter read it through.
+///
+/// `index` is this interface's position in the hub's peer list; the hub uses it
+/// to keep a redistributed update from going back the way it came.
 pub fn spawn(
-    ctx: SmContext,
+    params: Params,
     index: usize,
     hub: UnboundedSender<HubEvent>,
-    ingress: UnboundedSender<Input>,
-    rx: UnboundedReceiver<Input>,
-) -> JoinHandle<()> {
+) -> Interface {
     let config = crate::protocol::interface::Config {
-        aobj_name: ctx.config.aobj_name.clone(),
-        hostname: ctx.hostname.clone(),
-        kind: ctx.config.kind,
-        solicit_interval: Duration::from_millis(ctx.config.solicit_interval),
-        expire_threshold: Duration::from_millis(ctx.config.expire_threshold),
-        ip_addr_wait: Duration::from_millis(ctx.config.ip_addr_wait),
+        aobj_name: params.config.aobj_name.clone(),
+        hostname: params.hostname.clone(),
+        kind: params.config.kind,
+        solicit_interval: Duration::from_millis(params.config.solicit_interval),
+        expire_threshold: Duration::from_millis(params.config.expire_threshold),
+        ip_addr_wait: Duration::from_millis(params.config.ip_addr_wait),
         exchange_bind_retry: EXCHANGE_BIND_RETRY,
         exchange_ready_poll: EXCHANGE_READY_POLL,
     };
 
+    let sm = InterfaceSm::new(config, Instant::now());
+    let (status, status_rx) = watch::channel(sm.status());
+    let (ingress, rx) = unbounded_channel();
+    let stats = params.stats.clone();
+
     let driver = Driver {
-        sm: InterfaceSm::new(config, Instant::now()),
-        ctx,
+        sm,
+        params,
         index,
         hub,
-        ingress,
+        ingress: ingress.clone(),
+        status,
         discovery: None,
         server: None,
     };
 
-    tokio::spawn(driver.run(rx))
+    tokio::spawn(driver.run(rx));
+
+    Interface {
+        ingress,
+        status: status_rx,
+        stats,
+    }
 }
 
 struct Driver {
     sm: InterfaceSm,
 
-    /// Addressing in `ctx.config` is filled in once the address object
+    /// Addressing in `params.config` is filled in once the address object
     /// resolves. [`crate::sys::program`] and the exchange URIs both need it.
-    ctx: SmContext,
+    params: Params,
 
     index: usize,
     hub: UnboundedSender<HubEvent>,
     ingress: UnboundedSender<Input>,
+    status: watch::Sender<Status>,
     discovery: Option<Discovery>,
     server: Option<exchange::Server>,
 }
@@ -122,7 +154,7 @@ impl Driver {
     }
 
     async fn execute(&mut self, action: Action) -> Option<Input> {
-        let if_name = self.ctx.config.if_name.clone();
+        let if_name = self.params.config.if_name.clone();
         match action {
             Action::ResolveAddr => Some(Input::Addr(self.resolve().await)),
 
@@ -143,12 +175,12 @@ impl Driver {
             }
 
             Action::SelfPull => {
-                let self_addr = self.endpoint(self.ctx.config.addr);
+                let self_addr = self.endpoint(self.params.config.addr);
                 let ok = match exchange::pull(self_addr, Version::V3).await {
                     Ok(_) => true,
                     Err(e) => {
                         wrn!(
-                            self.ctx.log,
+                            self.params.log,
                             if_name,
                             "exchange server not started: {e}"
                         );
@@ -159,16 +191,17 @@ impl Driver {
             }
 
             Action::PeerPull { peer, version } => {
-                let result =
-                    match exchange::pull(self.endpoint(peer), version).await {
-                        Ok(response) => {
-                            Some(Box::new(v3::Update::announce(response)))
-                        }
-                        Err(e) => {
-                            wrn!(self.ctx.log, if_name, "exchange pull: {e}");
-                            None
-                        }
-                    };
+                let result = match exchange::pull(self.endpoint(peer), version)
+                    .await
+                {
+                    Ok(response) => {
+                        Some(Box::new(v3::Update::announce(response)))
+                    }
+                    Err(e) => {
+                        wrn!(self.params.log, if_name, "exchange pull: {e}");
+                        None
+                    }
+                };
                 Some(Input::Outcome(Outcome::PeerPull(result)))
             }
 
@@ -179,7 +212,7 @@ impl Driver {
                 match sockets.solicit().await {
                     Ok(_) => None,
                     Err(e) => {
-                        err!(self.ctx.log, if_name, "solicit failed: {e}");
+                        err!(self.params.log, if_name, "solicit failed: {e}");
                         Some(Input::SolicitFailed)
                     }
                 }
@@ -189,7 +222,7 @@ impl Driver {
                 if let Some(sockets) = self.sockets()
                     && let Err(e) = sockets.advertise(Some(to)).await
                 {
-                    err!(self.ctx.log, if_name, "advertise: {e}");
+                    err!(self.params.log, if_name, "advertise: {e}");
                 }
                 None
             }
@@ -203,14 +236,14 @@ impl Driver {
                     self.endpoint(peer),
                     version,
                     &update,
-                    Duration::from_millis(self.ctx.config.exchange_timeout),
+                    Duration::from_millis(self.params.config.exchange_timeout),
                 )
                 .await
                 {
                     Ok(()) => true,
                     Err(e) => {
                         err!(
-                            self.ctx.log,
+                            self.params.log,
                             if_name,
                             "push to {peer}: {e}, expiring peer"
                         );
@@ -224,10 +257,10 @@ impl Driver {
                 if let Err(e) = self.hub.send(HubEvent {
                     event,
                     origin: self.index,
-                    config: self.ctx.config.clone(),
-                    stats: self.ctx.stats.clone(),
+                    config: self.params.config.clone(),
+                    stats: self.params.stats.clone(),
                 }) {
-                    err!(self.ctx.log, if_name, "route hub gone: {e}");
+                    err!(self.params.log, if_name, "route hub gone: {e}");
                 }
                 None
             }
@@ -235,7 +268,7 @@ impl Driver {
     }
 
     async fn resolve(&self) -> Option<IfAddr> {
-        let aobj_name = self.ctx.config.aobj_name.clone();
+        let aobj_name = self.params.config.aobj_name.clone();
         let info = match tokio::task::spawn_blocking(move || {
             get_ipaddr_info(&aobj_name)
         })
@@ -244,17 +277,17 @@ impl Driver {
             Ok(Ok(info)) => info,
             Ok(Err(e)) => {
                 wrn!(
-                    self.ctx.log,
-                    self.ctx.config.if_name,
+                    self.params.log,
+                    self.params.config.if_name,
                     "failed to get IPv6 address for interface {}: {e}",
-                    self.ctx.config.aobj_name
+                    self.params.config.aobj_name
                 );
                 return None;
             }
             Err(e) => {
                 err!(
-                    self.ctx.log,
-                    self.ctx.config.if_name,
+                    self.params.log,
+                    self.params.config.if_name,
                     "address lookup task: {e}"
                 );
                 return None;
@@ -269,10 +302,10 @@ impl Driver {
             }),
             IpAddr::V4(_) => {
                 wrn!(
-                    self.ctx.log,
-                    self.ctx.config.if_name,
+                    self.params.log,
+                    self.params.config.if_name,
                     "specified address {} is not IPv6",
-                    self.ctx.config.aobj_name
+                    self.params.config.aobj_name
                 );
                 None
             }
@@ -280,13 +313,13 @@ impl Driver {
     }
 
     async fn open_sockets(&mut self, addr: IfAddr) -> Option<Input> {
-        self.ctx.config.if_name.clone_from(&addr.ifname);
-        self.ctx.config.if_index = addr.index;
-        self.ctx.config.addr = addr.addr;
+        self.params.config.if_name.clone_from(&addr.ifname);
+        self.params.config.if_index = addr.index;
+        self.params.config.addr = addr.addr;
 
         inf!(
-            self.ctx.log,
-            self.ctx.config.if_name,
+            self.params.log,
+            self.params.config.if_name,
             "sm initialized with addr {} on if {} index {}",
             addr.addr,
             addr.ifname,
@@ -294,23 +327,23 @@ impl Driver {
         );
 
         let sockets = match Sockets::open(
-            self.ctx.hostname.clone(),
-            self.ctx.config.kind,
+            self.params.hostname.clone(),
+            self.params.config.kind,
             addr.addr,
             addr.index,
         ) {
             Ok(sockets) => Arc::new(sockets),
             Err(e) => {
                 err!(
-                    self.ctx.log,
-                    self.ctx.config.if_name,
+                    self.params.log,
+                    self.params.config.if_name,
                     "discovery sockets on {}: {e}",
                     addr.addr
                 );
                 // Pace the retry. Falling straight back to address resolution
                 // would spin on a link whose sockets never open.
                 tokio::time::sleep(Duration::from_millis(
-                    self.ctx.config.ip_addr_wait,
+                    self.params.config.ip_addr_wait,
                 ))
                 .await;
                 return Some(Input::SolicitFailed);
@@ -329,8 +362,8 @@ impl Driver {
 
     fn reader(&self, sockets: Arc<Sockets>, unicast: bool) -> JoinHandle<()> {
         let ingress = self.ingress.clone();
-        let log = self.ctx.log.clone();
-        let if_name = self.ctx.config.if_name.clone();
+        let log = self.params.log.clone();
+        let if_name = self.params.config.if_name.clone();
         tokio::spawn(async move {
             loop {
                 let sock = if unicast { &sockets.uc } else { &sockets.mc };
@@ -361,19 +394,19 @@ impl Driver {
         };
 
         let context = ServerContext {
-            db: self.ctx.db.clone(),
-            hostname: self.ctx.hostname.clone(),
-            kind: self.ctx.config.kind,
+            db: self.params.db.clone(),
+            hostname: self.params.hostname.clone(),
+            kind: self.params.config.kind,
             peer: peer.addr,
             ingress: self.ingress.clone(),
         };
 
         match exchange::start_server(
             context,
-            self.ctx.config.addr,
-            self.ctx.config.exchange_port,
-            &self.ctx.config.if_name,
-            &self.ctx.log,
+            self.params.config.addr,
+            self.params.config.exchange_port,
+            &self.params.config.if_name,
+            &self.params.log,
         ) {
             Ok(server) => {
                 self.server = Some(server);
@@ -381,8 +414,8 @@ impl Driver {
             }
             Err(e) => {
                 wrn!(
-                    self.ctx.log,
-                    self.ctx.config.if_name,
+                    self.params.log,
+                    self.params.config.if_name,
                     "exchange handler start: {e}"
                 );
                 false
@@ -397,33 +430,34 @@ impl Driver {
     fn endpoint(&self, addr: Ipv6Addr) -> Endpoint {
         Endpoint {
             addr,
-            if_index: self.ctx.config.if_index,
-            port: self.ctx.config.exchange_port,
+            if_index: self.params.config.if_index,
+            port: self.params.config.exchange_port,
         }
     }
 
     /// Republish what the admin API and oximeter read.
     ///
-    /// These are the mutable shared structures the threaded implementation
-    /// wrote to as it went; the core owns the values now and this copies them
-    /// out.
+    /// The core owns these values; this copies out a snapshot taken between
+    /// inputs, so a reader never sees a half-applied transition.
     fn publish(&self) {
-        let status = self.sm.status();
-        let iface = &self.ctx.iface;
-
-        if *lock!(iface.fsm_state) != status.state {
-            iface.transition(status.state.clone());
-        }
-        // The core forgets its addressing while waiting for an address; the
-        // last known interface name stays published so metrics keep their
-        // label, matching the threaded implementation.
-        if status.if_index != 0 {
-            iface.set_if_info(status.if_index, status.if_name);
-        }
-        *lock!(iface.peer_identity) = status.peer;
+        self.status.send_if_modified(|published| {
+            let mut next = self.sm.status();
+            // The core forgets its addressing while waiting for an address; the
+            // last known interface name stays published so metrics keep their
+            // label, matching the threaded implementation.
+            if next.if_index == 0 {
+                next.if_index = published.if_index;
+                next.if_name.clone_from(&published.if_name);
+            }
+            if *published == next {
+                return false;
+            }
+            *published = next;
+            true
+        });
 
         let c = self.sm.counters();
-        let s = &self.ctx.stats;
+        let s = &self.params.stats;
         s.solicitations_sent
             .store(c.solicitations_sent, Ordering::Relaxed);
         s.solicitations_received

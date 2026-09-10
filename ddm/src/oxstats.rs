@@ -2,12 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::RouterStats, sm::SmContext};
+use crate::{admin::RouterStats, status::Interface};
 use chrono::{DateTime, Utc};
-use mg_common::{
-    lock,
-    nexus::{local_underlay_address, run_oximeter},
-};
+use mg_common::nexus::{local_underlay_address, run_oximeter};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::{
     MetricsError, Producer, Sample,
@@ -46,7 +43,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    peers: Vec<SmContext>,
+    peers: Vec<Interface>,
     router_stats: Arc<RouterStats>,
 }
 
@@ -152,7 +149,7 @@ impl Producer for Stats {
         ));
 
         for peer in &self.peers {
-            let if_name = lock!(peer.iface.if_name).clone();
+            let if_name = peer.status.borrow().if_name.clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
@@ -268,7 +265,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    peers: Vec<SmContext>,
+    peers: Vec<Interface>,
     router_stats: Arc<RouterStats>,
     hostname: String,
     rack_id: Uuid,

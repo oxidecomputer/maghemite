@@ -17,12 +17,61 @@
 
 use crate::discovery::Version;
 use crate::protocol::rib::RibEvent;
-use crate::sm::{AdminEvent, FsmState, PeerIdentity, PrefixSet};
-use ddm_api_types::db::RouterKind;
+use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol_types::v3;
-use std::collections::VecDeque;
+use oxnet::Ipv6Net;
+use std::collections::{HashSet, VecDeque};
 use std::net::Ipv6Addr;
 use std::time::{Duration, Instant};
+
+/// Something the admin API asked this router to do.
+#[derive(Debug)]
+pub enum AdminEvent {
+    /// Announce a set of IPv6 prefixes
+    Announce(PrefixSet),
+
+    /// Withdraw a set of IPv6 prefixes
+    Withdraw(PrefixSet),
+
+    /// Expire the peer at the specified address
+    Expire(Ipv6Addr),
+
+    /// Synchronize with active peers by pulling their prefixes.
+    Sync,
+}
+
+#[derive(Debug)]
+pub enum PrefixSet {
+    Underlay(HashSet<Ipv6Net>),
+    Tunnel(HashSet<TunnelOrigin>),
+}
+
+/// The lifecycle state, as the admin API reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FsmState {
+    Init,
+    Solicit,
+    Exchange,
+}
+
+impl FsmState {
+    pub fn to_peer_status(&self, elapsed: Duration) -> PeerStatus {
+        match self {
+            FsmState::Init => PeerStatus::Init(elapsed),
+            FsmState::Solicit => PeerStatus::Solicit(elapsed),
+            FsmState::Exchange => PeerStatus::Exchange(elapsed),
+        }
+    }
+}
+
+/// Who the neighbor on this interface said it is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeerIdentity {
+    pub addr: Ipv6Addr,
+    pub hostname: String,
+    pub kind: RouterKind,
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {

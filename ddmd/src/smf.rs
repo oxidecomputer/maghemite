@@ -66,7 +66,7 @@ fn refresh_stats_server(
         info!(log, "starting stats server on smf refresh");
         match ddm::oxstats::start_server(
             DDM_STATS_PORT,
-            context.peers.clone(),
+            context.interfaces.clone(),
             context.stats.clone(),
             hostname,
             props.rack_uuid,

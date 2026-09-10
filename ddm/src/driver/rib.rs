@@ -8,10 +8,11 @@
 //! drivers stay ignorant of each other. It also means no interface ever blocks
 //! on a route-socket call, an OPTE ioctl, or a dpd request.
 
+use crate::config::Config;
 use crate::db::Db;
 use crate::protocol::interface::Input;
 use crate::protocol::rib::RibEvent;
-use crate::sm::{Config, SessionStats};
+use crate::status::SessionStats;
 use crate::{dbg, err};
 use slog::Logger;
 use std::sync::Arc;

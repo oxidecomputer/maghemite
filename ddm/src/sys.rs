@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::config::{Config, DpdConfig};
 use crate::protocol::rib::RibOutput;
-use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use ddm_api_types::db::TunnelRoute;
 use dpd_client::Client;

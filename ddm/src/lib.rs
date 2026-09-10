@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod admin;
+pub mod config;
 pub mod db;
 pub mod discovery;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -10,7 +11,7 @@ pub mod driver;
 pub mod exchange;
 pub mod oxstats;
 pub mod protocol;
-pub mod sm;
+pub mod status;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod sys;
 
