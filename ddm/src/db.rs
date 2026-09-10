@@ -2,14 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types::db::TunnelRoute;
+//! Persistent storage for the DDM RIB
+
+use crate::rib::{Rib, RibEvent, RibOutput, Route};
+use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
-use oxnet::{IpNet, Ipv6Net};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use oxnet::Ipv6Net;
 use slog::{Logger, error};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
 
@@ -36,17 +37,17 @@ pub enum Error {
     Serialization(#[from] serde_json::Error),
 }
 
+/// Sled-backed storage for originated prefixes, plus the in-memory imported
+/// route table.
+///
+/// The route table itself is a pure [`Rib`]; this type only supplies the lock
+/// that lets the state machine threads share it. Route decisions belong in
+/// [`Rib::apply`], not here.
 #[derive(Clone)]
 pub struct Db {
-    data: Arc<Mutex<DbData>>,
+    rib: Arc<Mutex<Rib>>,
     persistent_data: sled::Db,
     log: Logger,
-}
-
-#[derive(Default, Clone)]
-pub struct DbData {
-    pub imported: HashSet<Route>,
-    pub imported_tunnel: HashSet<TunnelRoute>,
 }
 
 const _: () = {
@@ -55,53 +56,39 @@ const _: () = {
 };
 
 impl Db {
-    pub fn new(db_path: &str, log: Logger) -> Result<Self, sled::Error> {
+    pub fn new(
+        db_path: &str,
+        hostname: String,
+        kind: RouterKind,
+        log: Logger,
+    ) -> Result<Self, sled::Error> {
         Ok(Self {
-            data: Arc::new(Mutex::new(DbData::default())),
+            rib: Arc::new(Mutex::new(Rib::new(hostname, kind))),
             persistent_data: sled::open(db_path)?,
             log,
         })
     }
-    pub fn dump(&self) -> DbData {
-        lock!(self.data).clone()
+
+    /// Apply an event to the route table and return the forwarding-platform
+    /// deltas the caller must execute.
+    pub fn apply(&self, event: RibEvent) -> RibOutput {
+        lock!(self.rib).apply(event)
     }
 
     pub fn imported(&self) -> HashSet<Route> {
-        lock!(self.data).imported.clone()
+        lock!(self.rib).imported().clone()
     }
 
     pub fn imported_count(&self) -> usize {
-        lock!(self.data).imported.len()
+        lock!(self.rib).imported().len()
     }
 
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
-        lock!(self.data).imported_tunnel.clone()
+        lock!(self.rib).imported_tunnel().clone()
     }
 
     pub fn imported_tunnel_count(&self) -> usize {
-        lock!(self.data).imported_tunnel.len()
-    }
-
-    pub fn import(&self, r: &HashSet<Route>) {
-        lock!(self.data).imported.extend(r.clone());
-    }
-
-    pub fn import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        lock!(self.data).imported_tunnel.extend(r.clone());
-    }
-
-    pub fn delete_import(&self, r: &HashSet<Route>) {
-        let imported = &mut lock!(self.data).imported;
-        for x in r {
-            imported.remove(x);
-        }
-    }
-
-    pub fn delete_import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        let imported = &mut lock!(self.data).imported_tunnel;
-        for x in r {
-            imported.remove(x);
-        }
+        lock!(self.rib).imported_tunnel().len()
     }
 
     pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
@@ -217,151 +204,6 @@ impl Db {
         tree.flush()?;
         Ok(())
     }
-
-    pub fn remove_nexthop_routes(
-        &self,
-        nexthop: Ipv6Addr,
-    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
-        let mut data = lock!(self.data);
-        // Routes are generally held in sets to prevent duplication and provide
-        // handy set-algebra operations.
-        let mut removed = HashSet::new();
-        for x in &data.imported {
-            if x.nexthop == nexthop {
-                removed.insert(x.clone());
-            }
-        }
-        for x in &removed {
-            data.imported.remove(x);
-        }
-
-        let mut tnl_removed = HashSet::new();
-        for x in &data.imported_tunnel {
-            if x.nexthop == nexthop {
-                tnl_removed.insert(*x);
-            }
-        }
-        for x in &tnl_removed {
-            data.imported_tunnel.remove(x);
-        }
-        (removed, tnl_removed)
-    }
-
-    pub fn routes_by_vector(
-        &self,
-        dst: Ipv6Net,
-        nexthop: Ipv6Addr,
-    ) -> Vec<Route> {
-        let data = lock!(self.data);
-        let mut result = Vec::new();
-        for x in &data.imported {
-            if x.destination == dst && x.nexthop == nexthop {
-                result.push(x.clone());
-            }
-        }
-        result
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Route {
-    pub destination: Ipv6Net,
-    pub nexthop: Ipv6Addr,
-    pub ifname: String,
-    pub path: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum EffectiveTunnelRouteSet {
-    /// The routes in the contained set are active with priority greater than
-    /// zero.
-    Active(HashSet<TunnelRoute>),
-
-    /// The routes in the contained set are inactive with a priority equal to
-    /// zero.
-    Inactive(HashSet<TunnelRoute>),
-}
-
-impl EffectiveTunnelRouteSet {
-    fn values(&self) -> &HashSet<TunnelRoute> {
-        match self {
-            EffectiveTunnelRouteSet::Active(s) => s,
-            EffectiveTunnelRouteSet::Inactive(s) => s,
-        }
-    }
-}
-
-//NOTE this is the same algorithm as rdb::Db::effective_route set but for
-//     tunnel routes. We need to apply the same logic here, but because
-//     the server routers get tunnel endpoint information from a disparate
-//     set of transit routers that are not in cahoots, we need to calculate
-//     the effective set for all the tunneled routes for all endpoints.
-pub fn effective_route_set(
-    full: &HashSet<TunnelRoute>,
-) -> HashSet<TunnelRoute> {
-    let mut sets = HashMap::<IpNet, EffectiveTunnelRouteSet>::new();
-    for x in full.iter() {
-        match sets.get_mut(&x.origin.overlay_prefix) {
-            Some(set) => {
-                if x.origin.metric > 0 {
-                    match set {
-                        EffectiveTunnelRouteSet::Active(s) => {
-                            s.insert(*x);
-                        }
-                        EffectiveTunnelRouteSet::Inactive(_) => {
-                            let mut value = HashSet::new();
-                            value.insert(*x);
-                            sets.insert(
-                                x.origin.overlay_prefix,
-                                EffectiveTunnelRouteSet::Active(value),
-                            );
-                        }
-                    }
-                } else {
-                    match set {
-                        EffectiveTunnelRouteSet::Active(_) => {
-                            //Nothing to do here, the active set takes priority
-                        }
-                        EffectiveTunnelRouteSet::Inactive(s) => {
-                            s.insert(*x);
-                        }
-                    }
-                }
-            }
-            None => {
-                let mut value = HashSet::new();
-                value.insert(*x);
-                if x.origin.metric > 0 {
-                    sets.insert(
-                        x.origin.overlay_prefix,
-                        EffectiveTunnelRouteSet::Active(value),
-                    );
-                } else {
-                    sets.insert(
-                        x.origin.overlay_prefix,
-                        EffectiveTunnelRouteSet::Inactive(value),
-                    );
-                }
-            }
-        }
-    }
-    let mut result = HashSet::new();
-    for xs in sets.values() {
-        for x in xs.values() {
-            let mut v = *x;
-            //NOTE the point of this function is to determine an effective set
-            //     of routes based on the metric value to send to a data plane.
-            //     So from the data plane's perspective all routes returned
-            //     from this function are equally viable. Thus, we set the
-            //     metric to zero so there are not hash function differences
-            //     on subsequent operations involving the returned set.
-            v.origin.metric = 0;
-            result.insert(v);
-        }
-    }
-    result
 }
 
 trait DbKey: Sized {
@@ -389,82 +231,5 @@ impl DbKey for Ipv6Net {
             )
             .map_err(|e| Error::DbKey(e.to_string()))
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashSet;
-
-    #[test]
-    fn test_effective_tunnel_route_set() {
-        let mut before = HashSet::<TunnelRoute>::new();
-        before.insert(TunnelRoute {
-            origin: TunnelOrigin {
-                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
-                boundary_addr: "fd00:a::1".parse().unwrap(),
-                vni: 99,
-                metric: 0,
-            },
-            nexthop: "fe80:a::1".parse().unwrap(),
-        });
-        before.insert(TunnelRoute {
-            origin: TunnelOrigin {
-                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
-                boundary_addr: "fd00:b::1".parse().unwrap(),
-                vni: 99,
-                metric: 0,
-            },
-            nexthop: "fe80:b::1".parse().unwrap(),
-        });
-        let effective_before = effective_route_set(&before);
-
-        let mut after = HashSet::<TunnelRoute>::new();
-        after.insert(TunnelRoute {
-            origin: TunnelOrigin {
-                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
-                boundary_addr: "fd00:a::1".parse().unwrap(),
-                vni: 99,
-                metric: 0,
-            },
-            nexthop: "fe80:a::1".parse().unwrap(),
-        });
-        after.insert(TunnelRoute {
-            origin: TunnelOrigin {
-                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
-                boundary_addr: "fd00:b::1".parse().unwrap(),
-                vni: 99,
-                metric: 100,
-            },
-            nexthop: "fe80:b::1".parse().unwrap(),
-        });
-        let effective_after = effective_route_set(&after);
-
-        let to_add: HashSet<TunnelRoute> = effective_after
-            .difference(&effective_before)
-            .copied()
-            .collect();
-
-        let expected_add = HashSet::<TunnelRoute>::new();
-        assert_eq!(to_add, expected_add);
-
-        let to_del: HashSet<TunnelRoute> = effective_before
-            .difference(&effective_after)
-            .copied()
-            .collect();
-
-        let mut expected_del = HashSet::<TunnelRoute>::new();
-        expected_del.insert(TunnelRoute {
-            origin: TunnelOrigin {
-                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
-                boundary_addr: "fd00:a::1".parse().unwrap(),
-                vni: 99,
-                metric: 0,
-            },
-            nexthop: "fe80:a::1".parse().unwrap(),
-        });
-        assert_eq!(to_del, expected_del);
     }
 }

@@ -144,7 +144,18 @@ async fn run() {
         .await
         .expect("set up refresh signal handler");
 
-    let db = Db::new(&format!("{}/ddmdb", arg.data_dir), log.clone()).unwrap();
+    let hostname = hostname::get()
+        .expect("failed to get hostname")
+        .to_string_lossy()
+        .to_string();
+
+    let db = Db::new(
+        &format!("{}/ddmdb", arg.data_dir),
+        hostname.clone(),
+        arg.kind,
+        log.clone(),
+    )
+    .unwrap();
 
     let dpd = match arg.dendrite {
         true => Some(DpdConfig {
@@ -155,10 +166,6 @@ async fn run() {
     };
 
     let rt = Arc::new(tokio::runtime::Handle::current());
-    let hostname = hostname::get()
-        .expect("failed to get hostname")
-        .to_string_lossy()
-        .to_string();
 
     let (sms, event_channels) =
         start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);

@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::rib::{self, RibOutput};
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use ddm_api_types::db::TunnelRoute;
@@ -46,8 +47,8 @@ impl Route {
     }
 }
 
-impl From<crate::db::Route> for Route {
-    fn from(r: crate::db::Route) -> Self {
+impl From<rib::Route> for Route {
+    fn from(r: rib::Route) -> Self {
         Self {
             dest: r.destination.addr().into(),
             prefix_len: r.destination.width(),
@@ -92,6 +93,66 @@ impl From<Route> for IpNet {
             IpAddr::V4(a) => Ipv4Net::new(a, r.prefix_len).unwrap().into(),
             IpAddr::V6(a) => Ipv6Net::new(a, r.prefix_len).unwrap().into(),
         }
+    }
+}
+
+/// Execute the forwarding-platform deltas a [`RibOutput`] asked for.
+pub fn program(
+    out: &RibOutput,
+    config: &Config,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    let ifname = &config.if_name;
+
+    // Convert from rib routes to sys routes ensuring they are using the correct
+    // interface name.
+    //
+    // Routes are programmed against the interface driving the transition, not
+    // the one they were learned on. Those differ only when a peer expires and
+    // some of its routes arrived over a different interface sharing the same
+    // link-local nexthop.
+    let sys_routes = |routes: &HashSet<rib::Route>| -> Vec<Route> {
+        routes
+            .iter()
+            .cloned()
+            .map(|r| {
+                let mut r = Route::from(r);
+                r.ifname.clone_from(ifname);
+                r
+            })
+            .collect()
+    };
+
+    if !out.add_underlay.is_empty() {
+        add_underlay_routes(log, config, sys_routes(&out.add_underlay), rt);
+    }
+
+    if !out.del_underlay.is_empty() {
+        remove_underlay_routes(
+            log,
+            ifname,
+            &config.dpd,
+            sys_routes(&out.del_underlay),
+            rt,
+        );
+    }
+
+    if !out.add_tunnel.is_empty()
+        && let Err(e) = add_tunnel_routes(log, ifname, &out.add_tunnel)
+    {
+        err!(log, ifname, "add tunnel routes: {e}: {:#?}", out.add_tunnel)
+    }
+
+    if !out.del_tunnel.is_empty()
+        && let Err(e) = remove_tunnel_routes(log, ifname, &out.del_tunnel)
+    {
+        err!(
+            log,
+            ifname,
+            "remove tunnel routes: {e}: {:#?}",
+            out.del_tunnel
+        )
     }
 }
 

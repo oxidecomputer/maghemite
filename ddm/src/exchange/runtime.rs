@@ -8,11 +8,11 @@
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
 use super::ExchangeError;
-use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
+use crate::rib::RibEvent;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
-use ddm_api_types::db::{RouterKind, TunnelRoute};
+use ddm_api_types::db::RouterKind;
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -535,179 +535,32 @@ fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
         .updates_received
         .fetch_add(1, Ordering::Relaxed);
 
-    if let Some(underlay_update) = &update.underlay {
-        handle_underlay_update(underlay_update, ctx);
-    }
+    let out = ctx.ctx.db.apply(RibEvent::Update {
+        peer: ctx.peer,
+        ifname: ctx.ctx.config.if_name.clone(),
+        update: Box::new(update.clone()),
+    });
 
-    if let Some(tunnel_update) = &update.tunnel {
-        handle_tunnel_update(tunnel_update, ctx);
-    }
+    crate::sys::program(&out, &ctx.ctx.config, &ctx.ctx.rt, &ctx.log);
 
-    // distribute updates
-
-    if ctx.ctx.config.kind == RouterKind::Transit {
+    if let Some(push) = out.redistribute {
         dbg!(
             ctx.log,
             ctx.ctx.config.if_name,
             "redistributing update to {} peers",
             ctx.ctx.event_channels.len()
         );
-
-        let underlay = update
-            .underlay
-            .as_ref()
-            .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
-
-        let push = v3::Update {
-            underlay,
-            tunnel: update.tunnel.clone(),
-        };
-
         for ec in &ctx.ctx.event_channels {
             ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
         }
     }
-}
-
-fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
-    let mut import = HashSet::new();
-    let mut remove = HashSet::new();
-    let db = &ctx.ctx.db;
-
-    let before = effective_route_set(&db.imported_tunnel());
-
-    for x in &update.announce {
-        import.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
-            nexthop: ctx.peer,
-        });
-    }
-    db.import_tunnel(&import);
-
-    for x in &update.withdraw {
-        remove.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
-            nexthop: ctx.peer,
-        });
-    }
-    db.delete_import_tunnel(&remove);
-
-    let after = effective_route_set(&db.imported_tunnel());
-
-    let to_add = after.difference(&before).copied().collect();
-    let to_del = before.difference(&after).copied().collect();
-
-    if let Err(e) = crate::sys::add_tunnel_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &to_add,
-    ) {
-        err!(
-            ctx.log,
-            ctx.ctx.config.if_name,
-            "add tunnel routes: {e}: {:#?}",
-            import,
-        )
-    }
-
-    if let Err(e) = crate::sys::remove_tunnel_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &to_del,
-    ) {
-        err!(
-            ctx.log,
-            ctx.ctx.config.if_name,
-            "remove tunnel routes: {e}: {:#?}",
-            import,
-        )
-    }
-
-    ctx.ctx
-        .stats
-        .imported_underlay_prefixes
-        .store(ctx.ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
-}
-
-fn handle_underlay_update(update: &v3::UnderlayUpdate, ctx: &HandlerContext) {
-    let mut import = HashSet::new();
-    let mut add = Vec::new();
-    let db = &ctx.ctx.db;
-
-    for prefix in &update.announce {
-        import.insert(Route {
-            destination: prefix.destination,
-            nexthop: ctx.peer,
-            ifname: ctx.ctx.config.if_name.clone(),
-            path: prefix.path.clone(),
-        });
-        let mut r = crate::sys::Route::new(
-            prefix.destination.addr().into(),
-            prefix.destination.width(),
-            ctx.peer.into(),
-        );
-        r.ifname.clone_from(&ctx.ctx.config.if_name);
-        add.push(r);
-    }
-    db.import(&import);
-    crate::sys::add_underlay_routes(
-        &ctx.log,
-        &ctx.ctx.config,
-        add,
-        &ctx.ctx.rt,
-    );
-
-    let mut withdraw = HashSet::new();
-    for prefix in &update.withdraw {
-        withdraw.insert(Route {
-            destination: prefix.destination,
-            nexthop: ctx.peer,
-            ifname: ctx.ctx.config.if_name.clone(),
-            path: prefix.path.clone(),
-        });
-    }
-    db.delete_import(&withdraw);
-
-    // We cannot simply delete withdrawn routes here. If we have other paths to
-    // the destination with the same nexthop, we'll be left with a route in the
-    // DB but not the underlying forwarding platform. We cannot delete a
-    // (destination, nexthop) pair until all path-vector routes with that tuple
-    // are gone. Another way to say this is that while we track routes by path,
-    // the underlying forwarding platform only knows about a vector. And since
-    // there can be many paths along vector, we can only delete a route from the
-    // forwarding platform if the complete vector is gone.
-    let mut del = Vec::new();
-    for w in &withdraw {
-        if db.routes_by_vector(w.destination, w.nexthop).is_empty() {
-            let mut r = crate::sys::Route::new(
-                w.destination.addr().into(),
-                w.destination.width(),
-                w.nexthop.into(),
-            );
-            r.ifname.clone_from(&ctx.ctx.config.if_name);
-            del.push(r);
-        }
-    }
-    crate::sys::remove_underlay_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &ctx.ctx.config.dpd,
-        del,
-        &ctx.ctx.rt,
-    );
 
     ctx.ctx
         .stats
         .imported_underlay_prefixes
         .store(ctx.ctx.db.imported_count() as u64, Ordering::Relaxed);
+    ctx.ctx
+        .stats
+        .imported_tunnel_endpoints
+        .store(ctx.ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }

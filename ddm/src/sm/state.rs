@@ -11,9 +11,9 @@ use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
     SmContext, SmError, StateMachine,
 };
+use crate::rib::RibEvent;
 use crate::{dbg, discovery, err, exchange, inf, wrn};
-use ddm_api_types::db::RouterKind;
-use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
+use ddm_protocol::v3::PathVector;
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
@@ -298,70 +298,23 @@ impl Exchange {
     ) {
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
-        let (to_remove, to_remove_tnl) =
-            self.ctx.db.remove_nexthop_routes(self.peer);
-        let mut routes: Vec<crate::sys::Route> = Vec::new();
-        for x in &to_remove {
-            let mut r: crate::sys::Route = x.clone().into();
-            r.ifname.clone_from(&self.ctx.config.if_name);
-            routes.push(r);
-        }
-        crate::sys::remove_underlay_routes(
-            &self.log,
-            &self.ctx.config.if_name,
-            &self.ctx.config.dpd,
-            routes,
-            &self.ctx.rt,
-        );
-        if let Err(e) = crate::sys::remove_tunnel_routes(
-            &self.log,
-            &self.ctx.config.if_name,
-            &to_remove_tnl,
-        ) {
-            err!(
-                self.log,
-                self.ctx.config.if_name,
-                "failed to remove tunnel routes: {:#?} {e}",
-                to_remove_tnl
-            );
-        }
+
+        let out = self
+            .ctx
+            .db
+            .apply(RibEvent::PeerExpired { nexthop: self.peer });
+
+        crate::sys::program(&out, &self.ctx.config, &self.ctx.rt, &self.log);
+
         // if we're a transit router propagate withdraws for the
         // expired peer.
-        if self.ctx.config.kind == RouterKind::Transit {
+        if let Some(push) = out.redistribute {
             dbg!(
                 self.log,
                 self.ctx.config.if_name,
                 "redistributing expire to {} peers",
                 self.ctx.event_channels.len()
             );
-
-            let underlay = if to_remove.is_empty() {
-                None
-            } else {
-                Some(UnderlayUpdate::withdraw(
-                    to_remove
-                        .iter()
-                        .map(|x| PathVector {
-                            destination: x.destination,
-                            path: {
-                                let mut ps = x.path.clone();
-                                ps.push(self.ctx.hostname.clone());
-                                ps
-                            },
-                        })
-                        .collect(),
-                ))
-            };
-
-            let tunnel = if to_remove_tnl.is_empty() {
-                None
-            } else {
-                Some(TunnelUpdate::withdraw(
-                    to_remove_tnl.iter().cloned().map(Into::into).collect(),
-                ))
-            };
-
-            let push = Update { underlay, tunnel };
             for ec in &self.ctx.event_channels {
                 ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
             }

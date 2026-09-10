@@ -7,6 +7,7 @@ pub mod db;
 pub mod discovery;
 pub mod exchange;
 pub mod oxstats;
+mod rib;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod sys;
