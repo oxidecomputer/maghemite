@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types::db::TunnelRoute;
+use crate::protocol::rib::{Rib, RibEvent, RibOutput};
+use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
@@ -36,17 +37,17 @@ pub enum Error {
     Serialization(#[from] serde_json::Error),
 }
 
+/// Sled-backed storage for originated prefixes, plus the in-memory imported
+/// route table.
+///
+/// The route table itself is a pure [`Rib`]; this type only supplies the lock
+/// that lets the state machine threads share it. Route decisions belong in
+/// [`Rib::apply`], not here.
 #[derive(Clone)]
 pub struct Db {
-    data: Arc<Mutex<DbData>>,
+    rib: Arc<Mutex<Rib>>,
     persistent_data: sled::Db,
     log: Logger,
-}
-
-#[derive(Default, Clone)]
-pub struct DbData {
-    pub imported: HashSet<Route>,
-    pub imported_tunnel: HashSet<TunnelRoute>,
 }
 
 const _: () = {
@@ -55,53 +56,39 @@ const _: () = {
 };
 
 impl Db {
-    pub fn new(db_path: &str, log: Logger) -> Result<Self, sled::Error> {
+    pub fn new(
+        db_path: &str,
+        hostname: String,
+        kind: RouterKind,
+        log: Logger,
+    ) -> Result<Self, sled::Error> {
         Ok(Self {
-            data: Arc::new(Mutex::new(DbData::default())),
+            rib: Arc::new(Mutex::new(Rib::new(hostname, kind))),
             persistent_data: sled::open(db_path)?,
             log,
         })
     }
-    pub fn dump(&self) -> DbData {
-        lock!(self.data).clone()
+
+    /// Apply an event to the route table and return the forwarding-platform
+    /// deltas the caller must execute.
+    pub fn apply(&self, event: RibEvent) -> RibOutput {
+        lock!(self.rib).apply(event)
     }
 
     pub fn imported(&self) -> HashSet<Route> {
-        lock!(self.data).imported.clone()
+        lock!(self.rib).imported().clone()
     }
 
     pub fn imported_count(&self) -> usize {
-        lock!(self.data).imported.len()
+        lock!(self.rib).imported().len()
     }
 
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
-        lock!(self.data).imported_tunnel.clone()
+        lock!(self.rib).imported_tunnel().clone()
     }
 
     pub fn imported_tunnel_count(&self) -> usize {
-        lock!(self.data).imported_tunnel.len()
-    }
-
-    pub fn import(&self, r: &HashSet<Route>) {
-        lock!(self.data).imported.extend(r.clone());
-    }
-
-    pub fn import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        lock!(self.data).imported_tunnel.extend(r.clone());
-    }
-
-    pub fn delete_import(&self, r: &HashSet<Route>) {
-        let imported = &mut lock!(self.data).imported;
-        for x in r {
-            imported.remove(x);
-        }
-    }
-
-    pub fn delete_import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        let imported = &mut lock!(self.data).imported_tunnel;
-        for x in r {
-            imported.remove(x);
-        }
+        lock!(self.rib).imported_tunnel().len()
     }
 
     pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
@@ -216,50 +203,6 @@ impl Db {
         }
         tree.flush()?;
         Ok(())
-    }
-
-    pub fn remove_nexthop_routes(
-        &self,
-        nexthop: Ipv6Addr,
-    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
-        let mut data = lock!(self.data);
-        // Routes are generally held in sets to prevent duplication and provide
-        // handy set-algebra operations.
-        let mut removed = HashSet::new();
-        for x in &data.imported {
-            if x.nexthop == nexthop {
-                removed.insert(x.clone());
-            }
-        }
-        for x in &removed {
-            data.imported.remove(x);
-        }
-
-        let mut tnl_removed = HashSet::new();
-        for x in &data.imported_tunnel {
-            if x.nexthop == nexthop {
-                tnl_removed.insert(*x);
-            }
-        }
-        for x in &tnl_removed {
-            data.imported_tunnel.remove(x);
-        }
-        (removed, tnl_removed)
-    }
-
-    pub fn routes_by_vector(
-        &self,
-        dst: Ipv6Net,
-        nexthop: Ipv6Addr,
-    ) -> Vec<Route> {
-        let data = lock!(self.data);
-        let mut result = Vec::new();
-        for x in &data.imported {
-            if x.destination == dst && x.nexthop == nexthop {
-                result.push(x.clone());
-            }
-        }
-        result
     }
 }
 
