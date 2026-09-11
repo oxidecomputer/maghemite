@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 
@@ -63,18 +63,6 @@ struct Init {
 impl Init {
     fn new(ctx: SmContext, log: Logger) -> Self {
         Self { ctx, log }
-    }
-}
-
-pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
-    let mut dead_channels = Vec::default();
-    for (i, c) in event_channels.iter().enumerate() {
-        if c.send(e.clone()).is_err() {
-            dead_channels.push(i);
-        }
-    }
-    for i in dead_channels {
-        event_channels.remove(i);
     }
 }
 
@@ -389,7 +377,7 @@ impl Exchange {
             };
 
             let push = Update { underlay, tunnel };
-            send(
+            super::send(
                 Event::Peer(PeerEvent::Push(push.clone())),
                 &mut self.ctx.event_channels,
             );

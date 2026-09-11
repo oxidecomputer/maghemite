@@ -497,7 +497,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
             ctx.peers.push(sm_ctx.clone());
 
-            crate::sm::state::send(
+            crate::sm::send(
                 Event::Admin(AdminEvent::NewExternalPeer(tx.clone())),
                 &mut ctx.event_channels,
             );
