@@ -9,7 +9,7 @@ use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{Logger, error};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
 
@@ -47,6 +47,7 @@ pub struct Db {
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
+    pub external_peers: BTreeSet<String>,
 }
 
 const _: () = {
@@ -260,6 +261,14 @@ impl Db {
             }
         }
         result
+    }
+
+    pub fn get_external_peers(&self) -> BTreeSet<String> {
+        lock!(self.data).external_peers.clone()
+    }
+
+    pub fn set_external_peers(&mut self, value: BTreeSet<String>) {
+        lock!(self.data).external_peers = value;
     }
 }
 

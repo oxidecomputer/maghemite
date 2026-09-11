@@ -6,6 +6,10 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::Db;
+use ddm::defaults::{
+    DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
+    EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
+};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
@@ -24,6 +28,14 @@ use uuid::Uuid;
 mod signal;
 mod smf;
 
+// macro_rules! u64_millis {
+//     ($x:expr) => {
+//         $x.as_millis()
+//             .try_into()
+//             .expect(&format!("{} as u64", stringify!($x)))
+//     };
+// }
+
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
@@ -32,26 +44,26 @@ struct Arg {
     addresses: Vec<String>,
 
     /// How long to wait between solicitations (milliseconds).
-    #[arg(long, default_value_t = 2000)]
+    #[arg(long, default_value_t = millis_u64(SOLICIT_INTERVAL))]
     solicit_interval: u64,
 
     /// How long to wait without a solicitation response before expiring a peer
     /// (milliseconds).
-    #[arg(long, default_value_t = 5000)]
+    #[arg(long, default_value_t = millis_u64(EXPIRE_THRESHOLD))]
     expire_threshold: u64,
 
     /// How often to check for link failure while waiting for discovery messges
     /// (milliseconds).
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = millis_u64(DISCOVERY_READ_TIMEOUT))]
     discovery_read_timeout: u64,
 
     /// How long to wait between attempts to get an IP address for a specified
     /// address object (milliseconds).
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = millis_u64(IP_ADDR_WAIT))]
     ip_addr_wait: u64,
 
-    /// How long to wait for a response to exchange messages.
-    #[arg(long, default_value_t = 3000)]
+    /// How long to wait for a response to exchange messages (milliseconds).
+    #[arg(long, default_value_t = millis_u64(EXCHANGE_TIMEOUT))]
     pub exchange_timeout: u64,
 
     /// Address to listen on for the admin API.
@@ -67,7 +79,7 @@ struct Arg {
     kind: RouterKind,
 
     /// The tcp port to listen on for exchange messages.
-    #[arg(long, default_value_t = 0xdddd)]
+    #[arg(long, default_value_t = EXCHANGE_TCP_PORT)]
     exchange_port: u16,
 
     /// Whether or not to use Dendrite as the underlying routing and forwarding

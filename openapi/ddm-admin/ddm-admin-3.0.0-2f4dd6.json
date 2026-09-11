@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -33,6 +33,32 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/EnableStatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/external_peers": {
+      "post": {
+        "operationId": "set_external_peers",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetExternalPeers"
               }
             }
           },
@@ -588,6 +614,21 @@
         "enum": [
           0,
           1
+        ]
+      },
+      "SetExternalPeers": {
+        "type": "object",
+        "properties": {
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "interfaces"
         ]
       },
       "TunnelOrigin": {

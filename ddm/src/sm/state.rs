@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 
@@ -34,10 +34,13 @@ impl StateMachine {
         let mut rx = self.rx.take().unwrap();
         let log = self.ctx.log.clone();
         spawn(move || {
-            let mut state: Box<dyn State> =
-                Box::new(Init::new(ctx.clone(), log.clone()));
+            let mut state: Option<Box<dyn State>> =
+                Some(Box::new(Init::new(ctx.clone(), log.clone())));
             loop {
-                (state, rx) = state.run(rx);
+                (state, rx) = match &mut state {
+                    Some(st) => st.run(rx),
+                    None => break,
+                }
             }
         });
 
@@ -49,7 +52,7 @@ trait State {
     fn run(
         &mut self,
         event: Receiver<Event>,
-    ) -> (Box<dyn State>, Receiver<Event>);
+    ) -> (Option<Box<dyn State>>, Receiver<Event>);
 }
 
 struct Init {
@@ -63,11 +66,23 @@ impl Init {
     }
 }
 
+pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
+    let mut dead_channels = Vec::default();
+    for (i, c) in event_channels.iter().enumerate() {
+        if c.send(e.clone()).is_err() {
+            dead_channels.push(i);
+        }
+    }
+    for i in dead_channels {
+        event_channels.remove(i);
+    }
+}
+
 impl State for Init {
     fn run(
         &mut self,
         event: Receiver<Event>,
-    ) -> (Box<dyn State>, Receiver<Event>) {
+    ) -> (Option<Box<dyn State>>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Init);
         self.ctx.iface.clear_peer();
         loop {
@@ -125,7 +140,10 @@ impl State for Init {
             )
             .unwrap(); // TODO unwrap
             return (
-                Box::new(Solicit::new(self.ctx.clone(), self.log.clone())),
+                Some(Box::new(Solicit::new(
+                    self.ctx.clone(),
+                    self.log.clone(),
+                ))),
                 event,
             );
         }
@@ -147,7 +165,7 @@ impl State for Solicit {
     fn run(
         &mut self,
         event: Receiver<Event>,
-    ) -> (Box<dyn State>, Receiver<Event>) {
+    ) -> (Option<Box<dyn State>>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Solicit);
         loop {
             let e = match event.recv() {
@@ -170,12 +188,12 @@ impl State for Solicit {
                         "transition solicit -> exchange"
                     );
                     return (
-                        Box::new(Exchange::new(
+                        Some(Box::new(Exchange::new(
                             self.ctx.clone(),
                             addr,
                             version,
                             self.log.clone(),
-                        )),
+                        ))),
                         event,
                     );
                 }
@@ -187,7 +205,10 @@ impl State for Solicit {
                         "exiting solicit state due to failed solicit",
                     );
                     return (
-                        Box::new(Init::new(self.ctx.clone(), self.log.clone())),
+                        Some(Box::new(Init::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
                         event,
                     );
                 }
@@ -198,6 +219,12 @@ impl State for Solicit {
                         "peer event in solicit state: {:?}",
                         e
                     );
+                }
+                Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
+                    self.ctx.event_channels.push(tx);
+                }
+                Event::Admin(AdminEvent::Shutdown) => {
+                    return (None, event);
                 }
                 Event::Admin(e) => {
                     wrn!(
@@ -362,9 +389,10 @@ impl Exchange {
             };
 
             let push = Update { underlay, tunnel };
-            for ec in &self.ctx.event_channels {
-                ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
-            }
+            send(
+                Event::Peer(PeerEvent::Push(push.clone())),
+                &mut self.ctx.event_channels,
+            );
         }
         pull_stop.store(true, Ordering::Relaxed);
     }
@@ -374,7 +402,7 @@ impl State for Exchange {
     fn run(
         &mut self,
         event: Receiver<Event>,
-    ) -> (Box<dyn State>, Receiver<Event>) {
+    ) -> (Option<Box<dyn State>>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Exchange);
         let exchange_thread = loop {
             match exchange::handler(
@@ -453,10 +481,10 @@ impl State for Exchange {
                         );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
-                            Box::new(Solicit::new(
+                            Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
                                 self.log.clone(),
-                            )),
+                            ))),
                             event,
                         );
                     }
@@ -488,10 +516,10 @@ impl State for Exchange {
                         );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
-                            Box::new(Solicit::new(
+                            Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
                                 self.log.clone(),
-                            )),
+                            ))),
                             event,
                         );
                     }
@@ -529,10 +557,10 @@ impl State for Exchange {
                         );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
-                            Box::new(Solicit::new(
+                            Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
                                 self.log.clone(),
-                            )),
+                            ))),
                             event,
                         );
                     }
@@ -564,10 +592,10 @@ impl State for Exchange {
                         );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
-                            Box::new(Solicit::new(
+                            Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
                                 self.log.clone(),
-                            )),
+                            ))),
                             event,
                         );
                     }
@@ -582,10 +610,10 @@ impl State for Exchange {
                         );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
-                            Box::new(Solicit::new(
+                            Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
                                 self.log.clone(),
-                            )),
+                            ))),
                             event,
                         );
                     }
@@ -605,6 +633,12 @@ impl State for Exchange {
                             e
                         );
                     }
+                }
+                Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
+                    self.ctx.event_channels.push(tx);
+                }
+                Event::Admin(AdminEvent::Shutdown) => {
+                    return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
                     inf!(
@@ -640,10 +674,10 @@ impl State for Exchange {
                             );
                             self.expire_peer(&exchange_thread, &pull_stop);
                             return (
-                                Box::new(Solicit::new(
+                                Some(Box::new(Solicit::new(
                                     self.ctx.clone(),
                                     self.log.clone(),
-                                )),
+                                ))),
                                 event,
                             );
                         }
@@ -672,10 +706,10 @@ impl State for Exchange {
                             );
                             self.expire_peer(&exchange_thread, &pull_stop);
                             return (
-                                Box::new(Solicit::new(
+                                Some(Box::new(Solicit::new(
                                     self.ctx.clone(),
                                     self.log.clone(),
-                                )),
+                                ))),
                                 event,
                             );
                         }
@@ -690,10 +724,10 @@ impl State for Exchange {
                     );
                     self.expire_peer(&exchange_thread, &pull_stop);
                     return (
-                        Box::new(Solicit::new(
+                        Some(Box::new(Solicit::new(
                             self.ctx.clone(),
                             self.log.clone(),
-                        )),
+                        ))),
                         event,
                     );
                 }
@@ -706,7 +740,10 @@ impl State for Exchange {
                     );
                     self.expire_peer(&exchange_thread, &pull_stop);
                     return (
-                        Box::new(Init::new(self.ctx.clone(), self.log.clone())),
+                        Some(Box::new(Init::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
                         event,
                     );
                 }

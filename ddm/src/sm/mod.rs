@@ -23,9 +23,9 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-mod state;
+pub(crate) mod state;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AdminEvent {
     /// Announce a set of IPv6 prefixes
     Announce(PrefixSet),
@@ -38,27 +38,34 @@ pub enum AdminEvent {
 
     /// Synchronize with active peers by pulling their prefixes.
     Sync,
+
+    /// A new external peer has been added to the router that can be reached
+    /// using the provided sender.
+    NewExternalPeer(Sender<Event>),
+
+    /// Shutdown on recipt of this event.
+    Shutdown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PeerEvent {
     Push(ddm_protocol::v3::Update),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NeighborEvent {
     Advertise((Ipv6Addr, Version)),
     SolicitFail,
     Expire,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event {
     Neighbor(NeighborEvent),
     Peer(PeerEvent),
@@ -184,12 +191,20 @@ pub struct PeerIdentity {
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
+    pub external: bool,
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
 }
 
 impl InterfaceState {
+    pub fn external() -> Self {
+        Self {
+            external: true,
+            ..Default::default()
+        }
+    }
+
     pub fn transition(&self, state: FsmState) {
         *lock!(self.fsm_state) = state;
         *lock!(self.last_fsm_state_change) = Instant::now();
@@ -215,6 +230,7 @@ impl Default for InterfaceState {
         Self {
             if_index: Mutex::new(0),
             if_name: Mutex::new(String::new()),
+            external: false,
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),

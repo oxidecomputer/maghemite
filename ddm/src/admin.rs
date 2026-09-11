@@ -3,13 +3,21 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
+use crate::defaults::{
+    DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
+    EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
+};
+use crate::sm::{
+    AdminEvent, Event, InterfaceState, PrefixSet, SessionStats, SmContext,
+    StateMachine,
+};
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::db::{PeerInfo, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
+use ddm_api_types::external_peers::SetExternalPeers;
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
@@ -27,11 +35,11 @@ use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, channel};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
@@ -426,6 +434,85 @@ impl DdmAdminApi for DdmAdminApiImpl {
             h.abort();
         }
         *jh = None;
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn set_external_peers(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<SetExternalPeers>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let mut ctx = lock!(ctx.context());
+        let rq = request.into_inner();
+
+        let current = ctx.db.get_external_peers();
+        let to_create = rq.interfaces.difference(&current);
+        let to_remove = current.difference(&rq.interfaces);
+
+        for ifx in to_create.into_iter() {
+            let (tx, rx) = channel();
+
+            let config = crate::sm::Config {
+                solicit_interval: millis_u64(SOLICIT_INTERVAL),
+                expire_threshold: millis_u64(EXPIRE_THRESHOLD),
+                discovery_read_timeout: millis_u64(DISCOVERY_READ_TIMEOUT),
+                ip_addr_wait: millis_u64(IP_ADDR_WAIT),
+                exchange_timeout: millis_u64(EXCHANGE_TIMEOUT),
+                exchange_port: EXCHANGE_TCP_PORT,
+                aobj_name: format!("{ifx}/ll"),
+                if_name: String::default(), // initialized in state machine
+                if_index: 0,                // initialized in state machine
+                // External peers are only a thing for transit routers.
+                kind: RouterKind::Transit,
+                dpd: Some(crate::sm::DpdConfig {
+                    // Transit DDM routers always talk to their local dpd in the
+                    // switch zone.
+                    host: String::from("localhost"),
+                    // TODO: using the default dpd port might not be right for some
+                    // test environments.
+                    port: dpd_client::default_port(),
+                }),
+                addr: Ipv6Addr::UNSPECIFIED,
+            };
+            let sm_ctx = SmContext {
+                config,
+                db: ctx.db.clone(),
+                event_channels: ctx.event_channels.clone(),
+                tx: tx.clone(),
+                log: ctx.log.clone(),
+                hostname: hostname::get()
+                    .expect("failed to get hostname")
+                    .to_string_lossy()
+                    .to_string(),
+                rt: Arc::new(tokio::runtime::Handle::current()),
+                iface: Arc::new(InterfaceState::external()),
+                stats: Arc::new(SessionStats::default()),
+            };
+            let mut sm = StateMachine {
+                ctx: sm_ctx.clone(),
+                rx: Some(rx),
+            };
+
+            sm.run().unwrap();
+
+            ctx.peers.push(sm_ctx.clone());
+
+            crate::sm::state::send(
+                Event::Admin(AdminEvent::NewExternalPeer(tx.clone())),
+                &mut ctx.event_channels,
+            );
+            ctx.event_channels.push(tx);
+
+            // TODO oxstats server
+        }
+
+        for ifx in to_remove.into_iter() {
+            for p in &ctx.peers {
+                if &p.config.if_name == ifx {
+                    let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+                }
+            }
+        }
 
         Ok(HttpResponseUpdatedNoContent())
     }
