@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use colored::*;
 use ddm_admin_client::Client;
+use ddm_admin_client::types::SetExternalPeers;
 use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
@@ -65,6 +66,9 @@ enum SubCommand {
 
     /// Sync prefix information from peers.
     Sync,
+
+    /// Set external peers as a list of interfaces.
+    SetExternalPeers { ifx: Vec<String> },
 }
 
 #[derive(Debug, Parser)]
@@ -264,6 +268,13 @@ async fn run() -> Result<()> {
         }
         SubCommand::Sync => {
             client.sync().await?;
+        }
+        SubCommand::SetExternalPeers { ifx } => {
+            client
+                .set_external_peers(&SetExternalPeers {
+                    interfaces: ifx.clone(),
+                })
+                .await?;
         }
     }
 

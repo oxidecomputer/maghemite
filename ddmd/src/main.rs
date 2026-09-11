@@ -28,14 +28,6 @@ use uuid::Uuid;
 mod signal;
 mod smf;
 
-// macro_rules! u64_millis {
-//     ($x:expr) => {
-//         $x.as_millis()
-//             .try_into()
-//             .expect(&format!("{} as u64", stringify!($x)))
-//     };
-// }
-
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
