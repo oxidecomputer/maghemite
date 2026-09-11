@@ -348,7 +348,7 @@ dependencies = [
  "chrono",
  "clap",
  "client-common",
- "iddqd",
+ "iddqd 0.5.0",
  "itertools 0.15.0",
  "lazy_static",
  "libc",
@@ -798,7 +798,7 @@ dependencies = [
  "daft",
  "derive_more",
  "expectorate",
- "iddqd",
+ "iddqd 0.4.6",
  "itertools 0.14.0",
  "omicron-common",
  "omicron-workspace-hack",
@@ -2972,6 +2972,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "iddqd"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9c6a3a37e36cfd4170bf01265cb987a40993369198fb072c1a0041c0cc485cf"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3042,7 +3054,7 @@ dependencies = [
  "dropshot",
  "futures",
  "http",
- "iddqd",
+ "iddqd 0.4.6",
  "ipnetwork",
  "itertools 0.14.0",
  "key-manager-types",
@@ -4185,7 +4197,7 @@ source = "git+https://github.com/oxidecomputer/omicron?branch=main#d6fba551d0d87
 dependencies = [
  "chrono",
  "futures",
- "iddqd",
+ "iddqd 0.4.6",
  "nexus-types",
  "omicron-common",
  "omicron-uuid-kinds",
@@ -4229,7 +4241,7 @@ dependencies = [
  "gateway-types",
  "http",
  "humantime",
- "iddqd",
+ "iddqd 0.4.6",
  "illumos-utils",
  "indent_write",
  "internal-dns-types",
@@ -4529,7 +4541,7 @@ dependencies = [
  "hex",
  "http",
  "humantime",
- "iddqd",
+ "iddqd 0.4.6",
  "ipnetwork",
  "itertools 0.14.0",
  "macaddr",
@@ -4896,7 +4908,7 @@ dependencies = [
  "gethostname",
  "highway",
  "iana-time-zone",
- "iddqd",
+ "iddqd 0.4.6",
  "indexmap 2.14.0",
  "libc",
  "nom 7.1.3",
@@ -7017,7 +7029,7 @@ dependencies = [
  "camino",
  "chrono",
  "daft",
- "iddqd",
+ "iddqd 0.4.6",
  "omicron-common",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
@@ -7047,7 +7059,7 @@ dependencies = [
  "camino",
  "chrono",
  "daft",
- "iddqd",
+ "iddqd 0.4.6",
  "indent_write",
  "ipnetwork",
  "itertools 0.14.0",
@@ -8277,7 +8289,7 @@ dependencies = [
  "gfss",
  "hex",
  "hkdf",
- "iddqd",
+ "iddqd 0.4.6",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "rand 0.9.5",
@@ -8315,7 +8327,7 @@ dependencies = [
  "daft",
  "derive_more",
  "gfss",
- "iddqd",
+ "iddqd 0.4.6",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "rand 0.9.5",
