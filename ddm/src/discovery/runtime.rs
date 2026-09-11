@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::mem::MaybeUninit;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, Shutdown, SocketAddrV6};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
@@ -98,7 +98,7 @@ pub(crate) fn handler(
     iface: Arc<InterfaceState>,
     stats: Arc<SessionStats>,
     log: Logger,
-) -> Result<(), DiscoveryError> {
+) -> Result<Arc<AtomicBool>, DiscoveryError> {
     // listening on 2 sockets, solicitations are sent to DDM_MADDR, but
     // advertisements are sent to the unicast source addresses of a
     // solicitation. Binding to a link-scoped multicast address is required for
@@ -123,6 +123,7 @@ pub(crate) fn handler(
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
     uc.bind(&uc_sa)?;
+    uc.set_reuse_address(true)?;
     uc.set_read_timeout(Some(Duration::from_millis(
         config.discovery_read_timeout,
     )))?;
@@ -153,9 +154,9 @@ pub(crate) fn handler(
         stop.clone(),
         stats.clone(),
     )?;
-    expire(ctx, stop, stats.clone())?;
+    expire(ctx, stop.clone(), stats.clone())?;
 
-    Ok(())
+    Ok(stop)
 }
 
 fn send_solicitations(
@@ -165,6 +166,10 @@ fn send_solicitations(
 ) {
     spawn(move || {
         loop {
+            if stop.load(Ordering::Relaxed) {
+                inf!(ctx.log, ctx.config.if_name, "stopping solicitor");
+                break;
+            }
             if let Err(e) = solicit(&ctx) {
                 err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
                 stop.store(true, Ordering::Relaxed);
@@ -230,6 +235,11 @@ fn expire(
             // sockets by trying to listen on a unicast address that a socket
             // waiting to be dropped is already listening on.
             if stop.load(Ordering::Relaxed) {
+                inf!(
+                    &ctx.log,
+                    ctx.config.if_name,
+                    "stopping discovery expiration thread",
+                );
                 let event = ctx.event.clone();
                 let log = ctx.log.clone();
                 let if_name = ctx.config.if_name.clone();
@@ -258,6 +268,18 @@ fn listen(
                 handle_msg(&ctx, msg, &addr, &stats);
             };
             if stop.load(Ordering::Relaxed) {
+                inf!(
+                    &ctx.log,
+                    ctx.config.if_name,
+                    "stopping discovery handler"
+                );
+                if let Err(e) = s.shutdown(Shutdown::Both) {
+                    wrn!(
+                        &ctx.log,
+                        ctx.config.if_name,
+                        "failed to shut down discovery socket {e:?}",
+                    );
+                }
                 break;
             }
         }

@@ -118,7 +118,7 @@ impl State for Init {
 
             // Now that we have an ip address to run discovery on, start the
             // discovery handler and jump into the solicit state.
-            discovery::handler(
+            let discovery_stop = discovery::handler(
                 self.ctx.hostname.clone(),
                 self.ctx.config.clone(),
                 self.ctx.tx.clone(),
@@ -127,6 +127,7 @@ impl State for Init {
                 self.ctx.log.clone(),
             )
             .unwrap(); // TODO unwrap
+            self.ctx.discovery_stop = Some(discovery_stop);
             return (
                 Some(Box::new(Solicit::new(
                     self.ctx.clone(),
@@ -212,6 +213,9 @@ impl State for Solicit {
                     self.ctx.event_channels.push(tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
+                    if let Some(x) = self.ctx.discovery_stop.as_mut() {
+                        x.store(true, Ordering::Relaxed);
+                    }
                     return (None, event);
                 }
                 Event::Admin(e) => {
@@ -249,23 +253,20 @@ impl Exchange {
         }
     }
 
-    fn initial_pull(&self, stop: Arc<AtomicBool>) {
-        let ctx = self.ctx.clone();
+    fn initial_pull(&mut self, stop: Arc<AtomicBool>) {
+        //let ctx = self.ctx.clone();
         let peer = self.peer;
         let version = self.version;
         let rt = self.ctx.rt.clone();
         let log = self.log.clone();
         let interval = self.ctx.config.solicit_interval;
         let if_name = self.ctx.config.if_name.clone();
+        let mut ctx = self.ctx.clone();
 
         spawn(move || {
-            while let Err(e) = crate::exchange::pull(
-                ctx.clone(),
-                peer,
-                version,
-                rt.clone(),
-                log.clone(),
-            ) {
+            while let Err(e) =
+                crate::exchange::pull(&mut ctx, peer, version, rt.clone())
+            {
                 sleep(Duration::from_millis(interval));
                 wrn!(log, if_name, "exchange pull: {}", e);
                 if stop.load(Ordering::Relaxed) {
@@ -607,12 +608,12 @@ impl State for Exchange {
                     }
                 }
                 Event::Admin(AdminEvent::Sync) => {
+                    let rt = self.ctx.rt.clone();
                     if let Err(e) = crate::exchange::pull(
-                        self.ctx.clone(),
+                        &mut self.ctx,
                         self.peer,
                         self.version,
-                        self.ctx.rt.clone(),
-                        self.log.clone(),
+                        rt,
                     ) {
                         err!(
                             self.log,
@@ -626,6 +627,10 @@ impl State for Exchange {
                     self.ctx.event_channels.push(tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
+                    if let Some(x) = self.ctx.discovery_stop.as_mut() {
+                        x.store(true, Ordering::Relaxed);
+                    }
+                    self.expire_peer(&exchange_thread, &pull_stop);
                     return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {

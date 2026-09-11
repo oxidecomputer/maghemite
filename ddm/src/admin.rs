@@ -448,6 +448,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let current = ctx.db.get_external_peers();
         let to_create = rq.interfaces.difference(&current);
         let to_remove = current.difference(&rq.interfaces);
+        ctx.db.set_external_peers(rq.interfaces.clone());
 
         for ifx in to_create.into_iter() {
             let (tx, rx) = channel();
@@ -487,6 +488,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 rt: Arc::new(tokio::runtime::Handle::current()),
                 iface: Arc::new(InterfaceState::external()),
                 stats: Arc::new(SessionStats::default()),
+                discovery_stop: None,
             };
             let mut sm = StateMachine {
                 ctx: sm_ctx.clone(),
@@ -506,12 +508,29 @@ impl DdmAdminApi for DdmAdminApiImpl {
             // TODO oxstats server
         }
 
-        for ifx in to_remove.into_iter() {
+        let mut remove_idx = Vec::default();
+        info!(ctx.log, "removing peers";
+            "to_remove" => ?to_remove,
+            "current" => ?ctx
+                .peers.iter().map(|x| &x.config.aobj_name).collect::<Vec<_>>(),
+        );
+
+        for (i, ifx) in to_remove.into_iter().enumerate() {
             for p in &ctx.peers {
-                if &p.config.if_name == ifx {
+                if p.config.aobj_name.contains(ifx) {
                     let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+                    remove_idx.push(i);
+                    info!(
+                        ctx.log,
+                        "removing external peeer on interface {ifx}"
+                    );
+                } else {
+                    info!(ctx.log, "{ifx} != {}", p.config.if_name);
                 }
             }
+        }
+        for i in remove_idx {
+            ctx.peers.remove(i);
         }
 
         Ok(HttpResponseUpdatedNoContent())

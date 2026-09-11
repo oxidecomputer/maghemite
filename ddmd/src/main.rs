@@ -277,6 +277,7 @@ fn start_state_machines(
             rt: rt.clone(),
             iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
+            discovery_stop: None,
         };
 
         let sm = StateMachine { ctx, rx: Some(rx) };

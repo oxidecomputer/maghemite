@@ -16,7 +16,7 @@ use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -268,6 +268,7 @@ pub struct SmContext {
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
+    pub discovery_stop: Option<Arc<AtomicBool>>,
 }
 
 pub struct StateMachine {
