@@ -5,7 +5,6 @@
 use crate::AddPeerError;
 use crate::AddPeerRequest;
 use crate::ListenerShutdownHandle;
-use crate::RemovePeerError;
 use crate::Session;
 use crate::SessionCounters;
 use crate::dispatcher::Dispatcher;
@@ -144,24 +143,5 @@ impl Daemon {
     ) -> Option<ListenerShutdownHandle> {
         self.sessions.remove(&peer);
         self.dispatcher.remove(peer)
-    }
-
-    /// Remove `peer` on behalf of `router`. A peer whose session feeds
-    /// another router's RIB is left untouched and reported as such; an
-    /// absent peer is not an error.
-    pub fn remove_peer_owned(
-        &mut self,
-        router: &str,
-        peer: IpAddr,
-    ) -> Result<Option<ListenerShutdownHandle>, RemovePeerError> {
-        if let Some((owner, _)) = self.sessions.get(&peer)
-            && owner != router
-        {
-            return Err(RemovePeerError::PeerOwnedByOtherRouter {
-                peer,
-                owner: owner.clone(),
-            });
-        }
-        Ok(self.remove_peer(peer))
     }
 }

@@ -552,41 +552,23 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(session)
     }
 
-    /// Remove and shut down this router's session for `peer`. A same-id
-    /// session that belongs to another router is left untouched; use
-    /// [`Self::delete_owned_session`] to observe that case.
-    pub fn delete_session(&self, peer: impl Into<PeerId>) {
-        let _ = self.delete_owned_session(peer);
-    }
-
     /// Remove and shut down this router's session for `peer`.
     ///
-    /// Returns `Ok(true)` when a session was removed, `Ok(false)` when there
-    /// was none, and [`Error::PeerOwnedByOtherRouter`] — changing nothing —
-    /// when the session under that id belongs to another router sharing
-    /// this session map.
-    pub fn delete_owned_session(
-        &self,
-        peer: impl Into<PeerId>,
-    ) -> Result<bool, Error> {
+    /// The session map is shared daemon-wide, so a same-id session belonging
+    /// to another router is left untouched rather than torn down under it.
+    pub fn delete_session(&self, peer: impl Into<PeerId>) {
         let peer_id = peer.into();
         let removed = {
             let mut sessions = lock!(self.sessions);
             match sessions.get(&peer_id) {
-                None => None,
-                Some(s) if !s.belongs_to(self) => {
-                    return Err(Error::PeerOwnedByOtherRouter(peer_id));
-                }
+                Some(s) if !s.belongs_to(self) => None,
                 Some(_) => sessions.remove(&peer_id),
+                None => None,
             }
         };
         self.remove_fanout(peer_id);
-        match removed {
-            Some(s) => {
-                s.shutdown();
-                Ok(true)
-            }
-            None => Ok(false),
+        if let Some(s) = removed {
+            s.shutdown();
         }
     }
 

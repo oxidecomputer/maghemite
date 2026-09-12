@@ -61,13 +61,6 @@ pub enum AddPeerError {
     StdToTokio(#[source] io::Error),
 }
 
-/// Errors from attempting to remove a BFD peer on behalf of a router.
-#[derive(Debug, thiserror::Error)]
-pub enum RemovePeerError {
-    #[error("BFD peer {peer} belongs to router {owner}")]
-    PeerOwnedByOtherRouter { peer: IpAddr, owner: String },
-}
-
 #[derive(Debug, thiserror::Error)]
 #[error("BFD detection threshold must be nonzero")]
 pub struct DetectionThresholdZero;
