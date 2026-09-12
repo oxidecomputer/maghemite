@@ -8,5 +8,5 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SetExternalPeers {
-    pub interfaces: BTreeSet<String>,
+    pub address_objects: BTreeSet<String>,
 }

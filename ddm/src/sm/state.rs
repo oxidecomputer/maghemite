@@ -254,7 +254,6 @@ impl Exchange {
     }
 
     fn initial_pull(&mut self, stop: Arc<AtomicBool>) {
-        //let ctx = self.ctx.clone();
         let peer = self.peer;
         let version = self.version;
         let rt = self.ctx.rt.clone();

@@ -68,7 +68,7 @@ enum SubCommand {
     Sync,
 
     /// Set external peers as a list of interfaces.
-    SetExternalPeers { ifx: Vec<String> },
+    SetExternalPeers { addr_obj: Vec<String> },
 }
 
 #[derive(Debug, Parser)]
@@ -269,10 +269,10 @@ async fn run() -> Result<()> {
         SubCommand::Sync => {
             client.sync().await?;
         }
-        SubCommand::SetExternalPeers { ifx } => {
+        SubCommand::SetExternalPeers { addr_obj } => {
             client
                 .set_external_peers(&SetExternalPeers {
-                    interfaces: ifx.clone(),
+                    address_objects: addr_obj.clone(),
                 })
                 .await?;
         }

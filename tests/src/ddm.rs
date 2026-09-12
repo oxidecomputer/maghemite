@@ -7,6 +7,7 @@ use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use slog::{Drain, Logger};
+use std::collections::BTreeMap;
 use std::env;
 use std::net::Ipv6Addr;
 use std::thread::sleep;
@@ -60,7 +61,7 @@ impl<'a> SoftnpuZone<'a> {
         ifx: &[&'a str],
         testname: &'a str,
     ) -> Result<Self> {
-        let softnpu_mount = format!("/tmp/softnpu/{}", testname);
+        let softnpu_mount = format!("/tmp/softnpu/{testname}/{name}");
         std::fs::create_dir_all(&softnpu_mount)?;
         let fs = &[FsMount::new(&softnpu_mount, "/opt/mnt")];
 
@@ -91,7 +92,10 @@ impl<'a> SoftnpuZone<'a> {
         )?;
         self.zfs.copy_workspace_to_zone(
             &self.zone.name,
-            &format!("tests/conf/softnpu-{}.toml", self.testname),
+            &format!(
+                "tests/conf/softnpu-{}-{}.toml",
+                self.testname, self.zone.name
+            ),
             "opt/softnpu.toml",
         )?;
         self.zone.zexec(&format!(
@@ -135,6 +139,7 @@ struct RouterZone<'a> {
     zone: Zone,
     transit: bool,
     testname: String,
+    port_map: BTreeMap<String, String>,
 }
 
 impl<'a> RouterZone<'a> {
@@ -144,7 +149,7 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, false, "")
+        Self::new(name, zfs, mgmt, rtr_ifx, false, "", "")
     }
 
     fn transit(
@@ -153,8 +158,9 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
         testname: &str,
+        softnpu_name: &str,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, true, testname)
+        Self::new(name, zfs, mgmt, rtr_ifx, true, testname, softnpu_name)
     }
 
     fn new(
@@ -164,12 +170,14 @@ impl<'a> RouterZone<'a> {
         rtr_ifx: &[&'a str],
         transit: bool,
         testname: &str,
+        softnpu_name: &str,
     ) -> Result<Self> {
         let mut ifx = vec![mgmt];
         ifx.extend_from_slice(rtr_ifx);
 
         let fs = if transit {
-            let softnpu_mount = format!("/tmp/softnpu/{}", testname);
+            let softnpu_mount =
+                format!("/tmp/softnpu/{testname}/{softnpu_name}");
             std::fs::create_dir_all(&softnpu_mount)?;
             vec![FsMount::new(&softnpu_mount, "/opt/mnt")]
         } else {
@@ -183,7 +191,12 @@ impl<'a> RouterZone<'a> {
             zone,
             transit,
             testname: testname.into(),
+            port_map: BTreeMap::default(),
         })
+    }
+
+    fn set_port_map(&mut self, pm: BTreeMap<String, String>) {
+        self.port_map = pm;
     }
 
     fn stop_router(&self) -> Result<String> {
@@ -191,11 +204,32 @@ impl<'a> RouterZone<'a> {
     }
 
     fn start_router(&self, restart_dpd: bool) -> Result<()> {
-        let addrs = self.ifx[1..]
+        let mapped_ports = self.ifx[1..]
             .iter()
-            .map(|x| format!("-a {}/v6", x))
-            .collect::<Vec<String>>()
-            .join(" ");
+            .map(|x| x.to_string())
+            .map(|x| self.port_map.get(&x).unwrap_or(&x).clone())
+            .collect::<Vec<_>>();
+
+        let rear_ports = mapped_ports
+            .iter()
+            .filter(|&x| x.contains("rear"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let front_ports = mapped_ports
+            .iter()
+            .filter(|&x| x.contains("qsfp"))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let addrs = if self.transit {
+            &rear_ports
+        } else {
+            &mapped_ports
+        }
+        .iter()
+        .map(|x| format!("-a {}/v6", x))
+        .collect::<Vec<String>>()
+        .join(" ");
 
         let ddm = "/opt/ddmd";
         let extra_args = format!(
@@ -216,11 +250,17 @@ impl<'a> RouterZone<'a> {
                 self.zone.zexec(
                     "svccfg -s dendrite setprop config/uds_path = /opt/mnt",
                 )?;
+                /*
                 self.zone.zexec(
                 "svccfg -s dendrite setprop config/port_config = /opt/dpd-ports.toml")?;
+                */
+                self.zone.zexec(&format!(
+                    "svccfg -s dendrite setprop config/front_ports = {}",
+                    front_ports.len(),
+                ))?;
                 self.zone.zexec(&format!(
                     "svccfg -s dendrite setprop config/rear_ports = {}",
-                    self.ifx.len() - 1
+                    rear_ports.len(),
                 ))?;
                 self.zone.zexec("svcadm refresh dendrite:default")?;
                 self.zone.zexec("svcadm enable dendrite:default")?;
@@ -265,7 +305,18 @@ impl<'a> RouterZone<'a> {
             ),
         )?;
 
-        for ifx in &self.ifx[1..] {
+        for (link, vnic) in &self.port_map {
+            self.zone
+                .zexec(&format!("dladm create-vnic -t -l {link} {vnic}"))?;
+        }
+
+        let mapped_ports = self.ifx[1..]
+            .iter()
+            .map(|x| x.to_string())
+            .map(|x| self.port_map.get(&x).unwrap_or(&x).clone())
+            .collect::<Vec<_>>();
+
+        for ifx in &mapped_ports {
             self.zone.zcmd(
                 &z,
                 &format!("ipadm create-addr -t -T addrconf {}/v6", ifx),
@@ -437,6 +488,7 @@ async fn test_trio() -> Result<()> {
         &mg1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a],
         "trio",
+        "sidecar.trio",
     )?;
 
     println_nopipe!("waiting for zones to come up");
@@ -653,7 +705,7 @@ async fn run_trio_tests(
 
 #[tokio::test]
 async fn test_quartet() -> Result<()> {
-    // A quartet of servers in a star topology.
+    // A quartet of routers in a star topology.
     //
     //                                                    sled1
     //                                                 ,----------,
@@ -726,6 +778,7 @@ async fn test_quartet() -> Result<()> {
         &mgt1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a, &tf2_sr2.end_a],
         "quartet",
+        "sidecar.quartet",
     )?;
 
     println_nopipe!("waiting for zones to come up");
@@ -799,6 +852,207 @@ async fn run_quartet_tests(
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
     retry_cmd!(zs3.zexec("ping fd00:1::1"), 1, 10);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_external_peer_sextet() -> Result<()> {
+    // A sextet of routers in a multi-rack topology.
+    //
+    //                                                    sled1
+    //                                                 ,----------,
+    //                                               ,-----,  ,-----,
+    //                                             ,-| sl0 |  | mg2 |-*
+    //       scrimletA             sidecarA        | '-----'  '-----'
+    //     ,-----------,     ,-----------------,   |   '----------'
+    //     |      ,-----,  ,-----, ,-----, ,-----, |
+    //     |      | tr0a|--| sr0 |-|     |-| sw2 |-'      sled2
+    //     |      '-----'  '-----' |     | '-----'     ,----------,
+    //    ,-----, ,-----,  ,-----, |soft | ,-----,   ,-----,  ,-----,
+    //  *-| mg1 | | tr1a|--| sr1 |-|  npu|-| sw3 |---| sl1 |  | mg3 |-*
+    //    '-----' '-----'  '-----' |     | '-----'   '-----'  '-----'
+    //     |      ,-----,  ,-----, |     | ,-----,     '----------'
+    //     |      | tq0a|--| sq0 |-|     |-| sw0 |----,
+    //     |      '-----'  '-----' |     | '-----'    |
+    //     |      ,-----,  ,-----, |     | ,-----,    |
+    //     |      | tq1a|--| sq1 |-|     |-| sw1 |-,  |
+    //     |      '-----'  '-----' '-----' '-----' |  |
+    //     '-----------'     '-----------------'   |  |
+    //                                             |  |
+    //                                             |  |
+    //                                             |  |
+    //       scrimletB             sidecarB        |  |
+    //     ,-----------,     ,-----------------,   |  |
+    //     |      ,-----,  ,-----, ,-----, ,-----, |  |
+    //     |      | tq0b|--| sq2 |-|     |-| sw4 |-'  |
+    //     |      '-----'  '-----' |     | '-----'    |
+    //    ,-----, ,-----,  ,-----, |soft | ,-----,    |
+    //  *-| mg4 | | tq1b|--| sq3 |-|  npu|-| sw5 |----'   sled3
+    //    '-----' '-----'  '-----' |     | '-----'     ,----------,
+    //     |      ,-----,  ,-----, |     | ,-----,   ,-----,  ,-----,
+    //     |      | tr0b|--| sr2 |-|     |-| sw6 |---| sl2 |  | mg5 |-*
+    //     |      '-----'  '-----' |     | '-----'   '-----'  '-----'
+    //     |      ,-----,  ,-----, |     | ,-----,     '----------'
+    //     |      | tr1b|--| sr3 |-|     |-| sw7 |-,
+    //     |      '-----'  '-----' '-----' '-----' |      sled4
+    //     '-----------'     '-----------------'   |   ,----------,
+    //                                             | ,-----,  ,-----,
+    //                                             '-| sl3 |  | mg6 |-*
+    //                                               '-----'  '-----'
+    //                                                 '----------'
+
+    // Scrimlet A <-> Sidecar A
+    let tqa_sq_0 = SimnetLink::new("tqa0", "sq0")?;
+    let tqa_sq_1 = SimnetLink::new("tqa1", "sq1")?;
+    let tra_sr_0 = SimnetLink::new("tra0", "sr0")?;
+    let tra_sr_1 = SimnetLink::new("tra1", "sr1")?;
+
+    // Sidecar A <-> Sleds
+    let sl0_sw2 = SimnetLink::new("sl0", "sw2")?;
+    let sl1_sw3 = SimnetLink::new("sl1", "sw3")?;
+
+    // Scrimlet B <-> Sidecar B
+    let tqb_sq_0 = SimnetLink::new("tqb0", "sq2")?;
+    let tqb_sq_1 = SimnetLink::new("tqb1", "sq3")?;
+    let trb_sr_0 = SimnetLink::new("trb0", "sr2")?;
+    let trb_sr_1 = SimnetLink::new("trb1", "sr3")?;
+
+    // Sidecar B <-> Sleds
+    let sl2_sw6 = SimnetLink::new("sl2", "sw6")?;
+    let sl3_sw7 = SimnetLink::new("sl3", "sw7")?;
+
+    // Sidecar A <-> Sidecar B
+    let sw0_sw4 = SimnetLink::new("sw0", "sw5")?;
+    let sw1_sw5 = SimnetLink::new("sw1", "sw4")?;
+
+    let mgmt0 = Etherstub::new("mgmt0")?;
+    let mg0 = Vnic::new("mg0", &mgmt0.name)?;
+    let mgs1 = Vnic::new("mgs1", &mgmt0.name)?;
+    let mgs2 = Vnic::new("mgs2", &mgmt0.name)?;
+    let mgs3 = Vnic::new("mgs3", &mgmt0.name)?;
+    let mgs4 = Vnic::new("mgs4", &mgmt0.name)?;
+    let mgs5 = Vnic::new("mgs5", &mgmt0.name)?;
+    let mgs6 = Vnic::new("mgs6", &mgmt0.name)?;
+
+    let _mgip = Ip::new("10.0.0.254/24", &mg0.name, "test")?;
+
+    let zfs = Zfs::new("mgtest")?;
+
+    let sidecar_a = SoftnpuZone::new(
+        "sidecar_a.sextet",
+        &zfs,
+        &[
+            &tqa_sq_0.end_b,
+            &tqa_sq_1.end_b,
+            &tra_sr_0.end_b,
+            &tra_sr_1.end_b,
+            &sl0_sw2.end_b,
+            &sl1_sw3.end_b,
+            &sw0_sw4.end_a,
+            &sw1_sw5.end_a,
+        ],
+        "sextet",
+    )?;
+
+    let sidecar_b = SoftnpuZone::new(
+        "sidecar_b.sextet",
+        &zfs,
+        &[
+            &tqb_sq_0.end_b,
+            &tqb_sq_1.end_b,
+            &trb_sr_0.end_b,
+            &trb_sr_1.end_b,
+            &sl2_sw6.end_b,
+            &sl3_sw7.end_b,
+            &sw0_sw4.end_b,
+            &sw1_sw5.end_b,
+        ],
+        "sextet",
+    )?;
+
+    println_nopipe!("start zone s1");
+    let s1 =
+        RouterZone::server("s1.sextet", &zfs, &mgs2.name, &[&sl0_sw2.end_a])?;
+
+    println_nopipe!("start zone s2");
+    let s2 =
+        RouterZone::server("s2.sextet", &zfs, &mgs3.name, &[&sl1_sw3.end_a])?;
+
+    println_nopipe!("start zone s3");
+    let s3 =
+        RouterZone::server("s3.sextet", &zfs, &mgs5.name, &[&sl2_sw6.end_a])?;
+
+    println_nopipe!("start zone s4");
+    let s4 =
+        RouterZone::server("s4.sextet", &zfs, &mgs6.name, &[&sl3_sw7.end_a])?;
+
+    println_nopipe!("start zone t1");
+    let mut t1 = RouterZone::transit(
+        "t1.sextet",
+        &zfs,
+        &mgs1.name,
+        &[
+            &tqa_sq_0.end_a,
+            &tqa_sq_1.end_a,
+            &tra_sr_0.end_a,
+            &tra_sr_1.end_a,
+        ],
+        "sextet",
+        "sidecar_a.sextet",
+    )?;
+    t1.set_port_map(BTreeMap::from([
+        ("tra0".into(), "tfportrear0_0".into()),
+        ("tra1".into(), "tfportrear1_0".into()),
+        ("tqa0".into(), "tfportqsfp0_0".into()),
+        ("tqa1".into(), "tfportqsfp1_0".into()),
+    ]));
+
+    println_nopipe!("start zone t2");
+    let mut t2 = RouterZone::transit(
+        "t2.sextet",
+        &zfs,
+        &mgs4.name,
+        &[
+            &tqb_sq_0.end_a,
+            &tqb_sq_1.end_a,
+            &trb_sr_0.end_a,
+            &trb_sr_1.end_a,
+        ],
+        "sextet",
+        "sidecar_b.sextet",
+    )?;
+    t2.set_port_map(BTreeMap::from([
+        ("trb0".into(), "tfportrear0_0".into()),
+        ("trb1".into(), "tfportrear1_0".into()),
+        ("tqb0".into(), "tfportqsfp0_0".into()),
+        ("tqb1".into(), "tfportqsfp1_0".into()),
+    ]));
+
+    println_nopipe!("waiting for zones to come up");
+    sleep(Duration::from_secs(10));
+
+    sidecar_a.setup()?;
+    sidecar_b.setup()?;
+    s1.setup(1)?;
+    s2.setup(2)?;
+    s3.setup(3)?;
+    s4.setup(4)?;
+    t1.setup(5)?;
+    t2.setup(6)?;
+
+    run_topo!(run_sextet_tests(&s1, &s2, &s3, &s4, &t1, &t2).await)?;
+
+    Ok(())
+}
+
+async fn run_sextet_tests(
+    _zs1: &RouterZone<'_>,
+    _zs2: &RouterZone<'_>,
+    _zs3: &RouterZone<'_>,
+    _zs4: &RouterZone<'_>,
+    _zt1: &RouterZone<'_>,
+    _zt2: &RouterZone<'_>,
+) -> Result<()> {
     Ok(())
 }
 

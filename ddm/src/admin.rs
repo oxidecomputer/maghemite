@@ -446,11 +446,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let rq = request.into_inner();
 
         let current = ctx.db.get_external_peers();
-        let to_create = rq.interfaces.difference(&current);
-        let to_remove = current.difference(&rq.interfaces);
-        ctx.db.set_external_peers(rq.interfaces.clone());
+        let to_create = rq.address_objects.difference(&current);
+        let to_remove = current.difference(&rq.address_objects);
+        ctx.db.set_external_peers(rq.address_objects.clone());
 
-        for ifx in to_create.into_iter() {
+        for addr_obj in to_create.into_iter() {
             let (tx, rx) = channel();
 
             let config = crate::sm::Config {
@@ -460,7 +460,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 ip_addr_wait: millis_u64(IP_ADDR_WAIT),
                 exchange_timeout: millis_u64(EXCHANGE_TIMEOUT),
                 exchange_port: EXCHANGE_TCP_PORT,
-                aobj_name: format!("{ifx}/ll"),
+                aobj_name: addr_obj.clone(),
                 if_name: String::default(), // initialized in state machine
                 if_index: 0,                // initialized in state machine
                 // External peers are only a thing for transit routers.

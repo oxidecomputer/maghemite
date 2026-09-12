@@ -9469,7 +9469,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#021420c1e2f1ac9c66759d5df44979940a1ac483"
+source = "git+https://github.com/oxidecomputer/falcon?branch=ry%2Fztest-dl-privs#3acbd55db9d280f19c32b03fa93fce1a8fad3571"
 dependencies = [
  "anyhow",
  "libnet",

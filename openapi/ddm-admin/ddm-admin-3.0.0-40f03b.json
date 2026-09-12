@@ -619,7 +619,7 @@
       "SetExternalPeers": {
         "type": "object",
         "properties": {
-          "interfaces": {
+          "address_objects": {
             "type": "array",
             "items": {
               "type": "string"
@@ -628,7 +628,7 @@
           }
         },
         "required": [
-          "interfaces"
+          "address_objects"
         ]
       },
       "TunnelOrigin": {

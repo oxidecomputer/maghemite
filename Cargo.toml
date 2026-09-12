@@ -112,7 +112,7 @@ clap = { version = "4.6.6", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.1"
 strum = { version = "0.28", features = ["derive"] }
-ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
+ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "ry/ztest-dl-privs" }
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.14"
 nom = "8.0"
