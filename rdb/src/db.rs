@@ -370,6 +370,22 @@ impl Db {
                 )));
             }
         }
+        // No live router has this id (checked above), so any entry left in
+        // the SWITCH_INDEX tree is a departed router's tombstone: its switch
+        // table has not been confirmed clean (see `delete_router`). Handing
+        // the id — and with it the pinned, possibly dirty table index — to a
+        // new router would silently resurrect it.
+        if self
+            .persistent
+            .open_tree(SWITCH_INDEX)?
+            .contains_key(info.id.as_bytes())?
+        {
+            return Err(Error::Conflict(format!(
+                "router id {} is tombstoned: its switch table index is \
+                 pending a clean scrub",
+                info.id
+            )));
+        }
         let switch_index = self.ensure_switch_index(&info)?;
         let tree = self.persistent.open_tree(ROUTER)?;
         tree.insert(
@@ -2924,10 +2940,47 @@ mod test {
             vec![(r1_id, 1)]
         );
 
+        // While tombstoned, the departed router's uuid cannot come back —
+        // under its old name or a new one — since that would hand the
+        // possibly dirty table index straight to the new router.
+        let resurrect = |name: &str, seg: u16| RouterInfo {
+            id: r1_id,
+            name: name.to_string(),
+            tep: Ipv6Addr::new(0xfd00, 0, 0, seg, 0, 0, 0, 1),
+        };
+        for name in ["r1", "r1b"] {
+            let err = db
+                .db()
+                .create_router(resurrect(name, 9))
+                .err()
+                .expect("tombstoned id must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    crate::error::Error::Conflict(ref m)
+                        if m.contains("tombstoned")
+                ),
+                "{err}"
+            );
+            assert!(db.db().router(name).is_err());
+        }
+        assert_eq!(
+            db.db().orphaned_switch_indexes().unwrap(),
+            vec![(r1_id, 1)]
+        );
+
         // Releasing the tombstone makes the index reusable.
         db.db().release_switch_index(&r1_id).unwrap();
         assert!(db.db().orphaned_switch_indexes().unwrap().is_empty());
         let r4 = db.db().create_router(mk("r4", 4)).expect("create r4");
         assert_eq!(r4.switch_index(), 1);
+
+        // ...and the released uuid itself is usable again.
+        let r1b = db
+            .db()
+            .create_router(resurrect("r1b", 9))
+            .expect("create r1b after release");
+        assert_eq!(r1b.id(), r1_id);
+        assert_eq!(r1b.switch_index(), 2);
     }
 }
