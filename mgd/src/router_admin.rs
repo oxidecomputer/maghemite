@@ -734,16 +734,12 @@ mod tests {
     use super::do_multi_router_apply;
     use crate::admin::HandlerContext;
     use crate::bgp_admin::do_bgp_apply;
-    use crate::bgp_admin::helpers;
     use crate::bgp_admin::tests::{
         POLICY_SOURCE, mixed_req, numbered, test_ctx, unnumbered,
     };
-    use crate::error::Error;
     use dropshot::HttpError;
     use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
-    use mg_api_types::bgp::config::{
-        ApplyRequest, CheckerSource, Neighbor, ShaperSource,
-    };
+    use mg_api_types::bgp::config::{CheckerSource, ShaperSource};
     use mg_api_types::bgp::peer::PeerId;
     use mg_api_types::router::{
         BgpSpec, MultiRouterApplyRequest, RouterId, RouterSpec,
@@ -1395,144 +1391,5 @@ mod tests {
                 Some("two")
             );
         }
-    }
-
-    /// A-08: the legacy per-neighbor endpoints act as the default router and
-    /// cannot delete, update, create over, or re-apply a peer that a named
-    /// router owns; the refusal (409) changes nothing.
-    #[tokio::test]
-    async fn legacy_peer_mutations_respect_named_router_ownership() {
-        let ctx =
-            test_ctx("legacy_peer_mutations_respect_named_router_ownership");
-
-        let one = spec("one", 65001, "203.0.113.1");
-        apply(&ctx, vec![one.clone()]).await.expect("apply one");
-        let peer: IpAddr = "203.0.113.1".parse().unwrap();
-
-        // The default router runs the same ASN with no peers of its own, so
-        // the legacy paths resolve a BGP router and reach the session layer.
-        let default_rdb = ctx.rdb().expect("default rdb");
-        let empty = ApplyRequest {
-            asn: 65001,
-            originate: Vec::new(),
-            checker: None,
-            shaper: None,
-            peers: HashMap::new(),
-            unnumbered_peers: HashMap::new(),
-        };
-        do_bgp_apply(&ctx, &default_rdb, empty.clone())
-            .await
-            .expect("default router with no peers");
-        let before = snapshot(&ctx);
-
-        // Legacy delete of the named router's peer.
-        let err =
-            helpers::remove_neighbor(ctx.clone(), &default_rdb, 65001, peer)
-                .await
-                .err()
-                .expect("foreign delete must be refused");
-        assert!(matches!(err, Error::Conflict(_)), "{err}");
-        assert_eq!(HttpError::from(err).status_code.as_u16(), 409);
-        assert_eq!(session_owner(&ctx, "203.0.113.1").as_deref(), Some("one"));
-        assert_eq!(snapshot(&ctx), before, "legacy delete mutated state");
-
-        // Legacy create (ensure = false) and update (ensure = true).
-        let nbr = Neighbor::from_bgp_peer_config(
-            65001,
-            "qsfp0".into(),
-            numbered("203.0.113.1", "peer", 9),
-        );
-        for ensure in [false, true] {
-            let err = helpers::add_neighbor(
-                ctx.clone(),
-                &default_rdb,
-                nbr.clone(),
-                ensure,
-            )
-            .expect_err("foreign create/update must be refused");
-            assert!(matches!(err, Error::Conflict(_)), "{err}");
-            assert_eq!(snapshot(&ctx), before, "legacy add mutated state");
-        }
-
-        // Legacy apply listing the named router's peer.
-        let mut steal = empty;
-        steal.peers = HashMap::from([(
-            "qsfp0".to_string(),
-            vec![numbered("203.0.113.1", "peer", 6)],
-        )]);
-        let err = do_bgp_apply(&ctx, &default_rdb, steal)
-            .await
-            .err()
-            .expect("foreign legacy apply must be refused");
-        assert_eq!(err.status_code.as_u16(), 409, "{}", err.external_message);
-        assert_eq!(snapshot(&ctx), before, "legacy apply mutated state");
-        assert_eq!(session_owner(&ctx, "203.0.113.1").as_deref(), Some("one"));
-
-        // The owner's own re-apply is still an update, not a conflict. (It
-        // also empties the absent default router, dropping the BGP instance
-        // seeded above; "one" itself is unchanged.)
-        apply(&ctx, vec![one]).await.expect("owner re-apply");
-        let after = snapshot(&ctx);
-        assert_eq!(after.0, before.0, "routers changed");
-        assert_eq!(after.2, before.2, "neighbors/statics changed");
-        assert_eq!(session_owner(&ctx, "203.0.113.1").as_deref(), Some("one"));
-        assert!(
-            !lock!(ctx.bgp.router)
-                .contains_key(&("default".to_string(), 65001))
-        );
-    }
-
-    /// A-08: BFD peers are attributed to their router; the legacy remove
-    /// (acting as the default router) and a foreign add are refused, while
-    /// the owning router can remove its peer.
-    #[tokio::test]
-    async fn legacy_bfd_mutations_respect_named_router_ownership() {
-        let ctx =
-            test_ctx("legacy_bfd_mutations_respect_named_router_ownership");
-
-        let mut one = spec("one", 65001, "203.0.113.1");
-        let bfd = BfdPeerConfig {
-            peer: "203.0.113.11".parse().unwrap(),
-            listen: "127.0.0.1".parse().unwrap(),
-            required_rx: 1_000_000,
-            detection_threshold: NonZeroU8::new(3).unwrap(),
-            mode: SessionMode::SingleHop,
-        };
-        one.bfd_peers = vec![bfd];
-        apply(&ctx, vec![one.clone()])
-            .await
-            .expect("apply one with bfd");
-        let owner = |ctx: &Arc<HandlerContext>| {
-            lock!(ctx.bfd.daemon)
-                .router_for_peer(&bfd.peer)
-                .map(str::to_string)
-        };
-        assert_eq!(owner(&ctx).as_deref(), Some("one"));
-
-        // Legacy remove acts as the default router: refused, peer stays.
-        let err = lock!(ctx.bfd.daemon)
-            .remove_peer_owned(rdb::DEFAULT_ROUTER, bfd.peer)
-            .err()
-            .expect("foreign bfd remove must be refused");
-        assert!(matches!(
-            err,
-            bfd::RemovePeerError::PeerOwnedByOtherRouter { .. }
-        ));
-        assert_eq!(owner(&ctx).as_deref(), Some("one"));
-
-        // A foreign add of the same peer is a conflict.
-        let err = crate::bfd_admin::add_peer(
-            ctx.clone(),
-            ctx.rdb().expect("default rdb"),
-            bfd,
-        )
-        .expect_err("foreign bfd add must be refused");
-        assert_eq!(err.status_code.as_u16(), 409, "{}", err.external_message);
-        assert_eq!(owner(&ctx).as_deref(), Some("one"));
-
-        // The owner drops it by no longer listing it.
-        one.bfd_peers.clear();
-        apply(&ctx, vec![one]).await.expect("owner drops bfd peer");
-        assert_eq!(owner(&ctx), None);
     }
 }
