@@ -131,6 +131,7 @@ pub async fn create_router(
     request: TypedBody<mg_api_types::bgp::config::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     let rq = request.into_inner();
     let rdb = ctx.rdb()?;
 
@@ -175,6 +176,7 @@ pub async fn update_router(
     request: TypedBody<mg_api_types::bgp::config::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     let rq = request.into_inner();
     let rdb = ctx.rdb()?;
     Ok(helpers::ensure_router(ctx.clone(), &rdb, rq).await?)
@@ -186,6 +188,7 @@ pub async fn delete_router(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     let rdb = ctx.rdb()?;
     do_delete_router(ctx, &rdb, rq.asn).await?;
     Ok(HttpResponseUpdatedNoContent())
@@ -273,6 +276,7 @@ pub async fn create_neighbor_v1(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     helpers::add_neighbor_v1(ctx.clone(), &ctx.rdb()?, rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -307,6 +311,7 @@ pub async fn update_neighbor_v1(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     helpers::add_neighbor_v1(ctx.clone(), &ctx.rdb()?, rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -328,6 +333,7 @@ pub async fn create_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     helpers::add_neighbor(ctx.clone(), &ctx.rdb()?, rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -424,6 +430,7 @@ pub async fn update_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     helpers::add_neighbor(ctx.clone(), &ctx.rdb()?, rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -435,6 +442,7 @@ pub async fn delete_neighbor(
     let rq = path.into_inner();
     let peer_id = rq.to_peer_id();
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     let rdb = ctx.rdb()?;
 
     match peer_id {
@@ -483,6 +491,7 @@ pub async fn create_unnumbered_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     helpers::add_unnumbered_neighbor(ctx.clone(), &ctx.rdb()?, rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -518,6 +527,7 @@ pub async fn update_unnumbered_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     helpers::add_unnumbered_neighbor(ctx.clone(), &ctx.rdb()?, rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -528,6 +538,7 @@ pub async fn delete_unnumbered_neighbor(
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     Ok(helpers::remove_unnumbered_neighbor(
         ctx.clone(),
         &ctx.rdb()?,
@@ -1329,6 +1340,7 @@ pub async fn bgp_apply(
     request: TypedBody<ApplyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     let rdb = ctx.rdb()?;
     do_bgp_apply(ctx, &rdb, request.into_inner()).await
 }
@@ -2025,6 +2037,37 @@ pub(crate) mod helpers {
         add_router(ctx.clone(), rdb, rq, &mut guard)
     }
 
+    /// Refuse to touch a peer whose live session belongs to a router other
+    /// than `rdb`. The BGP session map is daemon-wide (sessions are keyed
+    /// by peer id alone), so this is what keeps a legacy call — which always
+    /// acts as the default router — or a mis-ordered apply from
+    /// reconfiguring or dropping another router's peer. Checked before any
+    /// mutation so a refused request changes nothing; the bgp layer enforces
+    /// the same rule again on the session itself.
+    pub(crate) fn ensure_peer_not_foreign(
+        ctx: &Arc<HandlerContext>,
+        rdb: &rdb::RouterDb,
+        peer: &PeerId,
+    ) -> Result<(), Error> {
+        let session = match lock!(ctx.bgp.sessions).get(peer) {
+            Some(s) => s.clone(),
+            None => return Ok(()),
+        };
+        let owner = lock!(ctx.bgp.router)
+            .iter()
+            .find(|(_, r)| session.belongs_to(r))
+            .map(|((name, asn), _)| (name.clone(), *asn));
+        match owner {
+            Some((name, _)) if name == rdb.name() => Ok(()),
+            Some((name, asn)) => Err(Error::Conflict(format!(
+                "peer {peer} belongs to router {name} (asn {asn})"
+            ))),
+            // A live session no router claims (its router is mid-teardown):
+            // the bgp layer decides what happens to it.
+            None => Ok(()),
+        }
+    }
+
     pub(crate) async fn remove_neighbor(
         ctx: Arc<HandlerContext>,
         rdb: &rdb::RouterDb,
@@ -2033,9 +2076,11 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
+        ensure_peer_not_foreign(&ctx, rdb, &PeerId::Ip(addr))?;
+        let router = get_router!(&ctx, rdb.name(), asn)?.clone();
         rdb.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
         rdb.remove_bgp_neighbor(asn.into(), addr)?;
-        get_router!(&ctx, rdb.name(), asn)?.delete_session(addr);
+        router.delete_owned_session(addr)?;
 
         Ok(HttpResponseDeleted())
     }
@@ -2052,13 +2097,25 @@ pub(crate) mod helpers {
             "remove unnumbered neighbor (interface {interface}, asn {asn})"
         );
 
+        let peer = PeerId::Interface(interface.to_string());
+        ensure_peer_not_foreign(&ctx, rdb, &peer)?;
+        let router = get_router!(&ctx, rdb.name(), asn)?.clone();
+
+        // The NDP manager is daemon-wide too: only unregister the interface
+        // when it is this router's neighbor.
+        let ours = rdb
+            .get_unnumbered_bgp_neighbors()?
+            .iter()
+            .any(|n| n.interface == interface);
+
         // Delete the BGP session for this unnumbered neighbor.
         // Unnumbered sessions are keyed by interface name, not IP address.
-        get_router!(&ctx, rdb.name(), asn)?
-            .delete_session(PeerId::Interface(interface.to_string()));
+        router.delete_owned_session(peer)?;
 
-        // Unregister the interface from NDP peer discovery
-        ctx.bgp.unnumbered_manager.remove_interface(interface)?;
+        if ours {
+            // Unregister the interface from NDP peer discovery
+            ctx.bgp.unnumbered_manager.remove_interface(interface)?;
+        }
 
         // And now clear out the top level database entry
         rdb.remove_unnumbered_bgp_neighbor(asn.into(), interface)?;
@@ -2178,6 +2235,8 @@ pub(crate) mod helpers {
         rq.validate_address_families()
             .map_err(Error::InvalidRequest)?;
 
+        ensure_peer_not_foreign(&ctx, rdb, &PeerId::Ip(rq.host.ip()))?;
+
         let (event_tx, event_rx) = channel();
 
         let info = SessionInfo::from(&rq.parameters);
@@ -2295,6 +2354,12 @@ pub(crate) mod helpers {
         // Validate that at least one AF is enabled
         rq.validate_address_families()
             .map_err(Error::InvalidRequest)?;
+
+        ensure_peer_not_foreign(
+            &ctx,
+            rdb,
+            &PeerId::Interface(rq.interface.clone()),
+        )?;
 
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
@@ -2892,10 +2957,13 @@ fn update(message, asn, addr) {
             bfd: BfdContext::new(log.clone()),
             log: log.clone(),
             db: db.db().clone(),
-            lower: crate::lower::LowerContext::default(),
+            // No platform in tests: lifecycle outcomes come from the hook
+            // (`ctx.lower.test_hook()`); teardowns are clean by default.
+            lower: crate::lower::LowerContext::for_test(Default::default()),
             mg_lower_stats: Arc::new(MgLowerStats::default()),
             stats_server_running: Mutex::new(false),
             oximeter_port: 0,
+            apply_lock: tokio::sync::Mutex::new(()),
         })
     }
 

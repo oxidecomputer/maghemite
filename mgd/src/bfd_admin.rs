@@ -6,6 +6,7 @@ use crate::admin::HandlerContext;
 use anyhow::Result;
 use bfd::AddPeerError;
 use bfd::Daemon;
+use bfd::RemovePeerError;
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,
@@ -63,11 +64,17 @@ pub(crate) async fn get_bfd_peers(
 
 /// Add a new peer to the daemon. A session for the specified peer will start
 /// immediately.
+///
+/// This legacy endpoint acts as the default router: the peer is attributed
+/// to it, and an address already in use by another router's session is
+/// refused (409). Default-router state written this way is overwritten by
+/// the next complete multi-router apply.
 pub(crate) async fn add_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<BfdPeerConfig>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
     let rdb = ctx.rdb()?;
     add_peer(ctx.clone(), rdb, request.into_inner())?;
     Ok(HttpResponseUpdatedNoContent())
@@ -80,11 +87,14 @@ pub(crate) fn add_peer(
 ) -> Result<(), HttpError> {
     let mut daemon = lock!(ctx.bfd.daemon);
     daemon.add_peer(rdb, rq.into()).map_err(|err| match err {
-        AddPeerError::PeerExists(_) => HttpError::for_client_error(
-            None,
-            ClientErrorStatusCode::CONFLICT,
-            InlineErrorChain::new(&err).to_string(),
-        ),
+        AddPeerError::PeerExists(_)
+        | AddPeerError::PeerOwnedByOtherRouter { .. } => {
+            HttpError::for_client_error(
+                None,
+                ClientErrorStatusCode::CONFLICT,
+                InlineErrorChain::new(&err).to_string(),
+            )
+        }
         AddPeerError::Bind { .. }
         | AddPeerError::SetSocketNonBlocking(_)
         | AddPeerError::StdToTokio(_) => HttpError::for_internal_error(
@@ -95,18 +105,28 @@ pub(crate) fn add_peer(
 
 /// Remove the specified peer from the daemon. The associated peer session will
 /// be stopped immediately.
+///
+/// This legacy endpoint acts as the default router: a peer whose session
+/// belongs to a named router is not removed (409); the total apply for that
+/// router owns it.
 pub(crate) async fn remove_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     params: Path<DeleteBfdPeerPathParams>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = params.into_inner();
-    let listener_shutdown_handle = ctx
-        .context()
-        .bfd
-        .daemon
-        .lock()
-        .unwrap()
-        .remove_peer(rq.addr);
+    let ctx = ctx.context();
+    let _serialized = ctx.apply_lock.lock().await;
+    let listener_shutdown_handle = lock!(ctx.bfd.daemon)
+        .remove_peer_owned(crate::admin::DEFAULT_ROUTER, rq.addr)
+        .map_err(|err| match err {
+            RemovePeerError::PeerOwnedByOtherRouter { .. } => {
+                HttpError::for_client_error(
+                    None,
+                    ClientErrorStatusCode::CONFLICT,
+                    InlineErrorChain::new(&err).to_string(),
+                )
+            }
+        })?;
 
     if let Some(handle) = listener_shutdown_handle {
         // If this was the last peer associated with a given local listening
