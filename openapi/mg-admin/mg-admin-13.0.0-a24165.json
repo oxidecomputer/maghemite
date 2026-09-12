@@ -1680,6 +1680,35 @@
         }
       }
     },
+    "/routers/tombstones": {
+      "get": {
+        "summary": "List departed routers whose switch-local table index is still",
+        "description": "tombstoned.\n\nA router torn down while dpd could not confirm its switch table was emptied keeps its table index reserved until a later apply scrubs the table clean; its id cannot be reused by a new router until then.",
+        "operationId": "list_router_tombstones",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_RouterTombstone",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RouterTombstone"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/static/route4": {
       "get": {
         "operationId": "static_list_v4_routes",
@@ -5606,6 +5635,26 @@
         "required": [
           "id",
           "name"
+        ]
+      },
+      "RouterTombstone": {
+        "description": "A departed router whose switch-local table index is still reserved: dpd has not yet confirmed that the table it programmed is clean. Until the tombstone is scrubbed and released, a router with this id cannot be created again (it would inherit the possibly dirty table).",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "switch_index": {
+            "description": "The reserved switch-local table index.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "switch_index"
         ]
       },
       "SessionMode": {

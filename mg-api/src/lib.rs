@@ -167,6 +167,21 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<latest::router::RouterInfo>>, HttpError>;
 
+    /// List departed routers whose switch-local table index is still
+    /// tombstoned.
+    ///
+    /// A router torn down while dpd could not confirm its switch table was
+    /// emptied keeps its table index reserved until a later apply scrubs
+    /// the table clean; its id cannot be reused by a new router until then.
+    #[endpoint {
+        method = GET,
+        path = "/routers/tombstones",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn list_router_tombstones(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<latest::router::RouterTombstone>>, HttpError>;
+
     /// Get the imported RIB (rib-in) of a named router.
     #[endpoint {
         method = GET,

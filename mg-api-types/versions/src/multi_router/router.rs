@@ -51,6 +51,17 @@ impl Display for RouterId {
     }
 }
 
+/// A departed router whose switch-local table index is still reserved: dpd
+/// has not yet confirmed that the table it programmed is clean. Until the
+/// tombstone is scrubbed and released, a router with this id cannot be
+/// created again (it would inherit the possibly dirty table).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RouterTombstone {
+    pub id: RouterId,
+    /// The reserved switch-local table index.
+    pub switch_index: u8,
+}
+
 /// A named router instance (VRF-like). BGP configuration, static routes and
 /// BFD peers all attach to a router, and each router has its own RIB and its
 /// own tunnel endpoint (TEP) address.
