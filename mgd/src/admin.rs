@@ -29,7 +29,7 @@ use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
 use mg_api_types::router::{
-    MultiRouterApplyRequest, RouterInfo, RouterSelector,
+    MultiRouterApplyRequest, RouterInfo, RouterSelector, RouterTombstone,
 };
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
@@ -64,6 +64,12 @@ pub struct HandlerContext {
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,
+    /// Serializes configuration mutations: the complete multi-router apply
+    /// and the legacy per-object BGP/BFD mutation endpoints. Held across the
+    /// whole request so two writers cannot interleave their teardown,
+    /// release and claim steps. Never taken by internal helpers; only by the
+    /// entry points.
+    pub apply_lock: tokio::sync::Mutex<()>,
 }
 
 impl HandlerContext {
@@ -147,6 +153,12 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
         router_admin::list_routers(ctx).await
+    }
+
+    async fn list_router_tombstones(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<RouterTombstone>>, HttpError> {
+        router_admin::list_router_tombstones(ctx).await
     }
 
     async fn get_router_rib_imported(
