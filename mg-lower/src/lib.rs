@@ -12,7 +12,10 @@ use crate::dendrite::{
     withdraw_tep_addr,
 };
 use crate::error::Error;
-use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
+use ddm::{
+    BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes,
+    withdraw_tep_underlay_origin,
+};
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use dendrite::link_is_up;
 use log::mgl_log;
@@ -216,11 +219,12 @@ fn full_sync(
 /// logged and skipped — teardown should always run to completion.
 ///
 /// Returns true only when dpd confirmed the router's switch table is clean
-/// (no routes, TEP withdrawn). ddm failures are excluded: tunnel origins are
-/// scoped to the router's never-reused id/TEP, so stale ones cannot be
-/// inherited by a later router the way a dirty switch table can. Callers use
-/// the result to decide whether the router's switch table index may be
-/// reused.
+/// (no routes, TEP withdrawn). ddm failures are excluded: tunnel origins and
+/// the TEP underlay origin are scoped to the router's never-reused id/TEP,
+/// so stale ones cannot be inherited by a later router the way a dirty
+/// switch table can (and the tombstone scrub only repairs switch tables).
+/// Callers use the result to decide whether the router's switch table index
+/// may be reused.
 fn withdraw_all(
     tep: Ipv6Addr,
     db: &RouterDb,
@@ -302,6 +306,12 @@ fn withdraw_all(
     }
 
     clean = withdraw_tep_addr(db.id(), tep, dpd, rt.clone(), log) && clean;
+
+    // The TEP's underlay /64 was originated into ddm when the router's first
+    // tunnel route landed (`ensure_tep_underlay_origin`); withdraw it so the
+    // departed TEP stops being advertised over the underlay. Like the tunnel
+    // origins above this is a ddm operation and does not affect `clean`.
+    withdraw_tep_underlay_origin(ddm, tep, rt, log);
 
     clean
 }

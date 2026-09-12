@@ -246,6 +246,15 @@ pub trait Ddm {
     >;
 
     #[allow(clippy::ptr_arg)]
+    async fn withdraw_prefixes<'a>(
+        &'a self,
+        body: &'a Vec<oxnet::Ipv6Net>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    >;
+
+    #[allow(clippy::ptr_arg)]
     async fn advertise_tunnel_endpoints<'a>(
         &'a self,
         body: &'a Vec<TunnelOrigin>,
@@ -513,6 +522,16 @@ impl Ddm for ProductionDdm {
         ddm_admin_client::Error<DdmError>,
     > {
         self.client.advertise_prefixes(body).await
+    }
+
+    async fn withdraw_prefixes<'a>(
+        &'a self,
+        body: &'a Vec<oxnet::Ipv6Net>,
+    ) -> Result<
+        ddm_admin_client::ResponseValue<()>,
+        ddm_admin_client::Error<DdmError>,
+    > {
+        self.client.withdraw_prefixes(body).await
     }
 
     async fn advertise_tunnel_endpoints<'a>(
@@ -976,6 +995,9 @@ pub(crate) mod test {
     pub(crate) struct TestDdm {
         pub(crate) tunnel_originated: Mutex<Vec<TunnelOrigin>>,
         pub(crate) originated: Mutex<Vec<oxnet::Ipv6Net>>,
+        /// Number of upcoming `withdraw_prefixes` calls to fail (failure
+        /// injection for teardown tests).
+        pub(crate) fail_withdraw_prefixes: Mutex<u32>,
     }
 
     impl Default for TestDdm {
@@ -983,6 +1005,7 @@ pub(crate) mod test {
             Self {
                 tunnel_originated: Mutex::new(Vec::default()),
                 originated: Mutex::new(Vec::default()),
+                fail_withdraw_prefixes: Mutex::new(0),
             }
         }
     }
@@ -1016,6 +1039,29 @@ pub(crate) mod test {
             ddm_admin_client::Error<DdmError>,
         > {
             self.originated.lock().unwrap().extend(body);
+            Ok(ddm_response_ok!(()))
+        }
+
+        async fn withdraw_prefixes<'a>(
+            &'a self,
+            body: &'a Vec<oxnet::Ipv6Net>,
+        ) -> Result<
+            ddm_admin_client::ResponseValue<()>,
+            ddm_admin_client::Error<DdmError>,
+        > {
+            {
+                let mut fail = self.fail_withdraw_prefixes.lock().unwrap();
+                if *fail > 0 {
+                    *fail -= 1;
+                    return Err(ddm_admin_client::Error::InvalidRequest(
+                        "injected withdraw_prefixes failure".into(),
+                    ));
+                }
+            }
+            self.originated
+                .lock()
+                .unwrap()
+                .retain(|x| !body.contains(x));
             Ok(ddm_response_ok!(()))
         }
 
