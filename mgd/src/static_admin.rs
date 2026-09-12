@@ -63,9 +63,6 @@ pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute4Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    // Legacy per-object mutation: serialize against the complete
-    // apply and the other legacy endpoints (A-01).
-    let _serialized = ctx.context().apply_lock.lock().await;
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
         .routes
@@ -89,9 +86,6 @@ pub async fn static_remove_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<DeleteStaticRoute4Request>,
 ) -> Result<HttpResponseDeleted, HttpError> {
-    // Legacy per-object mutation: serialize against the complete
-    // apply and the other legacy endpoints (A-01).
-    let _serialized = ctx.context().apply_lock.lock().await;
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
         .routes
@@ -129,9 +123,6 @@ pub async fn static_add_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute6Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    // Legacy per-object mutation: serialize against the complete
-    // apply and the other legacy endpoints (A-01).
-    let _serialized = ctx.context().apply_lock.lock().await;
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
         .routes
@@ -155,9 +146,6 @@ pub async fn static_remove_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<DeleteStaticRoute6Request>,
 ) -> Result<HttpResponseDeleted, HttpError> {
-    // Legacy per-object mutation: serialize against the complete
-    // apply and the other legacy endpoints (A-01).
-    let _serialized = ctx.context().apply_lock.lock().await;
     let routes: Vec<StaticRouteKey> = request
         .into_inner()
         .routes
