@@ -332,35 +332,6 @@ async fn execute_apply(
     Ok(())
 }
 
-/// Longest router name accepted; matches the control plane's `Name` type.
-const MAX_ROUTER_NAME_LEN: usize = 63;
-
-/// Router names become log keys, persistent-db keys and URL path segments:
-/// accept the same shape as the control plane's resource names.
-fn validate_router_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("router name must not be empty".into());
-    }
-    if name.len() > MAX_ROUTER_NAME_LEN {
-        return Err(format!(
-            "router name {name:?} is longer than {MAX_ROUTER_NAME_LEN} bytes"
-        ));
-    }
-    if !name
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    {
-        return Err(format!(
-            "router name {name:?} may only contain lowercase ASCII letters, \
-             digits and '-'"
-        ));
-    }
-    if name.starts_with('-') {
-        return Err(format!("router name {name:?} must not start with '-'"));
-    }
-    Ok(())
-}
-
 /// Structural validation of one spec: everything the apply would otherwise
 /// only discover while already mutating.
 fn validate_router_spec(spec: &RouterSpec) -> Result<(), HttpError> {
@@ -370,8 +341,6 @@ fn validate_router_spec(spec: &RouterSpec) -> Result<(), HttpError> {
             format!("router {:?}: {msg}", spec.name),
         )
     };
-    validate_router_name(&spec.name).map_err(bad)?;
-
     if let Some(bgp) = &spec.bgp {
         bgp.listen.parse::<SocketAddr>().map_err(|e| {
             bad(format!("invalid bgp listen address {:?}: {e}", bgp.listen))
@@ -1188,21 +1157,6 @@ mod tests {
             ("invalid static prefix", {
                 let mut s = two();
                 s.static4[0].prefix = "224.0.0.0/24".parse().unwrap();
-                s
-            }),
-            ("empty name", {
-                let mut s = two();
-                s.name = String::new();
-                s
-            }),
-            ("path-hostile name", {
-                let mut s = two();
-                s.name = "../two".into();
-                s
-            }),
-            ("oversized name", {
-                let mut s = two();
-                s.name = "t".repeat(64);
                 s
             }),
             ("invalid bgp listen address", {
