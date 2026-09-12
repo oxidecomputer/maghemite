@@ -183,7 +183,6 @@ pub mod router {
     pub use crate::v13::router::RouterInfo;
     pub use crate::v13::router::RouterSelector;
     pub use crate::v13::router::RouterSpec;
-    pub use crate::v13::router::RouterTombstone;
 }
 
 pub mod ndp {

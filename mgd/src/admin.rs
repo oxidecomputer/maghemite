@@ -29,7 +29,7 @@ use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
 use mg_api_types::router::{
-    MultiRouterApplyRequest, RouterInfo, RouterSelector, RouterTombstone,
+    MultiRouterApplyRequest, RouterInfo, RouterSelector,
 };
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
@@ -153,12 +153,6 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
         router_admin::list_routers(ctx).await
-    }
-
-    async fn list_router_tombstones(
-        ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<Vec<RouterTombstone>>, HttpError> {
-        router_admin::list_router_tombstones(ctx).await
     }
 
     async fn get_router_rib_imported(

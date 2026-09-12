@@ -15,10 +15,6 @@ pub enum Commands {
     /// List the routers on this system.
     List,
 
-    /// List departed routers whose switch table index is still tombstoned
-    /// (pending a clean scrub); their ids cannot be reused yet.
-    Tombstones,
-
     /// Apply a full multi-router configuration from a JSON file.
     ///
     /// The file contains a MultiRouterApplyRequest: the complete desired
@@ -43,20 +39,6 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             )?;
             for r in routers {
                 writeln!(&mut tw, "{}\t{}\t{}", r.name, r.id, r.tep)?;
-            }
-            tw.flush()?;
-        }
-        Commands::Tombstones => {
-            let tombstones = c.list_router_tombstones().await?.into_inner();
-            let mut tw = TabWriter::new(std::io::stdout());
-            writeln!(
-                &mut tw,
-                "{}\t{}",
-                "Id".dimmed(),
-                "Switch Index".dimmed(),
-            )?;
-            for t in tombstones {
-                writeln!(&mut tw, "{}\t{}", t.id, t.switch_index)?;
             }
             tw.flush()?;
         }

@@ -34,7 +34,6 @@ use mg_api_types::bgp::config::{
 use mg_api_types::rib::{Rib, RibQuery};
 use mg_api_types::router::{
     MultiRouterApplyRequest, RouterInfo, RouterSelector, RouterSpec,
-    RouterTombstone,
 };
 use mg_common::lock;
 use oxnet::IpNet;
@@ -48,22 +47,6 @@ pub(crate) async fn list_routers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
     Ok(HttpResponseOk(ctx.context().db.list_routers()))
-}
-
-pub(crate) async fn list_router_tombstones(
-    ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<Vec<RouterTombstone>>, HttpError> {
-    let tombstones = ctx
-        .context()
-        .db
-        .orphaned_switch_indexes()
-        .map_err(|e| HttpError::from(Error::from(e)))?;
-    Ok(HttpResponseOk(
-        tombstones
-            .into_iter()
-            .map(|(id, switch_index)| RouterTombstone { id, switch_index })
-            .collect(),
-    ))
 }
 
 pub(crate) async fn get_router_rib_imported(
