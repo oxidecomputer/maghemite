@@ -309,9 +309,12 @@ fn withdraw_all(
 
     // The TEP's underlay /64 was originated into ddm when the router's first
     // tunnel route landed (`ensure_tep_underlay_origin`); withdraw it so the
-    // departed TEP stops being advertised over the underlay. Like the tunnel
-    // origins above this is a ddm operation and does not affect `clean`.
-    withdraw_tep_underlay_origin(ddm, tep, rt, log);
+    // departed TEP stops being advertised over the underlay. A failure here is
+    // incomplete cleanup, not a cosmetic one: leaving the prefix originated
+    // keeps advertising a TEP that no longer exists. Fold it into `clean` so
+    // the departed router keeps its switch index tombstoned rather than being
+    // released while the underlay still carries its prefix.
+    clean = withdraw_tep_underlay_origin(ddm, tep, rt, log) && clean;
 
     clean
 }

@@ -916,12 +916,18 @@ async fn tep_underlay_withdraw_failure_is_tolerated() {
         shut.store(true, Ordering::Relaxed);
         let clean = j.join().expect("join mg-lower");
 
-        // ASIC state is fully withdrawn and reported clean...
-        assert!(clean, "dpd-confirmed clean teardown");
+        // ASIC state is fully withdrawn, but the underlay prefix is not, so
+        // the teardown must report incomplete cleanup: the caller keeps the
+        // router's switch index tombstoned instead of releasing it.
+        assert!(
+            !clean,
+            "a failed underlay withdraw must report incomplete cleanup"
+        );
         assert_eq!(dpd.v4_count(), 0);
         assert!(dpd.loopback.lock().unwrap().is_empty());
         assert!(ddm.tunnel_originated.lock().unwrap().is_empty());
-        // ...while the /64 whose withdraw failed is still originated.
+        // The /64 whose withdraw failed is still originated; that is exactly
+        // why the teardown is dirty.
         assert_eq!(*ddm.originated.lock().unwrap(), vec![tep_net]);
         assert_eq!(*ddm.fail_withdraw_prefixes.lock().unwrap(), 0);
 
