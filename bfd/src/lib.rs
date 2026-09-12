@@ -42,6 +42,11 @@ pub enum AddPeerError {
     #[error("BFD peer {0} already exists")]
     PeerExists(IpAddr),
 
+    /// The peer address is in use by a session that feeds another router's
+    /// RIB; the daemon's peer table is shared across routers.
+    #[error("BFD peer {peer} belongs to router {owner}")]
+    PeerOwnedByOtherRouter { peer: IpAddr, owner: String },
+
     #[error("failed to bind to {addr}")]
     Bind {
         addr: SocketAddr,
@@ -54,6 +59,13 @@ pub enum AddPeerError {
 
     #[error("failed to convert std socket to tokio socket")]
     StdToTokio(#[source] io::Error),
+}
+
+/// Errors from attempting to remove a BFD peer on behalf of a router.
+#[derive(Debug, thiserror::Error)]
+pub enum RemovePeerError {
+    #[error("BFD peer {peer} belongs to router {owner}")]
+    PeerOwnedByOtherRouter { peer: IpAddr, owner: String },
 }
 
 #[derive(Debug, thiserror::Error)]

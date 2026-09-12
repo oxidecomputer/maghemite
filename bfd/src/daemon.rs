@@ -5,6 +5,7 @@
 use crate::AddPeerError;
 use crate::AddPeerRequest;
 use crate::ListenerShutdownHandle;
+use crate::RemovePeerError;
 use crate::Session;
 use crate::SessionCounters;
 use crate::dispatcher::Dispatcher;
@@ -75,7 +76,23 @@ impl Daemon {
     ) -> Result<(), AddPeerError> {
         let peer = rq.remote_addr.ip();
         match self.sessions.entry(peer) {
-            hash_map::Entry::Occupied(_) => {
+            hash_map::Entry::Occupied(entry) => {
+                let (owner, _) = entry.get();
+                if owner != db.name() {
+                    warn!(
+                        self.log, "attempt to add a peer owned by another router";
+                        "component" => crate::COMPONENT_BFD,
+                        "module" => crate::MOD_DAEMON,
+                        "unit" => crate::UNIT_PEER,
+                        "peer" => %peer,
+                        "owner" => %owner,
+                        "requester" => %db.name(),
+                    );
+                    return Err(AddPeerError::PeerOwnedByOtherRouter {
+                        peer,
+                        owner: owner.clone(),
+                    });
+                }
                 // TODO-correctness Currently clients have no way to update an
                 // existing peer: they have to remove it and recreate it. This
                 // needs work both here and in omicron to fix.
@@ -127,5 +144,24 @@ impl Daemon {
     ) -> Option<ListenerShutdownHandle> {
         self.sessions.remove(&peer);
         self.dispatcher.remove(peer)
+    }
+
+    /// Remove `peer` on behalf of `router`. A peer whose session feeds
+    /// another router's RIB is left untouched and reported as such; an
+    /// absent peer is not an error.
+    pub fn remove_peer_owned(
+        &mut self,
+        router: &str,
+        peer: IpAddr,
+    ) -> Result<Option<ListenerShutdownHandle>, RemovePeerError> {
+        if let Some((owner, _)) = self.sessions.get(&peer)
+            && owner != router
+        {
+            return Err(RemovePeerError::PeerOwnedByOtherRouter {
+                peer,
+                owner: owner.clone(),
+            });
+        }
+        Ok(self.remove_peer(peer))
     }
 }
