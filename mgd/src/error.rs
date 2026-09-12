@@ -51,7 +51,8 @@ impl From<Error> for HttpError {
             ),
             Error::NotFound(_) => Self::for_not_found(None, value.to_string()),
             Error::Bgp(ref err) => match err {
-                bgp::error::Error::PeerExists(_) => {
+                bgp::error::Error::PeerExists(_)
+                | bgp::error::Error::PeerOwnedByOtherRouter(_) => {
                     Self::for_client_error_with_status(
                         Some(err.to_string()),
                         ClientErrorStatusCode::CONFLICT,

@@ -426,7 +426,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let sessions = lock!(self.sessions);
-        if sessions.contains_key(&peer.id) {
+        if let Some(existing) = sessions.get(&peer.id) {
+            // The session map is shared daemon-wide (keyed by peer id
+            // alone): a same-id session that belongs to another router is
+            // not ours to reconfigure.
+            if !existing.belongs_to(self) {
+                return Err(Error::PeerOwnedByOtherRouter(peer.id));
+            }
             drop(sessions);
             Ok(EnsureSessionResult::Updated(
                 self.update_session(peer, info)?,
@@ -455,8 +461,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let sessions = lock!(self.sessions);
-        if sessions.contains_key(&peer.id) {
-            Err(Error::PeerExists(peer.id))
+        if let Some(existing) = sessions.get(&peer.id) {
+            if existing.belongs_to(self) {
+                Err(Error::PeerExists(peer.id))
+            } else {
+                Err(Error::PeerOwnedByOtherRouter(peer.id))
+            }
         } else {
             self.new_session_locked(
                 sessions,
@@ -481,6 +491,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         info: SessionInfo,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
+        // Both callers check under this same lock guard; never displace a
+        // live session (ours or another router's) by overwriting its entry.
+        if sessions.contains_key(&peer.id) {
+            return Err(Error::PeerExists(peer.id));
+        }
+
         let mut session_info = info.clone();
         session_info.connect_retry_time =
             Duration::from_secs(peer.connect_retry);
@@ -527,17 +543,50 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             None => return Err(Error::UnknownPeer(key)),
             Some(s) => s.clone(),
         };
+        if !session.belongs_to(self) {
+            return Err(Error::PeerOwnedByOtherRouter(key));
+        }
 
         session.update_session_parameters(peer, info)?;
 
         Ok(session)
     }
 
+    /// Remove and shut down this router's session for `peer`. A same-id
+    /// session that belongs to another router is left untouched; use
+    /// [`Self::delete_owned_session`] to observe that case.
     pub fn delete_session(&self, peer: impl Into<PeerId>) {
+        let _ = self.delete_owned_session(peer);
+    }
+
+    /// Remove and shut down this router's session for `peer`.
+    ///
+    /// Returns `Ok(true)` when a session was removed, `Ok(false)` when there
+    /// was none, and [`Error::PeerOwnedByOtherRouter`] — changing nothing —
+    /// when the session under that id belongs to another router sharing
+    /// this session map.
+    pub fn delete_owned_session(
+        &self,
+        peer: impl Into<PeerId>,
+    ) -> Result<bool, Error> {
         let peer_id = peer.into();
-        self.remove_fanout(peer_id.clone());
-        if let Some(s) = lock!(self.sessions).remove(&peer_id) {
-            s.shutdown();
+        let removed = {
+            let mut sessions = lock!(self.sessions);
+            match sessions.get(&peer_id) {
+                None => None,
+                Some(s) if !s.belongs_to(self) => {
+                    return Err(Error::PeerOwnedByOtherRouter(peer_id));
+                }
+                Some(_) => sessions.remove(&peer_id),
+            }
+        };
+        self.remove_fanout(peer_id);
+        match removed {
+            Some(s) => {
+                s.shutdown();
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
