@@ -290,7 +290,11 @@ pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
             dead_channels.push(i);
         }
     }
-    for i in dead_channels {
-        event_channels.remove(i);
+    // we need to remove in descending order, so we don't remove `i` and then
+    // try to remove `i+1` later which wlll be a _diffrent_ item than we grabbed
+    // the index for. Removing from the top down causes no shifting for subsequent
+    // index removals.
+    for i in dead_channels.iter().rev() {
+        event_channels.remove(*i);
     }
 }

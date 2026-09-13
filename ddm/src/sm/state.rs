@@ -74,6 +74,21 @@ impl State for Init {
         self.ctx.iface.transition(FsmState::Init);
         self.ctx.iface.clear_peer();
         loop {
+            // Check for shutdown
+            while let Ok(e) = event.try_recv() {
+                match e {
+                    Event::Admin(AdminEvent::Shutdown) => {
+                        return (None, event);
+                    }
+                    _ => {
+                        wrn!(
+                            self.log,
+                            self.ctx.config.aobj_name,
+                            "event unhandled in init state: {e:?}"
+                        );
+                    }
+                }
+            }
             let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
                 Ok(info) => info,
                 Err(e) => {
@@ -118,15 +133,24 @@ impl State for Init {
 
             // Now that we have an ip address to run discovery on, start the
             // discovery handler and jump into the solicit state.
-            let discovery_stop = discovery::handler(
+            let discovery_stop = match discovery::handler(
                 self.ctx.hostname.clone(),
                 self.ctx.config.clone(),
                 self.ctx.tx.clone(),
                 self.ctx.iface.clone(),
                 self.ctx.stats.clone(),
                 self.ctx.log.clone(),
-            )
-            .unwrap(); // TODO unwrap
+            ) {
+                Ok(stop) => stop,
+                Err(e) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "failed to start discovery handler: {e}",
+                    );
+                    continue;
+                }
+            };
             self.ctx.discovery_stop = Some(discovery_stop);
             return (
                 Some(Box::new(Solicit::new(

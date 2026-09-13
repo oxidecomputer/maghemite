@@ -448,6 +448,13 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let current = ctx.db.get_external_peers();
         let to_create = rq.address_objects.difference(&current);
         let to_remove = current.difference(&rq.address_objects);
+
+        info!(ctx.log, "peer change request";
+            "requested" => ?rq.address_objects,
+            "to_create" => ?to_create,
+            "to_remove" => ?to_remove,
+            "current" => ?current,
+        );
         ctx.db.set_external_peers(rq.address_objects.clone());
 
         for addr_obj in to_create.into_iter() {
@@ -509,14 +516,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
         }
 
         let mut remove_idx = Vec::default();
-        info!(ctx.log, "removing peers";
-            "to_remove" => ?to_remove,
-            "current" => ?ctx
-                .peers.iter().map(|x| &x.config.aobj_name).collect::<Vec<_>>(),
-        );
 
-        for (i, ifx) in to_remove.into_iter().enumerate() {
-            for p in &ctx.peers {
+        for ifx in to_remove.into_iter() {
+            for (i, p) in ctx.peers.iter().enumerate() {
                 if p.config.aobj_name.contains(ifx) {
                     let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
                     remove_idx.push(i);
@@ -525,7 +527,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                         "removing external peeer on interface {ifx}"
                     );
                 } else {
-                    info!(ctx.log, "{ifx} != {}", p.config.if_name);
+                    info!(ctx.log, "{ifx} != {}", p.config.aobj_name);
                 }
             }
         }

@@ -5,11 +5,13 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
+use ddm_admin_client::types::SetExternalPeers;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use slog::{Drain, Logger};
 use std::collections::BTreeMap;
 use std::env;
 use std::net::Ipv6Addr;
+use std::ops::{Deref, DerefMut};
 use std::thread::sleep;
 use std::time::Duration;
 use zone::Zlogin;
@@ -855,7 +857,7 @@ async fn run_quartet_tests(
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_external_peer_sextet() -> Result<()> {
     // A sextet of routers in a multi-rack topology.
     //
@@ -1053,6 +1055,171 @@ async fn run_sextet_tests(
     _zt1: &RouterZone<'_>,
     _zt2: &RouterZone<'_>,
 ) -> Result<()> {
+    let log = init_logger();
+
+    // A ddm client that dumps out information when it drops. Primarily used for
+    // debugging test failures when an assert pops.
+    struct DropDump {
+        c: Client,
+        name: String,
+    }
+    impl Deref for DropDump {
+        type Target = Client;
+        fn deref(&self) -> &Self::Target {
+            &self.c
+        }
+    }
+    impl DerefMut for DropDump {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.c
+        }
+    }
+    impl Drop for DropDump {
+        fn drop(&mut self) {
+            // Async just loves to make things difficult, it's taken over all
+            // the things, but heaven forbid you need to do an async thing in
+            // the most basic of object lifecycle management traits ...
+            let rt = tokio::runtime::Handle::current();
+            let c = self.c.clone();
+            let name = self.name.clone();
+            tokio::task::block_in_place(|| {
+                rt.block_on(async move {
+                    println_nopipe!("{name}:");
+                    if let Ok(peers) = c.get_peers().await {
+                        println_nopipe!("peers: {peers:#?}");
+                    }
+                    if let Ok(prefixes) = c.get_prefixes().await {
+                        println_nopipe!("prefixes: {prefixes:#?}");
+                    }
+                });
+            });
+        }
+    }
+
+    macro_rules! drop_dump {
+        ($name:ident, $endpoint:expr) => {
+            let $name = DropDump {
+                c: Client::new($endpoint, log.clone()),
+                name: stringify!($name).to_string(),
+            };
+        };
+    }
+
+    #[derive(Default)]
+    struct PeerCounts {
+        s1: usize,
+        s2: usize,
+        s3: usize,
+        s4: usize,
+        t1: usize,
+        t2: usize,
+    }
+    impl PeerCounts {
+        fn server(mut self, c: usize) -> Self {
+            self.s1 = c;
+            self.s2 = c;
+            self.s3 = c;
+            self.s4 = c;
+            self
+        }
+        fn transit(mut self, c: usize) -> Self {
+            self.t1 = c;
+            self.t2 = c;
+            self
+        }
+    }
+
+    drop_dump!(s1, "http://10.0.0.1:8000");
+    drop_dump!(s2, "http://10.0.0.2:8000");
+    drop_dump!(s3, "http://10.0.0.3:8000");
+    drop_dump!(s4, "http://10.0.0.4:8000");
+    drop_dump!(t1, "http://10.0.0.5:8000");
+    drop_dump!(t2, "http://10.0.0.6:8000");
+
+    // While this would be better as a simple lambda function, when an assert
+    // pops within we only see the line number here and all that's available
+    // in RUST_BACKTRACE=1 is a pile of useless tokio noise.
+    macro_rules! assert_peer_count {
+        ($client:expr, $count:expr) => {{
+            println_nopipe!(
+                "ensure {} has {} peers",
+                stringify!($client),
+                $count
+            );
+            wait_for_eq!(
+                $client.get_peers().await.map(|x| x.len()).ok(),
+                Some($count)
+            );
+        }};
+    }
+
+    macro_rules! assert_peer_counts {
+        ($c:expr) => {{
+            assert_peer_count!(s1, $c.s1);
+            assert_peer_count!(s2, $c.s2);
+            assert_peer_count!(s3, $c.s3);
+            assert_peer_count!(s4, $c.s4);
+            assert_peer_count!(t1, $c.t1);
+            assert_peer_count!(t2, $c.t2);
+        }};
+    }
+
+    //
+    // Starting out we should have just the backplane peers.
+    //
+
+    assert_peer_counts!(PeerCounts::default().server(1).transit(2));
+
+    //
+    // Specifying two external peers should result in two additional peers for
+    // each transit router and no changes for the number of server router peers.
+    //
+
+    let ext_peers_both = SetExternalPeers {
+        address_objects: ["tfportqsfp0_0/v6", "tfportqsfp1_0/v6"]
+            .map(String::from)
+            .to_vec(),
+    };
+    t1.set_external_peers(&ext_peers_both).await?;
+    t2.set_external_peers(&ext_peers_both).await?;
+    assert_peer_counts!(PeerCounts::default().server(1).transit(4));
+
+    //
+    // Going down to the first peer should result in three peering sessions
+    // per transit router. Note in the model above that qsfp0/qsfp1 are cross
+    // connected between the two transit routers. Here we are connecting
+    // swA/qsfp0 <-> swB/qsfp1
+    //
+
+    let ext_peers_qsfp0 = SetExternalPeers {
+        address_objects: ["tfportqsfp0_0/v6"].map(String::from).to_vec(),
+    };
+    let ext_peers_qsfp1 = SetExternalPeers {
+        address_objects: ["tfportqsfp1_0/v6"].map(String::from).to_vec(),
+    };
+    t1.set_external_peers(&ext_peers_qsfp0).await?;
+    t2.set_external_peers(&ext_peers_qsfp1).await?;
+    assert_peer_counts!(PeerCounts::default().server(1).transit(3));
+
+    //
+    // Go back to full peering and then switch to swA/qsfp1 <-> swB/qsfp0
+    //
+
+    t1.set_external_peers(&ext_peers_both).await?;
+    t2.set_external_peers(&ext_peers_both).await?;
+    assert_peer_counts!(PeerCounts::default().server(1).transit(4));
+    t1.set_external_peers(&ext_peers_qsfp1).await?;
+    t2.set_external_peers(&ext_peers_qsfp0).await?;
+    assert_peer_counts!(PeerCounts::default().server(1).transit(3));
+
+    //
+    // Switch from swA/qsfp1 <-> swB/qsfp0 to swA/qsfp0 <-> swB/qsfp1
+    //
+
+    t1.set_external_peers(&ext_peers_qsfp0).await?;
+    t2.set_external_peers(&ext_peers_qsfp1).await?;
+    assert_peer_counts!(PeerCounts::default().server(1).transit(3));
+
     Ok(())
 }
 
