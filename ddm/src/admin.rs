@@ -396,9 +396,12 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<EnableStatsRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let rq = request.into_inner();
-        let ctx = lock!(ctx.context());
+        let (jh, log) = {
+            let ctx = lock!(ctx.context());
+            (ctx.stats_handler.clone(), ctx.log.clone())
+        };
 
-        let mut jh = lock!(ctx.stats_handler);
+        let mut jh = lock!(jh);
         if jh.is_none() {
             let hostname = hostname::get()
                 .expect("failed to get hostname")
@@ -407,12 +410,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
             *jh = Some(
                 crate::oxstats::start_server(
                     DDM_STATS_PORT,
-                    ctx.peers.clone(),
-                    ctx.stats.clone(),
+                    ctx.context().clone(),
                     hostname,
                     rq.rack_id,
                     rq.sled_id,
-                    ctx.log.clone(),
+                    log,
                 )
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(

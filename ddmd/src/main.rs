@@ -17,6 +17,7 @@ use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
+use mg_common::lock;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
@@ -172,40 +173,36 @@ async fn run() {
     let router_stats = Arc::new(RouterStats::default());
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
-    let stats_handler = if arg.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
-            (arg.rack_uuid, arg.sled_uuid)
-        {
-            match ddm::oxstats::start_server(
-                arg.oximeter_port,
-                peers.clone(),
-                router_stats.clone(),
-                hostname.clone(),
-                rack_uuid,
-                sled_uuid,
-                log.clone(),
-            ) {
-                Ok(handler) => Some(handler),
-                Err(e) => {
-                    error!(log, "failed to start stats server: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     let context = Arc::new(Mutex::new(HandlerContext {
         event_channels,
         db,
         stats: router_stats,
         peers,
-        stats_handler: Arc::new(Mutex::new(stats_handler)),
+        stats_handler: Arc::new(Mutex::new(None)),
         log: log.clone(),
     }));
+
+    if arg.with_stats
+        && let (Some(rack_uuid), Some(sled_uuid)) =
+            (arg.rack_uuid, arg.sled_uuid)
+    {
+        let h = match ddm::oxstats::start_server(
+            arg.oximeter_port,
+            context.clone(),
+            hostname.clone(),
+            rack_uuid,
+            sled_uuid,
+            log.clone(),
+        ) {
+            Ok(handler) => Some(handler),
+            Err(e) => {
+                error!(log, "failed to start stats server: {e}");
+                None
+            }
+        };
+        let ctx = lock!(context);
+        *lock!(ctx.stats_handler) = h;
+    }
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         error!(log, "send context to signal handler {e}");

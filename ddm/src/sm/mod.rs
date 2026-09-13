@@ -283,6 +283,8 @@ impl StateMachine {
     }
 }
 
+/// Send an event to all channels in the list, removing any channels from the
+/// list that are dead.
 pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
     // Ensure our indices are unique and ordered.
     let mut dead_channels = BTreeSet::default();
