@@ -3958,6 +3958,7 @@ dependencies = [
  "ddm-admin-client",
  "ddm-api-types-versions",
  "mg-common",
+ "rand 0.10.2",
  "slog",
  "slog-async",
  "slog-envlogger",

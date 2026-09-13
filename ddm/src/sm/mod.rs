@@ -14,7 +14,7 @@ use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
@@ -284,10 +284,11 @@ impl StateMachine {
 }
 
 pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
-    let mut dead_channels = Vec::default();
+    // Ensure our indices are unique and ordered.
+    let mut dead_channels = BTreeSet::default();
     for (i, c) in event_channels.iter().enumerate() {
         if c.send(e.clone()).is_err() {
-            dead_channels.push(i);
+            dead_channels.insert(i);
         }
     }
     // we need to remove in descending order, so we don't remove `i` and then

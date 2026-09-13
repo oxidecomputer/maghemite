@@ -235,7 +235,7 @@ impl<'a> RouterZone<'a> {
 
         let ddm = "/opt/ddmd";
         let extra_args = format!(
-            "--rack-uuid {} --sled-uuid {}",
+            "--rack-uuid {} --sled-uuid {} --solicit-interval 200 --expire-threshold 500",
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),
         );
@@ -1137,8 +1137,9 @@ async fn run_sextet_tests(
     drop_dump!(t2, "http://10.0.0.6:8000");
 
     // While this would be better as a simple lambda function, when an assert
-    // pops within we only see the line number here and all that's available
-    // in RUST_BACKTRACE=1 is a pile of useless tokio noise.
+    // pops within we only see the line number of the asserting statement in the
+    // lambda and all that's available in RUST_BACKTRACE=1 is a pile of useless
+    // tokio noise.
     macro_rules! assert_peer_count {
         ($client:expr, $count:expr) => {{
             println_nopipe!(
@@ -1175,10 +1176,12 @@ async fn run_sextet_tests(
     // each transit router and no changes for the number of server router peers.
     //
 
+    // The address objects for each qsfp on each switch in the test environment.
+    const QSFP0: &str = "tfportqsfp0_0/v6";
+    const QSFP1: &str = "tfportqsfp1_0/v6";
+
     let ext_peers_both = SetExternalPeers {
-        address_objects: ["tfportqsfp0_0/v6", "tfportqsfp1_0/v6"]
-            .map(String::from)
-            .to_vec(),
+        address_objects: [QSFP0, QSFP1].map(String::from).to_vec(),
     };
     t1.set_external_peers(&ext_peers_both).await?;
     t2.set_external_peers(&ext_peers_both).await?;
@@ -1192,10 +1195,10 @@ async fn run_sextet_tests(
     //
 
     let ext_peers_qsfp0 = SetExternalPeers {
-        address_objects: ["tfportqsfp0_0/v6"].map(String::from).to_vec(),
+        address_objects: [QSFP0].map(String::from).to_vec(),
     };
     let ext_peers_qsfp1 = SetExternalPeers {
-        address_objects: ["tfportqsfp1_0/v6"].map(String::from).to_vec(),
+        address_objects: [QSFP1].map(String::from).to_vec(),
     };
     t1.set_external_peers(&ext_peers_qsfp0).await?;
     t2.set_external_peers(&ext_peers_qsfp1).await?;
@@ -1219,6 +1222,64 @@ async fn run_sextet_tests(
     t1.set_external_peers(&ext_peers_qsfp0).await?;
     t2.set_external_peers(&ext_peers_qsfp1).await?;
     assert_peer_counts!(PeerCounts::default().server(1).transit(3));
+
+    //
+    // Go to no external peers
+    //
+
+    let ext_peers_none = SetExternalPeers {
+        address_objects: Vec::default(),
+    };
+    t1.set_external_peers(&ext_peers_none).await?;
+    t2.set_external_peers(&ext_peers_none).await?;
+    assert_peer_counts!(PeerCounts::default().server(1).transit(2));
+
+    //
+    // A bit of combinatorial exercise
+    //
+
+    fn peer_is_set(x: &SetExternalPeers, s: &str) -> bool {
+        x.address_objects.contains(&String::from(s))
+    }
+
+    fn expected_external_peerings(
+        x: &SetExternalPeers,
+        y: &SetExternalPeers,
+    ) -> PeerCounts {
+        // The count starts at two because each transit router has two
+        // backplane connections that we each expect to have a server
+        // peering session.
+        let mut ext_count: usize = 2;
+        if peer_is_set(x, QSFP0) && peer_is_set(y, QSFP1) {
+            ext_count += 1;
+        }
+        if peer_is_set(x, QSFP1) && peer_is_set(y, QSFP0) {
+            ext_count += 1;
+        }
+        PeerCounts::default().server(1).transit(ext_count)
+    }
+
+    let choices = [
+        ext_peers_none,
+        ext_peers_qsfp0,
+        ext_peers_qsfp1,
+        ext_peers_both,
+    ];
+
+    const N: usize = 100;
+    for i in 0..N {
+        println_nopipe!("{i}/{N}");
+        let a: usize = rand::random_range(0..choices.len());
+        let b: usize = rand::random_range(0..choices.len());
+
+        let x = &choices[a];
+        let y = &choices[b];
+
+        t1.set_external_peers(x).await?;
+        t2.set_external_peers(y).await?;
+        let counts = expected_external_peerings(x, y);
+        assert_peer_counts!(counts);
+    }
 
     Ok(())
 }

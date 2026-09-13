@@ -34,7 +34,7 @@ use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -515,13 +515,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
             // TODO oxstats server
         }
 
-        let mut remove_idx = Vec::default();
+        // Ensure our indices are unique and ordered.
+        let mut remove_idx = BTreeSet::default();
 
         for ifx in to_remove.into_iter() {
             for (i, p) in ctx.peers.iter().enumerate() {
                 if p.config.aobj_name.contains(ifx) {
                     let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
-                    remove_idx.push(i);
+                    remove_idx.insert(i);
                     info!(
                         ctx.log,
                         "removing external peeer on interface {ifx}"
@@ -531,8 +532,10 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 }
             }
         }
-        for i in remove_idx {
-            ctx.peers.remove(i);
+        // remove peers back to front so we don't shift the order our from under
+        // ourselves for the indexes we just gathered.
+        for i in remove_idx.iter().rev() {
+            ctx.peers.remove(*i);
         }
 
         Ok(HttpResponseUpdatedNoContent())

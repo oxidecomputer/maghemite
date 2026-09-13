@@ -148,6 +148,9 @@ impl State for Init {
                         self.ctx.config.if_name,
                         "failed to start discovery handler: {e}",
                     );
+                    sleep(Duration::from_millis(
+                        self.ctx.config.solicit_interval,
+                    ));
                     continue;
                 }
             };
