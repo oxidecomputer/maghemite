@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct SetExternalPeers {
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ExternalPeers {
     pub address_objects: BTreeSet<String>,
 }

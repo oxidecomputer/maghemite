@@ -52,13 +52,34 @@
       }
     },
     "/external_peers": {
+      "get": {
+        "operationId": "get_external_peers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalPeers"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "post": {
         "operationId": "set_external_peers",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SetExternalPeers"
+                "$ref": "#/components/schemas/ExternalPeers"
               }
             }
           },
@@ -440,6 +461,21 @@
           "request_id"
         ]
       },
+      "ExternalPeers": {
+        "type": "object",
+        "properties": {
+          "address_objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "address_objects"
+        ]
+      },
       "IpNet": {
         "x-rust-type": {
           "crate": "oxnet",
@@ -614,21 +650,6 @@
         "enum": [
           0,
           1
-        ]
-      },
-      "SetExternalPeers": {
-        "type": "object",
-        "properties": {
-          "address_objects": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "uniqueItems": true
-          }
-        },
-        "required": [
-          "address_objects"
         ]
       },
       "TunnelOrigin": {

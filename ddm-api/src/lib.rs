@@ -179,6 +179,15 @@ pub trait DdmAdminApi {
     }]
     async fn set_external_peers(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::external_peers::SetExternalPeers>,
+        request: TypedBody<latest::external_peers::ExternalPeers>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/external_peers",
+        versions = VERSION_EXTERNAL_PEERS..,
+    }]
+    async fn get_external_peers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
 }

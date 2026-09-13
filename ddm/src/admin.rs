@@ -17,7 +17,7 @@ use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
 use ddm_api_types::db::{PeerInfo, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
-use ddm_api_types::external_peers::SetExternalPeers;
+use ddm_api_types::external_peers::ExternalPeers;
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
@@ -440,7 +440,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn set_external_peers(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<SetExternalPeers>,
+        request: TypedBody<ExternalPeers>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let mut ctx = lock!(ctx.context());
         let rq = request.into_inner();
@@ -511,8 +511,6 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 &mut ctx.event_channels,
             );
             ctx.event_channels.push(tx);
-
-            // TODO oxstats server
         }
 
         // Ensure our indices are unique and ordered.
@@ -539,6 +537,16 @@ impl DdmAdminApi for DdmAdminApiImpl {
         }
 
         Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn get_external_peers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<ExternalPeers>, HttpError> {
+        let ctx = lock!(ctx.context());
+
+        Ok(HttpResponseOk(ExternalPeers {
+            address_objects: ctx.db.get_external_peers(),
+        }))
     }
 }
 

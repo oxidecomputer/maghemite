@@ -5,10 +5,10 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
-use ddm_admin_client::types::SetExternalPeers;
+use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use slog::{Drain, Logger};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::net::Ipv6Addr;
 use std::ops::{Deref, DerefMut};
@@ -234,6 +234,8 @@ impl<'a> RouterZone<'a> {
         .join(" ");
 
         let ddm = "/opt/ddmd";
+
+        // Tighter solicit interval and expire threshold are to speed up tests.
         let extra_args = format!(
             "--rack-uuid {} --sled-uuid {} --solicit-interval 200 --expire-threshold 500",
             uuid::Uuid::new_v4(),
@@ -252,10 +254,6 @@ impl<'a> RouterZone<'a> {
                 self.zone.zexec(
                     "svccfg -s dendrite setprop config/uds_path = /opt/mnt",
                 )?;
-                /*
-                self.zone.zexec(
-                "svccfg -s dendrite setprop config/port_config = /opt/dpd-ports.toml")?;
-                */
                 self.zone.zexec(&format!(
                     "svccfg -s dendrite setprop config/front_ports = {}",
                     front_ports.len(),
@@ -1180,8 +1178,8 @@ async fn run_sextet_tests(
     const QSFP0: &str = "tfportqsfp0_0/v6";
     const QSFP1: &str = "tfportqsfp1_0/v6";
 
-    let ext_peers_both = SetExternalPeers {
-        address_objects: [QSFP0, QSFP1].map(String::from).to_vec(),
+    let ext_peers_both = ExternalPeers {
+        address_objects: [QSFP0, QSFP1].map(String::from).into(),
     };
     t1.set_external_peers(&ext_peers_both).await?;
     t2.set_external_peers(&ext_peers_both).await?;
@@ -1194,11 +1192,11 @@ async fn run_sextet_tests(
     // swA/qsfp0 <-> swB/qsfp1
     //
 
-    let ext_peers_qsfp0 = SetExternalPeers {
-        address_objects: [QSFP0].map(String::from).to_vec(),
+    let ext_peers_qsfp0 = ExternalPeers {
+        address_objects: [QSFP0].map(String::from).into(),
     };
-    let ext_peers_qsfp1 = SetExternalPeers {
-        address_objects: [QSFP1].map(String::from).to_vec(),
+    let ext_peers_qsfp1 = ExternalPeers {
+        address_objects: [QSFP1].map(String::from).into(),
     };
     t1.set_external_peers(&ext_peers_qsfp0).await?;
     t2.set_external_peers(&ext_peers_qsfp1).await?;
@@ -1227,8 +1225,8 @@ async fn run_sextet_tests(
     // Go to no external peers
     //
 
-    let ext_peers_none = SetExternalPeers {
-        address_objects: Vec::default(),
+    let ext_peers_none = ExternalPeers {
+        address_objects: BTreeSet::default(),
     };
     t1.set_external_peers(&ext_peers_none).await?;
     t2.set_external_peers(&ext_peers_none).await?;
@@ -1238,18 +1236,21 @@ async fn run_sextet_tests(
     // A bit of combinatorial exercise
     //
 
-    fn peer_is_set(x: &SetExternalPeers, s: &str) -> bool {
+    fn peer_is_set(x: &ExternalPeers, s: &str) -> bool {
         x.address_objects.contains(&String::from(s))
     }
 
     fn expected_external_peerings(
-        x: &SetExternalPeers,
-        y: &SetExternalPeers,
+        x: &ExternalPeers,
+        y: &ExternalPeers,
     ) -> PeerCounts {
-        // The count starts at two because each transit router has two
-        // backplane connections that we each expect to have a server
-        // peering session.
+        // The count starts at two because each transit router has two backplane
+        // connections that we each expect to have a server peering session on.
         let mut ext_count: usize = 2;
+
+        // A peering is expected when qsfp0 and qsfp1 are configured as an
+        // external router in either direction. This is a property of the
+        // testing topology (see diagram in test_external_peer_sextet).
         if peer_is_set(x, QSFP0) && peer_is_set(y, QSFP1) {
             ext_count += 1;
         }
@@ -1259,6 +1260,8 @@ async fn run_sextet_tests(
         PeerCounts::default().server(1).transit(ext_count)
     }
 
+    // The choices we have for each switch are none, one or both peers where the
+    // one case can be either of the peers.
     let choices = [
         ext_peers_none,
         ext_peers_qsfp0,
@@ -1266,6 +1269,11 @@ async fn run_sextet_tests(
         ext_peers_both,
     ];
 
+    // Go through 100 rounds. Ideally we'd have more than this, but peer
+    // expiration and re-establishment is currently a second or two, so at 100
+    // rounds this is already taking over a minute. It'd be nice to have really
+    // quick peering timer settings for tests so we can rapidly iterate through
+    // sweeps like this.
     const N: usize = 100;
     for i in 0..N {
         println_nopipe!("{i}/{N}");
@@ -1279,6 +1287,12 @@ async fn run_sextet_tests(
         t2.set_external_peers(y).await?;
         let counts = expected_external_peerings(x, y);
         assert_peer_counts!(counts);
+
+        let xx = t1.get_external_peers().await?.into_inner();
+        let yy = t2.get_external_peers().await?.into_inner();
+
+        assert_eq!(x, &xx, "t1 reports different peers than we set");
+        assert_eq!(y, &yy, "t2 reports different peers than we set");
     }
 
     Ok(())

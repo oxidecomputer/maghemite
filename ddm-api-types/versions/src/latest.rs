@@ -27,5 +27,5 @@ pub mod net {
 }
 
 pub mod external_peers {
-    pub use crate::v3::external_peers::SetExternalPeers;
+    pub use crate::v3::external_peers::ExternalPeers;
 }
