@@ -509,11 +509,6 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
             ctx.peers.push(sm_ctx.clone());
 
-            // XXX needs to happen once peer is in exchange?
-            // crate::sm::send(
-            //     Event::Admin(AdminEvent::NewExternalPeer(tx.clone())),
-            //     &mut ctx.event_channels,
-            // );
             ctx.event_channels.push(tx);
         }
 
