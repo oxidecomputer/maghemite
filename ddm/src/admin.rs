@@ -498,6 +498,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 iface: Arc::new(InterfaceState::external()),
                 stats: Arc::new(SessionStats::default()),
                 discovery_stop: None,
+                first_run: true,
             };
             let mut sm = StateMachine {
                 ctx: sm_ctx.clone(),
@@ -508,10 +509,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
             ctx.peers.push(sm_ctx.clone());
 
-            crate::sm::send(
-                Event::Admin(AdminEvent::NewExternalPeer(tx.clone())),
-                &mut ctx.event_channels,
-            );
+            // XXX needs to happen once peer is in exchange?
+            // crate::sm::send(
+            //     Event::Admin(AdminEvent::NewExternalPeer(tx.clone())),
+            //     &mut ctx.event_channels,
+            // );
             ctx.event_channels.push(tx);
         }
 

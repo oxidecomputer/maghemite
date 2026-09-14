@@ -550,10 +550,11 @@ fn handle_update(
             ctx.event_channels.len()
         );
 
-        let underlay = update
-            .underlay
-            .as_ref()
-            .map(|update| update.with_path_element(ctx.hostname.clone()));
+        let underlay = update.underlay.as_ref().map(|update| {
+            update
+                .break_loops(&ctx.hostname)
+                .with_path_element(ctx.hostname.clone())
+        });
 
         let push = v3::Update {
             underlay,
@@ -646,6 +647,11 @@ fn handle_underlay_update(
     let db = &ctx.db;
 
     for prefix in &update.announce {
+        // Skip announcements with ourselves in the path e.g. path vector
+        // loop breaking.
+        if prefix.path.contains(&ctx.hostname) {
+            continue;
+        }
         import.insert(Route {
             destination: prefix.destination,
             nexthop: peer_addr,

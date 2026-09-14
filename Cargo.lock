@@ -3959,6 +3959,7 @@ dependencies = [
  "ddm-admin-client",
  "ddm-api-types-versions",
  "mg-common",
+ "oxnet",
  "rand 0.10.2",
  "slog",
  "slog-async",

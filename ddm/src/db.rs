@@ -4,6 +4,7 @@
 
 use ddm_api_types::db::TunnelRoute;
 use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::v3::PathVector;
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
@@ -280,6 +281,15 @@ pub struct Route {
     pub nexthop: Ipv6Addr,
     pub ifname: String,
     pub path: Vec<String>,
+}
+
+impl From<Route> for PathVector {
+    fn from(val: Route) -> Self {
+        Self {
+            destination: val.destination,
+            path: val.path,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

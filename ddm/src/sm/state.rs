@@ -340,7 +340,7 @@ impl Exchange {
     ) {
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
-        let (to_remove, to_remove_tnl) =
+        let (mut to_remove, to_remove_tnl) =
             self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
@@ -375,6 +375,24 @@ impl Exchange {
                 self.ctx.config.if_name,
                 "redistributing expire to {} peers",
                 self.ctx.event_channels.len()
+            );
+
+            // Only send withdraws for expirations that result in a total loss
+            // of reachability to a destination.
+            let imported = self.ctx.db.imported();
+            dbg!(self.log, self.ctx.config.if_name, "imported: {imported:#?}");
+            dbg!(
+                self.log,
+                self.ctx.config.if_name,
+                "to_remove: {to_remove:#?}"
+            );
+            to_remove.retain(|x| {
+                !imported.iter().any(|y| y.destination == x.destination)
+            });
+            dbg!(
+                self.log,
+                self.ctx.config.if_name,
+                "to_remove (retained): {to_remove:#?}"
             );
 
             let underlay = if to_remove.is_empty() {
@@ -448,6 +466,14 @@ impl State for Exchange {
         // this pull is taking place, they will be queued and handled in the
         // loop below.
         self.initial_pull(pull_stop.clone());
+
+        if self.ctx.iface.external && self.ctx.first_run {
+            self.ctx.first_run = false;
+            crate::sm::send(
+                Event::Admin(AdminEvent::NewExternalPeer(self.ctx.tx.clone())),
+                &mut self.ctx.event_channels,
+            );
+        }
 
         loop {
             let e = match event.recv() {
@@ -650,7 +676,27 @@ impl State for Exchange {
                     }
                 }
                 Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
-                    self.ctx.event_channels.push(tx);
+                    if tx
+                        .send(Event::Peer(PeerEvent::Push(Update {
+                            underlay: Some(
+                                UnderlayUpdate {
+                                    announce: self
+                                        .ctx
+                                        .db
+                                        .imported()
+                                        .into_iter()
+                                        .map(Into::into)
+                                        .collect(),
+                                    withdraw: HashSet::default(),
+                                }
+                                .with_path_element(self.ctx.hostname.clone()),
+                            ),
+                            tunnel: None,
+                        })))
+                        .is_ok()
+                    {
+                        self.ctx.event_channels.push(tx.clone());
+                    }
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {

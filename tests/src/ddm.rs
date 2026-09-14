@@ -7,6 +7,7 @@ use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
+use oxnet::Ipv6Net;
 use slog::{Drain, Logger};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -46,6 +47,12 @@ macro_rules! softnpu_dump {
             10
         );
     }};
+}
+
+macro_rules! ip6_net {
+    ($x:expr) => {
+        $x.parse().unwrap()
+    };
 }
 
 const ZONE_BRAND: &str = "omicron1";
@@ -1127,6 +1134,13 @@ async fn run_sextet_tests(
         }
     }
 
+    struct PeerReachablePrefixes {
+        s1: BTreeSet<Ipv6Net>,
+        s2: BTreeSet<Ipv6Net>,
+        s3: BTreeSet<Ipv6Net>,
+        s4: BTreeSet<Ipv6Net>,
+    }
+
     drop_dump!(s1, "http://10.0.0.1:8000");
     drop_dump!(s2, "http://10.0.0.2:8000");
     drop_dump!(s3, "http://10.0.0.3:8000");
@@ -1162,6 +1176,55 @@ async fn run_sextet_tests(
             assert_peer_count!(t2, $c.t2);
         }};
     }
+
+    macro_rules! assert_peer_reach {
+        ($client:expr, $reach:expr) => {{
+            println_nopipe!(
+                "ensure {} has imported prefixes {:?}",
+                stringify!($client),
+                $reach
+            );
+            wait_for_eq!(
+                $client
+                    .get_prefixes()
+                    .await
+                    .map(|x| x
+                        .values()
+                        .cloned()
+                        .into_iter()
+                        .flat_map(|x| x
+                            .clone()
+                            .into_iter()
+                            .map(|y| y.destination))
+                        .collect::<BTreeSet<_>>())
+                    .ok(),
+                Some($reach)
+            );
+        }};
+    }
+
+    macro_rules! assert_reach {
+        ($r:expr) => {{
+            assert_peer_reach!(s1, $r.s1.clone());
+            assert_peer_reach!(s2, $r.s2.clone());
+            assert_peer_reach!(s3, $r.s3.clone());
+            assert_peer_reach!(s4, $r.s4.clone());
+        }};
+    }
+
+    //
+    // Initialize announcements for each server peer
+    //
+
+    let s1_origin: Vec<Ipv6Net> = [ip6_net!("fd00:1::/64")].into();
+    let s2_origin: Vec<Ipv6Net> = [ip6_net!("fd00:2::/64")].into();
+    let s3_origin: Vec<Ipv6Net> = [ip6_net!("fd00:3::/64")].into();
+    let s4_origin: Vec<Ipv6Net> = [ip6_net!("fd00:4::/64")].into();
+
+    s1.advertise_prefixes(&s1_origin).await?;
+    s2.advertise_prefixes(&s2_origin).await?;
+    s3.advertise_prefixes(&s3_origin).await?;
+    s4.advertise_prefixes(&s4_origin).await?;
 
     //
     // Starting out we should have just the backplane peers.
@@ -1260,6 +1323,39 @@ async fn run_sextet_tests(
         PeerCounts::default().server(1).transit(ext_count)
     }
 
+    let expected_reachable_prefixes =
+        |x: &ExternalPeers, y: &ExternalPeers| -> PeerReachablePrefixes {
+            let counts = expected_external_peerings(x, y);
+            // Servers can always see the originated prefixes of other routers
+            // reachable over a single hop transit router path (e.g. in the same
+            // rack).
+            let mut reach = PeerReachablePrefixes {
+                s1: s2_origin.iter().cloned().collect(),
+                s2: s1_origin.iter().cloned().collect(),
+                s3: s4_origin.iter().cloned().collect(),
+                s4: s3_origin.iter().cloned().collect(),
+            };
+            // If there is any peering between transit routers, each server router
+            // should see prefixes originated from the router adjacent to their
+            // transit router.
+            if counts.t1 > 2 && counts.t2 > 2 {
+                // Origins from servers connected to t2 propagating to servers
+                // connected to t1.
+                reach.s1.extend(&s3_origin);
+                reach.s1.extend(&s4_origin);
+                reach.s2.extend(&s3_origin);
+                reach.s2.extend(&s4_origin);
+
+                // Origins from servers connected to t1 propagating to servers
+                // connected to t2.
+                reach.s3.extend(&s1_origin);
+                reach.s3.extend(&s2_origin);
+                reach.s4.extend(&s1_origin);
+                reach.s4.extend(&s2_origin);
+            }
+            reach
+        };
+
     // The choices we have for each switch are none, one or both peers where the
     // one case can be either of the peers.
     let choices = [
@@ -1293,6 +1389,9 @@ async fn run_sextet_tests(
 
         assert_eq!(x, &xx, "t1 reports different peers than we set");
         assert_eq!(y, &yy, "t2 reports different peers than we set");
+
+        let reach = expected_reachable_prefixes(x, y);
+        assert_reach!(reach);
     }
 
     Ok(())

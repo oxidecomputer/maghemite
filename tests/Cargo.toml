@@ -19,3 +19,4 @@ tokio.workspace = true
 ztest.workspace = true
 uuid.workspace = true
 rand.workspace = true
+oxnet.workspace = true

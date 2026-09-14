@@ -269,6 +269,7 @@ pub struct SmContext {
     pub stats: Arc<SessionStats>,
     pub log: Logger,
     pub discovery_stop: Option<Arc<AtomicBool>>,
+    pub first_run: bool,
 }
 
 pub struct StateMachine {
