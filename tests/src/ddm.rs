@@ -1216,6 +1216,35 @@ async fn run_sextet_tests(
         }};
     }
 
+    macro_rules! assert_nexthops_are_peers {
+        ($client:expr) => {{
+            let pfx_nexthops =
+                $client.get_prefixes().await.expect("get prefixes");
+            let peers = $client
+                .get_peers()
+                .await
+                .expect("get peers")
+                .values()
+                .map(|x| x.addr.to_string())
+                .collect::<Vec<_>>();
+
+            for p in pfx_nexthops.keys() {
+                assert!(peers.contains(p), "nexthop {p} is not a peer");
+            }
+        }};
+    }
+
+    macro_rules! assert_all_nexthops_are_peers {
+        () => {{
+            assert_nexthops_are_peers!(s1);
+            assert_nexthops_are_peers!(s2);
+            assert_nexthops_are_peers!(s3);
+            assert_nexthops_are_peers!(s4);
+            assert_nexthops_are_peers!(t1);
+            assert_nexthops_are_peers!(t2);
+        }};
+    }
+
     //
     // Initialize announcements for each server peer
     //
@@ -1413,6 +1442,8 @@ async fn run_sextet_tests(
 
         let reach = expected_reachable_prefixes(x, y);
         assert_reach!(reach);
+
+        assert_all_nexthops_are_peers!();
     }
 
     Ok(())
