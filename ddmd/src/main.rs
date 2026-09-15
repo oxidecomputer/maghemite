@@ -186,6 +186,7 @@ async fn run() {
             ),
             ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
             exchange_timeout: Duration::from_millis(arg.exchange_timeout),
+            dendrite: arg.dendrite,
             dpd_port: arg.dpd_port,
             dpd_host: arg.dpd_host.clone(),
             exchange_tcp_port: arg.exchange_port,
