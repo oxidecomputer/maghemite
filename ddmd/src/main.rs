@@ -178,6 +178,7 @@ async fn run() {
         stats: router_stats,
         peers,
         stats_handler: Arc::new(Mutex::new(None)),
+        router_kind: arg.kind,
         tunables: Tunables {
             solicit_interval: Duration::from_millis(arg.solicit_interval),
             expire_threshold: Duration::from_millis(arg.expire_threshold),

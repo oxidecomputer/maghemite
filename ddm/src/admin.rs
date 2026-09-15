@@ -61,6 +61,7 @@ pub struct HandlerContext {
     pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
+    pub router_kind: RouterKind,
     pub log: Logger,
 }
 
@@ -481,6 +482,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<ExternalPeers>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let mut ctx = lock!(ctx.context());
+
+        if ctx.router_kind != RouterKind::Transit {
+            return Err(HttpError::for_bad_request(
+                None,
+                "external peers only supported for transit routers".into(),
+            ));
+        }
+
         let rq = request.into_inner();
 
         let current = ctx.db.get_external_peers();
@@ -578,6 +587,13 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<ExternalPeers>, HttpError> {
         let ctx = lock!(ctx.context());
+
+        if ctx.router_kind != RouterKind::Transit {
+            return Err(HttpError::for_bad_request(
+                None,
+                "external peers only supported for transit routers".into(),
+            ));
+        }
 
         Ok(HttpResponseOk(ExternalPeers {
             address_objects: ctx.db.get_external_peers(),
