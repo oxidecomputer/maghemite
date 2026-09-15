@@ -35,7 +35,7 @@ use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -155,11 +155,16 @@ pub(crate) fn pull(
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), ExchangeError> {
     let pr: v3::PullResponse = match version {
         Version::V2 => do_pull_v2(ctx, &addr, &rt)?.into(),
         Version::V3 => do_pull(ctx, &addr, &rt)?,
     };
+
+    if stop.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     let update = v3::Update::announce(pr);
 

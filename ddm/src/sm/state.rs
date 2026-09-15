@@ -21,7 +21,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::thread::{sleep, spawn};
+use std::thread::{JoinHandle, sleep, spawn};
 use std::time::Duration;
 
 use crate::discovery::Version;
@@ -281,7 +281,7 @@ impl Exchange {
         }
     }
 
-    fn initial_pull(&mut self, stop: Arc<AtomicBool>) {
+    fn initial_pull(&mut self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
         let peer = self.peer;
         let version = self.version;
         let rt = self.ctx.rt.clone();
@@ -291,16 +291,20 @@ impl Exchange {
         let ctx = self.ctx.clone();
 
         spawn(move || {
-            while let Err(e) =
-                crate::exchange::pull(&ctx, peer, version, rt.clone())
-            {
+            while let Err(e) = crate::exchange::pull(
+                &ctx,
+                peer,
+                version,
+                rt.clone(),
+                stop.clone(),
+            ) {
                 sleep(interval);
                 wrn!(log, if_name, "exchange pull: {}", e);
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
             }
-        });
+        })
     }
 
     fn wait_for_exchange_server_to_start(&self) {
@@ -338,7 +342,18 @@ impl Exchange {
         &mut self,
         exchange_thread: &tokio::task::JoinHandle<()>,
         pull_stop: &AtomicBool,
+        initial_pull: JoinHandle<()>,
     ) {
+        // Stop other threads that may update the rib after we clear for expiry.
+        pull_stop.store(true, Ordering::Relaxed);
+        if let Err(e) = initial_pull.join() {
+            err!(
+                self.log,
+                self.ctx.config.if_name,
+                "failed to join initial pull thread: {e:?}",
+            );
+        }
+
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
         let (mut to_remove, to_remove_tnl) =
@@ -428,7 +443,6 @@ impl Exchange {
                 &mut self.ctx.event_channels,
             );
         }
-        pull_stop.store(true, Ordering::Relaxed);
     }
 }
 
@@ -466,7 +480,7 @@ impl State for Exchange {
         // Do an initial pull, in the event that exchange events are fired while
         // this pull is taking place, they will be queued and handled in the
         // loop below.
-        self.initial_pull(pull_stop.clone());
+        let initial_pull = self.initial_pull(pull_stop.clone());
 
         if self.ctx.iface.external && self.ctx.first_run {
             self.ctx.first_run = false;
@@ -521,7 +535,11 @@ impl State for Exchange {
                             "expiring peer {} due to failed announce",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(
+                            &exchange_thread,
+                            &pull_stop,
+                            initial_pull,
+                        );
                         return (
                             Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -556,7 +574,11 @@ impl State for Exchange {
                             "expiring peer {} due to failed tunnel announce",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(
+                            &exchange_thread,
+                            &pull_stop,
+                            initial_pull,
+                        );
                         return (
                             Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -597,7 +619,11 @@ impl State for Exchange {
                             "expiring peer {} due to failed withdraw",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(
+                            &exchange_thread,
+                            &pull_stop,
+                            initial_pull,
+                        );
                         return (
                             Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -632,7 +658,11 @@ impl State for Exchange {
                             "expiring peer {} due to failed tunnel withdraw",
                             self.peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(
+                            &exchange_thread,
+                            &pull_stop,
+                            initial_pull,
+                        );
                         return (
                             Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -650,7 +680,11 @@ impl State for Exchange {
                             "administratively expiring peer {}",
                             peer,
                         );
-                        self.expire_peer(&exchange_thread, &pull_stop);
+                        self.expire_peer(
+                            &exchange_thread,
+                            &pull_stop,
+                            initial_pull,
+                        );
                         return (
                             Some(Box::new(Solicit::new(
                                 self.ctx.clone(),
@@ -667,6 +701,7 @@ impl State for Exchange {
                         self.peer,
                         self.version,
                         rt,
+                        pull_stop.clone(),
                     ) {
                         err!(
                             self.log,
@@ -703,7 +738,11 @@ impl State for Exchange {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {
                         x.store(true, Ordering::Relaxed);
                     }
-                    self.expire_peer(&exchange_thread, &pull_stop);
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
                     return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
@@ -738,7 +777,11 @@ impl State for Exchange {
                                 "expiring peer {} due to failed announce",
                                 self.peer,
                             );
-                            self.expire_peer(&exchange_thread, &pull_stop);
+                            self.expire_peer(
+                                &exchange_thread,
+                                &pull_stop,
+                                initial_pull,
+                            );
                             return (
                                 Some(Box::new(Solicit::new(
                                     self.ctx.clone(),
@@ -770,7 +813,11 @@ impl State for Exchange {
                                 "expiring peer {} due to failed withdraw",
                                 self.peer,
                             );
-                            self.expire_peer(&exchange_thread, &pull_stop);
+                            self.expire_peer(
+                                &exchange_thread,
+                                &pull_stop,
+                                initial_pull,
+                            );
                             return (
                                 Some(Box::new(Solicit::new(
                                     self.ctx.clone(),
@@ -804,7 +851,11 @@ impl State for Exchange {
                         "expiring peer {} due to discovery event",
                         self.peer,
                     );
-                    self.expire_peer(&exchange_thread, &pull_stop);
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
                     return (
                         Some(Box::new(Solicit::new(
                             self.ctx.clone(),
@@ -820,7 +871,11 @@ impl State for Exchange {
                         "expiring peer {} due to failed solicit",
                         self.peer,
                     );
-                    self.expire_peer(&exchange_thread, &pull_stop);
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
                     return (
                         Some(Box::new(Init::new(
                             self.ctx.clone(),
