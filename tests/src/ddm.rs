@@ -244,7 +244,7 @@ impl<'a> RouterZone<'a> {
 
         // Tighter solicit interval and expire threshold are to speed up tests.
         let extra_args = format!(
-            "--rack-uuid {} --sled-uuid {} --solicit-interval 20 --expire-threshold 50",
+            "--rack-uuid {} --sled-uuid {} --solicit-interval 200 --expire-threshold 500",
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),
         );

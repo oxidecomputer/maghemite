@@ -11,7 +11,7 @@ use super::ExchangeError;
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
-use crate::{dbg, err, inf, wrn};
+use crate::{err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
@@ -151,7 +151,7 @@ fn do_pull_common(
 }
 
 pub(crate) fn pull(
-    ctx: &mut SmContext,
+    ctx: &SmContext,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
@@ -356,12 +356,10 @@ async fn push_handler_common(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     update: v3::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq_ctx: Arc<Mutex<HandlerContext>> = ctx.context().clone();
+    let ctx = lock!(ctx.context()).clone();
 
     tokio::task::spawn_blocking(move || {
-        let mut actx = lock!(rq_ctx);
-        let peer = actx.peer;
-        handle_update(&update, &mut actx.ctx, peer);
+        handle_update(&update, &ctx.ctx, ctx.peer);
     })
     .await
     .map_err(|e| {
@@ -523,11 +521,7 @@ async fn pull_handler(
     }))
 }
 
-fn handle_update(
-    update: &v3::Update,
-    ctx: &mut SmContext,
-    peer_addr: Ipv6Addr,
-) {
+fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
     if let Some(underlay_update) = &update.underlay {
@@ -541,34 +535,22 @@ fn handle_update(
     // distribute updates
 
     if ctx.config.kind == RouterKind::Transit {
-        dbg!(
-            ctx.log,
-            ctx.config.if_name,
-            "redistributing update to {} peers",
-            ctx.event_channels.len()
-        );
-
-        let underlay = update.underlay.as_ref().map(|update| {
-            update
-                .break_loops(&ctx.hostname)
-                .with_path_element(ctx.hostname.clone())
-        });
-
-        let push = v3::Update {
-            underlay,
-            tunnel: update.tunnel.clone(),
-        };
-
-        crate::sm::send(
-            Event::Peer(PeerEvent::Push(push.clone())),
-            &mut ctx.event_channels,
-        );
+        if let Err(e) = ctx
+            .tx
+            .send(Event::Peer(PeerEvent::Redistribute(update.clone())))
+        {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "failed to send update to SM: {e:?}"
+            );
+        }
     }
 }
 
 fn handle_tunnel_update(
     update: &v3::TunnelUpdate,
-    ctx: &mut SmContext,
+    ctx: &SmContext,
     peer_addr: Ipv6Addr,
 ) {
     let mut import = HashSet::new();
@@ -637,7 +619,7 @@ fn handle_tunnel_update(
 
 fn handle_underlay_update(
     update: &v3::UnderlayUpdate,
-    ctx: &mut SmContext,
+    ctx: &SmContext,
     peer_addr: Ipv6Addr,
 ) {
     let mut import = HashSet::new();

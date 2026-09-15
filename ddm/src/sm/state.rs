@@ -288,11 +288,11 @@ impl Exchange {
         let log = self.log.clone();
         let interval = self.ctx.config.solicit_interval;
         let if_name = self.ctx.config.if_name.clone();
-        let mut ctx = self.ctx.clone();
+        let ctx = self.ctx.clone();
 
         spawn(move || {
             while let Err(e) =
-                crate::exchange::pull(&mut ctx, peer, version, rt.clone())
+                crate::exchange::pull(&ctx, peer, version, rt.clone())
             {
                 sleep(interval);
                 wrn!(log, if_name, "exchange pull: {}", e);
@@ -663,7 +663,7 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Sync) => {
                     let rt = self.ctx.rt.clone();
                     if let Err(e) = crate::exchange::pull(
-                        &mut self.ctx,
+                        &self.ctx,
                         self.peer,
                         self.version,
                         rt,
@@ -780,6 +780,22 @@ impl State for Exchange {
                             );
                         }
                     }
+                }
+                Event::Peer(PeerEvent::Redistribute(mut update)) => {
+                    dbg!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "redistributing update to {} peers",
+                        self.ctx.event_channels.len()
+                    );
+                    update.underlay = update.underlay.map(|u| {
+                        u.break_loops(&self.ctx.hostname)
+                            .with_path_element(self.ctx.hostname.clone())
+                    });
+                    super::send(
+                        Event::Peer(PeerEvent::Push(update)),
+                        &mut self.ctx.event_channels,
+                    );
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {
                     wrn!(

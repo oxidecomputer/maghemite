@@ -58,13 +58,29 @@ pub enum PrefixSet {
 
 #[derive(Debug, Clone)]
 pub enum PeerEvent {
+    /// Upon reception of this event, a state machine is to push the update to
+    /// its peer.
     Push(ddm_protocol::v3::Update),
+
+    /// Upon reception of this event, a state machine is to redistribute the
+    /// update to it's sibling routers through it's event channels. The state
+    /// machine is responsible maintaining the path vector and performing loop
+    /// breaking.
+    Redistribute(ddm_protocol::v3::Update),
 }
 
 #[derive(Debug, Clone)]
 pub enum NeighborEvent {
+    /// An event sent from the discovery subsystem to the state machine letting
+    /// it know the link local ipv6 address of the peer and it's version.
     Advertise((Ipv6Addr, Version)),
+
+    /// An event sent from the discovery subsystem to the state machine letting
+    /// it know that solicitation has failed.
     SolicitFail,
+
+    /// An event sent from the discovery subsystem to the state machine letting
+    /// it know that the peer has expired.
     Expire,
 }
 
