@@ -14,13 +14,16 @@ use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+
+#[cfg(target_os = "illumos")]
+use std::collections::BTreeSet;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) mod state;
@@ -285,6 +288,7 @@ impl StateMachine {
 
 /// Send an event to all channels in the list, removing any channels from the
 /// list that are dead.
+#[cfg(target_os = "illumos")]
 pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
     // Ensure our indices are unique and ordered.
     let mut dead_channels = BTreeSet::default();

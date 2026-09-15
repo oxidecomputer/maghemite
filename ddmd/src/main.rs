@@ -323,11 +323,8 @@ fn start_state_machines(
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
-    (Vec::new(), Vec::new())
+) -> Vec<StateMachine> {
+    Vec::new()
 }
 
 /// Install a Ctrl-C handler that withdraws ddmd's imported routes from the
