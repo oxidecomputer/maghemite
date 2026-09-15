@@ -77,6 +77,9 @@ pub struct Tunables {
     pub discovery_read_timeout: Duration,
     pub ip_addr_wait: Duration,
     pub exchange_timeout: Duration,
+    pub dpd_port: u16,
+    pub dpd_host: String,
+    pub exchange_tcp_port: u16,
 }
 
 impl Default for Tunables {
@@ -87,6 +90,9 @@ impl Default for Tunables {
             discovery_read_timeout: DISCOVERY_READ_TIMEOUT,
             ip_addr_wait: IP_ADDR_WAIT,
             exchange_timeout: EXCHANGE_TIMEOUT,
+            dpd_port: dpd_client::default_port(),
+            dpd_host: "localhost".into(),
+            exchange_tcp_port: EXCHANGE_TCP_PORT,
         }
     }
 }
@@ -496,19 +502,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 discovery_read_timeout: ctx.tunables.discovery_read_timeout,
                 ip_addr_wait: ctx.tunables.ip_addr_wait,
                 exchange_timeout: ctx.tunables.exchange_timeout,
-                exchange_port: EXCHANGE_TCP_PORT,
+                exchange_port: ctx.tunables.exchange_tcp_port,
                 aobj_name: addr_obj.clone(),
                 if_name: String::default(), // initialized in state machine
                 if_index: 0,                // initialized in state machine
                 // External peers are only a thing for transit routers.
                 kind: RouterKind::Transit,
                 dpd: Some(crate::sm::DpdConfig {
-                    // Transit DDM routers always talk to their local dpd in the
-                    // switch zone.
-                    host: String::from("localhost"),
-                    // TODO: using the default dpd port might not be right for some
-                    // test environments.
-                    port: dpd_client::default_port(),
+                    host: ctx.tunables.dpd_host.clone(),
+                    port: ctx.tunables.dpd_port,
                 }),
                 addr: Ipv6Addr::UNSPECIFIED,
             };
