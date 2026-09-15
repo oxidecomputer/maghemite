@@ -4,7 +4,7 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
-use ddm::admin::{HandlerContext, RouterStats};
+use ddm::admin::{HandlerContext, RouterStats, Tunables};
 use ddm::db::Db;
 use ddm::defaults::{
     DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
@@ -24,6 +24,7 @@ use std::net::{IpAddr, Ipv6Addr};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use uuid::Uuid;
 
 mod signal;
@@ -179,6 +180,15 @@ async fn run() {
         stats: router_stats,
         peers,
         stats_handler: Arc::new(Mutex::new(None)),
+        tunables: Tunables {
+            solicit_interval: Duration::from_millis(arg.solicit_interval),
+            expire_threshold: Duration::from_millis(arg.expire_threshold),
+            discovery_read_timeout: Duration::from_millis(
+                arg.discovery_read_timeout,
+            ),
+            ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
+            exchange_timeout: Duration::from_millis(arg.exchange_timeout),
+        },
         log: log.clone(),
     }));
 
@@ -250,11 +260,13 @@ fn start_state_machines(
         let (tx, rx) = channel();
 
         let config = ddm::sm::Config {
-            solicit_interval: arg.solicit_interval,
-            expire_threshold: arg.expire_threshold,
-            discovery_read_timeout: arg.discovery_read_timeout,
-            ip_addr_wait: arg.ip_addr_wait,
-            exchange_timeout: arg.exchange_timeout,
+            solicit_interval: Duration::from_millis(arg.solicit_interval),
+            expire_threshold: Duration::from_millis(arg.expire_threshold),
+            discovery_read_timeout: Duration::from_millis(
+                arg.discovery_read_timeout,
+            ),
+            ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
+            exchange_timeout: Duration::from_millis(arg.exchange_timeout),
             exchange_port: arg.exchange_port,
             aobj_name: name.clone(),
             if_name: String::new(),

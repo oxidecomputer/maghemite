@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread::{sleep, spawn};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
@@ -116,16 +116,12 @@ pub(crate) fn handler(
     mc.bind(&mc_sa)?;
     mc.join_multicast_v6(&DDM_MADDR, config.if_index)?;
     mc.set_multicast_loop_v6(false)?;
-    mc.set_read_timeout(Some(Duration::from_millis(
-        config.discovery_read_timeout,
-    )))?;
+    mc.set_read_timeout(Some(config.discovery_read_timeout))?;
 
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
     uc.bind(&uc_sa)?;
-    uc.set_read_timeout(Some(Duration::from_millis(
-        config.discovery_read_timeout,
-    )))?;
+    uc.set_read_timeout(Some(config.discovery_read_timeout))?;
 
     let ctx = HandlerContext {
         mc_socket: Arc::new(mc),
@@ -175,7 +171,7 @@ fn send_solicitations(
                 break;
             }
             stats.solicitations_sent.fetch_add(1, Ordering::Relaxed);
-            sleep(Duration::from_millis(ctx.config.solicit_interval));
+            sleep(ctx.config.solicit_interval);
         }
     });
 }
@@ -201,7 +197,7 @@ fn expire(
             };
             if let Some(nbr) = &*guard {
                 let dt = Instant::now().duration_since(nbr.last_seen);
-                if dt.as_millis() > u128::from(ctx.config.expire_threshold) {
+                if dt > ctx.config.expire_threshold {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
@@ -216,9 +212,7 @@ fn expire(
                         ctx.log.clone(),
                         &ctx.config.if_name,
                     );
-                } else if dt.as_millis()
-                    > u128::from(ctx.config.solicit_interval)
-                {
+                } else if dt > ctx.config.solicit_interval {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
@@ -245,11 +239,11 @@ fn expire(
                 let wait = ctx.config.discovery_read_timeout;
                 drop(ctx);
                 // Ensure read handlers have registered the stop event.
-                sleep(Duration::from_millis(wait));
+                sleep(wait);
                 emit_solicit_fail(event, log, &if_name);
                 break;
             }
-            sleep(Duration::from_millis(ctx.config.solicit_interval));
+            sleep(ctx.config.solicit_interval);
         }
     });
     Ok(())

@@ -5,7 +5,7 @@
 use crate::db::Db;
 use crate::defaults::{
     DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
-    EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
+    EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL,
 };
 use crate::sm::{
     AdminEvent, Event, InterfaceState, PrefixSet, SessionStats, SmContext,
@@ -40,6 +40,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
+use std::time::Duration;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
@@ -60,7 +61,29 @@ pub struct HandlerContext {
     pub stats: Arc<RouterStats>,
     pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub tunables: Tunables,
     pub log: Logger,
+}
+
+#[derive(Clone)]
+pub struct Tunables {
+    pub solicit_interval: Duration,
+    pub expire_threshold: Duration,
+    pub discovery_read_timeout: Duration,
+    pub ip_addr_wait: Duration,
+    pub exchange_timeout: Duration,
+}
+
+impl Default for Tunables {
+    fn default() -> Self {
+        Self {
+            solicit_interval: SOLICIT_INTERVAL,
+            expire_threshold: EXPIRE_THRESHOLD,
+            discovery_read_timeout: DISCOVERY_READ_TIMEOUT,
+            ip_addr_wait: IP_ADDR_WAIT,
+            exchange_timeout: EXCHANGE_TIMEOUT,
+        }
+    }
 }
 
 pub fn handler(
@@ -463,11 +486,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
             let (tx, rx) = channel();
 
             let config = crate::sm::Config {
-                solicit_interval: millis_u64(SOLICIT_INTERVAL),
-                expire_threshold: millis_u64(EXPIRE_THRESHOLD),
-                discovery_read_timeout: millis_u64(DISCOVERY_READ_TIMEOUT),
-                ip_addr_wait: millis_u64(IP_ADDR_WAIT),
-                exchange_timeout: millis_u64(EXCHANGE_TIMEOUT),
+                solicit_interval: ctx.tunables.solicit_interval,
+                expire_threshold: ctx.tunables.expire_threshold,
+                discovery_read_timeout: ctx.tunables.discovery_read_timeout,
+                ip_addr_wait: ctx.tunables.ip_addr_wait,
+                exchange_timeout: ctx.tunables.exchange_timeout,
                 exchange_port: EXCHANGE_TCP_PORT,
                 aobj_name: addr_obj.clone(),
                 if_name: String::default(), // initialized in state machine
@@ -517,7 +540,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         for ifx in to_remove.into_iter() {
             for (i, p) in ctx.peers.iter().enumerate() {
-                if p.config.aobj_name.contains(ifx) {
+                if p.iface.external && p.config.aobj_name.contains(ifx) {
                     let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
                     remove_idx.insert(i);
                     info!(

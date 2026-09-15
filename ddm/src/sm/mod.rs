@@ -131,22 +131,21 @@ pub struct Config {
     /// Link local Ipv6 address this state machine is associated with
     pub addr: Ipv6Addr,
 
-    /// How long to wait between solicitations (milliseconds).
-    pub solicit_interval: u64,
+    /// How long to wait between solicitations.
+    pub solicit_interval: Duration,
 
     /// How often to check for link failure while waiting for discovery messges.
-    pub discovery_read_timeout: u64,
+    pub discovery_read_timeout: Duration,
 
     /// How long to wait between attempts to get an IP address for a specified
     /// address object.
-    pub ip_addr_wait: u64,
+    pub ip_addr_wait: Duration,
 
     /// How long to wait without a solicitation response before expiring a peer
-    /// (milliseconds).
-    pub expire_threshold: u64,
+    pub expire_threshold: Duration,
 
     /// How long to wait for a response to exchange messages.
-    pub exchange_timeout: u64,
+    pub exchange_timeout: Duration,
 
     /// The kind of router this is, server or transit.
     pub kind: RouterKind,

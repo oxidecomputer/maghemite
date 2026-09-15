@@ -238,9 +238,7 @@ fn send_update_common(
     let resp = client.request(req);
 
     rt.block_on(async move {
-        match timeout(Duration::from_millis(config.exchange_timeout), resp)
-            .await
-        {
+        match timeout(config.exchange_timeout, resp).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 err!(

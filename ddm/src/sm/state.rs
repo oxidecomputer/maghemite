@@ -99,7 +99,7 @@ impl State for Init {
                         &self.ctx.config.aobj_name,
                         e
                     );
-                    sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
+                    sleep(self.ctx.config.ip_addr_wait);
                     continue;
                 }
             };
@@ -112,7 +112,7 @@ impl State for Init {
                         "specified address {} is not IPv6",
                         &self.ctx.config.aobj_name
                     );
-                    sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
+                    sleep(self.ctx.config.ip_addr_wait);
                     continue;
                 }
             };
@@ -148,9 +148,7 @@ impl State for Init {
                         self.ctx.config.if_name,
                         "failed to start discovery handler: {e}",
                     );
-                    sleep(Duration::from_millis(
-                        self.ctx.config.solicit_interval,
-                    ));
+                    sleep(self.ctx.config.solicit_interval);
                     continue;
                 }
             };
@@ -293,7 +291,7 @@ impl Exchange {
             while let Err(e) =
                 crate::exchange::pull(&mut ctx, peer, version, rt.clone())
             {
-                sleep(Duration::from_millis(interval));
+                sleep(interval);
                 wrn!(log, if_name, "exchange pull: {}", e);
                 if stop.load(Ordering::Relaxed) {
                     break;
