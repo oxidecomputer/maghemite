@@ -1139,6 +1139,8 @@ async fn run_sextet_tests(
         s2: BTreeSet<Ipv6Net>,
         s3: BTreeSet<Ipv6Net>,
         s4: BTreeSet<Ipv6Net>,
+        t1: BTreeSet<Ipv6Net>,
+        t2: BTreeSet<Ipv6Net>,
     }
 
     drop_dump!(s1, "http://10.0.0.1:8000");
@@ -1209,6 +1211,8 @@ async fn run_sextet_tests(
             assert_peer_reach!(s2, $r.s2.clone());
             assert_peer_reach!(s3, $r.s3.clone());
             assert_peer_reach!(s4, $r.s4.clone());
+            assert_peer_reach!(t1, $r.t1.clone());
+            assert_peer_reach!(t2, $r.t2.clone());
         }};
     }
 
@@ -1220,6 +1224,16 @@ async fn run_sextet_tests(
     let s2_origin: Vec<Ipv6Net> = [ip6_net!("fd00:2::/64")].into();
     let s3_origin: Vec<Ipv6Net> = [ip6_net!("fd00:3::/64")].into();
     let s4_origin: Vec<Ipv6Net> = [ip6_net!("fd00:4::/64")].into();
+    let t1_origin: Vec<Ipv6Net> = s1_origin
+        .clone()
+        .into_iter()
+        .chain(s2_origin.clone())
+        .collect();
+    let t2_origin: Vec<Ipv6Net> = s3_origin
+        .clone()
+        .into_iter()
+        .chain(s4_origin.clone())
+        .collect();
 
     s1.advertise_prefixes(&s1_origin).await?;
     s2.advertise_prefixes(&s2_origin).await?;
@@ -1328,17 +1342,20 @@ async fn run_sextet_tests(
             let counts = expected_external_peerings(x, y);
             // Servers can always see the originated prefixes of other routers
             // reachable over a single hop transit router path (e.g. in the same
-            // rack).
+            // rack). Transit routers can always see the originated prefixes of
+            // their directly connected server routers.
             let mut reach = PeerReachablePrefixes {
                 s1: s2_origin.iter().cloned().collect(),
                 s2: s1_origin.iter().cloned().collect(),
                 s3: s4_origin.iter().cloned().collect(),
                 s4: s3_origin.iter().cloned().collect(),
+                t1: t1_origin.iter().cloned().collect(),
+                t2: t2_origin.iter().cloned().collect(),
             };
             // If there is any peering between transit routers, each server router
             // should see prefixes originated from the router adjacent to their
             // transit router.
-            if counts.t1 > 2 && counts.t2 > 2 {
+            if counts.t1 > 2 || counts.t2 > 2 {
                 // Origins from servers connected to t2 propagating to servers
                 // connected to t1.
                 reach.s1.extend(&s3_origin);
@@ -1352,6 +1369,10 @@ async fn run_sextet_tests(
                 reach.s3.extend(&s2_origin);
                 reach.s4.extend(&s1_origin);
                 reach.s4.extend(&s2_origin);
+
+                // Origins from transit routers propagate to each other.
+                reach.t1.extend(&t2_origin);
+                reach.t2.extend(&t1_origin);
             }
             reach
         };

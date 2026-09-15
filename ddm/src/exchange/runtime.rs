@@ -534,17 +534,16 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
 
     // distribute updates
 
-    if ctx.config.kind == RouterKind::Transit {
-        if let Err(e) = ctx
+    if ctx.config.kind == RouterKind::Transit
+        && let Err(e) = ctx
             .tx
             .send(Event::Peer(PeerEvent::Redistribute(update.clone())))
-        {
-            wrn!(
-                ctx.log,
-                ctx.config.if_name,
-                "failed to send update to SM: {e:?}"
-            );
-        }
+    {
+        wrn!(
+            ctx.log,
+            ctx.config.if_name,
+            "failed to send update to SM: {e:?}"
+        );
     }
 }
 
