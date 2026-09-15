@@ -32,7 +32,7 @@ use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info, o};
+use slog::{Logger, debug, error, info, o};
 use slog_error_chain::InlineErrorChain;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -56,13 +56,18 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
     pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
     pub log: Logger,
+}
+
+impl HandlerContext {
+    pub fn event_channels(&self) -> impl Iterator<Item = &Sender<Event>> {
+        self.peers.iter().map(|x| &x.tx)
+    }
 }
 
 #[derive(Clone)]
@@ -190,7 +195,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Expire(addr)))
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
@@ -269,7 +274,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                 prefixes.clone(),
             ))))
@@ -305,7 +310,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                 endpoints.clone(),
             ))))
@@ -339,7 +344,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                 prefixes.clone(),
             ))))
@@ -375,7 +380,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                 endpoints.clone(),
             ))))
@@ -405,7 +410,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
                 HttpError::for_internal_error(format!("admin event send: {e}"))
             })?;
@@ -510,7 +515,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             let sm_ctx = SmContext {
                 config,
                 db: ctx.db.clone(),
-                event_channels: ctx.event_channels.clone(),
+                event_channels: ctx.event_channels().cloned().collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
                 hostname: hostname::get()
@@ -531,24 +536,24 @@ impl DdmAdminApi for DdmAdminApiImpl {
             sm.run().unwrap();
 
             ctx.peers.push(sm_ctx.clone());
-
-            ctx.event_channels.push(tx);
         }
 
         // Ensure our indices are unique and ordered.
         let mut remove_idx = BTreeSet::default();
 
-        for ifx in to_remove.into_iter() {
+        for aobj in to_remove.into_iter() {
             for (i, p) in ctx.peers.iter().enumerate() {
-                if p.iface.external && p.config.aobj_name.contains(ifx) {
-                    let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
-                    remove_idx.insert(i);
-                    info!(
-                        ctx.log,
-                        "removing external peeer on interface {ifx}"
-                    );
-                } else {
-                    info!(ctx.log, "{ifx} != {}", p.config.aobj_name);
+                if p.iface.external {
+                    if &p.config.aobj_name == aobj {
+                        let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+                        remove_idx.insert(i);
+                        info!(
+                            ctx.log,
+                            "removing external peeer for address object {aobj}"
+                        );
+                    } else {
+                        debug!(ctx.log, "{aobj} != {}", p.config.aobj_name);
+                    }
                 }
             }
         }

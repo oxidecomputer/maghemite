@@ -166,8 +166,7 @@ async fn run() {
         .to_string_lossy()
         .to_string();
 
-    let (sms, event_channels) =
-        start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
+    let sms = start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
@@ -175,7 +174,6 @@ async fn run() {
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
     let context = Arc::new(Mutex::new(HandlerContext {
-        event_channels,
         db,
         stats: router_stats,
         peers,
@@ -245,12 +243,9 @@ fn start_state_machines(
     hostname: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
+) -> Vec<StateMachine> {
     if arg.api_only {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
 
     let mut sms = Vec::new();
@@ -311,7 +306,7 @@ fn start_state_machines(
         sm.run().unwrap();
     }
 
-    (sms, event_channels)
+    sms
 }
 
 /// Non-illumos variant: the routing state machine depends on illumos
