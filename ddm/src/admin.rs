@@ -3,13 +3,21 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
+use crate::defaults::{
+    DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
+    EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL,
+};
+use crate::sm::{
+    AdminEvent, Event, InterfaceState, PrefixSet, SessionStats, SmContext,
+    StateMachine,
+};
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::db::{PeerInfo, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
+use ddm_api_types::external_peers::ExternalPeers;
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
@@ -24,14 +32,15 @@ use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info, o};
+use slog::{Logger, debug, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, channel};
+use std::time::Duration;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
@@ -47,12 +56,48 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
     pub peers: Vec<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub tunables: Tunables,
+    pub router_kind: RouterKind,
     pub log: Logger,
+}
+
+impl HandlerContext {
+    pub fn event_channels(&self) -> impl Iterator<Item = &Sender<Event>> {
+        self.peers.iter().map(|x| &x.tx)
+    }
+}
+
+#[derive(Clone)]
+pub struct Tunables {
+    pub solicit_interval: Duration,
+    pub expire_threshold: Duration,
+    pub discovery_read_timeout: Duration,
+    pub ip_addr_wait: Duration,
+    pub exchange_timeout: Duration,
+    pub dendrite: bool,
+    pub dpd_port: u16,
+    pub dpd_host: String,
+    pub exchange_tcp_port: u16,
+}
+
+impl Default for Tunables {
+    fn default() -> Self {
+        Self {
+            solicit_interval: SOLICIT_INTERVAL,
+            expire_threshold: EXPIRE_THRESHOLD,
+            discovery_read_timeout: DISCOVERY_READ_TIMEOUT,
+            ip_addr_wait: IP_ADDR_WAIT,
+            exchange_timeout: EXCHANGE_TIMEOUT,
+            dpd_port: dpd_client::default_port(),
+            dpd_host: "localhost".into(),
+            exchange_tcp_port: EXCHANGE_TCP_PORT,
+            dendrite: true,
+        }
+    }
 }
 
 pub fn handler(
@@ -159,7 +204,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Expire(addr)))
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
@@ -238,7 +283,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                 prefixes.clone(),
             ))))
@@ -274,7 +319,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                 endpoints.clone(),
             ))))
@@ -308,7 +353,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                 prefixes.clone(),
             ))))
@@ -344,7 +389,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                 endpoints.clone(),
             ))))
@@ -374,7 +419,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
+        for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
                 HttpError::for_internal_error(format!("admin event send: {e}"))
             })?;
@@ -388,9 +433,12 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<EnableStatsRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let rq = request.into_inner();
-        let ctx = lock!(ctx.context());
+        let (jh, log) = {
+            let ctx = lock!(ctx.context());
+            (ctx.stats_handler.clone(), ctx.log.clone())
+        };
 
-        let mut jh = lock!(ctx.stats_handler);
+        let mut jh = lock!(jh);
         if jh.is_none() {
             let hostname = hostname::get()
                 .expect("failed to get hostname")
@@ -399,12 +447,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
             *jh = Some(
                 crate::oxstats::start_server(
                     DDM_STATS_PORT,
-                    ctx.peers.clone(),
-                    ctx.stats.clone(),
+                    ctx.context().clone(),
                     hostname,
                     rq.rack_id,
                     rq.sled_id,
-                    ctx.log.clone(),
+                    log,
                 )
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
@@ -428,6 +475,129 @@ impl DdmAdminApi for DdmAdminApiImpl {
         *jh = None;
 
         Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn set_external_peers(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<ExternalPeers>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let mut ctx = lock!(ctx.context());
+
+        if ctx.router_kind != RouterKind::Transit {
+            return Err(HttpError::for_bad_request(
+                None,
+                "external peers only supported for transit routers".into(),
+            ));
+        }
+
+        let rq = request.into_inner();
+
+        let current = ctx.db.get_external_peers();
+        let to_create = rq.address_objects.difference(&current);
+        let to_remove = current.difference(&rq.address_objects);
+
+        info!(ctx.log, "peer change request";
+            "requested" => ?rq.address_objects,
+            "to_create" => ?to_create,
+            "to_remove" => ?to_remove,
+            "current" => ?current,
+        );
+        ctx.db.set_external_peers(rq.address_objects.clone());
+
+        for addr_obj in to_create.into_iter() {
+            let (tx, rx) = channel();
+
+            let config = crate::sm::Config {
+                solicit_interval: ctx.tunables.solicit_interval,
+                expire_threshold: ctx.tunables.expire_threshold,
+                discovery_read_timeout: ctx.tunables.discovery_read_timeout,
+                ip_addr_wait: ctx.tunables.ip_addr_wait,
+                exchange_timeout: ctx.tunables.exchange_timeout,
+                exchange_port: ctx.tunables.exchange_tcp_port,
+                aobj_name: addr_obj.clone(),
+                if_name: String::default(), // initialized in state machine
+                if_index: 0,                // initialized in state machine
+                // External peers are only a thing for transit routers.
+                kind: RouterKind::Transit,
+                dpd: if ctx.tunables.dendrite {
+                    Some(crate::sm::DpdConfig {
+                        host: ctx.tunables.dpd_host.clone(),
+                        port: ctx.tunables.dpd_port,
+                    })
+                } else {
+                    None
+                },
+                addr: Ipv6Addr::UNSPECIFIED,
+            };
+            let sm_ctx = SmContext {
+                config,
+                db: ctx.db.clone(),
+                event_channels: ctx.event_channels().cloned().collect(),
+                tx: tx.clone(),
+                log: ctx.log.clone(),
+                hostname: hostname::get()
+                    .expect("failed to get hostname")
+                    .to_string_lossy()
+                    .to_string(),
+                rt: Arc::new(tokio::runtime::Handle::current()),
+                iface: Arc::new(InterfaceState::external()),
+                stats: Arc::new(SessionStats::default()),
+                discovery_stop: None,
+                first_run: true,
+            };
+            let mut sm = StateMachine {
+                ctx: sm_ctx.clone(),
+                rx: Some(rx),
+            };
+
+            sm.run().unwrap();
+
+            ctx.peers.push(sm_ctx.clone());
+        }
+
+        // Ensure our indices are unique and ordered.
+        let mut remove_idx = BTreeSet::default();
+
+        for aobj in to_remove.into_iter() {
+            for (i, p) in ctx.peers.iter().enumerate() {
+                if p.iface.external {
+                    if &p.config.aobj_name == aobj {
+                        let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+                        remove_idx.insert(i);
+                        info!(
+                            ctx.log,
+                            "removing external peeer for address object {aobj}"
+                        );
+                    } else {
+                        debug!(ctx.log, "{aobj} != {}", p.config.aobj_name);
+                    }
+                }
+            }
+        }
+        // remove peers back to front so we don't shift the order our from under
+        // ourselves for the indexes we just gathered.
+        for i in remove_idx.iter().rev() {
+            ctx.peers.remove(*i);
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn get_external_peers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<ExternalPeers>, HttpError> {
+        let ctx = lock!(ctx.context());
+
+        if ctx.router_kind != RouterKind::Transit {
+            return Err(HttpError::for_bad_request(
+                None,
+                "external peers only supported for transit routers".into(),
+            ));
+        }
+
+        Ok(HttpResponseOk(ExternalPeers {
+            address_objects: ctx.db.get_external_peers(),
+        }))
     }
 }
 

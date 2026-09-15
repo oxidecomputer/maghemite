@@ -16,16 +16,19 @@ use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-mod state;
+#[cfg(target_os = "illumos")]
+use std::collections::BTreeSet;
 
-#[derive(Debug)]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub(crate) mod state;
+
+#[derive(Debug, Clone)]
 pub enum AdminEvent {
     /// Announce a set of IPv6 prefixes
     Announce(PrefixSet),
@@ -38,27 +41,50 @@ pub enum AdminEvent {
 
     /// Synchronize with active peers by pulling their prefixes.
     Sync,
+
+    /// A new external peer has been added to the router that can be reached
+    /// using the provided sender.
+    NewExternalPeer(Sender<Event>),
+
+    /// Shutdown on recipt of this event.
+    Shutdown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PeerEvent {
+    /// Upon reception of this event, a state machine is to push the update to
+    /// its peer.
     Push(ddm_protocol::v3::Update),
+
+    /// Upon reception of this event, a state machine is to redistribute the
+    /// update to it's sibling routers through it's event channels. The state
+    /// machine is responsible maintaining the path vector and performing loop
+    /// breaking.
+    Redistribute(ddm_protocol::v3::Update),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NeighborEvent {
+    /// An event sent from the discovery subsystem to the state machine letting
+    /// it know the link local ipv6 address of the peer and it's version.
     Advertise((Ipv6Addr, Version)),
+
+    /// An event sent from the discovery subsystem to the state machine letting
+    /// it know that solicitation has failed.
     SolicitFail,
+
+    /// An event sent from the discovery subsystem to the state machine letting
+    /// it know that the peer has expired.
     Expire,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event {
     Neighbor(NeighborEvent),
     Peer(PeerEvent),
@@ -124,22 +150,21 @@ pub struct Config {
     /// Link local Ipv6 address this state machine is associated with
     pub addr: Ipv6Addr,
 
-    /// How long to wait between solicitations (milliseconds).
-    pub solicit_interval: u64,
+    /// How long to wait between solicitations.
+    pub solicit_interval: Duration,
 
     /// How often to check for link failure while waiting for discovery messges.
-    pub discovery_read_timeout: u64,
+    pub discovery_read_timeout: Duration,
 
     /// How long to wait between attempts to get an IP address for a specified
     /// address object.
-    pub ip_addr_wait: u64,
+    pub ip_addr_wait: Duration,
 
     /// How long to wait without a solicitation response before expiring a peer
-    /// (milliseconds).
-    pub expire_threshold: u64,
+    pub expire_threshold: Duration,
 
     /// How long to wait for a response to exchange messages.
-    pub exchange_timeout: u64,
+    pub exchange_timeout: Duration,
 
     /// The kind of router this is, server or transit.
     pub kind: RouterKind,
@@ -184,12 +209,20 @@ pub struct PeerIdentity {
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
+    pub external: bool,
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
 }
 
 impl InterfaceState {
+    pub fn external() -> Self {
+        Self {
+            external: true,
+            ..Default::default()
+        }
+    }
+
     pub fn transition(&self, state: FsmState) {
         *lock!(self.fsm_state) = state;
         *lock!(self.last_fsm_state_change) = Instant::now();
@@ -215,6 +248,7 @@ impl Default for InterfaceState {
         Self {
             if_index: Mutex::new(0),
             if_name: Mutex::new(String::new()),
+            external: false,
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),
@@ -252,9 +286,38 @@ pub struct SmContext {
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
+    pub discovery_stop: Option<Arc<AtomicBool>>,
+    pub first_run: bool,
 }
 
 pub struct StateMachine {
     pub ctx: SmContext,
     pub rx: Option<Receiver<Event>>,
+}
+
+#[cfg(not(target_os = "illumos"))]
+impl StateMachine {
+    pub fn run(&mut self) -> Result<(), SmError> {
+        Ok(())
+    }
+}
+
+/// Send an event to all channels in the list, removing any channels from the
+/// list that are dead.
+#[cfg(target_os = "illumos")]
+pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
+    // Ensure our indices are unique and ordered.
+    let mut dead_channels = BTreeSet::default();
+    for (i, c) in event_channels.iter().enumerate() {
+        if c.send(e.clone()).is_err() {
+            dead_channels.insert(i);
+        }
+    }
+    // we need to remove in descending order, so we don't remove `i` and then
+    // try to remove `i+1` later which wlll be a _diffrent_ item than we grabbed
+    // the index for. Removing from the top down causes no shifting for subsequent
+    // index removals.
+    for i in dead_channels.iter().rev() {
+        event_channels.remove(*i);
+    }
 }

@@ -4,8 +4,12 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
-use ddm::admin::{HandlerContext, RouterStats};
+use ddm::admin::{HandlerContext, RouterStats, Tunables};
 use ddm::db::Db;
+use ddm::defaults::{
+    DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
+    EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
+};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
@@ -13,12 +17,14 @@ use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
+use mg_common::lock;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use uuid::Uuid;
 
 mod signal;
@@ -32,26 +38,26 @@ struct Arg {
     addresses: Vec<String>,
 
     /// How long to wait between solicitations (milliseconds).
-    #[arg(long, default_value_t = 2000)]
+    #[arg(long, default_value_t = millis_u64(SOLICIT_INTERVAL))]
     solicit_interval: u64,
 
     /// How long to wait without a solicitation response before expiring a peer
     /// (milliseconds).
-    #[arg(long, default_value_t = 5000)]
+    #[arg(long, default_value_t = millis_u64(EXPIRE_THRESHOLD))]
     expire_threshold: u64,
 
     /// How often to check for link failure while waiting for discovery messges
     /// (milliseconds).
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = millis_u64(DISCOVERY_READ_TIMEOUT))]
     discovery_read_timeout: u64,
 
     /// How long to wait between attempts to get an IP address for a specified
     /// address object (milliseconds).
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = millis_u64(IP_ADDR_WAIT))]
     ip_addr_wait: u64,
 
-    /// How long to wait for a response to exchange messages.
-    #[arg(long, default_value_t = 3000)]
+    /// How long to wait for a response to exchange messages (milliseconds).
+    #[arg(long, default_value_t = millis_u64(EXCHANGE_TIMEOUT))]
     pub exchange_timeout: u64,
 
     /// Address to listen on for the admin API.
@@ -67,7 +73,7 @@ struct Arg {
     kind: RouterKind,
 
     /// The tcp port to listen on for exchange messages.
-    #[arg(long, default_value_t = 0xdddd)]
+    #[arg(long, default_value_t = EXCHANGE_TCP_PORT)]
     exchange_port: u16,
 
     /// Whether or not to use Dendrite as the underlying routing and forwarding
@@ -160,48 +166,56 @@ async fn run() {
         .to_string_lossy()
         .to_string();
 
-    let (sms, event_channels) =
-        start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
+    let sms = start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
     let router_stats = Arc::new(RouterStats::default());
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
-    let stats_handler = if arg.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
-            (arg.rack_uuid, arg.sled_uuid)
-        {
-            match ddm::oxstats::start_server(
-                arg.oximeter_port,
-                peers.clone(),
-                router_stats.clone(),
-                hostname.clone(),
-                rack_uuid,
-                sled_uuid,
-                log.clone(),
-            ) {
-                Ok(handler) => Some(handler),
-                Err(e) => {
-                    error!(log, "failed to start stats server: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     let context = Arc::new(Mutex::new(HandlerContext {
-        event_channels,
         db,
         stats: router_stats,
         peers,
-        stats_handler: Arc::new(Mutex::new(stats_handler)),
+        stats_handler: Arc::new(Mutex::new(None)),
+        router_kind: arg.kind,
+        tunables: Tunables {
+            solicit_interval: Duration::from_millis(arg.solicit_interval),
+            expire_threshold: Duration::from_millis(arg.expire_threshold),
+            discovery_read_timeout: Duration::from_millis(
+                arg.discovery_read_timeout,
+            ),
+            ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
+            exchange_timeout: Duration::from_millis(arg.exchange_timeout),
+            dendrite: arg.dendrite,
+            dpd_port: arg.dpd_port,
+            dpd_host: arg.dpd_host.clone(),
+            exchange_tcp_port: arg.exchange_port,
+        },
         log: log.clone(),
     }));
+
+    if arg.with_stats
+        && let (Some(rack_uuid), Some(sled_uuid)) =
+            (arg.rack_uuid, arg.sled_uuid)
+    {
+        let h = match ddm::oxstats::start_server(
+            arg.oximeter_port,
+            context.clone(),
+            hostname.clone(),
+            rack_uuid,
+            sled_uuid,
+            log.clone(),
+        ) {
+            Ok(handler) => Some(handler),
+            Err(e) => {
+                error!(log, "failed to start stats server: {e}");
+                None
+            }
+        };
+        let ctx = lock!(context);
+        *lock!(ctx.stats_handler) = h;
+    }
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         error!(log, "send context to signal handler {e}");
@@ -234,12 +248,9 @@ fn start_state_machines(
     hostname: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
+) -> Vec<StateMachine> {
     if arg.api_only {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
 
     let mut sms = Vec::new();
@@ -249,11 +260,13 @@ fn start_state_machines(
         let (tx, rx) = channel();
 
         let config = ddm::sm::Config {
-            solicit_interval: arg.solicit_interval,
-            expire_threshold: arg.expire_threshold,
-            discovery_read_timeout: arg.discovery_read_timeout,
-            ip_addr_wait: arg.ip_addr_wait,
-            exchange_timeout: arg.exchange_timeout,
+            solicit_interval: Duration::from_millis(arg.solicit_interval),
+            expire_threshold: Duration::from_millis(arg.expire_threshold),
+            discovery_read_timeout: Duration::from_millis(
+                arg.discovery_read_timeout,
+            ),
+            ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
+            exchange_timeout: Duration::from_millis(arg.exchange_timeout),
             exchange_port: arg.exchange_port,
             aobj_name: name.clone(),
             if_name: String::new(),
@@ -273,6 +286,8 @@ fn start_state_machines(
             rt: rt.clone(),
             iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
+            discovery_stop: None,
+            first_run: true,
         };
 
         let sm = StateMachine { ctx, rx: Some(rx) };
@@ -296,7 +311,7 @@ fn start_state_machines(
         sm.run().unwrap();
     }
 
-    (sms, event_channels)
+    sms
 }
 
 /// Non-illumos variant: the routing state machine depends on illumos
@@ -310,11 +325,8 @@ fn start_state_machines(
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,
-) -> (
-    Vec<StateMachine>,
-    Vec<std::sync::mpsc::Sender<ddm::sm::Event>>,
-) {
-    (Vec::new(), Vec::new())
+) -> Vec<StateMachine> {
+    Vec::new()
 }
 
 /// Install a Ctrl-C handler that withdraws ddmd's imported routes from the
