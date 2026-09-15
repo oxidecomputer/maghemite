@@ -74,11 +74,14 @@ impl State for Init {
         self.ctx.iface.transition(FsmState::Init);
         self.ctx.iface.clear_peer();
         loop {
-            // Check for shutdown
+            // Check for shutdown or new peers
             while let Ok(e) = event.try_recv() {
                 match e {
                     Event::Admin(AdminEvent::Shutdown) => {
                         return (None, event);
+                    }
+                    Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
+                        self.ctx.event_channels.push(tx);
                     }
                     _ => {
                         wrn!(
