@@ -394,7 +394,7 @@ impl Exchange {
             );
 
             // Only send withdraws for expirations that result in a total loss
-            // of reachability to a destination.
+            // of reachability to a destination for the given path.
             let imported = self.ctx.db.imported();
             dbg!(self.log, self.ctx.config.if_name, "imported: {imported:#?}");
             dbg!(
@@ -403,7 +403,9 @@ impl Exchange {
                 "to_remove: {to_remove:#?}"
             );
             to_remove.retain(|x| {
-                !imported.iter().any(|y| y.destination == x.destination)
+                !imported
+                    .iter()
+                    .any(|y| y.destination == x.destination && y.path == x.path)
             });
             dbg!(
                 self.log,

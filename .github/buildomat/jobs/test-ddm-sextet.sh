@@ -11,8 +11,8 @@
 source .github/buildomat/test-ddm-common.sh
 
 #
-# trio tests
+# sextet tests
 #
 
-banner "trio"
+banner "sextet"
 pfexec cargo test --release -p mg-tests test_external_peer_sextet -- --nocapture

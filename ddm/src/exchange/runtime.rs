@@ -29,14 +29,13 @@ use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use mg_common::lock;
 use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
@@ -361,7 +360,7 @@ async fn push_handler_common(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     update: v3::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = lock!(ctx.context()).clone();
+    let ctx = ctx.context().lock().await.clone();
 
     tokio::task::spawn_blocking(move || {
         handle_update(&update, &ctx.ctx, ctx.peer);
@@ -381,7 +380,7 @@ async fn push_handler_common(
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
-    let ctx = lock!(ctx.context());
+    let ctx = ctx.context().lock().await.clone();
 
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
@@ -457,7 +456,7 @@ async fn pull_handler_v2(
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
-    let ctx = lock!(ctx.context());
+    let ctx = ctx.context().lock().await.clone();
 
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();

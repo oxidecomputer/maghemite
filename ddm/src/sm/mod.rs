@@ -46,7 +46,7 @@ pub enum AdminEvent {
     /// using the provided sender.
     NewExternalPeer(Sender<Event>),
 
-    /// Shutdown on recipt of this event.
+    /// Shutdown on receipt of this event.
     Shutdown,
 }
 
@@ -64,8 +64,8 @@ pub enum PeerEvent {
 
     /// Upon reception of this event, a state machine is to redistribute the
     /// update to it's sibling routers through it's event channels. The state
-    /// machine is responsible maintaining the path vector and performing loop
-    /// breaking.
+    /// machine is responsible for maintaining the path vector and performing
+    /// loop breaking.
     Redistribute(ddm_protocol::v3::Update),
 }
 
@@ -314,7 +314,7 @@ pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
         }
     }
     // we need to remove in descending order, so we don't remove `i` and then
-    // try to remove `i+1` later which wlll be a _diffrent_ item than we grabbed
+    // try to remove `i+1` later which wlll be a _different_ item than we grabbed
     // the index for. Removing from the top down causes no shifting for subsequent
     // index removals.
     for i in dead_channels.iter().rev() {
