@@ -396,7 +396,7 @@ async fn pull_handler_v2(
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
+            pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
@@ -415,7 +415,7 @@ async fn pull_handler_v2(
     for prefix in &originated {
         let pv = v3::PathVector {
             destination: *prefix,
-            path: vec![ctx.ctx.hostname.clone()],
+            path: vec![ctx.ctx.router_id.clone()],
         };
         underlay.insert(pv);
     }
@@ -472,7 +472,7 @@ async fn pull_handler(
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
+            pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
@@ -491,7 +491,7 @@ async fn pull_handler(
     for prefix in &originated {
         let pv = v3::PathVector {
             destination: *prefix,
-            path: vec![ctx.ctx.hostname.clone()],
+            path: vec![ctx.ctx.router_id.clone()],
         };
         underlay.insert(pv);
     }
@@ -632,7 +632,7 @@ fn handle_underlay_update(
     for prefix in &update.announce {
         // Skip announcements with ourselves in the path e.g. path vector
         // loop breaking.
-        if prefix.path.contains(&ctx.hostname) {
+        if prefix.path.contains(&ctx.router_id) {
             continue;
         }
         import.insert(Route {

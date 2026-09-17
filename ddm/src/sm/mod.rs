@@ -21,6 +21,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use uuid::Uuid;
 
 #[cfg(target_os = "illumos")]
 use std::collections::BTreeSet;
@@ -174,6 +175,12 @@ pub struct Config {
 
     /// Dendrite dpd config
     pub dpd: Option<DpdConfig>,
+
+    /// Rack ID
+    pub rack_id: Option<Uuid>,
+
+    /// Sled ID
+    pub sled_id: Option<Uuid>,
 }
 
 #[derive(Clone)]
@@ -282,7 +289,7 @@ pub struct SmContext {
     pub tx: Sender<Event>,
     pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
-    pub hostname: String,
+    pub router_id: String,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,

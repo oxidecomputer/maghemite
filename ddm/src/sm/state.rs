@@ -137,7 +137,7 @@ impl State for Init {
             // Now that we have an ip address to run discovery on, start the
             // discovery handler and jump into the solicit state.
             let discovery_stop = match discovery::handler(
-                self.ctx.hostname.clone(),
+                self.ctx.router_id.clone(),
                 self.ctx.config.clone(),
                 self.ctx.tx.clone(),
                 self.ctx.iface.clone(),
@@ -423,7 +423,7 @@ impl Exchange {
                             destination: x.destination,
                             path: {
                                 let mut ps = x.path.clone();
-                                ps.push(self.ctx.hostname.clone());
+                                ps.push(self.ctx.router_id.clone());
                                 ps
                             },
                         })
@@ -513,7 +513,7 @@ impl State for Exchange {
                         .iter()
                         .map(|x| PathVector {
                             destination: *x,
-                            path: vec![self.ctx.hostname.clone()],
+                            path: vec![self.ctx.router_id.clone()],
                         })
                         .collect();
                     if let Err(e) = crate::exchange::announce_underlay(
@@ -597,7 +597,7 @@ impl State for Exchange {
                         .iter()
                         .map(|x| PathVector {
                             destination: *x,
-                            path: vec![self.ctx.hostname.clone()],
+                            path: vec![self.ctx.router_id.clone()],
                         })
                         .collect();
                     if let Err(e) = crate::exchange::withdraw_underlay(
@@ -727,7 +727,7 @@ impl State for Exchange {
                                         .collect(),
                                     withdraw: HashSet::default(),
                                 }
-                                .with_path_element(self.ctx.hostname.clone()),
+                                .with_path_element(self.ctx.router_id.clone()),
                             ),
                             tunnel: None,
                         })))
@@ -838,8 +838,31 @@ impl State for Exchange {
                         self.ctx.event_channels.len()
                     );
                     update.underlay = update.underlay.map(|u| {
-                        u.break_loops(&self.ctx.hostname)
-                            .with_path_element(self.ctx.hostname.clone())
+                        let sans_loops = u.break_loops(&self.ctx.router_id);
+
+                        let announce_loop =
+                            u.announce.difference(&sans_loops.announce);
+                        let withdraw_loop =
+                            u.withdraw.difference(&sans_loops.withdraw);
+
+                        for x in announce_loop {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "loop detected: dropping announcement: {:?}",
+                                x,
+                            )
+                        }
+                        for x in withdraw_loop {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "loop detected: dropping withdraw {:?}",
+                                x,
+                            )
+                        }
+
+                        sans_loops.with_path_element(self.ctx.router_id.clone())
                     });
                     super::send(
                         Event::Peer(PeerEvent::Push(update)),

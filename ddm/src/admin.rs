@@ -43,6 +43,7 @@ use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 use tokio::spawn;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 pub const DDM_STATS_PORT: u16 = 8001;
 
@@ -62,6 +63,9 @@ pub struct HandlerContext {
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
     pub router_kind: RouterKind,
+    pub rack_id: Option<Uuid>,
+    pub sled_id: Option<Uuid>,
+    pub router_id: String,
     pub log: Logger,
 }
 
@@ -528,6 +532,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
                     None
                 },
                 addr: Ipv6Addr::UNSPECIFIED,
+                rack_id: ctx.rack_id,
+                sled_id: ctx.sled_id,
             };
             let sm_ctx = SmContext {
                 config,
@@ -535,10 +541,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 event_channels: ctx.event_channels().cloned().collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
-                hostname: hostname::get()
-                    .expect("failed to get hostname")
-                    .to_string_lossy()
-                    .to_string(),
+                router_id: ctx.router_id.clone(),
                 rt: Arc::new(tokio::runtime::Handle::current()),
                 iface: Arc::new(InterfaceState::external()),
                 stats: Arc::new(SessionStats::default()),

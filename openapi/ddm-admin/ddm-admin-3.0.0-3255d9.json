@@ -73,7 +73,7 @@
           }
         }
       },
-      "post": {
+      "put": {
         "operationId": "set_external_peers",
         "requestBody": {
           "content": {

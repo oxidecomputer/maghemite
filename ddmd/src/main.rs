@@ -166,7 +166,12 @@ async fn run() {
         .to_string_lossy()
         .to_string();
 
-    let sms = start_state_machines(&arg, &db, &dpd, &hostname, &rt, &log);
+    let router_id = match arg.sled_uuid {
+        Some(id) => id.to_string(),
+        None => hostname.clone(),
+    };
+
+    let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
 
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
@@ -193,6 +198,9 @@ async fn run() {
             exchange_tcp_port: arg.exchange_port,
         },
         log: log.clone(),
+        rack_id: arg.rack_uuid,
+        sled_id: arg.sled_uuid,
+        router_id: router_id.clone(),
     }));
 
     if arg.with_stats
@@ -245,7 +253,7 @@ fn start_state_machines(
     arg: &Arg,
     db: &Db,
     dpd: &Option<DpdConfig>,
-    hostname: &str,
+    router_id: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) -> Vec<StateMachine> {
@@ -274,6 +282,8 @@ fn start_state_machines(
             kind: arg.kind,
             dpd: dpd.clone(),
             addr: Ipv6Addr::UNSPECIFIED,
+            sled_id: arg.sled_uuid,
+            rack_id: arg.rack_uuid,
         };
 
         let ctx = SmContext {
@@ -282,7 +292,7 @@ fn start_state_machines(
             event_channels: Vec::new(),
             tx: tx.clone(),
             log: log.clone(),
-            hostname: hostname.to_string(),
+            router_id: router_id.to_string(),
             rt: rt.clone(),
             iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),

@@ -173,7 +173,7 @@ pub trait DdmAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
-        method = POST,
+        method = PUT,
         path = "/external_peers",
         versions = VERSION_EXTERNAL_PEERS..,
     }]
