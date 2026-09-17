@@ -180,13 +180,16 @@ async fn run() -> Result<()> {
                 for pv in &mut destinations {
                     // show path from perspective of this node, e.g. nearest node
                     // first
-                    pv.path.reverse();
-                    let strpath = pv.path.join(" ");
-                    writeln!(
-                        &mut tw,
-                        "{}\t{}\t{}",
-                        pv.destination, nexthop, strpath,
-                    )?;
+                    if let Some(p) = pv.path.pop() {
+                        writeln!(
+                            &mut tw,
+                            "{}\t{}\t{}",
+                            pv.destination, nexthop, p,
+                        )?;
+                    }
+                    for p in &pv.path {
+                        writeln!(&mut tw, "\t\t{}", p,)?;
+                    }
                 }
             }
             tw.flush()?;
