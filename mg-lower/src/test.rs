@@ -766,6 +766,15 @@ async fn two_router_lifecycle() {
             assert!(loopback.iter().any(|e| e.addr == tep2));
         }
 
+        // ...and each TEP's underlay /64 is originated into ddm.
+        let tep_net = |tep: Ipv6Addr| oxnet::Ipv6Net::new(tep, 64).unwrap();
+        {
+            let originated = ddm.originated.lock().unwrap();
+            assert_eq!(originated.len(), 2, "{originated:?}");
+            assert!(originated.contains(&tep_net(tep1)));
+            assert!(originated.contains(&tep_net(tep2)));
+        }
+
         // Each tunnel origin carries its own router's tep.
         {
             let origins = ddm.tunnel_originated.lock().unwrap();
@@ -811,6 +820,9 @@ async fn two_router_lifecycle() {
             let loopback = dpd.loopback.lock().unwrap();
             assert!(!loopback.iter().any(|e| e.addr == tep1));
             assert!(loopback.iter().any(|e| e.addr == tep2));
+            // r1's TEP underlay /64 is withdrawn from ddm; r2's stays.
+            let originated = ddm.originated.lock().unwrap();
+            assert_eq!(*originated, vec![tep_net(tep2)]);
         }
 
         shut2.store(true, Ordering::Relaxed);
@@ -818,6 +830,106 @@ async fn two_router_lifecycle() {
         assert_eq!(dpd.v4_count(), 0);
         assert!(ddm.tunnel_originated.lock().unwrap().is_empty());
         assert!(dpd.loopback.lock().unwrap().is_empty());
+        assert!(ddm.originated.lock().unwrap().is_empty());
+
+        tx.send(()).unwrap();
+    });
+
+    done.recv().unwrap();
+}
+
+/// A ddm failure while withdrawing the TEP underlay /64 at teardown is
+/// logged and leaves the prefix in place; it does not abort the rest of the
+/// withdraw (the ASIC state is still cleaned) and — like the tunnel-origin
+/// withdraw — does not make the switch table "dirty", since the tombstone
+/// scrub cannot repair ddm state anyway. Documented limitation: the stale
+/// /64 is not retried.
+#[tokio::test]
+async fn tep_underlay_withdraw_failure_is_tolerated() {
+    let rt = Arc::new(tokio::runtime::Handle::current());
+    let (tx, done) = std::sync::mpsc::channel::<()>();
+
+    std::thread::spawn(move || {
+        let log = util::test::logger();
+        let dpd = Arc::new(TestDpd::default());
+        v4_over_v6_link_setup(&dpd);
+        let ddm = Arc::new(TestDdm::default());
+
+        let db = rdb::test::get_test_db(
+            "mg_lower_tep_underlay_withdraw_failure",
+            log.clone(),
+        )
+        .expect("create test db");
+        let tep: Ipv6Addr = "fd00::1".parse().unwrap();
+        let r1 = db
+            .db()
+            .create_router(RouterInfo {
+                id: RouterId::new_random(),
+                name: "r1".to_string(),
+                tep,
+            })
+            .expect("create router");
+        r1.add_static_routes(&[StaticRouteKey {
+            prefix: "1.0.0.0/24".parse().unwrap(),
+            nexthop: "1.0.0.1".parse().unwrap(),
+            vlan_id: None,
+            rib_priority: 10,
+        }])
+        .expect("add static route");
+
+        let shut = Arc::new(AtomicBool::new(false));
+        let flag = shut.clone();
+        let (dpd2, ddm2, log2, rt2, rdb2) = (
+            dpd.clone(),
+            ddm.clone(),
+            log.clone(),
+            rt.clone(),
+            r1.clone(),
+        );
+        let j = std::thread::spawn(move || {
+            let sw = TestSwitchZone {
+                routes: HashMap::default(),
+                default_ifname: Some(String::from("tfportqsfp0_0")),
+                default_gw: "1.2.3.4".parse().unwrap(),
+            };
+            crate::run(
+                tep,
+                rdb2,
+                log2,
+                Arc::new(MgLowerStats::default()),
+                rt2,
+                flag,
+                &*dpd2,
+                &*ddm2,
+                &sw,
+            )
+        });
+
+        let tep_net = oxnet::Ipv6Net::new(tep, 64).unwrap();
+        wait_until("route and TEP /64 to sync", || {
+            dpd.v4_count() == 1
+                && ddm.originated.lock().unwrap().contains(&tep_net)
+        });
+
+        // Inject one ddm failure for the underlay withdraw, then shut down.
+        *ddm.fail_withdraw_prefixes.lock().unwrap() = 1;
+        shut.store(true, Ordering::Relaxed);
+        let clean = j.join().expect("join mg-lower");
+
+        // ASIC state is fully withdrawn, but the underlay prefix is not, so
+        // the teardown must report incomplete cleanup: the caller keeps the
+        // router's switch index tombstoned instead of releasing it.
+        assert!(
+            !clean,
+            "a failed underlay withdraw must report incomplete cleanup"
+        );
+        assert_eq!(dpd.v4_count(), 0);
+        assert!(dpd.loopback.lock().unwrap().is_empty());
+        assert!(ddm.tunnel_originated.lock().unwrap().is_empty());
+        // The /64 whose withdraw failed is still originated; that is exactly
+        // why the teardown is dirty.
+        assert_eq!(*ddm.originated.lock().unwrap(), vec![tep_net]);
+        assert_eq!(*ddm.fail_withdraw_prefixes.lock().unwrap(), 0);
 
         tx.send(()).unwrap();
     });

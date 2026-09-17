@@ -80,11 +80,17 @@ pub(crate) fn add_peer(
 ) -> Result<(), HttpError> {
     let mut daemon = lock!(ctx.bfd.daemon);
     daemon.add_peer(rdb, rq.into()).map_err(|err| match err {
-        AddPeerError::PeerExists(_) => HttpError::for_client_error(
-            None,
-            ClientErrorStatusCode::CONFLICT,
-            InlineErrorChain::new(&err).to_string(),
-        ),
+        // `PeerOwnedByOtherRouter` comes from the bfd crate's own guard, which
+        // the complete apply relies on; surface it as a conflict rather than
+        // an internal error.
+        AddPeerError::PeerExists(_)
+        | AddPeerError::PeerOwnedByOtherRouter { .. } => {
+            HttpError::for_client_error(
+                None,
+                ClientErrorStatusCode::CONFLICT,
+                InlineErrorChain::new(&err).to_string(),
+            )
+        }
         AddPeerError::Bind { .. }
         | AddPeerError::SetSocketNonBlocking(_)
         | AddPeerError::StdToTokio(_) => HttpError::for_internal_error(

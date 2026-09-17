@@ -64,6 +64,24 @@ pub struct HandlerContext {
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,
+    /// Serializes complete multi-router applies against one another. Held
+    /// across the whole request so two applies cannot interleave their
+    /// teardown, release and claim steps. Never taken by internal helpers;
+    /// only by the entry point.
+    ///
+    /// The scope is deliberately limited to the complete apply. The legacy
+    /// per-object BGP, BFD and static-route endpoints do **not** take this
+    /// lock: they write default-router state that the next complete apply
+    /// overwrites anyway, so guarding a surface we expect to remove is not
+    /// worth what it costs to read.
+    ///
+    /// Known limitation: a legacy mutation issued while a complete apply is
+    /// running can interleave with it, and the outcome is then whichever
+    /// order the two happened to take. The two are not intended to run
+    /// concurrently. In the POC sled-agent is the sole writer and issues
+    /// complete applies only; the legacy endpoints are operator and debug
+    /// tools.
+    pub apply_lock: tokio::sync::Mutex<()>,
 }
 
 impl HandlerContext {

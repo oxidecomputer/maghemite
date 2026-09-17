@@ -128,6 +128,9 @@ pub enum Error {
     #[error("Session for peer {0} already exists")]
     PeerExists(PeerId),
 
+    #[error("Session for peer {0} belongs to another router")]
+    PeerOwnedByOtherRouter(PeerId),
+
     #[error("Capability not supported {0:?}")]
     UnsupportedCapability(crate::messages::Capability),
 

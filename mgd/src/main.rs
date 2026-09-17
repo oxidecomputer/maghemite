@@ -143,6 +143,7 @@ async fn run(args: RunArgs) {
         db: db.clone(),
         stats_server_running: Mutex::new(false),
         oximeter_port: args.oximeter_port,
+        apply_lock: tokio::sync::Mutex::new(()),
     });
 
     detect_switch_slot(

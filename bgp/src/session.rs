@@ -1970,7 +1970,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Ownership is compared by [`RouterInstanceId`], so a router deleted and
     /// created with the same ASN does not claim the old router's sessions
     /// (re-creation yields a fresh instance ID).
-    pub(crate) fn belongs_to(&self, router: &Router<Cnx>) -> bool {
+    pub fn belongs_to(&self, router: &Router<Cnx>) -> bool {
         self.router_instance_id == router.instance_id()
     }
 

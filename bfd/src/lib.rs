@@ -42,6 +42,11 @@ pub enum AddPeerError {
     #[error("BFD peer {0} already exists")]
     PeerExists(IpAddr),
 
+    /// The peer address is in use by a session that feeds another router's
+    /// RIB; the daemon's peer table is shared across routers.
+    #[error("BFD peer {peer} belongs to router {owner}")]
+    PeerOwnedByOtherRouter { peer: IpAddr, owner: String },
+
     #[error("failed to bind to {addr}")]
     Bind {
         addr: SocketAddr,

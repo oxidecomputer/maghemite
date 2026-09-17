@@ -2892,10 +2892,13 @@ fn update(message, asn, addr) {
             bfd: BfdContext::new(log.clone()),
             log: log.clone(),
             db: db.db().clone(),
-            lower: crate::lower::LowerContext::default(),
+            // No platform in tests: lifecycle outcomes come from the hook
+            // (`ctx.lower.test_hook()`); teardowns are clean by default.
+            lower: crate::lower::LowerContext::for_test(Default::default()),
             mg_lower_stats: Arc::new(MgLowerStats::default()),
             stats_server_running: Mutex::new(false),
             oximeter_port: 0,
+            apply_lock: tokio::sync::Mutex::new(()),
         })
     }
 
