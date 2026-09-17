@@ -3,9 +3,9 @@
 source .github/buildomat/common.sh
 
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
-export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
-export SIDECAR_LITE_VERSION=a95b7a9f78c08125f4e34106f5c885c7e9f2e8d5
-export DENDRITE_VERSION=803f6899e3bc64780a965d625e248e1d77e37d43
+export SOFTNPU_VERSION=77ba891f8b8c2288ac8d01d3c372892ad1111592
+export SIDECAR_LITE_VERSION=2e7bd9b52a90224fb227e72c27623beb5b827e57
+export DENDRITE_VERSION=`grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p'`
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
