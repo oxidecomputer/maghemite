@@ -4,6 +4,7 @@
 
 use crate::{
     bgp::basic_unnumbered_neighbor,
+    bird::{self, BgpLink, BirdNode},
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     diagnostics::ProtocolDiagnostics,
     eos::EosNode,
@@ -291,6 +292,11 @@ const CR2_V6_CIDR: &str = "fd00:2::2/64";
 const CR3_V6_CIDR: &str = "fd00:3::2/64";
 const PEER_V6_CIDR: &str = "fd00:4::2/64";
 
+const OX_BIRD_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 4, 1);
+const BIRD_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 4, 2);
+const OX_BIRD_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 5, 0, 0, 0, 0, 0, 1);
+const BIRD_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 5, 0, 0, 0, 0, 0, 2);
+
 /// Destination prefixes with nexthops via every interop peer.
 const TEST_PREFIX_V4: &str = "192.168.100.0/24";
 const TEST_PREFIX_V6: &str = "fd01::/64";
@@ -312,6 +318,7 @@ struct BootedInterop {
     cr1: FrrNode,
     cr2: EosNode,
     cr3: JuniperNode,
+    bird: BirdNode,
     mgd: MgdClient,
     peer_mgd: MgdClient,
     dpd: DpdClient,
@@ -326,6 +333,7 @@ struct InteropRouters {
     cr1: FrrNode,
     cr2: EosNode,
     cr3: JuniperNode,
+    bird: BirdNode,
 }
 
 #[derive(Copy, Clone)]
@@ -343,9 +351,13 @@ impl InteropLayout {
     }
 
     const fn front_ports(self) -> usize {
+        5 * self.links_per_peer()
+    }
+
+    const fn links_per_peer(self) -> usize {
         match self {
-            Self::SingleLink(_) => 4,
-            Self::ThreeLinks(_) => 12,
+            Self::SingleLink(_) => 1,
+            Self::ThreeLinks(_) => 3,
         }
     }
 
@@ -362,15 +374,17 @@ struct InteropPeerStates<T> {
     cr2: T,
     cr3: T,
     peer: T,
+    bird: T,
 }
 
 impl<T> InteropPeerStates<T> {
-    fn new(cr1: T, cr2: T, cr3: T, peer: T) -> Self {
+    fn new(cr1: T, cr2: T, cr3: T, peer: T, bird: T) -> Self {
         Self {
             cr1,
             cr2,
             cr3,
             peer,
+            bird,
         }
     }
 }
@@ -405,6 +419,7 @@ where
         cr1: bt.cr1,
         cr2: bt.cr2,
         cr3: bt.cr3,
+        bird: bt.bird,
     };
     let mgd = bt.mgd.clone();
     let peer_mgd = bt.peer_mgd.clone();
@@ -436,12 +451,24 @@ async fn restore_interop_before_diagnostics(
     ad: &Runner,
     routers: InteropRouters,
 ) {
-    let InteropRouters { cr1, cr2, cr3 } = routers;
-    let (cr1_result, cr2_result, cr3_result) = tokio::join!(
+    let InteropRouters {
+        cr1,
+        cr2,
+        cr3,
+        bird,
+    } = routers;
+    let (cr1_result, cr2_result, cr3_result, bird_result) = tokio::join!(
         timeout(OP_TIMEOUT, cr1.start_frr(ad)),
         timeout(OP_TIMEOUT, cr2.unpause(ad)),
         timeout(OP_TIMEOUT, cr3.unpause(ad)),
+        timeout(OP_TIMEOUT, bird.start(ad)),
     );
+    if !matches!(bird_result, Ok(Ok(()))) {
+        warn!(
+            ad.log,
+            "failed to start BIRD before diagnostics: {bird_result:?}"
+        );
+    }
     match cr1_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -557,10 +584,11 @@ where
         FrrNode,
         EosNode,
         JuniperNode,
+        BirdNode,
         Arc<Runner>,
     ) -> tokio::task::JoinSet<Result<()>>,
 {
-    let (mut d, ox, peer, cr1, cr2, cr3) = match layout {
+    let (mut d, ox, peer, cr1, cr2, cr3, bird) = match layout {
         InteropLayout::SingleLink(scenario) => {
             let Interop {
                 d,
@@ -569,8 +597,9 @@ where
                 cr1,
                 cr2,
                 cr3,
+                bird,
             } = Interop::build(scenario)?;
-            (d, ox, peer, cr1, cr2, cr3)
+            (d, ox, peer, cr1, cr2, cr3, bird)
         }
         InteropLayout::ThreeLinks(scenario) => {
             let Interop3Link {
@@ -580,8 +609,9 @@ where
                 cr1,
                 cr2,
                 cr3,
+                bird,
             } = Interop3Link::build(scenario)?;
-            (d, ox, peer, cr1, cr2, cr3)
+            (d, ox, peer, cr1, cr2, cr3, bird)
         }
     };
     let topo_name = layout.name();
@@ -602,7 +632,12 @@ where
         &ad,
         ox,
         peer,
-        InteropRouters { cr1, cr2, cr3 },
+        InteropRouters {
+            cr1,
+            cr2,
+            cr3,
+            bird,
+        },
         commits,
         layout,
         spawn_peer_setups,
@@ -617,6 +652,7 @@ where
             cr1,
             cr2,
             cr3,
+            bird,
             mgd,
             peer_mgd,
             dpd,
@@ -631,7 +667,12 @@ where
                     &ad,
                     ox,
                     peer,
-                    InteropRouters { cr1, cr2, cr3 },
+                    InteropRouters {
+                        cr1,
+                        cr2,
+                        cr3,
+                        bird,
+                    },
                     topo_name,
                 )
                 .await;
@@ -655,10 +696,16 @@ where
         FrrNode,
         EosNode,
         JuniperNode,
+        BirdNode,
         Arc<Runner>,
     ) -> tokio::task::JoinSet<Result<()>>,
 {
-    let InteropRouters { cr1, cr2, cr3 } = routers;
+    let InteropRouters {
+        cr1,
+        cr2,
+        cr3,
+        bird,
+    } = routers;
     let ox_illumos = ox.illumos();
     let peer_illumos = peer.illumos();
     let (mgmt_addr, peer_mgmt_addr) = tokio::try_join!(
@@ -666,7 +713,7 @@ where
         peer_illumos.dhcp(ad, layout.peer_mgmt_addr()),
     )?;
 
-    let mut js = spawn_peer_setups(cr1, cr2, cr3, ad.clone());
+    let mut js = spawn_peer_setups(cr1, cr2, cr3, bird, ad.clone());
     let npuvm_ad = ad.clone();
     js.spawn(async move {
         ox.dendrite()
@@ -855,7 +902,7 @@ async fn run_interop_unnumbered(
         diag_on_fail,
         commits,
         ProtocolDiagnostics::Bgp,
-        |cr1, cr2, cr3, ad| {
+        |cr1, cr2, cr3, _bird, ad| {
             let mut js = tokio::task::JoinSet::new();
             let cr1_ad = ad.clone();
             let cr2_ad = ad.clone();
@@ -888,12 +935,19 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
         cr1,
         cr2,
         cr3,
+        bird,
         mgd,
         peer_mgd,
         dpd,
+        layout,
         ..
     } = bt;
-    let peers = InteropRouters { cr1, cr2, cr3 };
+    let peers = InteropRouters {
+        cr1,
+        cr2,
+        cr3,
+        bird,
+    };
 
     for link in [
         "tfportqsfp0_0/ll",
@@ -916,10 +970,10 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
     ox.ddm().run_ddm(&ad).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
-    // Fanout of 4 so all peer paths survive best-path selection and we can
+    // Fanout of 5 so all peer paths survive best-path selection and we can
     // validate ECMP in loc_rib and dpd.
     mgd.update_bestpath_fanout(&BestpathFanoutRequest {
-        fanout: std::num::NonZeroU8::new(4).expect("fanout > 0"),
+        fanout: std::num::NonZeroU8::new(5).expect("fanout > 0"),
     })
     .await
     .context("mgd: set bestpath fanout")?;
@@ -991,6 +1045,8 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
     .await
     .context("mgd: create peer unnumbered neighbor")?;
 
+    setup_bird_bgp(&ad, ox, bird, &mgd, layout).await?;
+
     peer_mgd
         .create_unnumbered_neighbor(&basic_unnumbered_neighbor(
             "ox",
@@ -1040,7 +1096,7 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
             .await
             .map(|x| x.into_inner().len())
             .unwrap_or(0),
-        4,
+        5,
         "mgd neighbor count"
     );
 
@@ -1048,6 +1104,7 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
         &mgd,
         LOCAL_ASN,
         InteropPeerStates::new(
+            FsmStateKind::Established,
             FsmStateKind::Established,
             FsmStateKind::Established,
             FsmStateKind::Established,
@@ -1062,42 +1119,42 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
     );
 
     // All peers advertise the same prefix, so mgd should see a single
-    // imported entry per family with four paths, and — with fanout=4 — the
-    // same four paths should survive into the selected (loc) RIB.
+    // imported entry per family with five paths, and — with fanout=5 — the
+    // same five paths should survive into the selected (loc) RIB.
     wait_for_eq!(
         mgd_imported_paths(&mgd, AddressFamily::Ipv4, PEER_V4_PREFIX).await,
-        Some(4),
+        Some(5),
         "mgd imported paths for 1.2.3.0/24"
     );
     wait_for_eq!(
         mgd_imported_paths(&mgd, AddressFamily::Ipv6, PEER_V6_PREFIX).await,
-        Some(4),
+        Some(5),
         "mgd imported paths for fd99::/64"
     );
     wait_for_eq!(
         mgd_selected_paths(&mgd, AddressFamily::Ipv4, PEER_V4_PREFIX).await,
-        Some(4),
+        Some(5),
         "mgd selected paths for 1.2.3.0/24"
     );
     wait_for_eq!(
         mgd_selected_paths(&mgd, AddressFamily::Ipv6, PEER_V6_PREFIX).await,
-        Some(4),
+        Some(5),
         "mgd selected paths for fd99::/64"
     );
 
-    // dpd should have the specific prefixes, each with four ECMP targets.
+    // dpd should have the specific prefixes, each with five ECMP targets.
     let peer_v4: Ipv4Net =
         PEER_V4_PREFIX.parse().expect("parse peer v4 prefix");
     let peer_v6: Ipv6Net =
         PEER_V6_PREFIX.parse().expect("parse peer v6 prefix");
     wait_for_eq!(
         dpd_v4_targets(&dpd, &peer_v4).await.len(),
-        4,
+        5,
         "dpd ipv4 targets for 1.2.3.0/24"
     );
     wait_for_eq!(
         dpd_v6_targets(&dpd, &peer_v6).await.len(),
-        4,
+        5,
         "dpd ipv6 targets for fd99::/64"
     );
 
@@ -1188,10 +1245,90 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
         );
         Ok::<(), anyhow::Error>(())
     };
-    tokio::try_join!(cr1_imports, cr2_imports, cr3_imports, peer_imports)?;
+    tokio::try_join!(
+        cr1_imports,
+        cr2_imports,
+        cr3_imports,
+        peer_imports,
+        expect_bird_bgp(&ad, bird, layout.links_per_peer())
+    )?;
 
     info!(ad.log, "interop bgp unnumbered test passed 🎉");
 
+    Ok(())
+}
+
+/// BIRD needs an explicit, scoped DUT link-local address, whereas mgd learns
+/// BIRD's address through RAdv. Both ends always use the same TCP MD5 key.
+async fn setup_bird_bgp(
+    d: &Runner,
+    ox: MgdNode,
+    bird: BirdNode,
+    mgd: &MgdClient,
+    layout: InteropLayout,
+) -> Result<()> {
+    let mut links = Vec::new();
+    for index in 0..layout.links_per_peer() {
+        let port = 4 * layout.links_per_peer() + index;
+        let dut_interface = format!("tfportqsfp{port}_0");
+        let address = ox
+            .illumos()
+            .addrconf(d, &format!("{dut_interface}/ll"))
+            .await?;
+        let IpAddr::V6(remote) = address else {
+            anyhow::bail!(
+                "DUT {dut_interface}: expected IPv6 link-local, got {address}"
+            );
+        };
+        anyhow::ensure!(
+            remote.is_unicast_link_local(),
+            "DUT address is not link-local: {remote}"
+        );
+        let interface = bird.data_interface(d, index).await?;
+        let local = bird.link_local(d, &interface).await?;
+        links.push(BgpLink {
+            interface,
+            local,
+            remote,
+        });
+        let mut neighbor = basic_unnumbered_neighbor(
+            &format!("bird{index}"),
+            "bird",
+            &dut_interface,
+            33,
+            0,
+        );
+        neighbor.md5_auth_key = Some(bird::MD5_KEY.to_owned());
+        neighbor.remote_asn = Some(bird::ASN);
+        mgd.create_unnumbered_neighbor(&neighbor)
+            .await
+            .with_context(|| {
+                format!("create authenticated BIRD neighbor {index}")
+            })?;
+    }
+    bird.apply(d, &bird::bgp_config(&links)).await
+}
+
+async fn expect_bird_bgp(
+    d: &Runner,
+    bird: BirdNode,
+    count: usize,
+) -> Result<()> {
+    // One console per VM: query BIRD's links and address families serially.
+    for index in 0..count {
+        wait_for_eq!(
+            bird.bgp_established(d, index).await.unwrap_or(false),
+            true,
+            &format!("BIRD dut{index} Established")
+        );
+        for prefix in ["4.5.6.0/24", "fdee::/64"] {
+            wait_for_eq!(
+                bird.bgp_imported(d, index, prefix).await.unwrap_or(false),
+                true,
+                &format!("BIRD dut{index} imported {prefix}")
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1207,7 +1344,12 @@ async fn collect_interop_diagnostics(
     topo_name: &str,
     protocols: ProtocolDiagnostics,
 ) {
-    let InteropRouters { cr1, cr2, cr3 } = routers;
+    let InteropRouters {
+        cr1,
+        cr2,
+        cr3,
+        bird,
+    } = routers;
     warn!(d.log, "collecting diagnostics for {topo_name}");
     tokio::join!(
         async {
@@ -1224,6 +1366,7 @@ async fn collect_interop_diagnostics(
         cr1.collect_diagnostics(d, topo_name, protocols),
         cr2.collect_diagnostics(d, topo_name, protocols),
         cr3.collect_diagnostics(d, topo_name, protocols),
+        bird.collect_diagnostics(d, topo_name),
     );
 }
 
@@ -1237,7 +1380,12 @@ async fn collect_interop_boot_diagnostics(
     routers: InteropRouters,
     topo_name: &str,
 ) {
-    let InteropRouters { cr1, cr2, cr3 } = routers;
+    let InteropRouters {
+        cr1,
+        cr2,
+        cr3,
+        bird,
+    } = routers;
     warn!(d.log, "collecting boot diagnostics for {topo_name}");
     tokio::join!(
         async {
@@ -1293,6 +1441,7 @@ async fn collect_interop_boot_diagnostics(
             }
         },
         cr3.collect_boot_diagnostics(d, topo_name),
+        bird.collect_diagnostics(d, topo_name),
     );
 }
 
@@ -1446,11 +1595,13 @@ async fn run_interop_bfd_static(
         diag_on_fail,
         commits,
         ProtocolDiagnostics::Bfd,
-        |cr1, cr2, cr3, ad| {
+        |cr1, cr2, cr3, bird, ad| {
             let mut js = tokio::task::JoinSet::new();
             let cr1_ad = ad.clone();
             let cr2_ad = ad.clone();
+            let bird_ad = ad.clone();
             let cr3_ad = ad;
+            js.spawn(async move { bird.setup_bfd(&bird_ad).await });
             js.spawn(async move {
                 frr_bfd_setup(cr1, cr1_ad)
                     .await
@@ -1483,12 +1634,18 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         cr1,
         cr2,
         cr3,
+        bird,
         mgd,
         peer_mgd,
         dpd,
         ..
     } = bt;
-    let peers = InteropRouters { cr1, cr2, cr3 };
+    let peers = InteropRouters {
+        cr1,
+        cr2,
+        cr3,
+        bird,
+    };
 
     // Register each ox-side address with dpd so softnpu punts packets for
     // those destinations to the CPU port. Link-local v6 is handled
@@ -1500,6 +1657,7 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         ("qsfp1", OX_CR2_V4, OX_CR2_V6),
         ("qsfp2", OX_CR3_V4, OX_CR3_V6),
         ("qsfp3", OX_PEER_V4, OX_PEER_V6),
+        ("qsfp4", OX_BIRD_V4, OX_BIRD_V6),
     ] {
         let port = PortId::Qsfp(qsfp.parse().expect("parse qsfp port"));
         let link = LinkId(0);
@@ -1537,6 +1695,7 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         ("tfportqsfp1_0", OX_CR2_V4_CIDR, OX_CR2_V6_CIDR),
         ("tfportqsfp2_0", OX_CR3_V4_CIDR, OX_CR3_V6_CIDR),
         ("tfportqsfp3_0", OX_PEER_V4_CIDR, OX_PEER_V6_CIDR),
+        ("tfportqsfp4_0", "10.0.4.1/24", "fd00:5::1/64"),
     ] {
         let ll = format!("{link}/ll");
         ox.illumos()
@@ -1573,10 +1732,10 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Default fanout is 1, which collapses the static paths into a single
-    // selected nexthop. Bump to 4 so all paths propagate through best-path
+    // selected nexthop. Bump to 5 so all paths propagate through best-path
     // selection and land in dpd as ECMP.
     mgd.update_bestpath_fanout(&BestpathFanoutRequest {
-        fanout: std::num::NonZeroU8::new(4).expect("fanout > 0"),
+        fanout: std::num::NonZeroU8::new(5).expect("fanout > 0"),
     })
     .await
     .context("mgd: set bestpath fanout")?;
@@ -1589,7 +1748,7 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
     info!(ad.log, "installing static v4 route {TEST_PREFIX_V4}");
     mgd.static_add_v4_route(&AddStaticRoute4Request {
         routes: StaticRoute4List {
-            list: [CR1_V4, CR2_V4, CR3_V4, PEER_V4]
+            list: [CR1_V4, CR2_V4, CR3_V4, PEER_V4, BIRD_V4]
                 .into_iter()
                 .map(|nh| StaticRoute4 {
                     prefix: prefix_v4,
@@ -1606,7 +1765,7 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
     info!(ad.log, "installing static v6 route {TEST_PREFIX_V6}");
     mgd.static_add_v6_route(&AddStaticRoute6Request {
         routes: StaticRoute6List {
-            list: [CR1_V6, CR2_V6, CR3_V6, PEER_V6]
+            list: [CR1_V6, CR2_V6, CR3_V6, PEER_V6, BIRD_V6]
                 .into_iter()
                 .map(|nh| StaticRoute6 {
                     prefix: prefix_v6,
@@ -1622,17 +1781,19 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
 
     info!(
         ad.log,
-        "adding BFD peers for cr1, cr2, cr3, and peer (dual-stack)"
+        "adding BFD peers for cr1, cr2, cr3, peer, and BIRD (dual-stack)"
     );
     for (peer, listen) in [
         (IpAddr::V4(CR1_V4), IpAddr::V4(OX_CR1_V4)),
         (IpAddr::V4(CR2_V4), IpAddr::V4(OX_CR2_V4)),
         (IpAddr::V4(CR3_V4), IpAddr::V4(OX_CR3_V4)),
         (IpAddr::V4(PEER_V4), IpAddr::V4(OX_PEER_V4)),
+        (IpAddr::V4(BIRD_V4), IpAddr::V4(OX_BIRD_V4)),
         (IpAddr::V6(CR1_V6), IpAddr::V6(OX_CR1_V6)),
         (IpAddr::V6(CR2_V6), IpAddr::V6(OX_CR2_V6)),
         (IpAddr::V6(CR3_V6), IpAddr::V6(OX_CR3_V6)),
         (IpAddr::V6(PEER_V6), IpAddr::V6(OX_PEER_V6)),
+        (IpAddr::V6(BIRD_V6), IpAddr::V6(OX_BIRD_V6)),
     ] {
         mgd.add_bfd_peer(&BfdPeerConfig {
             peer,
@@ -1654,14 +1815,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Up, Up, Up, Up),
+        InteropPeerStates::new(Up, Up, Up, Up, Up),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(true, true, true, true),
+        InteropPeerStates::new(true, true, true, true, true),
         "phase 1",
     )
     .await?;
@@ -1673,14 +1834,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Down, Up, Up, Up),
+        InteropPeerStates::new(Down, Up, Up, Up, Up),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(false, true, true, true),
+        InteropPeerStates::new(false, true, true, true, true),
         "phase 2",
     )
     .await?;
@@ -1692,14 +1853,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Down, Down, Up, Up),
+        InteropPeerStates::new(Down, Down, Up, Up, Up),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(false, false, true, true),
+        InteropPeerStates::new(false, false, true, true, true),
         "phase 3",
     )
     .await?;
@@ -1711,14 +1872,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Down, Down, Down, Up),
+        InteropPeerStates::new(Down, Down, Down, Up, Up),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(false, false, false, true),
+        InteropPeerStates::new(false, false, false, true, true),
         "phase 4",
     )
     .await?;
@@ -1730,7 +1891,26 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Down, Down, Down, Down),
+        InteropPeerStates::new(Down, Down, Down, Down, Up),
+    )
+    .await?;
+    expect_route(
+        &dpd,
+        &prefix_v4,
+        &prefix_v6,
+        InteropPeerStates::new(false, false, false, false, true),
+        "phase 5",
+    )
+    .await?;
+
+    info!(ad.log, "phase 5b: stop BIRD, all peers down");
+    bird.stop(&ad).await?;
+    expect_bfd(
+        &mgd,
+        &peer_mgd,
+        peers,
+        &ad,
+        InteropPeerStates::new(Down, Down, Down, Down, Down),
     )
     .await?;
     // With every nexthop shutdown, all shutdown nexthops are reinstated.
@@ -1738,8 +1918,8 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(true, true, true, true),
-        "phase 5",
+        InteropPeerStates::new(true, true, true, true, true),
+        "phase 5b",
     )
     .await?;
 
@@ -1750,14 +1930,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Up, Down, Down, Down),
+        InteropPeerStates::new(Up, Down, Down, Down, Down),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(true, false, false, false),
+        InteropPeerStates::new(true, false, false, false, false),
         "phase 6",
     )
     .await?;
@@ -1769,14 +1949,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Up, Up, Down, Down),
+        InteropPeerStates::new(Up, Up, Down, Down, Down),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(true, true, false, false),
+        InteropPeerStates::new(true, true, false, false, false),
         "phase 7",
     )
     .await?;
@@ -1788,14 +1968,14 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Up, Up, Up, Down),
+        InteropPeerStates::new(Up, Up, Up, Down, Down),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(true, true, true, false),
+        InteropPeerStates::new(true, true, true, false, false),
         "phase 8",
     )
     .await?;
@@ -1810,15 +1990,34 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
         &peer_mgd,
         peers,
         &ad,
-        InteropPeerStates::new(Up, Up, Up, Up),
+        InteropPeerStates::new(Up, Up, Up, Up, Down),
     )
     .await?;
     expect_route(
         &dpd,
         &prefix_v4,
         &prefix_v6,
-        InteropPeerStates::new(true, true, true, true),
+        InteropPeerStates::new(true, true, true, true, false),
         "phase 9",
+    )
+    .await?;
+
+    info!(ad.log, "phase 10: restart BIRD, all peers recovered");
+    bird.start(&ad).await?;
+    expect_bfd(
+        &mgd,
+        &peer_mgd,
+        peers,
+        &ad,
+        InteropPeerStates::new(Up, Up, Up, Up, Up),
+    )
+    .await?;
+    expect_route(
+        &dpd,
+        &prefix_v4,
+        &prefix_v6,
+        InteropPeerStates::new(true, true, true, true, true),
+        "phase 10",
     )
     .await?;
 
@@ -1955,6 +2154,8 @@ async fn expect_bfd(
         (IpAddr::V6(CR3_V6), states.cr3),
         (IpAddr::V4(PEER_V4), states.peer),
         (IpAddr::V6(PEER_V6), states.peer),
+        (IpAddr::V4(BIRD_V4), states.bird),
+        (IpAddr::V6(BIRD_V6), states.bird),
     ] {
         let mgd = (*mgd).clone();
         checks.spawn(async move {
@@ -2013,6 +2214,20 @@ async fn expect_bfd(
             Ok(())
         });
     }
+    if matches!(states.bird, BfdPeerState::Up) {
+        let bird = peers.bird;
+        let d = Arc::clone(d);
+        checks.spawn(async move {
+            let wanted = [IpAddr::V4(OX_BIRD_V4), IpAddr::V6(OX_BIRD_V6)];
+            wait_for_eq_stable!(
+                bird.bfd_peers_up(&d, &wanted).await.unwrap_or(false),
+                true,
+                BFD_STABLE_SAMPLES,
+                "BIRD bfd peers -> Up"
+            );
+            Ok(())
+        });
+    }
     if matches!(states.peer, BfdPeerState::Up) {
         for remote in [IpAddr::V4(OX_PEER_V4), IpAddr::V6(OX_PEER_V6)] {
             let peer_mgd = (*peer_mgd).clone();
@@ -2064,6 +2279,10 @@ async fn expect_route(
         want_v4.push(IpAddr::V4(PEER_V4));
         want_v6.push(IpAddr::V6(PEER_V6));
     }
+    if included.bird {
+        want_v4.push(IpAddr::V4(BIRD_V4));
+        want_v6.push(IpAddr::V6(BIRD_V6));
+    }
 
     let desc_v4 = format!("{phase} v4");
     let desc_v6 = format!("{phase} v6");
@@ -2098,6 +2317,7 @@ async fn expect_bgp_neighbor_states(
         ("cr2", states.cr2),
         ("cr3", states.cr3),
         ("peer", states.peer),
+        ("bird0", states.bird),
     ] {
         let desc = format!("mgd bgp {name} -> {want:?}");
         wait_for_eq!(
@@ -2193,4 +2413,21 @@ async fn dpd_v6_targets(dpd: &DpdClient, prefix: &Ipv6Net) -> Vec<IpAddr> {
         .collect();
     out.sort();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interop_layout_reserves_appended_bird_ports() {
+        let single = InteropLayout::SingleLink(InteropScenario::BgpUnnumbered);
+        let triple = InteropLayout::ThreeLinks(Interop3LinkScenario::BgpMd5);
+        assert_eq!(single.front_ports(), 5);
+        assert_eq!(triple.front_ports(), 15);
+        assert_eq!(4 * single.links_per_peer(), 4);
+        assert_eq!(4 * triple.links_per_peer(), 12);
+        assert_eq!(single.peer_mgmt_addr(), "vioif1/dhcp");
+        assert_eq!(triple.peer_mgmt_addr(), "vioif3/dhcp");
+    }
 }
