@@ -62,10 +62,13 @@ pub struct Interop {
     pub cr3: JuniperNode,
 }
 
-// The bare scenario only drives the runner; node handles arrive with the
-// first scenario that interacts with individual VMs.
 pub struct Interop3Link {
     pub d: Runner,
+    pub ox: MgdNode,
+    pub peer: MgdNode,
+    pub cr1: FrrNode,
+    pub cr2: EosNode,
+    pub cr3: JuniperNode,
 }
 
 struct InteropNodes {
@@ -149,7 +152,14 @@ impl Topology for Interop3Link {
 
     fn build(scenario: Interop3LinkScenario) -> Result<Self> {
         let nodes = build_interop(scenario.name(), 3)?;
-        Ok(Self { d: nodes.d })
+        Ok(Self {
+            d: nodes.d,
+            ox: MgdNode(nodes.ox),
+            peer: MgdNode(nodes.peer),
+            cr1: FrrNode(nodes.cr1),
+            cr2: EosNode(nodes.cr2),
+            cr3: JuniperNode(nodes.cr3),
+        })
     }
 
     fn runner_mut(&mut self) -> &mut Runner {
