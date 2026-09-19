@@ -46,6 +46,12 @@ if [[ "$val" != 'unknown' ]]; then
     args+=( "$val" )
 fi
 
+val=$(svcprop -c -p config/sled_uuid "${SMF_FMRI}")
+if [[ "$val" != 'unknown' ]]; then
+    args+=( '--router-id' )
+    args+=( "$val" )
+fi
+
 for x in $(svcprop -c -p config/interfaces "${SMF_FMRI}"); do
     args+=( '-a' )
     args+=( "$x" )

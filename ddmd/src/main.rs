@@ -113,6 +113,10 @@ struct Arg {
     #[arg(long)]
     sled_uuid: Option<Uuid>,
 
+    // Explicitly set router id instead of using hostname
+    #[arg(long)]
+    router_id: Option<String>,
+
     /// Serve only the admin API. Skips the routing state machine
     /// (discovery, exchange, route synchronization), allowing test fixtures
     /// to obtain a real `ddmd` admin endpoint without the kernel-level
@@ -166,8 +170,8 @@ async fn run() {
         .to_string_lossy()
         .to_string();
 
-    let router_id = match arg.sled_uuid {
-        Some(id) => id.to_string(),
+    let router_id = match &arg.router_id {
+        Some(id) => id.clone(),
         None => hostname.clone(),
     };
 
