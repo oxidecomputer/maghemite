@@ -26,6 +26,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
     (1, INITIAL),
 ]);
@@ -170,4 +171,23 @@ pub trait DdmAdminApi {
     async fn disable_stats(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = PUT,
+        path = "/external_peers",
+        versions = VERSION_EXTERNAL_PEERS..,
+    }]
+    async fn set_external_peers(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::external_peers::ExternalPeers>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/external_peers",
+        versions = VERSION_EXTERNAL_PEERS..,
+    }]
+    async fn get_external_peers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
 }

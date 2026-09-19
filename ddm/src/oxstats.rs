@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::RouterStats, sm::SmContext};
+use crate::admin::HandlerContext;
 use chrono::{DateTime, Utc};
 use mg_common::{
     lock,
@@ -15,7 +15,7 @@ use oximeter::{
 };
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
 use slog::Logger;
-use std::sync::atomic::Ordering;
+use std::sync::{Mutex, atomic::Ordering};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -46,8 +46,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    peers: Vec<SmContext>,
-    router_stats: Arc<RouterStats>,
+    ctx: Arc<Mutex<HandlerContext>>,
 }
 
 macro_rules! ddm_session_counter {
@@ -135,12 +134,14 @@ impl Producer for Stats {
         // level stats.
         let mut samples: Vec<Sample> = Vec::with_capacity(2 + 13);
 
+        let ctx = lock!(self.ctx);
+
         samples.push(ddm_router_quantity!(
             self.hostname.clone().into(),
             self.rack_id,
             self.sled_id,
             OriginatedUnderlayPrefixes,
-            self.router_stats.originated_underlay_prefixes
+            ctx.stats.originated_underlay_prefixes
         ));
 
         samples.push(ddm_router_quantity!(
@@ -148,10 +149,10 @@ impl Producer for Stats {
             self.rack_id,
             self.sled_id,
             OriginatedTunnelEndpoints,
-            self.router_stats.originated_tunnel_endpoints
+            ctx.stats.originated_tunnel_endpoints
         ));
 
-        for peer in &self.peers {
+        for peer in &ctx.peers {
             let if_name = lock!(peer.iface.if_name).clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
@@ -268,8 +269,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    peers: Vec<SmContext>,
-    router_stats: Arc<RouterStats>,
+    ctx: Arc<Mutex<HandlerContext>>,
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
@@ -284,11 +284,10 @@ pub fn start_server(
 
     let stats_producer = Stats {
         start_time: chrono::offset::Utc::now(),
-        peers,
+        ctx,
         hostname,
         rack_id,
         sled_id,
-        router_stats,
     };
 
     registry.register_producer(stats_producer).unwrap();

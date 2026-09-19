@@ -4,12 +4,13 @@
 
 use ddm_api_types::db::TunnelRoute;
 use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::v3::PathVector;
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{Logger, error};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
 
@@ -47,6 +48,7 @@ pub struct Db {
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
+    pub external_peers: BTreeSet<String>,
 }
 
 const _: () = {
@@ -261,6 +263,14 @@ impl Db {
         }
         result
     }
+
+    pub fn get_external_peers(&self) -> BTreeSet<String> {
+        lock!(self.data).external_peers.clone()
+    }
+
+    pub fn set_external_peers(&mut self, value: BTreeSet<String>) {
+        lock!(self.data).external_peers = value;
+    }
 }
 
 #[derive(
@@ -271,6 +281,15 @@ pub struct Route {
     pub nexthop: Ipv6Addr,
     pub ifname: String,
     pub path: Vec<String>,
+}
+
+impl From<Route> for PathVector {
+    fn from(val: Route) -> Self {
+        Self {
+            destination: val.destination,
+            path: val.path,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
