@@ -62,6 +62,20 @@ impl Db {
             log,
         })
     }
+
+    /// Create an in-memory `Db` suitable for unit tests.
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(DbData::default())),
+            persistent_data: sled::Config::new()
+                .temporary(true)
+                .open()
+                .expect("in-memory sled"),
+            log: slog::Logger::root(slog::Discard, slog::o!()),
+        }
+    }
+
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
     }

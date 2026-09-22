@@ -4,17 +4,23 @@
 
 use crate::{
     bgp::basic_unnumbered_neighbor,
+    ddm::DdmNode,
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     diagnostics::ProtocolDiagnostics,
     eos::EosNode,
     frr::FrrNode,
     juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
-    topo::{Interop, MgdDuo, Topology},
+    topo::{DdmTrio, Interop, MgdDuo, Topology},
     wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use ddm_admin_client::{
+    Client as DdmClient,
+    types::{ApplyRequest, PathVector},
+};
+use ddm_api_types::db::{InterfaceLifetime, RouterKind};
 use dpd_client::{
     Client as DpdClient,
     types::{Ipv4Entry, Ipv6Entry, LinkId, PortId},
@@ -36,6 +42,7 @@ use mg_api_types::static_routes::{
 use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU8,
     sync::Arc,
@@ -68,6 +75,11 @@ const _: () = {
     let mut i = 0;
     while i < InteropScenario::VARIANTS.len() {
         assert_falcon_compatible(InteropScenario::VARIANTS[i].name());
+        i += 1;
+    }
+    let mut i = 0;
+    while i < DdmTrioScenario::VARIANTS.len() {
+        assert_falcon_compatible(DdmTrioScenario::VARIANTS[i].name());
         i += 1;
     }
 };
@@ -198,6 +210,39 @@ impl Scenario for InteropScenario {
     }
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum, strum::VariantArray)]
+pub(crate) enum DdmTrioScenario {
+    Bare,
+    DdmApplyLifecycle,
+}
+
+impl DdmTrioScenario {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Bare => "ddmtrio_bare",
+            Self::DdmApplyLifecycle => "ddmtrio_apply",
+        }
+    }
+}
+
+impl Scenario for DdmTrioScenario {
+    type Topology = DdmTrio;
+
+    async fn run(self, options: ScenarioOptions) -> Result<()> {
+        match self {
+            Self::Bare => self.run_bare(options.persistent).await,
+            Self::DdmApplyLifecycle => {
+                run_ddm_apply_lifecycle(
+                    self,
+                    options.persistent,
+                    options.diag_on_fail,
+                )
+                .await
+            }
+        }
+    }
+}
+
 const CR1_BFD_FRR_CONFIG: &str = "cr1-bfd-frr.conf";
 const OP_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -207,6 +252,16 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 // vioif1.
 const HELIOS_PEER_LINK: &str = "vioif0";
 const HELIOS_MGMT_ADDR: &str = "vioif1/dhcp";
+
+// The ddm-trio hub's two peer links are created before its management link.
+// Each leaf has one peer link followed by management.
+const DDM_HUB_PEER1_IF: &str = "vioif0";
+const DDM_HUB_PEER2_IF: &str = "vioif1";
+const DDM_HUB_MGMT_ADDR: &str = "vioif2/dhcp";
+const DDM_LEAF_PEER_IF: &str = "vioif0";
+const DDM_LEAF_MGMT_ADDR: &str = "vioif1/dhcp";
+const DDM_PEER1_PREFIX: &str = "fd00:dd01::/64";
+const DDM_PEER2_PREFIX: &str = "fd00:dd02::/64";
 
 // BFD-static test addressing. `OX_*` addresses are configured on the softnpu
 // side of each link; the other addresses are configured on its peer.
@@ -308,6 +363,29 @@ struct BootedMgdDuo {
     scenario: MgdDuoScenario,
 }
 
+/// Output of `boot_ddm_trio`: three Helios nodes running ddmd with admin
+/// clients ready for scenario-specific `ddm_apply` calls.
+struct BootedDdmTrio {
+    ad: Arc<Runner>,
+    hub: DdmNode,
+    peer1: DdmNode,
+    peer2: DdmNode,
+    hub_client: DdmClient,
+    peer1_client: DdmClient,
+    peer2_client: DdmClient,
+    scenario: DdmTrioScenario,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DdmObservedState {
+    hub_peers: usize,
+    peer1_peers: usize,
+    peer2_peers: usize,
+    hub_prefixes: BTreeSet<Ipv6Net>,
+    peer1_prefixes: BTreeSet<Ipv6Net>,
+    peer2_prefixes: BTreeSet<Ipv6Net>,
+}
+
 /// Run a test body against a booted topology and dump diagnostics from every
 /// VM if it fails. The body consumes the `BootedInterop`, so cache the bits
 /// `collect_diagnostics` needs before handing it off.
@@ -406,6 +484,117 @@ where
         }
     }
     result
+}
+
+/// Run a test body against a booted ddm-trio topology and dump diagnostics
+/// from every Helios node if it fails.
+async fn run_ddm_trio_with_optional_diagnostics<F, Fut>(
+    bt: BootedDdmTrio,
+    diag_on_fail: bool,
+    body: F,
+) -> Result<()>
+where
+    F: FnOnce(BootedDdmTrio) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let ad = bt.ad.clone();
+    let nodes = [bt.hub, bt.peer1, bt.peer2];
+    let topo_name = bt.scenario.name();
+    let result = body(bt).await;
+    if let Err(e) = &result {
+        warn!(ad.log, "{topo_name} failed: {e:#}");
+        if diag_on_fail {
+            collect_ddm_trio_diagnostics(&ad, nodes, topo_name).await;
+        }
+    }
+    result
+}
+
+/// Launch the ddm-trio topology, bring up link-local addresses on every peer
+/// link, start ddmd (transit hub, server leaves) and wait for each admin API
+/// to answer. The hub gets `hub_static_ifaces` on its command line; the
+/// leaves start with no interfaces.
+async fn boot_ddm_trio(
+    scenario: DdmTrioScenario,
+    persistent: bool,
+    diag_on_fail: bool,
+    hub_static_ifaces: &[&str],
+) -> Result<BootedDdmTrio> {
+    let topo_name = scenario.name();
+    let DdmTrio {
+        mut d,
+        hub,
+        peer1,
+        peer2,
+    } = DdmTrio::build(scenario)?;
+    d.persistent = persistent;
+    timeout(LAUNCH_TIMEOUT, d.launch())
+        .await
+        .context("launch timed out")?
+        .context("launch failed")?;
+    let ad = Arc::new(d);
+
+    let result = async {
+        let hub_illumos = hub.illumos();
+        let peer1_illumos = peer1.illumos();
+        let peer2_illumos = peer2.illumos();
+        let (hub_addr, peer1_addr, peer2_addr) = tokio::try_join!(
+            hub_illumos.dhcp(&ad, DDM_HUB_MGMT_ADDR),
+            peer1_illumos.dhcp(&ad, DDM_LEAF_MGMT_ADDR),
+            peer2_illumos.dhcp(&ad, DDM_LEAF_MGMT_ADDR),
+        )?;
+        let hub_peer1_ll = format!("{DDM_HUB_PEER1_IF}/ll");
+        let hub_peer2_ll = format!("{DDM_HUB_PEER2_IF}/ll");
+        let leaf_peer_ll = format!("{DDM_LEAF_PEER_IF}/ll");
+        tokio::try_join!(
+            hub_illumos.addrconf(&ad, &hub_peer1_ll),
+            hub_illumos.addrconf(&ad, &hub_peer2_ll),
+            peer1_illumos.addrconf(&ad, &leaf_peer_ll),
+            peer2_illumos.addrconf(&ad, &leaf_peer_ll),
+        )?;
+
+        let hub_client = hub.client(&ad, hub_addr).await?;
+        let peer1_client = peer1.client(&ad, peer1_addr).await?;
+        let peer2_client = peer2.client(&ad, peer2_addr).await?;
+        tokio::try_join!(
+            hub.run_ddm(&ad, RouterKind::Transit, hub_static_ifaces),
+            peer1.run_ddm(&ad, RouterKind::Server, &[]),
+            peer2.run_ddm(&ad, RouterKind::Server, &[]),
+        )?;
+        tokio::try_join!(
+            hub.wait_for_api(&hub_client, OP_TIMEOUT, &ad),
+            peer1.wait_for_api(&peer1_client, OP_TIMEOUT, &ad),
+            peer2.wait_for_api(&peer2_client, OP_TIMEOUT, &ad),
+        )?;
+
+        Ok((hub_client, peer1_client, peer2_client))
+    }
+    .await;
+
+    match result {
+        Ok((hub_client, peer1_client, peer2_client)) => Ok(BootedDdmTrio {
+            ad,
+            hub,
+            peer1,
+            peer2,
+            hub_client,
+            peer1_client,
+            peer2_client,
+            scenario,
+        }),
+        Err(e) => {
+            warn!(ad.log, "{topo_name} boot failed: {e:#}");
+            if diag_on_fail {
+                collect_ddm_trio_diagnostics(
+                    &ad,
+                    [hub, peer1, peer2],
+                    topo_name,
+                )
+                .await;
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Launch two Helios nodes with a direct link between them and obtain mgd
@@ -617,6 +806,244 @@ fn cleanup_interop_deployment(scenario: InteropScenario) -> Result<()> {
     config_result
 }
 
+async fn run_ddm_apply_lifecycle(
+    scenario: DdmTrioScenario,
+    persistent: bool,
+    diag_on_fail: bool,
+) -> Result<()> {
+    let bt =
+        boot_ddm_trio(scenario, persistent, diag_on_fail, &[DDM_HUB_PEER2_IF])
+            .await?;
+    run_ddm_trio_with_optional_diagnostics(
+        bt,
+        diag_on_fail,
+        ddm_apply_lifecycle_body,
+    )
+    .await
+}
+
+/// The hub starts with a static (`-a`) interface toward peer2 and no dynamic
+/// interfaces. Everything toward peer1, and both leaves' interfaces, are
+/// driven through `ddm_apply`.
+async fn ddm_apply_lifecycle_body(bt: BootedDdmTrio) -> Result<()> {
+    let BootedDdmTrio {
+        ad,
+        hub_client,
+        peer1_client,
+        peer2_client,
+        ..
+    } = bt;
+    let prefix1: Ipv6Net = DDM_PEER1_PREFIX.parse()?;
+    let prefix2: Ipv6Net = DDM_PEER2_PREFIX.parse()?;
+    let hub_static_only = BTreeMap::from([(
+        DDM_HUB_PEER2_IF.to_string(),
+        InterfaceLifetime::Static,
+    )]);
+
+    info!(ad.log, "peering over the hub's static DDM interface");
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(hub_static_only.clone()),
+        1,
+        10,
+        "hub reports its command-line interface as static"
+    );
+    apply_ddm(&peer2_client, &[DDM_LEAF_PEER_IF]).await?;
+    peer2_client.advertise_prefixes(&vec![prefix2]).await?;
+    let static_only_up = DdmObservedState {
+        hub_peers: 1,
+        peer1_peers: 0,
+        peer2_peers: 1,
+        hub_prefixes: BTreeSet::from([prefix2]),
+        peer1_prefixes: BTreeSet::new(),
+        peer2_prefixes: BTreeSet::new(),
+    };
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(static_only_up.clone()),
+        3,
+        1,
+        30,
+        "static DDM interface exchanges routes with a dynamic peer"
+    );
+
+    info!(
+        ad.log,
+        "adding a dynamic DDM interface alongside the static one"
+    );
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF]).await?;
+    apply_ddm(&peer1_client, &[DDM_LEAF_PEER_IF]).await?;
+    peer1_client.advertise_prefixes(&vec![prefix1]).await?;
+    let both_up = DdmObservedState {
+        hub_peers: 2,
+        peer1_peers: 1,
+        peer2_peers: 1,
+        hub_prefixes: BTreeSet::from([prefix1, prefix2]),
+        peer1_prefixes: BTreeSet::from([prefix2]),
+        peer2_prefixes: BTreeSet::from([prefix1]),
+    };
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(both_up.clone()),
+        3,
+        1,
+        30,
+        "static and dynamic DDM interfaces exchange independent routes"
+    );
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(BTreeMap::from([
+            (DDM_HUB_PEER1_IF.to_string(), InterfaceLifetime::Dynamic),
+            (DDM_HUB_PEER2_IF.to_string(), InterfaceLifetime::Static),
+        ])),
+        1,
+        10,
+        "hub reports one dynamic and one static interface"
+    );
+
+    info!(ad.log, "reapplying identical desired state");
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF]).await?;
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(both_up.clone()),
+        3,
+        1,
+        10,
+        "identical ddm_apply is idempotent"
+    );
+
+    info!(ad.log, "naming the static interface in ddm_apply");
+    apply_ddm(&hub_client, &[DDM_HUB_PEER1_IF, DDM_HUB_PEER2_IF]).await?;
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(both_up.clone()),
+        3,
+        1,
+        10,
+        "a static interface named in ddm_apply is left alone"
+    );
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(BTreeMap::from([
+            (DDM_HUB_PEER1_IF.to_string(), InterfaceLifetime::Dynamic),
+            (DDM_HUB_PEER2_IF.to_string(), InterfaceLifetime::Static),
+        ])),
+        1,
+        10,
+        "naming a static interface does not change its lifetime"
+    );
+
+    info!(
+        ad.log,
+        "removing every dynamic hub interface with ddm_apply({{}})"
+    );
+    apply_ddm(&hub_client, &[]).await?;
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(static_only_up.clone()),
+        3,
+        1,
+        30,
+        "removed dynamic interface withdraws its routes while the static one remains"
+    );
+    wait_for_eq!(
+        observe_ddm_interfaces(&hub_client).await,
+        Some(hub_static_only.clone()),
+        1,
+        10,
+        "empty ddm_apply leaves only the static interface"
+    );
+
+    info!(
+        ad.log,
+        "removing peer2's dynamic interface with ddm_apply({{}})"
+    );
+    apply_ddm(&peer2_client, &[]).await?;
+    wait_for_eq_stable!(
+        observe_ddm_state(&hub_client, &peer1_client, &peer2_client).await,
+        Some(DdmObservedState {
+            hub_peers: 0,
+            peer1_peers: 0,
+            peer2_peers: 0,
+            hub_prefixes: BTreeSet::new(),
+            peer1_prefixes: BTreeSet::new(),
+            peer2_prefixes: BTreeSet::new(),
+        }),
+        3,
+        1,
+        30,
+        "empty desired state tears down every adjacency and learned route"
+    );
+
+    info!(ad.log, "DDM apply lifecycle test passed 🎉");
+    Ok(())
+}
+
+async fn apply_ddm(client: &DdmClient, interfaces: &[&str]) -> Result<()> {
+    client
+        .ddm_apply(&ApplyRequest {
+            ddm_interfaces: interfaces
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        })
+        .await?;
+    Ok(())
+}
+
+/// Every interface ddmd knows about, keyed by name, with its lifetime.
+async fn observe_ddm_interfaces(
+    client: &DdmClient,
+) -> Option<BTreeMap<String, InterfaceLifetime>> {
+    Some(
+        client
+            .get_interfaces()
+            .await
+            .ok()?
+            .into_inner()
+            .into_values()
+            .map(|info| (info.name, info.lifetime))
+            .collect(),
+    )
+}
+
+async fn observe_ddm_state(
+    hub: &DdmClient,
+    peer1: &DdmClient,
+    peer2: &DdmClient,
+) -> Option<DdmObservedState> {
+    let (
+        hub_peers,
+        peer1_peers,
+        peer2_peers,
+        hub_prefixes,
+        peer1_prefixes,
+        peer2_prefixes,
+    ) = tokio::join!(
+        hub.get_peers(),
+        peer1.get_peers(),
+        peer2.get_peers(),
+        hub.get_prefixes(),
+        peer1.get_prefixes(),
+        peer2.get_prefixes(),
+    );
+    let destinations = |prefixes: HashMap<String, Vec<PathVector>>| {
+        prefixes
+            .into_values()
+            .flatten()
+            .map(|path| path.destination)
+            .collect()
+    };
+    Some(DdmObservedState {
+        hub_peers: hub_peers.ok()?.len(),
+        peer1_peers: peer1_peers.ok()?.len(),
+        peer2_peers: peer2_peers.ok()?.len(),
+        hub_prefixes: destinations(hub_prefixes.ok()?.into_inner()),
+        peer1_prefixes: destinations(peer1_prefixes.ok()?.into_inner()),
+        peer2_prefixes: destinations(peer2_prefixes.ok()?.into_inner()),
+    })
+}
+
 async fn run_mgd_unnumbered(
     scenario: MgdDuoScenario,
     persistent: bool,
@@ -798,7 +1225,7 @@ async fn interop_unnumbered_body(bt: BootedInterop) -> Result<()> {
         .context(format!("create {peer_addr}"))?;
 
     ox.run_mgd(&ad).await?;
-    ox.ddm().run_ddm(&ad).await?;
+    ox.ddm().run_ddm(&ad, RouterKind::Server, &[]).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Fanout of 4 so all peer paths survive best-path selection and we can
@@ -1182,6 +1609,20 @@ async fn collect_mgd_duo_boot_diagnostics(
     }
 }
 
+/// Snapshot logs and live DDM state from every Helios node in the ddm-trio
+/// topology.
+async fn collect_ddm_trio_diagnostics(
+    d: &Runner,
+    nodes: [DdmNode; 3],
+    topo_name: &str,
+) {
+    warn!(d.log, "collecting diagnostics for {topo_name}");
+    for node in nodes {
+        node.illumos().collect_diagnostics(d, topo_name).await;
+        node.collect_diagnostics(d, topo_name).await;
+    }
+}
+
 async fn frr_setup(r: FrrNode, d: Arc<Runner>) -> Result<()> {
     const BASE_CONFIG: &str = "
         configure
@@ -1411,7 +1852,7 @@ async fn interop_bfd_static_body(bt: BootedInterop) -> Result<()> {
     // mg-lower's sync loop queries ddm on every prefix change and bails the
     // whole sync when ddm is unreachable. We don't exercise DDM here, but
     // ddmd has to be up for static routes to lower into dpd.
-    ox.ddm().run_ddm(&ad).await?;
+    ox.ddm().run_ddm(&ad, RouterKind::Server, &[]).await?;
     wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     // Default fanout is 1, which collapses the static paths into a single

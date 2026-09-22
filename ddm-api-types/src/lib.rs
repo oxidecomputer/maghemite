@@ -17,6 +17,7 @@
 //! [RFD 619]: https://rfd.shared.oxide.computer/rfd/619
 
 pub mod admin;
+pub mod config;
 pub mod db;
 pub mod exchange;
 pub mod net;

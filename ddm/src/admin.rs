@@ -3,12 +3,13 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::Db;
-use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
+use crate::sm::{AdminEvent, Event, Overseer, PrefixSet};
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, TunnelRoute};
+use ddm_api_types::config::ApplyRequest;
+use ddm_api_types::db::{InterfaceInfo, PeerInfo, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::net::TunnelOrigin;
 use dropshot::ApiDescription;
@@ -22,7 +23,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use mg_common::lock;
+use mg_common::{lock, read_lock};
 use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
@@ -30,10 +31,13 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use mg_common::write_lock;
 
 pub const DDM_STATS_PORT: u16 = 8001;
 
@@ -47,10 +51,9 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    pub event_channels: Vec<Sender<Event>>,
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
+    pub overseer: Arc<RwLock<Overseer>>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub log: Logger,
 }
@@ -126,30 +129,70 @@ pub enum DdmAdminApiImpl {}
 impl DdmAdminApi for DdmAdminApiImpl {
     type Context = Arc<Mutex<HandlerContext>>;
 
+    async fn get_interfaces(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, InterfaceInfo>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        Ok(HttpResponseOk(
+            read_lock!(ctx.overseer)
+                .iter()
+                .map(|sm| {
+                    let info = sm.interface_info();
+                    (info.ifindex, info)
+                })
+                .collect(),
+        ))
+    }
+
+    async fn ddm_apply(
+        _ctx: RequestContext<Self::Context>,
+        _request: TypedBody<ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        #[cfg(all(feature = "backend", target_os = "illumos"))]
+        {
+            let desired = _request.into_inner().ddm_interfaces;
+            let overseer = lock!(_ctx.context()).overseer.clone();
+            // Run apply on the blocking pool, not on this Tokio worker.
+            //
+            // apply() joins every departing FSM thread, and FSM teardown
+            // re-enters this runtime via Handle::block_on (closing the
+            // exchange server, deleting routes through DPD). Those futures
+            // need a free worker to make progress. If the join itself sat on
+            // a worker, teardown could starve the runtime and deadlock while
+            // holding the Overseer write lock.
+            tokio::task::spawn_blocking(move || {
+                write_lock!(overseer).apply(desired)
+            })
+            .await
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("ddm_apply: {e}"))
+            })?;
+        }
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let mut result = HashMap::new();
-        for sm in &ctx.peers {
-            // Compute status first so peer_status() never runs while we hold
-            // any of the InterfaceState mutexes below.
-            let status = sm.iface.peer_status();
-            let if_index = *lock!(sm.iface.if_index);
-            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
-                continue;
-            };
-            result.insert(
-                if_index,
-                PeerInfo {
-                    status,
-                    addr: peer.addr,
-                    host: peer.hostname,
-                    kind: peer.kind,
-                },
-            );
-        }
-        Ok(HttpResponseOk(result))
+        Ok(HttpResponseOk(
+            read_lock!(ctx.overseer)
+                .iter()
+                .filter_map(|sm| {
+                    let info = sm.interface_info();
+                    let peer = info.peer?;
+                    Some((
+                        info.ifindex,
+                        PeerInfo {
+                            status: info.status,
+                            addr: peer.addr,
+                            host: peer.hostname,
+                            kind: peer.kind,
+                        },
+                    ))
+                })
+                .collect(),
+        ))
     }
 
     async fn expire_peer(
@@ -159,8 +202,10 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let addr = params.into_inner().addr;
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Expire(addr)))
+        for peer in read_lock!(ctx.overseer).iter() {
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Expire(addr)))
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
                         "admin event send: {e}"
@@ -238,13 +283,17 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.overseer).iter() {
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
+                    prefixes.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_count() {
@@ -274,13 +323,17 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .originate_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.overseer).iter() {
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+                    endpoints.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_tunnel_count() {
@@ -308,13 +361,17 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw(&prefixes)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
-                prefixes.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.overseer).iter() {
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
+                    prefixes.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_count() {
@@ -344,13 +401,17 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .withdraw_tunnel(&endpoints)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.overseer).iter() {
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+                    endpoints.clone(),
+                ))))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         match ctx.db.originated_tunnel_count() {
@@ -374,10 +435,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
 
-        for e in &ctx.event_channels {
-            e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+        for peer in read_lock!(ctx.overseer).iter() {
+            peer.ctx
+                .tx
+                .send(Event::Admin(AdminEvent::Sync))
+                .map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "admin event send: {e}"
+                    ))
+                })?;
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -399,7 +465,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             *jh = Some(
                 crate::oxstats::start_server(
                     DDM_STATS_PORT,
-                    ctx.peers.clone(),
+                    ctx.overseer.clone(),
                     ctx.stats.clone(),
                     hostname,
                     rq.rack_id,

@@ -6,9 +6,37 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "paths": {
+    "/ddm/omicron/apply": {
+      "post": {
+        "summary": "Declarative endpoint describing the set of interfaces DDM should run on.",
+        "description": "DDM FSMs will be spawned for requested interfaces that are unknown to DDM, and stopped for known interfaces that aren't in the request.",
+        "operationId": "ddm_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/disable-stats": {
       "post": {
         "operationId": "disable_stats",
@@ -41,6 +69,35 @@
         "responses": {
           "204": {
             "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/interfaces": {
+      "get": {
+        "summary": "Query interfaces known to DDM.",
+        "description": "Exposes configured interfaces, regardless of peer discovery.",
+        "operationId": "get_interfaces",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_InterfaceInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/InterfaceInfo"
+                  }
+                }
+              }
+            }
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -359,6 +416,22 @@
   },
   "components": {
     "schemas": {
+      "ApplyRequest": {
+        "type": "object",
+        "properties": {
+          "ddm_interfaces": {
+            "description": "The complete set of dynamically managed interface names DDM should peer over. Dynamic interfaces not in this set are torn down and their routes withdrawn. Interfaces supplied on the ddmd command line are static and unaffected by this request.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ddm_interfaces"
+        ]
+      },
       "Duration": {
         "type": "object",
         "properties": {
@@ -412,6 +485,148 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "InterfaceInfo": {
+        "description": "Information about a DDM interface and its FSM state.",
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "ifindex": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "lifetime": {
+            "$ref": "#/components/schemas/InterfaceLifetime"
+          },
+          "name": {
+            "type": "string"
+          },
+          "peer": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerIdentity"
+              }
+            ]
+          },
+          "stats": {
+            "$ref": "#/components/schemas/InterfaceStats"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeerStatus"
+          }
+        },
+        "required": [
+          "addr",
+          "ifindex",
+          "lifetime",
+          "name",
+          "stats",
+          "status"
+        ]
+      },
+      "InterfaceLifetime": {
+        "description": "How long a DDM interface lives, and therefore who may remove it.",
+        "oneOf": [
+          {
+            "description": "Supplied on the ddmd command line. Lives for the life of the daemon; `ddm_apply` neither adds nor removes it.",
+            "type": "string",
+            "enum": [
+              "static"
+            ]
+          },
+          {
+            "description": "Managed by `ddm_apply`, which adds and removes it to match the requested set.",
+            "type": "string",
+            "enum": [
+              "dynamic"
+            ]
+          }
+        ]
+      },
+      "InterfaceStats": {
+        "description": "Statistics about a DDM interface.",
+        "type": "object",
+        "properties": {
+          "advertisements_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "advertisements_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_tunnel_endpoints": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_underlay_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_address_changes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_send_fail": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "advertisements_received",
+          "advertisements_sent",
+          "imported_tunnel_endpoints",
+          "imported_underlay_prefixes",
+          "peer_address_changes",
+          "peer_established",
+          "peer_expirations",
+          "solicitations_received",
+          "solicitations_sent",
+          "update_send_fail",
+          "updates_received",
+          "updates_sent"
         ]
       },
       "IpNet": {
@@ -479,6 +694,27 @@
         "required": [
           "destination",
           "path"
+        ]
+      },
+      "PeerIdentity": {
+        "description": "Information about a DDM peer.",
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RouterKind"
+          }
+        },
+        "required": [
+          "addr",
+          "hostname",
+          "kind"
         ]
       },
       "PeerInfo": {

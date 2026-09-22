@@ -9,20 +9,19 @@
 
 use super::{DiscoveryError, Version};
 use crate::sm::{
-    Config, Event, InterfaceState, NeighborEvent, PeerIdentity, SessionStats,
+    Config, Event, InterfaceState, NeighborEvent, SessionStats, Stop,
 };
 use crate::{dbg, err, inf, trc, wrn};
-use ddm_api_types::db::RouterKind;
-use mg_common::lock;
+use ddm_api_types::db::{PeerIdentity, RouterKind};
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::mem::MaybeUninit;
 use std::net::{Ipv6Addr, SocketAddrV6};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
-use std::thread::{sleep, spawn};
+use std::thread::{JoinHandle, spawn};
 use std::time::{Duration, Instant};
 
 const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
@@ -91,6 +90,28 @@ struct Neighbor {
     last_seen: Instant,
 }
 
+/// Owner handle for a running discovery handler.
+pub(crate) struct DiscoveryHandle {
+    shutdown: Stop,
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl DiscoveryHandle {
+    /// Stop all discovery threads and wait for them.
+    pub(crate) fn shutdown(mut self) {
+        self.shutdown.set();
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for DiscoveryHandle {
+    fn drop(&mut self) {
+        self.shutdown.set();
+    }
+}
+
 pub(crate) fn handler(
     hostname: String,
     config: Config,
@@ -98,7 +119,7 @@ pub(crate) fn handler(
     iface: Arc<InterfaceState>,
     stats: Arc<SessionStats>,
     log: Logger,
-) -> Result<(), DiscoveryError> {
+) -> Result<DiscoveryHandle, DiscoveryError> {
     // listening on 2 sockets, solicitations are sent to DDM_MADDR, but
     // advertisements are sent to the unicast source addresses of a
     // solicitation. Binding to a link-scoped multicast address is required for
@@ -122,6 +143,7 @@ pub(crate) fn handler(
 
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
+    uc.set_reuse_address(true)?;
     uc.bind(&uc_sa)?;
     uc.set_read_timeout(Some(Duration::from_millis(
         config.discovery_read_timeout,
@@ -138,49 +160,63 @@ pub(crate) fn handler(
         iface,
     };
 
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = Stop::default();
+    let shutdown = Stop::default();
+    let threads = vec![
+        send_solicitations(
+            ctx.clone(),
+            stop.clone(),
+            shutdown.clone(),
+            stats.clone(),
+        ),
+        listen(
+            ctx.clone(),
+            ctx.mc_socket.clone(),
+            stop.clone(),
+            shutdown.clone(),
+            stats.clone(),
+        ),
+        listen(
+            ctx.clone(),
+            ctx.uc_socket.clone(),
+            stop.clone(),
+            shutdown.clone(),
+            stats.clone(),
+        ),
+        expire(ctx, stop, shutdown.clone(), stats),
+    ];
 
-    send_solicitations(ctx.clone(), stop.clone(), stats.clone());
-    listen(
-        ctx.clone(),
-        ctx.mc_socket.clone(),
-        stop.clone(),
-        stats.clone(),
-    )?;
-    listen(
-        ctx.clone(),
-        ctx.uc_socket.clone(),
-        stop.clone(),
-        stats.clone(),
-    )?;
-    expire(ctx, stop, stats.clone())?;
-
-    Ok(())
+    Ok(DiscoveryHandle { shutdown, threads })
 }
 
 fn send_solicitations(
     ctx: HandlerContext,
-    stop: Arc<AtomicBool>,
+    stop: Stop,
+    shutdown: Stop,
     stats: Arc<SessionStats>,
-) {
+) -> JoinHandle<()> {
     spawn(move || {
         loop {
             if let Err(e) = solicit(&ctx) {
                 err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
-                stop.store(true, Ordering::Relaxed);
+                stop.set();
                 break;
             }
             stats.solicitations_sent.fetch_add(1, Ordering::Relaxed);
-            sleep(Duration::from_millis(ctx.config.solicit_interval));
+            if shutdown.wait(Duration::from_millis(ctx.config.solicit_interval))
+            {
+                break;
+            }
         }
-    });
+    })
 }
 
 fn expire(
     ctx: HandlerContext,
-    stop: Arc<AtomicBool>,
+    stop: Stop,
+    shutdown: Stop,
     stats: Arc<SessionStats>,
-) -> Result<(), DiscoveryError> {
+) -> JoinHandle<()> {
     spawn(move || {
         loop {
             let mut guard = match ctx.nbr.write() {
@@ -229,40 +265,42 @@ fn expire(
             // handler context. Otherwise we could create a race on the discovery
             // sockets by trying to listen on a unicast address that a socket
             // waiting to be dropped is already listening on.
-            if stop.load(Ordering::Relaxed) {
+            if stop.is_set() {
                 let event = ctx.event.clone();
                 let log = ctx.log.clone();
                 let if_name = ctx.config.if_name.clone();
                 let wait = ctx.config.discovery_read_timeout;
                 drop(ctx);
-                // Ensure read handlers have registered the stop event.
-                sleep(Duration::from_millis(wait));
-                emit_solicit_fail(event, log, &if_name);
+                if !shutdown.wait(Duration::from_millis(wait)) {
+                    emit_solicit_fail(event, log, &if_name);
+                }
                 break;
             }
-            sleep(Duration::from_millis(ctx.config.solicit_interval));
+            if shutdown.wait(Duration::from_millis(ctx.config.solicit_interval))
+            {
+                break;
+            }
         }
-    });
-    Ok(())
+    })
 }
 
 fn listen(
     ctx: HandlerContext,
     s: Arc<Socket>,
-    stop: Arc<AtomicBool>,
+    stop: Stop,
+    shutdown: Stop,
     stats: Arc<SessionStats>,
-) -> Result<(), DiscoveryError> {
+) -> JoinHandle<()> {
     spawn(move || {
         loop {
             if let Some((addr, msg)) = recv(&ctx, &s) {
                 handle_msg(&ctx, msg, &addr, &stats);
             };
-            if stop.load(Ordering::Relaxed) {
+            if stop.is_set() || shutdown.is_set() {
                 break;
             }
         }
-    });
-    Ok(())
+    })
 }
 
 fn recv(
@@ -432,10 +470,7 @@ fn handle_advertisement(
         hostname,
         kind,
     };
-    let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
-        *info = Some(new_peer);
-        drop(info);
+    if ctx.iface.set_peer(new_peer) {
         emit_nbr_update(ctx, sender, version);
     }
 }

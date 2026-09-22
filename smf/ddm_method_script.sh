@@ -46,9 +46,12 @@ if [[ "$val" != 'unknown' ]]; then
     args+=( "$val" )
 fi
 
+# config/interfaces historically holds address object names (e.g. `cxgbe0/ll`).
+# ddmd takes interface names and resolves the link-local address itself, so
+# strip any address object suffix.
 for x in $(svcprop -c -p config/interfaces "${SMF_FMRI}"); do
     args+=( '-a' )
-    args+=( "$x" )
+    args+=( "${x%%/*}" )
 done
 
 for x in $(svcprop -c -p config/dns_servers "${SMF_FMRI}"); do
