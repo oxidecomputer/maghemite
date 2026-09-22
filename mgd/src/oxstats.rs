@@ -596,13 +596,7 @@ impl Stats {
     }
 
     fn bfd_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
-        let daemon = lock!(self.bfd.daemon);
-        let mut counters = BTreeMap::new();
-        for (addr, session) in daemon.sessions_iter() {
-            counters.insert(*addr, Arc::clone(session.counters()));
-        }
-        drop(daemon);
-
+        let counters = self.bfd.session_counters();
         let mut samples = Vec::with_capacity(counters.len() * 8);
 
         for (addr, counters) in &counters {

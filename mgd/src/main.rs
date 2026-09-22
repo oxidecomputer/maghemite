@@ -9,7 +9,6 @@ use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
-use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::config::{
     BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig,
 };
@@ -194,11 +193,7 @@ async fn run(args: RunArgs) {
             .expect("get BGP unnumbered neighbors from data store"),
     );
 
-    start_bfd_sessions(
-        context.clone(),
-        db.get_bfd_neighbors()
-            .expect("get BFD neighbors from data store"),
-    );
+    start_bfd_sessions(context.clone());
 
     initialize_static_routes(&db, &context.log);
 
@@ -476,15 +471,12 @@ fn start_bgp_routers(
     }
 }
 
-fn start_bfd_sessions(
-    context: Arc<HandlerContext>,
-    configs: Vec<BfdPeerConfig>,
-) {
-    dlog!(context.log, info, "starting bfd sessions: {configs:#?}");
-    for config in configs {
-        bfd_admin::add_peer(context.clone(), config)
-            .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
-    }
+fn start_bfd_sessions(context: Arc<HandlerContext>) {
+    dlog!(context.log, info, "starting persisted bfd sessions");
+    context
+        .bfd
+        .restore_db_peers(context.db.clone())
+        .unwrap_or_else(|e| panic!("failed to restore bfd peers: {e}"));
 }
 
 // Read static routes from disk, normalize prefixes by unsetting host bits,

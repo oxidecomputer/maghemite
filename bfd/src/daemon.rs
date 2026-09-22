@@ -29,6 +29,11 @@ impl Daemon {
         Self::with_dispatcher(Dispatcher::new(), log)
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn new_for_test(log: Logger) -> Self {
+        Self::with_dispatcher(Dispatcher::new_for_test(), log)
+    }
+
     // Non-public method to allow construction with a custom dispatcher.
     //
     // This is used by tests when they want to use a `Dispatcher` with a custom

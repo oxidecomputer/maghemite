@@ -471,6 +471,16 @@ impl Db {
         let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
         let key = cfg.peer.to_string();
         let value = serde_json::to_string(&cfg)?;
+        match tree.contains_key(key.as_str()) {
+            Ok(exists) => {
+                if exists {
+                    return Err(Error::Conflict(
+                        "bfd neighbor already exists".to_string(),
+                    ));
+                }
+            }
+            Err(e) => return Err(Error::DataStore(e)),
+        }
         tree.insert(key.as_str(), value.as_str())?;
         tree.flush()?;
         Ok(())
@@ -533,7 +543,7 @@ impl Db {
 
         let current = self.get_origin4(asn)?;
         if !current.is_empty() {
-            return Err(Error::Conflict("origin already exists".to_string()));
+            return Err(Error::Conflict("origin4 already exists".to_string()));
         }
 
         self.set_origin4(asn, ps)
@@ -600,7 +610,7 @@ impl Db {
     ) -> Result<(), Error> {
         let current = self.get_origin6(asn)?;
         if !current.is_empty() {
-            return Err(Error::Conflict("origin already exists".to_string()));
+            return Err(Error::Conflict("origin6 already exists".to_string()));
         }
 
         self.set_origin6(asn, ps)

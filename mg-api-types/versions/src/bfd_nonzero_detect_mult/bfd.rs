@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::num::NonZeroU8;
 
-#[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+)]
 pub struct BfdPeerConfig {
     /// Address of the peer to add.
     pub peer: IpAddr,

@@ -66,6 +66,11 @@ impl Dispatcher {
         Self::with_backend(Arc::new(TokioUdpBinder))
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn new_for_test() -> Self {
+        Self::with_backend(Arc::new(NoopListenerBackend))
+    }
+
     fn with_backend(backend: Arc<dyn ListenerBackend>) -> Self {
         Self {
             peer_to_listen_addr: HashMap::default(),
@@ -274,6 +279,21 @@ trait ListenerBackend: Send + Sync + 'static {
         sessions: SharedSessions,
         log: Logger,
     ) -> Result<JoinHandle<()>, AddPeerError>;
+}
+
+#[cfg(feature = "test-support")]
+struct NoopListenerBackend;
+
+#[cfg(feature = "test-support")]
+impl ListenerBackend for NoopListenerBackend {
+    fn spawn(
+        &self,
+        _listen_addr: SocketAddr,
+        _sessions: SharedSessions,
+        _log: Logger,
+    ) -> Result<JoinHandle<()>, AddPeerError> {
+        Ok(tokio::spawn(std::future::pending()))
+    }
 }
 
 /// Production [`ListenerBackend`]: binds a real UDP socket and spawns a

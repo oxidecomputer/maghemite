@@ -7,7 +7,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
-#[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+)]
 pub struct BfdPeerConfig {
     /// Address of the peer to add.
     pub peer: IpAddr,
@@ -21,7 +23,9 @@ pub struct BfdPeerConfig {
     pub mode: SessionMode,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
 pub enum SessionMode {
     SingleHop,
     MultiHop,
