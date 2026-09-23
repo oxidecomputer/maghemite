@@ -2179,6 +2179,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Remove a connection from the registry
+    ///
+    /// # Locking
+    /// Acquires the connection registry and the connection's timer mutexes.
+    /// Callers must not hold those locks.
     fn unregister_conn(&self, conn_id: &ConnectionId) {
         // Remove from connection registry
         if let Some(conn_kind) = lock!(self.connection_registry).remove(conn_id)
@@ -7455,33 +7459,45 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
 
+        // RFC 4271 §4.2:
+        // ```text
+        // Hold Time:
+        //
+        //    This 2-octet unsigned integer indicates the number of seconds
+        //    the sender proposes for the value of the Hold Timer.  Upon
+        //    receipt of an OPEN message, a BGP speaker MUST calculate the
+        //    value of the Hold Timer by using the smaller of its configured
+        //    Hold Time and the Hold Time received in the OPEN message.  The
+        //    Hold Time MUST be either zero or at least three seconds.  An
+        //    implementation MAY reject connections on the basis of the Hold
+        //    Time.  The calculated value indicates the maximum number of
+        //    seconds that may elapse between the receipt of successive
+        //    KEEPALIVE and/or UPDATE messages from the sender.
+        // ```
+        let requested = u64::from(om.hold_time);
+        if requested > 0 && requested < 3 {
+            self.send_notification(
+                conn,
+                ErrorCode::Open,
+                ErrorSubcode::Open(OpenErrorSubcode::UnacceptableHoldTime),
+            );
+            self.unregister_conn(conn.id());
+            return Err(Error::HoldTimeTooSmall);
+        }
+
         {
             let clock = conn.clock();
             let mut ht = lock!(clock.timers.hold);
             let mut kt = lock!(clock.timers.keepalive);
             let mut theirs = false;
             // XXX: handle peer sending us a holdtime of 0 (keepalives disabled)
-            let requested = u64::from(om.hold_time);
-            if requested > 0 {
-                if requested < 3 {
-                    self.send_notification(
-                        conn,
-                        ErrorCode::Open,
-                        ErrorSubcode::Open(
-                            OpenErrorSubcode::UnacceptableHoldTime,
-                        ),
-                    );
-                    self.unregister_conn(conn.id());
-                    return Err(Error::HoldTimeTooSmall);
-                }
-                if requested < ht.interval.as_secs() {
-                    theirs = true;
-                    ht.interval = Duration::from_secs(requested);
-                    ht.restart();
-                    // per BGP RFC section 10
-                    kt.interval = Duration::from_secs(requested / 3);
-                    kt.restart();
-                }
+            if requested > 0 && requested < ht.interval.as_secs() {
+                theirs = true;
+                ht.interval = Duration::from_secs(requested);
+                ht.restart();
+                // per BGP RFC section 10
+                kt.interval = Duration::from_secs(requested / 3);
+                kt.restart();
             }
             if !theirs {
                 ht.interval = clock.timers.config_hold_time;
@@ -9729,6 +9745,37 @@ mod tests {
                 false,
                 ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
             );
+        }
+    }
+
+    #[test]
+    fn test_established_collision_rejects_short_hold_time_without_deadlock() {
+        for hold_time in [1, 2] {
+            for deterministic_collision_resolution in [false, true] {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    check_established_open(
+                        Outbound,
+                        OpenMessage::new4(4200000001, hold_time, 200, false),
+                        deterministic_collision_resolution,
+                        false,
+                        ErrorSubcode::Open(
+                            OpenErrorSubcode::UnacceptableHoldTime,
+                        ),
+                    );
+                    tx.send(()).unwrap();
+                });
+
+                // Rejection unregisters the connection and locks its timers.
+                // Bound the wait so recursive locking fails instead of hanging
+                // the test suite. Only join after the worker has completed.
+                rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|e| {
+                    panic!(
+                        "OPEN rejection did not complete: {e}; hold_time={hold_time}, deterministic_collision_resolution={deterministic_collision_resolution}"
+                    )
+                });
+                worker.join().unwrap();
+            }
         }
     }
 
