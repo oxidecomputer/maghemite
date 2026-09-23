@@ -8,6 +8,7 @@ use crate::scenario::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 mod bgp;
+mod bird;
 mod ddm;
 mod dendrite;
 mod diagnostics;
