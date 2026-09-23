@@ -209,18 +209,59 @@ pub fn collision_resolution(
     exist_direction: ConnectionDirection,
     local_bgp_id: u32,
     remote_bgp_id: u32,
+    local_asn: u32,
+    remote_asn: u32,
 ) -> CollisionResolution {
+    let mut criteria = CollisionResolutionCriteria::HighestBgpId;
     if local_bgp_id < remote_bgp_id {
         // The peer has a higher RID, keep the connection they initiated
         match exist_direction {
-            ConnectionDirection::Inbound => CollisionResolution::ExistWins,
-            ConnectionDirection::Outbound => CollisionResolution::NewWins,
+            ConnectionDirection::Inbound => {
+                CollisionResolution::ExistWins(criteria)
+            }
+            ConnectionDirection::Outbound => {
+                CollisionResolution::NewWins(criteria)
+            }
         }
-    } else {
+    } else if local_bgp_id > remote_bgp_id {
         // The local system has a higher RID, keep the connection we initiated
         match exist_direction {
-            ConnectionDirection::Inbound => CollisionResolution::NewWins,
-            ConnectionDirection::Outbound => CollisionResolution::ExistWins,
+            ConnectionDirection::Inbound => {
+                CollisionResolution::NewWins(criteria)
+            }
+            ConnectionDirection::Outbound => {
+                CollisionResolution::ExistWins(criteria)
+            }
+        }
+    } else {
+        // Our BGP-IDs are identical (eBGP only), so fallback to ASN comparison.
+        // RFC 6286:
+        // ```text
+        // If the BGP Identifiers of the peers involved in the connection
+        // collision are identical, then the connection initiated by the BGP
+        // speaker with the larger AS number is preserved.
+        // ```
+        criteria = CollisionResolutionCriteria::HighestAsn;
+
+        if local_asn < remote_asn {
+            // The peer has a higher ASN, keep the connection they initiated
+            match exist_direction {
+                ConnectionDirection::Inbound => {
+                    CollisionResolution::ExistWins(criteria)
+                }
+                ConnectionDirection::Outbound => {
+                    CollisionResolution::NewWins(criteria)
+                }
+            }
+        } else {
+            match exist_direction {
+                ConnectionDirection::Inbound => {
+                    CollisionResolution::NewWins(criteria)
+                }
+                ConnectionDirection::Outbound => {
+                    CollisionResolution::ExistWins(criteria)
+                }
+            }
         }
     }
 }
@@ -1809,13 +1850,44 @@ impl<Cnx: BgpConnection + 'static> FsmDriver<Cnx> {
     }
 }
 
+/// Criteria used to determine winner of collision resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollisionResolutionCriteria {
+    /// Typical collision resolution criteria, i.e. RFC 4271 §6.8.
+    HighestBgpId,
+    /// Extension to collision resolution for AS-wide IDs, i.e. RFC 6286 §2.3.
+    HighestAsn,
+}
+
+impl Display for CollisionResolutionCriteria {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::HighestBgpId => "highest BGP-ID",
+            Self::HighestAsn => "highest ASN",
+        })
+    }
+}
+
 /// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollisionResolution {
     /// The "existing" connection wins
-    ExistWins,
+    ExistWins(CollisionResolutionCriteria),
     /// The "new" connection wins
-    NewWins,
+    NewWins(CollisionResolutionCriteria),
+}
+
+impl Display for CollisionResolution {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExistWins(criteria) => {
+                write!(f, "existing connection wins ({criteria})")
+            }
+            Self::NewWins(criteria) => {
+                write!(f, "new connection wins ({criteria})")
+            }
+        }
+    }
 }
 
 impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
@@ -5301,19 +5373,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             om.id
         );
 
-        match collision_resolution(exist.conn.direction(), self.id, om.id) {
-            CollisionResolution::ExistWins => {
-                // Existing connection wins
-                collision_log!(
-                    self,
-                    info,
-                    &exist.conn,
-                    &new,
-                    "collision resolution: local system wins with higher RID ({} > {})",
-                    self.id,
-                    om.id
-                );
+        let resolution = collision_resolution(
+            exist.conn.direction(),
+            self.id,
+            om.id,
+            self.asn.as_u32(),
+            om.asn(),
+        );
+        collision_log!(
+            self,
+            info,
+            &exist.conn,
+            &new,
+            "collision resolution: {resolution}"
+        );
 
+        match resolution {
+            CollisionResolution::ExistWins(_) => {
                 self.stop(Some(&new), None, StopReason::CollisionResolution);
 
                 conn_timer!(exist.conn, hold).restart();
@@ -5325,18 +5401,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmState::OpenConfirm(exist)
             }
-            CollisionResolution::NewWins => {
-                // New connection wins
-                collision_log!(
-                    self,
-                    info,
-                    &exist.conn,
-                    &new,
-                    "collision resolution: peer wins with higher RID ({} >= {})",
-                    om.id,
-                    self.id
-                );
-
+            CollisionResolution::NewWins(_) => {
                 self.stop(
                     Some(&exist.conn),
                     None,
@@ -5643,17 +5708,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             conn_id.short();
                                         );
 
-                                        match collision_resolution(
+                                        let resolution = collision_resolution(
                                             exist.direction(),
                                             self.id,
                                             om.id,
-                                        ) {
-                                            CollisionResolution::ExistWins => {
-                                                // Existing connection wins
-                                                collision_log!(self, info, exist, new,
-                                                    "exist conn wins collision, close new conn",
-                                                );
+                                            self.asn.as_u32(),
+                                            om.asn(),
+                                        );
+                                        collision_log!(self, info, exist, new,
+                                            "collision resolution: {resolution}",
+                                        );
 
+                                        match resolution {
+                                            CollisionResolution::ExistWins(_) => {
                                                 self.stop(Some(&new), None, StopReason::CollisionResolution);
 
                                                 conn_timer!(exist, hold).restart();
@@ -5677,16 +5744,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.send_keepalive(&exist_pc.conn);
                                                 return FsmState::OpenConfirm(exist_pc);
                                             }
-                                            CollisionResolution::NewWins => {
-                                                // New connection wins
-                                                collision_log!(
-                                                    self,
-                                                    info,
-                                                    exist,
-                                                    new,
-                                                    "new conn wins collision, close exist conn",
-                                                );
-
+                                            CollisionResolution::NewWins(_) => {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
                                                 session_timer!(self, connect_retry).stop();
                                                 self.counters
@@ -5756,21 +5814,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             conn_id.short()
                                         );
 
-                                        match collision_resolution(
+                                        let resolution = collision_resolution(
                                             exist.direction(),
                                             self.id,
                                             om.id,
-                                        ) {
-                                            CollisionResolution::ExistWins => {
-                                                // Existing connection wins
-                                                collision_log!(
-                                                    self,
-                                                    info,
-                                                    new,
-                                                    exist,
-                                                    "exist conn wins collision, closing new"
-                                                );
+                                            self.asn.as_u32(),
+                                            om.asn(),
+                                        );
+                                        collision_log!(self, info, new, exist,
+                                            "collision resolution: {resolution}",
+                                        );
 
+                                        match resolution {
+                                            CollisionResolution::ExistWins(_) => {
                                                 self.stop(Some(&new), None, StopReason::CollisionResolution);
                                                 session_timer!(self, connect_retry).stop();
                                                 self.counters
@@ -5779,16 +5835,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                                 return FsmState::OpenSent(exist);
                                             }
-                                            CollisionResolution::NewWins => {
-                                                // New connection wins
-                                                collision_log!(
-                                                    self,
-                                                    info,
-                                                    new,
-                                                    exist,
-                                                    "new conn wins collision, closing exist"
-                                                );
-
+                                            CollisionResolution::NewWins(_) => {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
 
                                                 let caps = om.get_capabilities();
@@ -6874,85 +6921,96 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                              *    - changes its state to Idle.
                              */
                             if let Message::Open(om) = &msg {
-                                // This applies to situations where we enter
-                                // ConnectionCollision from OpenConfirm and the
-                                // existing connection gets a Keepalive before
-                                // the new/colliding connection got an Open.
+                                if let Err(e) =
+                                    self.handle_open(&incoming_conn, om)
+                                {
+                                    session_log!(self, warn, incoming_conn,
+                                        "colliding connection failed to handle open message ({e}), retaining established connection";
+                                        "error" => e.to_string()
+                                    );
+                                    self.bump_msg_counter(msg_kind, true);
+                                    // handle_open already unregistered the
+                                    // colliding connection.
+                                    return FsmState::Established(pc);
+                                }
+
+                                // Connection Collisions are fundamentally a
+                                // race between two parallel BGP connections. We
+                                // handle this by juggling the two connections
+                                // while they race until we receive an OPEN from
+                                // both of them (or one errors/times out).
                                 //
-                                // In that case, we transition out of
-                                // ConnectionCollision and into Established with
-                                // the existing connection, but we deliberately
-                                // do not close or unregister the new connection
-                                // so we can handle its Open when it arrives.
-                                // This allows us to delay collision resolution
-                                // until receipt of an Open message (aligning
-                                // better with the expectations of RFC 4271)
-                                // even if the existing connection moves into
-                                // Established prior to collision resolution.
+                                // In the "normal" case (as much as there can
+                                // be a normal for an already odd condition),
+                                // both connections get an OPEN before either
+                                // get a KEEPALIVE. This gives us sufficient
+                                // information to perform Connection Collision
+                                // Resolution (RFC 4271 §6.8 + RFC 6286 §2.3)
+                                // immediately, so we do.
                                 //
-                                // If we find ourselves in this situation, the
-                                // RFC specifies an optional boolean attribute
-                                // to influnce the resolution behavior
-                                // (CollisionDetectEstablishedState), which
-                                // effectively boils down to:
-                                // if false:
-                                //   The Established connection always wins.
-                                //   This means timing is _sometimes_ the
-                                //   deciding factor when choosing a connection
-                                //   to retain, but only if an Open isn't
-                                //   received on the new connection until
-                                //   after .
-                                // if true:
-                                //   Collision resolution is performed based
-                                //   on the BGP-ID of each peer as per the
-                                //   procedure outlined in Section 6.8. and the
-                                //   Established connection is not guaranteed
-                                //   to survive (taking timing out of the
-                                //   picture and making collision resolution
-                                //   more deterministic, in an idealistic sort
-                                //   of way).
+                                // However, it is also possible for the
+                                // timing to work out such that we enter
+                                // yet another corner case within the corner
+                                // case we're already in (corner-ception?).
+                                // e.g.
+                                // 1) Connection A receives an OPEN
+                                // 2) New Connection B completes
+                                // 3) Connection A receives a KEEPALIVE
+                                // 4) Move into Established with Connection A
+                                // 5) Connection B receives an OPEN
                                 //
-                                // Note: This is not a full implementation of
-                                //       CollisionDetectEstablishedState.
+                                // This is the exact situation we're in here.
                                 //
-                                // Rather, it is simply a lever for us to
-                                // choose whether to ensure determinism in
-                                // collision resolution (i.e. by forcing the
-                                // use of BGP-ID as tie-breaker) or not
-                                // (sticking to "first to Established wins")
-                                // for the scenario described above. A full
-                                // implementation would involve registration
-                                // and tracking of new connections that complete
-                                // while in Established (likely warranting
-                                // an additional CollisionPair variant and
-                                // collision_detection_* method) and adding
-                                // full handling for connections to go into
-                                // and out of Established while a collision is
-                                // underway. At the time of writing this, a full
-                                // implementation is not believed to be worth
-                                // the added complexity and maintenance burden.
+                                // Since we're here, we have a decision we need
+                                // to make. How do we want to handle an OPEN for
+                                // Connection B?
+                                //
+                                // RFC 4271 indicates that collision
+                                // resolution should be triggered by receipt
+                                // of an OPEN message, and the connection
+                                // receiving the OPEN should be discarded
+                                // if another connection in Established
+                                // exists... UNLESS an optional boolean is set.
+                                // The bool (CollisionDetectEstablishedState in
+                                // RFC-speak) effectively boils down to:
+                                //
+                                // if True:
+                                //   Perform Connection Collision Resolution.
+                                //   Discard the connection that lost the
+                                //   collision resolution procedure.
+                                //
+                                // if False:
+                                //    Do not perform Connection Collision
+                                //    Resolution. Discard the non-Established
+                                //    connection.
+                                //
+                                // `deterministic_collision_resolution` is mgd's
+                                // configuration knob mapping to RFC 4271's
+                                // CollisionDetectEstablishedState.
                                 if lock!(self.session)
                                     .deterministic_collision_resolution
                                 {
                                     // Determine which connection wins using pure function
                                     let resolution = collision_resolution(
                                         pc.conn.direction(),
-                                        om.id,
                                         self.id,
+                                        om.id,
+                                        self.asn.as_u32(),
+                                        om.asn(),
                                     );
 
                                     session_log!(self,
                                         info,
                                         pc.conn,
-                                        "collision detected in established state (conn_id: {}), collision_detect_established_state enabled",
+                                        "collision detected in established state (conn_id: {}), collision_detect_established_state enabled: {resolution}",
                                         conn_id.short();
                                         "message" => "open",
                                         "message_contents" => format!("{om}"),
-                                        "resolution" => format!("{:?}", resolution)
+                                        "resolution" => resolution.to_string()
                                     );
 
                                     match resolution {
-                                        CollisionResolution::ExistWins => {
+                                        CollisionResolution::ExistWins(_) => {
                                             // pc wins: close incoming_conn, stay Established
                                             self.bump_msg_counter(
                                                 msg_kind, true,
@@ -6964,7 +7022,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             );
                                             return FsmState::Established(pc);
                                         }
-                                        CollisionResolution::NewWins => {
+                                        CollisionResolution::NewWins(_) => {
                                             // incoming_conn wins: close pc, transition to SessionSetup
                                             self.bump_msg_counter(
                                                 msg_kind, false,
@@ -7327,7 +7385,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
-    /// Handle an open message
+    /// Handle an Open message
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let remote_asn = om.asn();
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn
@@ -7344,6 +7402,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 got: remote_asn,
             }));
         }
+
+        // RFC 6286:
+        // ```text
+        // If the BGP Identifier field of the OPEN message is zero, or if it
+        // is the same as the BGP Identifier of the local BGP speaker and the
+        // message is from an internal peer, then the Error Subcode is set to
+        // "Bad BGP Identifier".
+        // ```
+        //
+        // The BGP-ID is already enforced to be non-zero during deserialization.
+        if remote_asn == self.asn.as_u32() && om.id == self.id {
+            self.send_notification(
+                conn,
+                ErrorCode::Open,
+                ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
+            );
+            self.unregister_conn(conn.id());
+            return Err(Error::BadBgpIdentifier(Ipv4Addr::from(om.id)));
+        }
+
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
             let peer_ip = match self.neighbor.peer {
                 PeerId::Ip(ip) => ip,
@@ -9381,6 +9459,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RouterConfig;
+    use crate::connection_channel::{BgpConnectionChannel, channel};
+    use crate::test::{
+        RouteExchange, create_test_session, create_test_session_info,
+    };
+    use CollisionResolution::{ExistWins, NewWins};
+    use CollisionResolutionCriteria::{HighestAsn, HighestBgpId};
+    use ConnectionDirection::{Inbound, Outbound};
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -9418,58 +9504,259 @@ mod tests {
     }
 
     #[test]
+    fn test_collision_resolution_criteria_display() {
+        for (criteria, expected) in [
+            (CollisionResolutionCriteria::HighestBgpId, "highest BGP-ID"),
+            (CollisionResolutionCriteria::HighestAsn, "highest ASN"),
+        ] {
+            assert_eq!(criteria.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_collision_resolution_display() {
+        for (resolution, expected) in [
+            (
+                ExistWins(HighestBgpId),
+                "existing connection wins (highest BGP-ID)",
+            ),
+            (
+                NewWins(HighestBgpId),
+                "new connection wins (highest BGP-ID)",
+            ),
+            (
+                ExistWins(HighestAsn),
+                "existing connection wins (highest ASN)",
+            ),
+            (NewWins(HighestAsn), "new connection wins (highest ASN)"),
+        ] {
+            assert_eq!(resolution.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn test_resolve_collision_decision() {
-        use crate::connection::ConnectionDirection;
-        use crate::session::collision_resolution;
+        // BGP-ID takes precedence regardless of ASN ordering, including iBGP.
+        for (local_asn, remote_asn) in
+            [(64512, 64513), (64513, 64512), (64512, 64512)]
+        {
+            for (direction, local_id, remote_id, expected) in [
+                (Outbound, 100, 50, ExistWins(HighestBgpId)),
+                (Inbound, 100, 50, NewWins(HighestBgpId)),
+                (Inbound, 50, 100, ExistWins(HighestBgpId)),
+                (Outbound, 50, 100, NewWins(HighestBgpId)),
+            ] {
+                assert_eq!(
+                    collision_resolution(
+                        direction, local_id, remote_id, local_asn, remote_asn,
+                    ),
+                    expected,
+                    "{direction:?}, IDs {local_id}/{remote_id}, ASNs {local_asn}/{remote_asn}",
+                );
+            }
+        }
+    }
 
-        // Case 1: Local wins (higher BGP ID), Connector (ours) is exist
-        // Local BGP ID (100) > Remote (50), exist is Connector (ours)
-        // Expected: ExistWins
-        assert_eq!(
-            collision_resolution(
-                ConnectionDirection::Outbound,
-                100, // local
-                50,  // remote
+    /// Deliver an OPEN on a new connection while another is Established.
+    /// The local speaker uses BGP-ID 100 and ASN 64512.
+    ///
+    /// - `existing_connection_direction`: Inbound was initiated by the peer;
+    ///   Outbound by us. The new connection is the opposite.
+    /// - `deterministic_collision_resolution`: when true, valid OPENs are
+    ///   resolved by the initiator's BGP-ID (then ASN if IDs match). The higher
+    ///   value wins. When false, the existing connection always wins.
+    /// - `expect_new_connection_to_win` is the expected outcome, not an input
+    ///   to the FSM. True expects SessionSetup on the new connection; false
+    ///   expects Established on the existing connection. Invalid OPENs must
+    ///   always use false.
+    ///
+    /// In either outcome, the loser must be unregistered and receive exactly
+    /// one notification with `expected_notification_subcode`.
+    fn check_established_open(
+        existing_connection_direction: ConnectionDirection,
+        incoming_open: OpenMessage,
+        deterministic_collision_resolution: bool,
+        expect_new_connection_to_win: bool,
+        expected_notification_subcode: ErrorSubcode,
+    ) {
+        // Build a session without starting the FSM or connection receive loops.
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db =
+            rdb::test::get_test_db("established_open", log.clone()).unwrap();
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(64512),
+                id: 100,
+            },
+            log.clone(),
+            db.db().clone(),
+            Arc::new(Mutex::new(crate::router::SessionMap::new())),
+        ));
+        let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
+        let peer: SocketAddr = "192.0.2.2:179".parse().unwrap();
+        let mut config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        config.deterministic_collision_resolution =
+            deterministic_collision_resolution;
+        let (runner, rx) =
+            create_test_session(&router, "peer", peer, config.clone());
+
+        // One connection has already accepted an OPEN; the other is waiting
+        // for the OPEN under test. Keep the peer endpoints to inspect replies.
+        let make_conn = |direction| {
+            let (endpoint, remote) = channel();
+            let conn = Arc::new(BgpConnectionChannel::with_conn(
+                local,
+                peer,
+                endpoint,
+                runner.event_tx.clone(),
+                crate::IO_TIMEOUT,
+                log.clone(),
+                direction,
+                &config,
+            ));
+            (conn, remote)
+        };
+        let (existing, existing_peer) =
+            make_conn(existing_connection_direction);
+        let (incoming, incoming_peer) =
+            make_conn(match existing_connection_direction {
+                ConnectionDirection::Inbound => ConnectionDirection::Outbound,
+                ConnectionDirection::Outbound => ConnectionDirection::Inbound,
+            });
+        let pc = PeerConnection {
+            conn: existing.clone(),
+            // The existing peer advertised a valid ID, distinct from ours.
+            // The new OPEN may carry a different (or invalid) ID.
+            id: 200,
+            asn: incoming_open.asn(),
+            caps: BTreeSet::new(),
+            ipv4_unicast: AfiSafiState::Unconfigured,
+            ipv6_unicast: AfiSafiState::Unconfigured,
+        };
+        lock!(runner.connection_registry)
+            .register(ConnectionKind::Full(pc.clone()))
+            .unwrap();
+        lock!(runner.connection_registry)
+            .register(ConnectionKind::Partial(incoming.clone()))
+            .unwrap();
+        conn_timer!(existing, hold).restart();
+
+        // Process exactly one event, with no background FSM racing us.
+        runner
+            .event_tx
+            .send(FsmEvent::Connection(ConnectionEvent::Message {
+                msg: Message::Open(incoming_open),
+                conn_id: *incoming.id(),
+            }))
+            .unwrap();
+
+        let state = runner.fsm_established(&rx, pc);
+
+        // Check the returned state and the surviving connection separately.
+        let retained = match (expect_new_connection_to_win, state) {
+            (false, FsmState::Established(pc)) => pc,
+            (true, FsmState::SessionSetup(pc)) => pc,
+            (_, other) => panic!(
+                "unexpected state {other}, expected new connection to win: {expect_new_connection_to_win}"
             ),
-            CollisionResolution::ExistWins
+        };
+        let (winner, loser, rejected_peer) = if expect_new_connection_to_win {
+            (&incoming, &existing, &existing_peer)
+        } else {
+            (&existing, &incoming, &incoming_peer)
+        };
+        assert_eq!(retained.conn.id(), winner.id());
+        assert_eq!(runner.connection_count(), 1);
+        assert_eq!(runner.primary_connection().unwrap().id(), *winner.id());
+        assert!(conn_timer!(winner, hold).enabled());
+        assert!(!conn_timer!(loser, hold).enabled());
+        // Retaining the existing connection preserves its hold time; accepting
+        // the new OPEN negotiates its shorter hold time.
+        assert_eq!(
+            conn_timer!(winner, hold).interval,
+            Duration::from_secs(if expect_new_connection_to_win {
+                3
+            } else {
+                6
+            }),
         );
 
-        // Case 2: Local wins, Dispatcher (theirs) is exist
-        // Local BGP ID (100) > Remote (50), exist is Dispatcher (theirs), so new is Connector (ours)
-        // Our connection wins, so NewWins
-        // Expected: NewWins
-        assert_eq!(
-            collision_resolution(
+        let messages: Vec<_> = rejected_peer.rx.try_iter().collect();
+        let [Message::Notification(notification)] = messages.as_slice() else {
+            panic!("expected exactly one notification, got {messages:?}");
+        };
+        assert_eq!(notification.error_subcode, expected_notification_subcode);
+    }
+
+    #[test]
+    fn test_established_collision_resolution() {
+        for (
+            existing_connection_direction,
+            remote_id,
+            expect_new_connection_to_win,
+        ) in [
+            (Outbound, 50, false),
+            (Inbound, 50, true),
+            (Inbound, 150, false),
+            (Outbound, 150, true),
+            (Inbound, 100, false),
+            (Outbound, 100, true),
+        ] {
+            check_established_open(
+                existing_connection_direction,
+                OpenMessage::new4(4200000001, 3, remote_id, false),
+                true,
+                expect_new_connection_to_win,
+                ErrorSubcode::Cease(
+                    CeaseErrorSubcode::ConnectionCollisionResolution,
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn test_established_collision_rejects_matching_ibgp_id() {
+        for deterministic_collision_resolution in [false, true] {
+            check_established_open(
                 ConnectionDirection::Inbound,
-                100, // local
-                50,  // remote
-            ),
-            CollisionResolution::NewWins
-        );
+                OpenMessage::new4(64512, 3, 100, false),
+                deterministic_collision_resolution,
+                false,
+                ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
+            );
+        }
+    }
 
-        // Case 3: Remote wins (higher BGP ID), Dispatcher (theirs) is exist
-        // Local BGP ID (50) < Remote (100), exist is Dispatcher (theirs)
-        // Expected: ExistWins
-        assert_eq!(
-            collision_resolution(
-                ConnectionDirection::Inbound,
-                50,  // local
-                100, // remote
-            ),
-            CollisionResolution::ExistWins
-        );
-
-        // Case 4: Remote wins, Connector (theirs) is exist
-        // Local BGP ID (50) < Remote (100), exist is Connector (theirs)
-        // Expected: NewWins
-        assert_eq!(
-            collision_resolution(
-                ConnectionDirection::Outbound,
-                50,  // local
-                100, // remote
-            ),
-            CollisionResolution::NewWins
-        );
+    #[test]
+    fn test_resolve_collision_matching_bgp_ids() {
+        // Cover two-octet ASNs, the two/four-octet boundary, and four-octet
+        // ASNs above i32::MAX. Compare the full ASN, never AS_TRANS or a u16.
+        for (lower_asn, higher_asn) in [
+            (64512, 64513),
+            (65535, 65536),
+            (64512, 4200000001),
+            (4200000001, 4200000002),
+        ] {
+            for (direction, local_asn, remote_asn, expected) in [
+                (Outbound, higher_asn, lower_asn, ExistWins(HighestAsn)),
+                (Inbound, higher_asn, lower_asn, NewWins(HighestAsn)),
+                (Inbound, lower_asn, higher_asn, ExistWins(HighestAsn)),
+                (Outbound, lower_asn, higher_asn, NewWins(HighestAsn)),
+            ] {
+                assert_eq!(
+                    collision_resolution(
+                        direction, 100, 100, local_asn, remote_asn,
+                    ),
+                    expected,
+                    "{direction:?}, matching IDs, ASNs {local_asn}/{remote_asn}",
+                );
+            }
+        }
     }
 
     #[test]

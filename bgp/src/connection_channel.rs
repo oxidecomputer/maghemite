@@ -385,7 +385,7 @@ impl BgpConnectionChannel {
     /// This is a private constructor used by BgpConnectorChannel and BgpListenerChannel.
     /// The receive loop is not started until start_recv_loop() is called.
     #[allow(clippy::too_many_arguments)]
-    fn with_conn(
+    pub(crate) fn with_conn(
         addr: SocketAddr,
         peer: SocketAddr,
         conn: Endpoint<Message>,
