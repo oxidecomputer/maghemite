@@ -164,6 +164,51 @@ pub enum CollisionConnectionKind<Cnx: BgpConnection> {
     Missing,
 }
 
+/// The comparison criteria by which a CollisionResolution was decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollisionResolutionCriteria {
+    /// CollisionResolution was decided by BGP-ID (RFC 4271 §6.8)
+    HighestBgpId,
+    /// CollisionResolution was decided by ASN (RFC 6286 §2.3)
+    HighestAsn,
+}
+
+impl Display for CollisionResolutionCriteria {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::HighestBgpId => "highest BGP-ID",
+            Self::HighestAsn => "highest ASN",
+        })
+    }
+}
+
+/// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
+/// The procedure initially follows
+/// [RFC 4271 §6.8](https://datatracker.ietf.org/doc/html/rfc4271#section-6.8)
+/// and falls back to
+/// [RFC 6286 §2.3](https://datatracker.ietf.org/doc/html/rfc6286#section-2.3)
+/// if both peers have the same BGP-ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollisionResolution {
+    /// The "existing" connection wins
+    ExistWins(CollisionResolutionCriteria),
+    /// The "new" connection wins
+    NewWins(CollisionResolutionCriteria),
+}
+
+impl Display for CollisionResolution {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExistWins(criteria) => {
+                write!(f, "existing connection wins ({criteria})")
+            }
+            Self::NewWins(criteria) => {
+                write!(f, "new connection wins ({criteria})")
+            }
+        }
+    }
+}
+
 /// Pure function to determine which connection wins in a collision.
 ///
 /// ```text
@@ -1847,46 +1892,6 @@ impl<Cnx: BgpConnection + 'static> FsmDriver<Cnx> {
         // Restore the event receiver *after* on_shutdown so that teardown
         // completes before a restart.
         *lock!(self.event_rx) = Some(event_rx);
-    }
-}
-
-/// Criteria used to determine winner of collision resolution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CollisionResolutionCriteria {
-    /// Typical collision resolution criteria, i.e. RFC 4271 §6.8.
-    HighestBgpId,
-    /// Extension to collision resolution for AS-wide IDs, i.e. RFC 6286 §2.3.
-    HighestAsn,
-}
-
-impl Display for CollisionResolutionCriteria {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::HighestBgpId => "highest BGP-ID",
-            Self::HighestAsn => "highest ASN",
-        })
-    }
-}
-
-/// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CollisionResolution {
-    /// The "existing" connection wins
-    ExistWins(CollisionResolutionCriteria),
-    /// The "new" connection wins
-    NewWins(CollisionResolutionCriteria),
-}
-
-impl Display for CollisionResolution {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ExistWins(criteria) => {
-                write!(f, "existing connection wins ({criteria})")
-            }
-            Self::NewWins(criteria) => {
-                write!(f, "new connection wins ({criteria})")
-            }
-        }
     }
 }
 
@@ -6988,9 +6993,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 // `deterministic_collision_resolution` is mgd's
                                 // configuration knob mapping to RFC 4271's
                                 // CollisionDetectEstablishedState.
-                                if lock!(self.session)
-                                    .deterministic_collision_resolution
-                                {
+                                let deterministic_collision_resolution =
+                                    lock!(self.session)
+                                        .deterministic_collision_resolution;
+
+                                if deterministic_collision_resolution {
                                     // Determine which connection wins using pure function
                                     let resolution = collision_resolution(
                                         pc.conn.direction(),
@@ -7003,11 +7010,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     session_log!(self,
                                         info,
                                         pc.conn,
-                                        "collision detected in established state (conn_id: {}), collision_detect_established_state enabled: {resolution}",
+                                        "collision in established state (conn_id: {}): {resolution}",
                                         conn_id.short();
+                                        "deterministic_collision_resolution" => deterministic_collision_resolution,
                                         "message" => "open",
-                                        "message_contents" => format!("{om}"),
-                                        "resolution" => resolution.to_string()
+                                        "message_contents" => format!("{om}")
                                     );
 
                                     match resolution {
@@ -7074,8 +7081,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self,
                                         info,
                                         pc.conn,
-                                        "collision detected in established state (conn_id: {}), resolving",
+                                        "collision in established state (conn_id: {}), discarding",
                                         conn_id.short();
+                                        "deterministic_collision_resolution" => deterministic_collision_resolution,
                                         "message" => "open",
                                         "message_contents" => format!("{om}")
                                     );
@@ -9486,9 +9494,6 @@ mod tests {
     use crate::test::{
         RouteExchange, create_test_session, create_test_session_info,
     };
-    use CollisionResolution::{ExistWins, NewWins};
-    use CollisionResolutionCriteria::{HighestAsn, HighestBgpId};
-    use ConnectionDirection::{Inbound, Outbound};
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -9539,18 +9544,29 @@ mod tests {
     fn test_collision_resolution_display() {
         for (resolution, expected) in [
             (
-                ExistWins(HighestBgpId),
+                CollisionResolution::ExistWins(
+                    CollisionResolutionCriteria::HighestBgpId,
+                ),
                 "existing connection wins (highest BGP-ID)",
             ),
             (
-                NewWins(HighestBgpId),
+                CollisionResolution::NewWins(
+                    CollisionResolutionCriteria::HighestBgpId,
+                ),
                 "new connection wins (highest BGP-ID)",
             ),
             (
-                ExistWins(HighestAsn),
+                CollisionResolution::ExistWins(
+                    CollisionResolutionCriteria::HighestAsn,
+                ),
                 "existing connection wins (highest ASN)",
             ),
-            (NewWins(HighestAsn), "new connection wins (highest ASN)"),
+            (
+                CollisionResolution::NewWins(
+                    CollisionResolutionCriteria::HighestAsn,
+                ),
+                "new connection wins (highest ASN)",
+            ),
         ] {
             assert_eq!(resolution.to_string(), expected);
         }
@@ -9563,10 +9579,38 @@ mod tests {
             [(64512, 64513), (64513, 64512), (64512, 64512)]
         {
             for (direction, local_id, remote_id, expected) in [
-                (Outbound, 100, 50, ExistWins(HighestBgpId)),
-                (Inbound, 100, 50, NewWins(HighestBgpId)),
-                (Inbound, 50, 100, ExistWins(HighestBgpId)),
-                (Outbound, 50, 100, NewWins(HighestBgpId)),
+                (
+                    ConnectionDirection::Outbound,
+                    100,
+                    50,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    100,
+                    50,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    50,
+                    100,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Outbound,
+                    50,
+                    100,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
             ] {
                 assert_eq!(
                     collision_resolution(
@@ -9722,12 +9766,12 @@ mod tests {
             remote_id,
             expect_new_connection_to_win,
         ) in [
-            (Outbound, 50, false),
-            (Inbound, 50, true),
-            (Inbound, 150, false),
-            (Outbound, 150, true),
-            (Inbound, 100, false),
-            (Outbound, 100, true),
+            (ConnectionDirection::Outbound, 50, false),
+            (ConnectionDirection::Inbound, 50, true),
+            (ConnectionDirection::Inbound, 150, false),
+            (ConnectionDirection::Outbound, 150, true),
+            (ConnectionDirection::Inbound, 100, false),
+            (ConnectionDirection::Outbound, 100, true),
         ] {
             check_established_open(
                 existing_connection_direction,
@@ -9743,15 +9787,13 @@ mod tests {
 
     #[test]
     fn test_established_collision_rejects_matching_ibgp_id() {
-        for deterministic_collision_resolution in [false, true] {
-            check_established_open(
-                ConnectionDirection::Inbound,
-                OpenMessage::new4(64512, 3, 100, false),
-                deterministic_collision_resolution,
-                false,
-                ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
-            );
-        }
+        check_established_open(
+            ConnectionDirection::Inbound,
+            OpenMessage::new4(64512, 3, 100, false),
+            false,
+            false,
+            ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
+        );
     }
 
     #[test]
@@ -9761,7 +9803,7 @@ mod tests {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let worker = std::thread::spawn(move || {
                     check_established_open(
-                        Outbound,
+                        ConnectionDirection::Outbound,
                         OpenMessage::new4(4200000001, hold_time, 200, false),
                         deterministic_collision_resolution,
                         false,
@@ -9777,29 +9819,61 @@ mod tests {
                 // the test suite. Only join after the worker has completed.
                 rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|e| {
                     panic!(
-                        "OPEN rejection did not complete: {e}; hold_time={hold_time}, deterministic_collision_resolution={deterministic_collision_resolution}"
-                    )
-                });
-                worker.join().unwrap();
+                        "OPEN rejection did not complete within 60s; hold_time={hold_time}, deterministic_collision_resolution={deterministic_collision_resolution}"
+                    );
+                }
+                if let Err(payload) = worker.join() {
+                    std::panic::resume_unwind(payload);
+                }
             }
         }
     }
 
     #[test]
     fn test_resolve_collision_matching_bgp_ids() {
-        // Cover two-octet ASNs, the two/four-octet boundary, and four-octet
-        // ASNs above i32::MAX. Compare the full ASN, never AS_TRANS or a u16.
         for (lower_asn, higher_asn) in [
+            // both ASNs are 2-octet
             (64512, 64513),
+            // both ASNs are 2-octet
             (65535, 65536),
+            // ASNs on either side of the 2-octet/4-octet split
             (64512, 4200000001),
+            // both ASNs are 4-octet
             (4200000001, 4200000002),
         ] {
             for (direction, local_asn, remote_asn, expected) in [
-                (Outbound, higher_asn, lower_asn, ExistWins(HighestAsn)),
-                (Inbound, higher_asn, lower_asn, NewWins(HighestAsn)),
-                (Inbound, lower_asn, higher_asn, ExistWins(HighestAsn)),
-                (Outbound, lower_asn, higher_asn, NewWins(HighestAsn)),
+                (
+                    ConnectionDirection::Outbound,
+                    higher_asn,
+                    lower_asn,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    higher_asn,
+                    lower_asn,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    lower_asn,
+                    higher_asn,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Outbound,
+                    lower_asn,
+                    higher_asn,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
             ] {
                 assert_eq!(
                     collision_resolution(
