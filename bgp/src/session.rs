@@ -4036,9 +4036,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "failed to handle open message, fsm transition to idle";
                         "error" => format!("{e}")
                     );
-                    self.counters
-                        .open_handle_failures
-                        .fetch_add(1, Ordering::Relaxed);
                     // Notification sent by handle_open for all Errors except
                     // PolicyCheckFailed, which is handled in other match arm.
                     return FsmState::Idle;
@@ -7395,6 +7392,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn
             && remote_asn != expected_remote_asn
         {
+            self.counters
+                .open_handle_failures
+                .fetch_add(1, Ordering::Relaxed);
             self.send_notification(
                 conn,
                 ErrorCode::Open,
@@ -7417,6 +7417,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //
         // The BGP-ID is already enforced to be non-zero during deserialization.
         if remote_asn == self.asn.as_u32() && om.id == self.id {
+            self.counters
+                .open_handle_failures
+                .fetch_add(1, Ordering::Relaxed);
             self.send_notification(
                 conn,
                 ErrorCode::Open,
@@ -7476,6 +7479,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // ```
         let requested = u64::from(om.hold_time);
         if requested > 0 && requested < 3 {
+            self.counters
+                .open_handle_failures
+                .fetch_add(1, Ordering::Relaxed);
             self.send_notification(
                 conn,
                 ErrorCode::Open,
