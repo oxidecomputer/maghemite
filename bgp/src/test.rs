@@ -283,8 +283,8 @@ pub(crate) fn create_test_session_info(
     }
 }
 
-/// Create an unregistered session without starting its FSM, leaving the event
-/// receiver available for tests to inject or inspect events directly.
+/// Create an unregistered session without starting its FSM or clock thread,
+/// leaving the event receiver for tests to inject or inspect events directly.
 pub(crate) fn create_test_session<Cnx: BgpConnection + 'static>(
     router: &Arc<Router<Cnx>>,
     name: &str,
@@ -292,7 +292,7 @@ pub(crate) fn create_test_session<Cnx: BgpConnection + 'static>(
     config: SessionInfo,
 ) -> (Arc<SessionRunner<Cnx>>, Receiver<FsmEvent<Cnx>>) {
     let (tx, rx) = channel();
-    let session = Arc::new(SessionRunner::new(
+    let session = Arc::new(SessionRunner::new_without_clock_thread(
         Arc::new(Mutex::new(config)),
         tx,
         NeighborInfo {

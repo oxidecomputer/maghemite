@@ -1917,6 +1917,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         router: Arc<Router<Cnx>>,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> SessionRunner<Cnx> {
+        let runner = Self::new_without_clock_thread(
+            session,
+            event_tx,
+            neighbor,
+            router,
+            unnumbered_manager,
+        );
+        runner
+            .clock
+            .start(runner.event_tx.clone(), runner.log.clone());
+        runner
+    }
+
+    /// Construct a runner whose timers do not tick automatically. Unit tests
+    /// drive the FSM by injecting events, without background clock threads.
+    pub(crate) fn new_without_clock_thread(
+        session: Arc<Mutex<SessionInfo>>,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        neighbor: NeighborInfo,
+        router: Arc<Router<Cnx>>,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
             session: session.clone(),
@@ -1927,14 +1949,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             unnumbered_manager,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
             last_state_change: Mutex::new(Instant::now()),
-            clock: Arc::new(SessionClock::new(
+            clock: Arc::new(SessionClock::new_unstarted(
                 session_info.resolution,
                 session_info.connect_retry_time,
                 session_info.idle_hold_time,
                 session_info.connect_retry_jitter,
                 session_info.idle_hold_jitter,
-                event_tx.clone(),
-                router.log.clone(),
             )),
             log: router.log.clone(),
             shutdown_state: AtomicShutdownState::new(),
@@ -9623,29 +9643,26 @@ mod tests {
         }
     }
 
-    /// Deliver an OPEN on a new connection while another is Established.
-    /// The local speaker uses BGP-ID 100 and ASN 64512.
-    ///
-    /// - `existing_connection_direction`: Inbound was initiated by the peer;
-    ///   Outbound by us. The new connection is the opposite.
-    /// - `deterministic_collision_resolution`: when true, valid OPENs are
-    ///   resolved by the initiator's BGP-ID (then ASN if IDs match). The higher
-    ///   value wins. When false, the existing connection always wins.
-    /// - `expect_new_connection_to_win` is the expected outcome, not an input
-    ///   to the FSM. True expects SessionSetup on the new connection; false
-    ///   expects Established on the existing connection. Invalid OPENs must
-    ///   always use false.
-    ///
-    /// In either outcome, the loser must be unregistered and receive exactly
-    /// one notification with `expected_notification_subcode`.
+    #[derive(Clone, Copy, Debug)]
+    enum ExpectedWinner {
+        Existing,
+        Incoming,
+    }
+
+    /// Deliver a new4(..., false) OPEN while another connection is Established.
+    /// Local BGP-ID/ASN are 100/64512; the incoming direction is opposite the
+    /// existing connection's. Check both connections' messages and the returned
+    /// and registered peer state, without running clocks or receive loops.
     fn check_established_open(
         existing_connection_direction: ConnectionDirection,
         incoming_open: OpenMessage,
         deterministic_collision_resolution: bool,
-        expect_new_connection_to_win: bool,
-        expected_notification_subcode: ErrorSubcode,
+        expected_winner: ExpectedWinner,
+        expected_notification: (ErrorCode, ErrorSubcode),
     ) {
-        // Build a session without starting the FSM or connection receive loops.
+        let case = format!(
+            "{existing_connection_direction:?}, OPEN {incoming_open}, deterministic={deterministic_collision_resolution}, expected={expected_winner:?}"
+        );
         let log = Logger::root(slog::Discard, slog::o!());
         let db =
             rdb::test::get_test_db("established_open", log.clone()).unwrap();
@@ -9675,16 +9692,17 @@ mod tests {
         // for the OPEN under test. Keep the peer endpoints to inspect replies.
         let make_conn = |direction| {
             let (endpoint, remote) = channel();
-            let conn = Arc::new(BgpConnectionChannel::with_conn(
-                local,
-                peer,
-                endpoint,
-                runner.event_tx.clone(),
-                crate::IO_TIMEOUT,
-                log.clone(),
-                direction,
-                &config,
-            ));
+            let conn =
+                Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                    local,
+                    peer,
+                    endpoint,
+                    runner.event_tx.clone(),
+                    crate::IO_TIMEOUT,
+                    log.clone(),
+                    direction,
+                    &config,
+                ));
             (conn, remote)
         };
         let (existing, existing_peer) =
@@ -9712,7 +9730,20 @@ mod tests {
             .unwrap();
         conn_timer!(existing, hold).restart();
 
-        // Process exactly one event, with no background FSM racing us.
+        let (expected_id, expected_asn, expected_caps) = match expected_winner {
+            ExpectedWinner::Existing => (pc.id, pc.asn, pc.caps.clone()),
+            ExpectedWinner::Incoming => (
+                incoming_open.id,
+                incoming_open.asn(),
+                // new4 advertises this capability, independently of the FSM's
+                // capability extraction and connection upgrade logic.
+                BTreeSet::from([Capability::FourOctetAs {
+                    asn: incoming_open.asn(),
+                }]),
+            ),
+        };
+
+        // No background producers: the OPEN is the only queued event.
         runner
             .event_tx
             .send(FsmEvent::Connection(ConnectionEvent::Message {
@@ -9724,62 +9755,105 @@ mod tests {
         let state = runner.fsm_established(&rx, pc);
 
         // Check the returned state and the surviving connection separately.
-        let retained = match (expect_new_connection_to_win, state) {
-            (false, FsmState::Established(pc)) => pc,
-            (true, FsmState::SessionSetup(pc)) => pc,
-            (_, other) => panic!(
-                "unexpected state {other}, expected new connection to win: {expect_new_connection_to_win}"
-            ),
+        let retained = match (expected_winner, state) {
+            (ExpectedWinner::Existing, FsmState::Established(pc)) => pc,
+            (ExpectedWinner::Incoming, FsmState::SessionSetup(pc)) => pc,
+            (_, other) => panic!("{case}: unexpected state {other}"),
         };
-        let (winner, loser, rejected_peer) = if expect_new_connection_to_win {
-            (&incoming, &existing, &existing_peer)
-        } else {
-            (&existing, &incoming, &incoming_peer)
+        let (winner, loser, winning_peer, rejected_peer, hold_time, replies) =
+            match expected_winner {
+                ExpectedWinner::Incoming => (
+                    &incoming,
+                    &existing,
+                    &incoming_peer,
+                    &existing_peer,
+                    3,
+                    vec![Message::KeepAlive],
+                ),
+                ExpectedWinner::Existing => (
+                    &existing,
+                    &incoming,
+                    &existing_peer,
+                    &incoming_peer,
+                    6,
+                    vec![],
+                ),
+            };
+        assert_eq!(runner.connection_count(), 1, "{case}");
+        let Some(ConnectionKind::Full(registered)) =
+            runner.primary_connection()
+        else {
+            panic!("{case}: winner must be Full in the registry");
         };
-        assert_eq!(retained.conn.id(), winner.id());
-        assert_eq!(runner.connection_count(), 1);
-        assert_eq!(runner.primary_connection().unwrap().id(), *winner.id());
-        assert!(conn_timer!(winner, hold).enabled());
-        assert!(!conn_timer!(loser, hold).enabled());
+        for pc in [&retained, &registered] {
+            assert_eq!(pc.conn.id(), winner.id(), "{case}");
+            assert_eq!(pc.id, expected_id, "{case}: peer BGP-ID");
+            assert_eq!(pc.asn, expected_asn, "{case}: peer ASN");
+            assert_eq!(pc.caps, expected_caps, "{case}: peer capabilities");
+        }
+        assert!(conn_timer!(winner, hold).enabled(), "{case}");
+        assert!(!conn_timer!(loser, hold).enabled(), "{case}");
         // Retaining the existing connection preserves its hold time; accepting
         // the new OPEN negotiates its shorter hold time.
         assert_eq!(
             conn_timer!(winner, hold).interval,
-            Duration::from_secs(if expect_new_connection_to_win {
-                3
-            } else {
-                6
-            }),
+            Duration::from_secs(hold_time),
+            "{case}",
         );
-
-        let messages: Vec<_> = rejected_peer.rx.try_iter().collect();
-        let [Message::Notification(notification)] = messages.as_slice() else {
-            panic!("expected exactly one notification, got {messages:?}");
-        };
-        assert_eq!(notification.error_subcode, expected_notification_subcode);
+        assert_eq!(
+            winning_peer.rx.try_iter().collect::<Vec<_>>(),
+            replies,
+            "{case}: winner's messages",
+        );
+        assert_eq!(
+            rejected_peer.rx.try_iter().collect::<Vec<_>>(),
+            vec![Message::Notification(NotificationMessage {
+                error_code: expected_notification.0,
+                error_subcode: expected_notification.1,
+                data: vec![],
+            })],
+            "{case}: loser's messages",
+        );
     }
 
     #[test]
     fn test_established_collision_resolution() {
-        for (
-            existing_connection_direction,
-            remote_id,
-            expect_new_connection_to_win,
-        ) in [
-            (ConnectionDirection::Outbound, 50, false),
-            (ConnectionDirection::Inbound, 50, true),
-            (ConnectionDirection::Inbound, 150, false),
-            (ConnectionDirection::Outbound, 150, true),
-            (ConnectionDirection::Inbound, 100, false),
-            (ConnectionDirection::Outbound, 100, true),
+        for (existing_connection_direction, remote_id, expected_winner) in [
+            (ConnectionDirection::Outbound, 50, ExpectedWinner::Existing),
+            (ConnectionDirection::Inbound, 50, ExpectedWinner::Incoming),
+            (ConnectionDirection::Inbound, 150, ExpectedWinner::Existing),
+            (ConnectionDirection::Outbound, 150, ExpectedWinner::Incoming),
+            (ConnectionDirection::Inbound, 100, ExpectedWinner::Existing),
+            (ConnectionDirection::Outbound, 100, ExpectedWinner::Incoming),
         ] {
             check_established_open(
                 existing_connection_direction,
                 OpenMessage::new4(4200000001, 3, remote_id, false),
                 true,
-                expect_new_connection_to_win,
-                ErrorSubcode::Cease(
-                    CeaseErrorSubcode::ConnectionCollisionResolution,
+                expected_winner,
+                (
+                    ErrorCode::Cease,
+                    ErrorSubcode::Cease(
+                        CeaseErrorSubcode::ConnectionCollisionResolution,
+                    ),
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn test_established_collision_resolution_disabled() {
+        // Either the higher BGP-ID or, with matching IDs, the higher ASN
+        // would make the incoming connection win if the flag were ignored.
+        for remote_id in [150, 100] {
+            check_established_open(
+                ConnectionDirection::Outbound,
+                OpenMessage::new4(4200000001, 3, remote_id, false),
+                false,
+                ExpectedWinner::Existing,
+                (
+                    ErrorCode::Cease,
+                    ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionRejected),
                 ),
             );
         }
@@ -9787,13 +9861,18 @@ mod tests {
 
     #[test]
     fn test_established_collision_rejects_matching_ibgp_id() {
-        check_established_open(
-            ConnectionDirection::Inbound,
-            OpenMessage::new4(64512, 3, 100, false),
-            false,
-            false,
-            ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
-        );
+        for deterministic_collision_resolution in [false, true] {
+            check_established_open(
+                ConnectionDirection::Inbound,
+                OpenMessage::new4(64512, 3, 100, false),
+                deterministic_collision_resolution,
+                ExpectedWinner::Existing,
+                (
+                    ErrorCode::Open,
+                    ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
+                ),
+            );
+        }
     }
 
     #[test]
@@ -9806,9 +9885,12 @@ mod tests {
                         ConnectionDirection::Outbound,
                         OpenMessage::new4(4200000001, hold_time, 200, false),
                         deterministic_collision_resolution,
-                        false,
-                        ErrorSubcode::Open(
-                            OpenErrorSubcode::UnacceptableHoldTime,
+                        ExpectedWinner::Existing,
+                        (
+                            ErrorCode::Open,
+                            ErrorSubcode::Open(
+                                OpenErrorSubcode::UnacceptableHoldTime,
+                            ),
                         ),
                     );
                     tx.send(()).unwrap();
@@ -9816,8 +9898,12 @@ mod tests {
 
                 // Rejection unregisters the connection and locks its timers.
                 // Bound the wait so recursive locking fails instead of hanging
-                // the test suite. Only join after the worker has completed.
-                rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|e| {
+                // the test suite, allowing time for database and session setup.
+                // Join on success or disconnection to propagate worker panics,
+                // but never on timeout: the worker may be deadlocked.
+                if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    rx.recv_timeout(Duration::from_secs(60))
+                {
                     panic!(
                         "OPEN rejection did not complete within 60s; hold_time={hold_time}, deterministic_collision_resolution={deterministic_collision_resolution}"
                     );
