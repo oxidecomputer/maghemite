@@ -649,6 +649,9 @@ pub enum StopReason {
     Reset,
     Shutdown,
     FsmError,
+    /// OPEN rejection was already notified and cleaned up by handle_open().
+    /// Account for the retry and stop its timer without another notification.
+    UnacceptableOpen,
     HoldTimeExpired,
     ConnectionRejected,
     CollisionResolution,
@@ -1176,12 +1179,14 @@ impl FsmEventHistory {
 /// These serve as aggregate counters across all connections for the session
 #[derive(Default)]
 pub struct SessionCounters {
-    // FSM Counters
+    // Connection Counters
     pub connection_retries: AtomicU64, // total number of retries
     pub active_connections_accepted: AtomicU64,
     pub active_connections_declined: AtomicU64,
     pub passive_connections_accepted: AtomicU64,
     pub passive_connections_declined: AtomicU64,
+
+    // FSM Counters
     pub transitions_to_idle: AtomicU64,
     pub transitions_to_connect: AtomicU64,
     pub transitions_to_active: AtomicU64,
@@ -1190,6 +1195,8 @@ pub struct SessionCounters {
     pub transitions_to_connection_collision: AtomicU64,
     pub transitions_to_session_setup: AtomicU64,
     pub transitions_to_established: AtomicU64,
+
+    // FSM Timer Counters
     pub hold_timer_expirations: AtomicU64,
     pub idle_hold_timer_expirations: AtomicU64,
 
@@ -1216,8 +1223,8 @@ pub struct SessionCounters {
     pub unexpected_route_refresh_message: AtomicU64,
     pub unexpected_notification_message: AtomicU64,
     pub update_nexhop_missing: AtomicU64,
-    pub open_handle_failures: AtomicU64,
-    pub unnegotiated_address_family: AtomicU64,
+    pub open_handle_failures: AtomicU64, // incremented for any rejected OPEN
+    pub unnegotiated_address_family: AtomicU64, // incremented per UPDATE
 
     // Send failure counters
     pub notification_send_failure: AtomicU64,
@@ -4043,29 +4050,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          * - changes its state to Idle.
          */
         if let Err(e) = self.handle_open(&conn, &om) {
-            match e {
-                Error::PolicyCheckFailed => {
-                    session_log!(
-                        self,
-                        info,
-                        conn,
-                        "policy check failed";
-                        "error" => format!("{e}")
-                    );
-                }
-                e => {
-                    session_log!(
-                        self,
-                        warn,
-                        conn,
-                        "failed to handle open message, fsm transition to idle";
-                        "error" => format!("{e}")
-                    );
-                    // Notification sent by handle_open for all Errors except
-                    // PolicyCheckFailed, which is handled in other match arm.
-                    return FsmState::Idle;
-                }
-            }
+            session_log!(
+                self,
+                warn,
+                conn,
+                "failed to handle open message, fsm transition to idle";
+                "error" => format!("{e}")
+            );
+            self.stop(None, None, StopReason::UnacceptableOpen);
+            return FsmState::Idle;
         }
 
         /*
@@ -5720,11 +5713,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "error" => format!("{e}")
                                             );
 
-                                            // notification sent by handle_open(), nothing to do here
-                                            self.counters
-                                                .connection_retries
-                                                .fetch_add(1, Ordering::Relaxed);
-                                            self.stop(Some(&exist), None, StopReason::FsmError);
+                                            // handle_open already notified and unregistered the connection.
+                                            self.stop(None, None, StopReason::UnacceptableOpen);
                                             return FsmState::OpenSent(new);
                                         }
 
@@ -5820,11 +5810,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "error" => format!("{e}")
                                             );
 
-                                            // notification sent by handle_open(), nothing to do here
-                                            self.counters
-                                                .connection_retries
-                                                .fetch_add(1, Ordering::Relaxed);
-                                            self.stop(Some(&new), None, StopReason::FsmError);
+                                            // handle_open already notified and unregistered the connection.
+                                            self.stop(None, None, StopReason::UnacceptableOpen);
                                             return FsmState::OpenSent(exist);
                                         }
 
@@ -7414,7 +7401,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
-    /// Handle an Open message
+    /// Validate an OPEN and negotiate its timers. On rejection, send a
+    /// notification and unregister the connection before returning an error.
+    /// Policy execution errors fail open, but do not bypass protocol checks.
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let remote_asn = om.asn();
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn
@@ -7457,6 +7446,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Err(Error::BadBgpIdentifier(Ipv4Addr::from(om.id)));
         }
 
+        // XXX: Should user-defined policy be mutually exclusive with builtin
+        //      (RFC 4271) policy? Or should it be applied in addition to the
+        //      builtin policy?
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
             let peer_ip = match self.neighbor.peer {
                 PeerId::Ip(ip) => ip,
@@ -7472,8 +7464,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Ok(result) => match result {
                     CheckerResult::Accept => {}
                     CheckerResult::Drop => {
-                        // XXX: This can probably be removed with more robust
-                        //      policy handling
+                        // Dropping an OPEN rejects the connection, not just
+                        // the message.
+                        self.send_rejected_notification(conn);
                         self.unregister_conn(conn.id());
                         return Err(Error::PolicyCheckFailed);
                     }
@@ -8302,6 +8295,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 if let Some(c2) = conn2 {
                     self.send_fsm_notification(c2)
                 }
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                session_timer!(self, connect_retry).stop();
+            }
+
+            StopReason::UnacceptableOpen => {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
@@ -9647,6 +9647,225 @@ mod tests {
     enum ExpectedWinner {
         Existing,
         Incoming,
+    }
+
+    #[test]
+    fn test_open_sent_validation_and_policy() {
+        #[derive(Clone, Copy, Debug)]
+        enum OpenSentPath {
+            Single,
+            CollisionExisting,
+            CollisionIncoming,
+        }
+
+        for path in [
+            OpenSentPath::Single,
+            OpenSentPath::CollisionExisting,
+            OpenSentPath::CollisionIncoming,
+        ] {
+            for (policy, hold_time, notification) in [
+                (
+                    "CheckerResult::Drop",
+                    30,
+                    Some((
+                        ErrorCode::Cease,
+                        ErrorSubcode::Cease(
+                            CeaseErrorSubcode::ConnectionRejected,
+                        ),
+                    )),
+                ),
+                ("CheckerResult::Accept", 30, None),
+                ("throw \"script failed\"", 30, None),
+                (
+                    "CheckerResult::Accept",
+                    2,
+                    Some((
+                        ErrorCode::Open,
+                        ErrorSubcode::Open(
+                            OpenErrorSubcode::UnacceptableHoldTime,
+                        ),
+                    )),
+                ),
+                (
+                    "throw \"script failed\"",
+                    2,
+                    Some((
+                        ErrorCode::Open,
+                        ErrorSubcode::Open(
+                            OpenErrorSubcode::UnacceptableHoldTime,
+                        ),
+                    )),
+                ),
+            ] {
+                // Successful collision resolution is covered separately.
+                if !matches!(path, OpenSentPath::Single)
+                    && notification.is_none()
+                {
+                    continue;
+                }
+                let case = format!("{path:?}, {policy}, hold={hold_time}");
+                let log = Logger::root(slog::Discard, slog::o!());
+                let db =
+                    rdb::test::get_test_db("open_sent_policy", log.clone())
+                        .unwrap();
+                let router = Arc::new(Router::new(
+                    RouterConfig {
+                        asn: Asn::FourOctet(64512),
+                        id: 100,
+                    },
+                    log.clone(),
+                    db.db().clone(),
+                    Arc::new(Mutex::new(crate::router::SessionMap::new())),
+                ));
+                *write_lock!(router.policy.checker) = Some(
+                    crate::policy::load_checker(&format!(
+                        "fn open(m, asn, addr) {{ {policy} }}
+                         fn update(m, asn, addr) {{ CheckerResult::Accept }}"
+                    ))
+                    .unwrap(),
+                );
+                let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
+                let peer: SocketAddr = "192.0.2.2:179".parse().unwrap();
+                let config = create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    local,
+                    peer,
+                    false,
+                );
+                let (runner, rx) =
+                    create_test_session(&router, "peer", peer, config.clone());
+                let make_conn =
+                    |direction| {
+                        let (endpoint, remote) = channel();
+                        let conn =
+                        BgpConnectionChannel::with_conn_without_clock_thread(
+                            local, peer, endpoint, runner.event_tx.clone(),
+                            crate::IO_TIMEOUT, log.clone(), direction, &config,
+                        );
+                        let conn = Arc::new(conn);
+                        lock!(runner.connection_registry)
+                            .register(ConnectionKind::Partial(conn.clone()))
+                            .unwrap();
+                        conn_timer!(conn, hold).restart();
+                        conn_timer!(conn, keepalive).restart();
+                        (conn, remote)
+                    };
+                let (existing, existing_peer) =
+                    make_conn(ConnectionDirection::Outbound);
+                let incoming = match path {
+                    OpenSentPath::Single => None,
+                    OpenSentPath::CollisionExisting
+                    | OpenSentPath::CollisionIncoming => {
+                        Some(make_conn(ConnectionDirection::Inbound))
+                    }
+                };
+                let (target, target_peer) = match path {
+                    OpenSentPath::Single | OpenSentPath::CollisionExisting => {
+                        (&existing, &existing_peer)
+                    }
+                    OpenSentPath::CollisionIncoming => {
+                        let (conn, remote) = incoming.as_ref().unwrap();
+                        (conn, remote)
+                    }
+                };
+                session_timer!(runner, connect_retry).restart();
+                runner
+                    .event_tx
+                    .send(FsmEvent::Connection(ConnectionEvent::Message {
+                        msg: Message::Open(OpenMessage::new4(
+                            64513, hold_time, 200, false,
+                        )),
+                        conn_id: *target.id(),
+                    }))
+                    .unwrap();
+
+                let state = match &incoming {
+                    Some((conn, _)) => runner.connection_collision_open_sent(
+                        &rx,
+                        existing.clone(),
+                        conn.clone(),
+                    ),
+                    None => runner.fsm_open_sent(&rx, existing.clone()),
+                };
+                let replies = target_peer.rx.try_iter().collect::<Vec<_>>();
+                if let Some((error_code, error_subcode)) = notification {
+                    assert_eq!(
+                        replies,
+                        vec![Message::Notification(NotificationMessage {
+                            error_code,
+                            error_subcode,
+                            data: vec![],
+                        })],
+                        "{case}: exactly one rejection, no KEEPALIVE"
+                    );
+                    assert!(runner.get_conn(target.id()).is_none(), "{case}");
+                    assert!(!conn_timer!(target, hold).enabled(), "{case}");
+                    assert!(
+                        !conn_timer!(target, keepalive).enabled(),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .connection_retries
+                            .load(Ordering::Relaxed),
+                        1,
+                        "{case}"
+                    );
+                    assert!(
+                        !session_timer!(runner, connect_retry).enabled(),
+                        "{case}"
+                    );
+                    if let Some((incoming, incoming_peer)) = &incoming {
+                        let (survivor, survivor_peer) = if matches!(
+                            path,
+                            OpenSentPath::CollisionExisting
+                        ) {
+                            (incoming, incoming_peer)
+                        } else {
+                            (&existing, &existing_peer)
+                        };
+                        let FsmState::OpenSent(retained) = state else {
+                            panic!("{case}: expected OpenSent, got {state}");
+                        };
+                        assert_eq!(retained.id(), survivor.id(), "{case}");
+                        assert_eq!(runner.connection_count(), 1, "{case}");
+                        assert!(
+                            runner.get_conn(survivor.id()).is_some(),
+                            "{case}"
+                        );
+                        assert!(
+                            survivor_peer.rx.try_iter().next().is_none(),
+                            "{case}"
+                        );
+                        assert!(
+                            conn_timer!(survivor, hold).enabled(),
+                            "{case}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(state, FsmState::Idle),
+                            "{case}: got {state}"
+                        );
+                        assert_eq!(runner.connection_count(), 0, "{case}");
+                    }
+                } else {
+                    assert_eq!(replies, vec![Message::KeepAlive], "{case}");
+                    let FsmState::OpenConfirm(pc) = state else {
+                        panic!("{case}: expected OpenConfirm, got {state}");
+                    };
+                    assert_eq!(pc.conn.id(), target.id(), "{case}");
+                    assert!(
+                        matches!(
+                            runner.primary_connection(),
+                            Some(ConnectionKind::Full(_))
+                        ),
+                        "{case}"
+                    );
+                    assert!(conn_timer!(target, hold).enabled(), "{case}");
+                }
+            }
+        }
     }
 
     /// Deliver a new4(..., false) OPEN while another connection is Established.
