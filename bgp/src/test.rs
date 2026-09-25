@@ -35,7 +35,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
-        mpsc::channel,
+        mpsc::{Receiver, channel},
     },
     thread::{Builder, sleep},
     time::{Duration, Instant},
@@ -149,7 +149,7 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
 /// Test-specific enum describing which route address families are exchanged
 /// in a BGP session. This is independent of the TCP/IP connection address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RouteExchange {
+pub(crate) enum RouteExchange {
     Ipv4 {
         nexthop: Option<IpAddr>,
     },
@@ -185,7 +185,7 @@ struct NeighborConfig {
 /// * `local_addr` - Local bind address for this session
 /// * `remote_addr` - Remote peer address (for nexthop defaults)
 /// * `passive` - Whether to use passive TCP establishment
-fn create_test_session_info(
+pub(crate) fn create_test_session_info(
     route_exchange: RouteExchange,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
@@ -281,6 +281,31 @@ fn create_test_session_info(
         }),
         deterministic_collision_resolution: false,
     }
+}
+
+/// Create an unregistered session without starting its FSM or clock thread,
+/// leaving the event receiver for tests to inject or inspect events directly.
+pub(crate) fn create_test_session<Cnx: BgpConnection + 'static>(
+    router: &Arc<Router<Cnx>>,
+    name: &str,
+    peer_addr: SocketAddr,
+    config: SessionInfo,
+) -> (Arc<SessionRunner<Cnx>>, Receiver<FsmEvent<Cnx>>) {
+    let (tx, rx) = channel();
+    let session = Arc::new(SessionRunner::new_without_clock_thread(
+        Arc::new(Mutex::new(config)),
+        tx,
+        NeighborInfo {
+            name: Arc::new(Mutex::new(name.to_string())),
+            peer_group: String::new(),
+            peer: PeerId::Ip(peer_addr.ip()),
+            port: NonZeroU16::new(peer_addr.port())
+                .expect("test peer port is non-zero"),
+        },
+        router.clone(),
+        None,
+    ));
+    (session, rx)
 }
 
 fn test_setup<Cnx, Listener>(
@@ -4535,25 +4560,17 @@ fn admin_events_do_not_reach_other_routers_sessions() {
         Arc<SessionRunner<BgpConnectionChannel>>,
         std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
     ) {
-        let (probe_tx, probe_rx) = channel();
-        let session = Arc::new(SessionRunner::new(
-            Arc::new(Mutex::new(create_test_session_info(
+        let (session, probe_rx) = create_test_session(
+            router,
+            name,
+            peer_addr,
+            create_test_session_info(
                 RouteExchange::Ipv6 { nexthop: None },
                 bind_addr,
                 peer_addr,
                 true,
-            ))),
-            probe_tx,
-            NeighborInfo {
-                name: Arc::new(Mutex::new(name.to_string())),
-                peer_group: String::new(),
-                peer: PeerId::Ip(peer_addr.ip()),
-                port: NonZeroU16::new(peer_addr.port())
-                    .expect("test peer port is non-zero"),
-            },
-            router.clone(),
-            None,
-        ));
+            ),
+        );
         // FsmDriver::new needs a receiver -- ordinarily, `probe_rx` would be
         // provided here. But we deliberately do not pass that in so that the
         // test can receive events from it instead.

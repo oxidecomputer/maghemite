@@ -13,7 +13,7 @@ use slog::{Logger, error};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{JoinHandle, sleep, spawn};
 use std::time::Duration;
 
@@ -199,14 +199,14 @@ impl Display for Timer {
 }
 
 /// Clock for session-level timers that persist across connections
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SessionClock {
     /// The rate at which the clock ticks
     pub resolution: Duration,
     /// The collection of BGP timers specific to this SessionRunner
     pub timers: Arc<SessionTimers>,
-    /// Handle to the thread running the per-session clock
-    _thread: Arc<ManagedThread>,
+    /// Handle to the background thread that ticks the clock forward
+    ticker: OnceLock<ManagedThread>,
 }
 
 impl SessionClock {
@@ -218,6 +218,25 @@ impl SessionClock {
         idle_hold_jitter: Option<JitterRange>,
         event_tx: Sender<FsmEvent<Cnx>>,
         log: Logger,
+    ) -> Self {
+        let clock = Self::new_unstarted(
+            resolution,
+            connect_retry_interval,
+            idle_hold_interval,
+            connect_retry_jitter,
+            idle_hold_jitter,
+        );
+        clock.start(event_tx, log);
+        clock
+    }
+
+    /// Construct clock without a ticker thread.
+    pub(crate) fn new_unstarted(
+        resolution: Duration,
+        connect_retry_interval: Duration,
+        idle_hold_interval: Duration,
+        connect_retry_jitter: Option<JitterRange>,
+        idle_hold_jitter: Option<JitterRange>,
     ) -> Self {
         let timers = Arc::new(SessionTimers {
             connect_retry: Mutex::new(match connect_retry_jitter {
@@ -233,19 +252,31 @@ impl SessionClock {
                 None => Timer::new(idle_hold_interval),
             }),
         });
-        let thread = Arc::new(ManagedThread::new());
-        let _ = thread.start(Self::run(
-            resolution,
-            timers.clone(),
-            event_tx,
-            thread.dropped_flag(),
-            log,
-        ));
         Self {
             resolution,
             timers,
-            _thread: thread,
+            ticker: OnceLock::new(),
         }
+    }
+
+    /// Start the clock once. Subsequent calls leave the existing worker alone,
+    /// including after stopping timers for an FSM shutdown.
+    pub(crate) fn start<Cnx: BgpConnection + 'static>(
+        &self,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        log: Logger,
+    ) {
+        self.ticker.get_or_init(|| {
+            let thread = ManagedThread::new();
+            thread.start(Self::run(
+                self.resolution,
+                self.timers.clone(),
+                event_tx,
+                thread.dropped_flag(),
+                log,
+            ));
+            thread
+        });
     }
 
     fn run<Cnx: BgpConnection + 'static>(
@@ -347,7 +378,7 @@ impl Display for SessionClock {
 }
 
 /// Clock for connection-level timers tied to individual connections
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ConnectionClock {
     /// The rate at which the clock ticks
     pub resolution: Duration,
@@ -355,8 +386,8 @@ pub struct ConnectionClock {
     pub timers: Arc<ConnectionTimers>,
     /// The ID of the BgpConnection we're running a clock for
     pub conn_id: ConnectionId,
-    /// Handle to the thread running the per-connection clock
-    _thread: Arc<ManagedThread>,
+    /// Handle to the background thread that ticks the clock forward
+    ticker: OnceLock<ManagedThread>,
 }
 
 impl ConnectionClock {
@@ -371,6 +402,25 @@ impl ConnectionClock {
         dropped: Arc<AtomicBool>,
         log: Logger,
     ) -> Self {
+        let clock = Self::new_unstarted(
+            resolution,
+            keepalive_interval,
+            hold_interval,
+            delay_open_interval,
+            conn_id,
+        );
+        clock.start(event_tx, dropped, log);
+        clock
+    }
+
+    /// Construct clock without a ticker thread.
+    pub(crate) fn new_unstarted(
+        resolution: Duration,
+        keepalive_interval: Duration,
+        hold_interval: Duration,
+        delay_open_interval: Duration,
+        conn_id: ConnectionId,
+    ) -> Self {
         let timers = Arc::new(ConnectionTimers {
             keepalive: Mutex::new(Timer::new(keepalive_interval)),
             hold: Mutex::new(Timer::new(hold_interval)),
@@ -378,21 +428,33 @@ impl ConnectionClock {
             config_hold_time: hold_interval,
             config_keepalive_time: keepalive_interval,
         });
-        let thread = Arc::new(ManagedThread::new());
-        thread.start(Self::run(
-            resolution,
-            timers.clone(),
-            conn_id,
-            event_tx,
-            dropped.clone(),
-            log,
-        ));
         Self {
             resolution,
             timers,
-            _thread: thread,
+            ticker: OnceLock::new(),
             conn_id,
         }
+    }
+
+    /// Start the clock once. Disabling timers does not reset thread startup.
+    pub(crate) fn start<Cnx: BgpConnection + 'static>(
+        &self,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        dropped: Arc<AtomicBool>,
+        log: Logger,
+    ) {
+        self.ticker.get_or_init(|| {
+            let thread = ManagedThread::new();
+            thread.start(Self::run(
+                self.resolution,
+                self.timers.clone(),
+                self.conn_id,
+                event_tx,
+                dropped,
+                log,
+            ));
+            thread
+        });
     }
 
     fn run<Cnx: BgpConnection + 'static>(
@@ -545,5 +607,164 @@ impl From<&SessionInfo> for TimerConfig {
             connect_retry_jitter: session.connect_retry_jitter,
             idle_hold_jitter: session.idle_hold_jitter,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection_channel::BgpConnectionChannel;
+    use std::sync::mpsc::{TryRecvError, channel};
+
+    #[test]
+    fn session_clock_starts_only_once() {
+        let clock = SessionClock::new_unstarted(
+            Duration::from_millis(1),
+            Duration::from_secs(3),
+            Duration::from_secs(5),
+            None,
+            None,
+        );
+        let log = Logger::root(slog::Discard, slog::o!());
+        let (first_tx, first_rx) = channel::<FsmEvent<BgpConnectionChannel>>();
+        let (second_tx, second_rx) =
+            channel::<FsmEvent<BgpConnectionChannel>>();
+        clock.start(first_tx, log.clone());
+        // Stopping timers for FSM shutdown must not permit a second worker.
+        clock.stop_all();
+        clock.start(second_tx, log);
+        let first = first_rx.try_recv();
+        let second = second_rx.try_recv();
+        drop(clock);
+
+        // Only the first worker retains its sender. A duplicate spawn would
+        // keep the second channel connected, even with all timers disabled.
+        assert!(matches!(first, Err(TryRecvError::Empty)));
+        assert!(matches!(second, Err(TryRecvError::Disconnected)));
+        assert!(matches!(
+            first_rx.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn connection_clock_starts_only_once() {
+        let clock = ConnectionClock::new_unstarted(
+            Duration::from_millis(1),
+            Duration::from_secs(2),
+            Duration::from_secs(7),
+            Duration::from_secs(1),
+            ConnectionId::new(
+                "192.0.2.1:179".parse().unwrap(),
+                "192.0.2.2:179".parse().unwrap(),
+            ),
+        );
+        let log = Logger::root(slog::Discard, slog::o!());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (first_tx, first_rx) = channel::<FsmEvent<BgpConnectionChannel>>();
+        let (second_tx, second_rx) =
+            channel::<FsmEvent<BgpConnectionChannel>>();
+        clock.start(first_tx, dropped.clone(), log.clone());
+        clock.disable_all();
+        clock.start(second_tx, dropped.clone(), log);
+        let first = first_rx.try_recv();
+        let second = second_rx.try_recv();
+        // Connection clocks use the owning connection's drop signal.
+        dropped.store(true, Ordering::Relaxed);
+        drop(clock);
+
+        assert!(matches!(first, Err(TryRecvError::Empty)));
+        assert!(matches!(second, Err(TryRecvError::Disconnected)));
+        assert!(matches!(
+            first_rx.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn session_clock_without_thread_can_be_stepped() {
+        let clock = SessionClock::new_unstarted(
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            Duration::from_secs(5),
+            None,
+            None,
+        );
+        assert!(clock.ticker.get().is_none());
+        let log = Logger::root(slog::Discard, slog::o!());
+        let (tx, rx) = channel::<FsmEvent<BgpConnectionChannel>>();
+        let timer = lock!(clock.timers.connect_retry);
+        let step = |elapsed| {
+            SessionClock::step(
+                elapsed,
+                &timer,
+                FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires),
+                tx.clone(),
+                &log,
+            );
+        };
+
+        // Disabled timers neither advance nor emit events.
+        step(Duration::from_secs(3));
+        assert_eq!(timer.remaining(), Duration::from_secs(3));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        timer.restart();
+        step(Duration::from_secs(2));
+        assert_eq!(timer.remaining(), Duration::from_secs(1));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        step(Duration::from_secs(1));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires))
+        ));
+        assert_eq!(timer.remaining(), Duration::from_secs(3));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn connection_clock_without_thread_can_be_stepped() {
+        let conn_id = ConnectionId::new(
+            "192.0.2.1:179".parse().unwrap(),
+            "192.0.2.2:179".parse().unwrap(),
+        );
+        let clock = ConnectionClock::new_unstarted(
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+            Duration::from_secs(7),
+            Duration::from_secs(1),
+            conn_id,
+        );
+        assert!(clock.ticker.get().is_none());
+        let log = Logger::root(slog::Discard, slog::o!());
+        let (tx, rx) = channel::<FsmEvent<BgpConnectionChannel>>();
+        let timer = lock!(clock.timers.hold);
+        let step = |elapsed| {
+            ConnectionClock::step(
+                elapsed,
+                &timer,
+                FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
+                    conn_id,
+                )),
+                tx.clone(),
+                &log,
+            );
+        };
+
+        timer.restart();
+        step(Duration::from_secs(6));
+        assert_eq!(timer.remaining(), Duration::from_secs(1));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        step(Duration::from_secs(1));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(id)))
+                if id == conn_id
+        ));
+        assert_eq!(timer.remaining(), Duration::from_secs(7));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        timer.disable();
+        step(Duration::from_secs(7));
+        assert_eq!(timer.remaining(), Duration::from_secs(7));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }
