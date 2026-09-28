@@ -5644,7 +5644,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
                         self.stop(
-                            Some(&exist),
+                            Some(&extra),
                             None,
                             StopReason::ConnectionRejected,
                         );
