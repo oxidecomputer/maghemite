@@ -9080,6 +9080,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut current = lock!(self.session);
 
         current.passive_tcp_establishment = info.passive_tcp_establishment;
+        current.deterministic_collision_resolution =
+            info.deterministic_collision_resolution;
 
         if current.remote_asn != info.remote_asn {
             current.remote_asn = info.remote_asn;
