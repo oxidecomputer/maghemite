@@ -659,6 +659,7 @@ pub enum StopReason {
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
     },
+    NotificationReceived,
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -1800,8 +1801,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Unnumbered neighbor manager for actively querying NDP state.
     pub unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
 
-    /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
-    /// included in message history.
+    /// A log of the last `MAX_MESSAGE_HISTORY` messages in each direction.
     pub message_history: Arc<Mutex<MessageHistory>>,
 
     /// Dual-buffer FSM event history (all events + major events only)
@@ -2467,78 +2467,50 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Established(pc) => self.fsm_established(event_rx, pc),
             };
 
-            // If we have made a state transition log that and update the
-            // appropriate state variables.
-            if current.kind() != previous {
-                session_log_lite!(
-                    self,
-                    info,
-                    "fsm transition {previous} -> {}",
-                    current.kind()
-                );
-
-                // Record state transition as a major event in FSM history
-                let transition_record = FsmEventRecord {
-                    timestamp: chrono::Utc::now(),
-                    event_category: FsmEventCategory::StateTransition,
-                    event_type: format!(
-                        "{:?} -> {:?}",
-                        previous,
-                        current.kind()
-                    ),
-                    current_state: current.kind(),
-                    previous_state: Some(previous),
-                    connection_id: None,
-                    details: Some("State transition".to_string()),
-                };
-                lock!(self.fsm_event_history).record_major(transition_record);
-
-                match current.kind() {
-                    FsmStateKind::Idle => {
-                        self.counters
-                            .transitions_to_idle
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::Connect => {
-                        self.counters
-                            .transitions_to_connect
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::Active => {
-                        self.counters
-                            .transitions_to_active
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::OpenSent => {
-                        self.counters
-                            .transitions_to_open_sent
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::OpenConfirm => {
-                        self.counters
-                            .transitions_to_open_confirm
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::ConnectionCollision => {
-                        self.counters
-                            .transitions_to_connection_collision
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::SessionSetup => {
-                        self.counters
-                            .transitions_to_session_setup
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::Established => {
-                        self.counters
-                            .transitions_to_established
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                *(lock!(self.state)) = current.kind();
-                *(lock!(self.last_state_change)) = Instant::now();
-            }
+            self.record_state_transition(previous, current.kind());
         }
+    }
+
+    fn record_state_transition(
+        &self,
+        previous: FsmStateKind,
+        next: FsmStateKind,
+    ) {
+        if previous == next {
+            return;
+        }
+        session_log_lite!(self, info, "fsm transition {previous} -> {next}");
+        let transition_record = FsmEventRecord {
+            timestamp: chrono::Utc::now(),
+            event_category: FsmEventCategory::StateTransition,
+            event_type: format!("{previous:?} -> {next:?}"),
+            current_state: next,
+            previous_state: Some(previous),
+            connection_id: None,
+            details: Some("State transition".to_string()),
+        };
+        lock!(self.fsm_event_history).record_major(transition_record);
+        let counter = match next {
+            FsmStateKind::Idle => &self.counters.transitions_to_idle,
+            FsmStateKind::Connect => &self.counters.transitions_to_connect,
+            FsmStateKind::Active => &self.counters.transitions_to_active,
+            FsmStateKind::OpenSent => &self.counters.transitions_to_open_sent,
+            FsmStateKind::OpenConfirm => {
+                &self.counters.transitions_to_open_confirm
+            }
+            FsmStateKind::ConnectionCollision => {
+                &self.counters.transitions_to_connection_collision
+            }
+            FsmStateKind::SessionSetup => {
+                &self.counters.transitions_to_session_setup
+            }
+            FsmStateKind::Established => {
+                &self.counters.transitions_to_established
+            }
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        *lock!(self.state) = next;
+        *lock!(self.last_state_change) = Instant::now();
     }
 
     fn initialize_capabilities(&self) {
@@ -2755,6 +2727,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             match self.get_conn(conn_id) {
                                 Some(conn) => {
                                     session_log_lite!(
@@ -3064,6 +3038,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // DelayOpen is added, we'll need to validate conn_id
                         // against the connection before processing it.
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
@@ -3076,20 +3052,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     "message_contents" => format!("{n}")
                                 );
                                 self.bump_msg_counter(msg.kind(), false);
-                            } else {
-                                session_log_lite!(
-                                    self,
-                                    warn,
-                                    "rx unexpected {title} message (conn_id: {}), fsm transition to idle",
-                                    conn_id.short();
-                                    "message" => msg.title(),
-                                    "message_contents" => format!("{msg}")
+                                self.stop(
+                                    None,
+                                    None,
+                                    StopReason::NotificationReceived,
                                 );
-                                self.bump_msg_counter(msg.kind(), true);
+                                return FsmState::Idle;
                             }
 
+                            session_log_lite!(
+                                self,
+                                warn,
+                                "rx unexpected {title} message (conn_id: {}), fsm transition to idle",
+                                conn_id.short();
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+                            self.bump_msg_counter(msg.kind(), true);
                             session_timer!(self, connect_retry).stop();
-
                             return FsmState::Idle;
                         }
 
@@ -3285,6 +3265,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // DelayOpen is added, we'll need to validate conn_id
                         // against the connection before processing it.
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
@@ -3696,6 +3678,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
                                 new.id().short()
                             );
+                            let declined = match new_direction {
+                                ConnectionDirection::Inbound => {
+                                    &self.counters.passive_connections_declined
+                                }
+                                ConnectionDirection::Outbound => {
+                                    &self.counters.active_connections_declined
+                                }
+                            };
+                            declined.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
 
@@ -3763,18 +3754,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
+
                             if !self.validate_active_connection(
                                 conn_id,
                                 &conn,
                                 msg.title(),
                             ) {
+                                self.bump_msg_counter(msg.kind(), true);
                                 continue;
                             }
 
                             // RFC 4271 FSM Event 19
                             if let Message::Open(om) = msg {
-                                lock!(self.message_history)
-                                    .receive(om.clone().into(), *conn_id);
                                 self.counters
                                     .opens_received
                                     .fetch_add(1, Ordering::Relaxed);
@@ -3861,9 +3854,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     continue;
                                 }
                             };
-                            self.counters
-                                .hold_timer_expirations
-                                .fetch_add(1, Ordering::Relaxed);
                             self.stop(
                                 Some(&conn),
                                 None,
@@ -4080,7 +4070,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.send_keepalive(&conn);
 
         session_timer!(self, connect_retry).stop();
-        conn_timer!(conn, keepalive).restart();
         // hold_timer set in handle_open(), enable it here
         conn_timer!(conn, hold).enable();
 
@@ -4279,7 +4268,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "keepalive timer expired, generate keepalive"
                     );
                     self.send_keepalive(&pc.conn);
-                    conn_timer!(pc.conn, keepalive).restart();
                     FsmState::OpenConfirm(pc)
                 }
 
@@ -4308,6 +4296,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 ConnectionEvent::Message { msg, conn_id } => {
+                    lock!(self.message_history).receive(msg.clone(), conn_id);
+
                     if !self.validate_active_connection(
                         &conn_id,
                         &pc.conn,
@@ -4317,48 +4307,66 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::OpenConfirm(pc);
                     }
 
-                    lock!(self.message_history).receive(msg.clone(), conn_id);
-
                     // The peer has ACK'd our open message with a keepalive. Start the
                     // session timers and enter session setup.
                     if let Message::KeepAlive = msg {
                         conn_timer!(pc.conn, hold).restart();
                         conn_timer!(pc.conn, keepalive).restart();
                         self.bump_msg_counter(msg.kind(), false);
-                        FsmState::SessionSetup(pc)
-                    } else {
-                        /*
-                         * If the local system receives a TcpConnectionFails event (Event 18)
-                         * from the underlying TCP or a NOTIFICATION message (Event 25), the
-                         * local system:
-                         *
-                         *   - sets the ConnectRetryTimer to zero,
-                         *
-                         *   - releases all BGP resources,
-                         *
-                         *   - drops the TCP connection,
-                         *
-                         *   - increments the ConnectRetryCounter by 1,
-                         *
-                         *   - (optionally) performs peer oscillation damping if the
-                         *     DampPeerOscillations attribute is set to TRUE, and
-                         *
-                         *   - changes its state to Idle.
-                         */
+                        return FsmState::SessionSetup(pc);
+                    }
+
+                    /*
+                     * If the local system receives a TcpConnectionFails event (Event 18)
+                     * from the underlying TCP or a NOTIFICATION message (Event 25), the
+                     * local system:
+                     *
+                     *   - sets the ConnectRetryTimer to zero,
+                     *
+                     *   - releases all BGP resources,
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - increments the ConnectRetryCounter by 1,
+                     *
+                     *   - (optionally) performs peer oscillation damping if the
+                     *     DampPeerOscillations attribute is set to TRUE, and
+                     *
+                     *   - changes its state to Idle.
+                     */
+                    if let Message::Notification(_) = msg {
                         session_log!(
                             self,
                             warn,
                             pc.conn,
-                            "unexpected {} received (conn_id: {}), fsm transition to idle",
+                            "{} received (conn_id: {}), fsm transition to idle",
                             msg.title(),
                             conn_id.short();
                             "message" => "notification",
                             "message_contents" => format!("{msg}")
                         );
-                        self.bump_msg_counter(msg.kind(), true);
-                        session_timer!(self, connect_retry).stop();
-                        FsmState::Idle
+                        self.bump_msg_counter(msg.kind(), false);
+                        self.stop(
+                            Some(&pc.conn),
+                            None,
+                            StopReason::NotificationReceived,
+                        );
+                        return FsmState::Idle;
                     }
+
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "unexpected {} received (conn_id: {}), fsm transition to idle",
+                        msg.title(),
+                        conn_id.short();
+                        "message" => "notification",
+                        "message_contents" => format!("{msg}")
+                    );
+                    self.bump_msg_counter(msg.kind(), true);
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
+                    FsmState::Idle
                 }
 
                 ConnectionEvent::ParseError {
@@ -4472,6 +4480,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
                             new.id().short()
                         );
+                        let declined = match new_direction {
+                            ConnectionDirection::Inbound => {
+                                &self.counters.passive_connections_declined
+                            }
+                            ConnectionDirection::Outbound => {
+                                &self.counters.active_connections_declined
+                            }
+                        };
+                        declined.fetch_add(1, Ordering::Relaxed);
                         return FsmState::OpenConfirm(pc);
                     }
 
@@ -4895,7 +4912,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         continue;
                                     }
                                     self.send_keepalive(&new);
-                                    conn_timer!(new, keepalive).restart();
                                 }
                                 CollisionConnectionKind::Exist => {
                                     if !conn_timer!(exist.conn, keepalive)
@@ -4904,8 +4920,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         continue;
                                     }
                                     self.send_keepalive(&exist.conn);
-                                    conn_timer!(exist.conn, keepalive)
-                                        .restart();
                                 }
 
                                 CollisionConnectionKind::Unexpected(
@@ -5051,6 +5065,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             let msg_kind = msg.kind();
                             match self.collision_conn_kind(
                                 conn_id,
@@ -5059,11 +5075,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             ) {
                                 CollisionConnectionKind::New => {
                                     if let Message::Open(om) = msg {
-                                        lock!(self.message_history).receive(
-                                            om.clone().into(),
-                                            *conn_id,
-                                        );
-
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) =
@@ -5077,14 +5088,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "new conn failed to handle open message ({e}), existing conn falls back to open confirm";
                                                 "error" => format!("{e}")
                                             );
-                                            // notification sent by handle_open(), nothing to do here
-                                            self.counters
-                                                .connection_retries
-                                                .fetch_add(
-                                                    1,
-                                                    Ordering::Relaxed,
-                                                );
-                                            // peer oscillation damping happens in idle, nothing to do here
+                                            // handle_open already notified and unregistered the connection.
                                             return FsmState::OpenConfirm(
                                                 exist,
                                             );
@@ -5423,11 +5427,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     StopReason::CollisionResolution,
                 );
 
-                session_timer!(self, connect_retry).stop();
-                self.counters
-                    .connection_retries
-                    .fetch_add(1, Ordering::Relaxed);
-
                 let caps = om.get_capabilities();
                 let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
 
@@ -5440,6 +5439,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     ipv6_unicast,
                 };
 
+                session_timer!(self, connect_retry).stop();
                 conn_timer!(new_pc.conn, hold).restart();
                 conn_timer!(new_pc.conn, keepalive).restart();
                 self.send_keepalive(&new_pc.conn);
@@ -5657,6 +5657,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history).receive(
+                                msg.clone(),
+                                *conn_id,
+                            );
+
                             let msg_kind = msg.kind();
                             match self.collision_conn_kind(conn_id, exist.id(), new.id()) {
                                 CollisionConnectionKind::Missing => {
@@ -5694,13 +5699,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Exist => {
+                                    // RFC 4271 FSM Event 19
                                     if let Message::Open(om) = msg {
-                                        // RFC 4271 FSM Event 19
-                                        lock!(self.message_history).receive(
-                                            om.clone().into(),
-                                            *conn_id,
-                                        );
-
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) = self.handle_open(&exist, &om) {
@@ -5710,7 +5710,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             );
 
                                             // handle_open already notified and unregistered the connection.
-                                            self.stop(None, None, StopReason::UnacceptableOpen);
                                             return FsmState::OpenSent(new);
                                         }
 
@@ -5759,9 +5758,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             CollisionResolution::NewWins(_) => {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
                                                 session_timer!(self, connect_retry).stop();
-                                                self.counters
-                                                    .connection_retries
-                                                    .fetch_add(1, Ordering::Relaxed);
 
                                                 return FsmState::OpenSent(new);
                                             }
@@ -5787,13 +5783,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::New => {
+                                    // RFC 4271 FSM Event 19
                                     if let Message::Open(om) = msg {
-                                        // RFC 4271 FSM Event 19
-                                        lock!(self.message_history).receive(
-                                            om.clone().into(),
-                                            *conn_id,
-                                        );
-
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) = self.handle_open(&new, &om) {
@@ -5805,13 +5796,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "new conn failed to handle {msg_kind} ({e}), fallback to existing conn";
                                                 "error" => format!("{e}")
                                             );
-
-                                            // handle_open already notified and unregistered the connection.
-                                            self.stop(None, None, StopReason::UnacceptableOpen);
                                             return FsmState::OpenSent(exist);
                                         }
-
-                                        self.send_keepalive(&new);
 
                                         // Resolve collision on first Open - don't wait for both
                                         collision_log!(
@@ -5838,9 +5824,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             CollisionResolution::ExistWins(_) => {
                                                 self.stop(Some(&new), None, StopReason::CollisionResolution);
                                                 session_timer!(self, connect_retry).stop();
-                                                self.counters
-                                                    .connection_retries
-                                                    .fetch_add(1, Ordering::Relaxed);
 
                                                 return FsmState::OpenSent(exist);
                                             }
@@ -6307,7 +6290,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         self.send_keepalive(&pc.conn);
-        conn_timer!(pc.conn, keepalive).restart();
 
         // Send an update to our peer with the IPv4 Unicast prefixes this router
         // is originating.
@@ -6836,9 +6818,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         pc.conn,
                         "hold timer expired, fsm transition to idle"
                     );
-                    self.counters
-                        .hold_timer_expirations
-                        .fetch_add(1, Ordering::Relaxed);
                     self.stop(
                         Some(&pc.conn),
                         None,
@@ -6898,6 +6877,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 ConnectionEvent::Message { msg, ref conn_id } => {
+                    lock!(self.message_history).receive(msg.clone(), *conn_id);
                     let msg_kind = msg.kind();
 
                     // ** Special Handling **
@@ -7126,6 +7106,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{msg}")
                             );
                         }
+                        self.bump_msg_counter(msg_kind, true);
                         return FsmState::Established(pc);
                     }
 
@@ -7174,8 +7155,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{m}")
                             );
                             self.apply_update(m.clone(), &pc);
-                            lock!(self.message_history)
-                                .receive(m.into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             FsmState::Established(pc)
                         }
@@ -7210,9 +7189,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "notification",
                                 "message_contents" => format!("{m}")
                             );
-                            lock!(self.message_history)
-                                .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
+                            self.stop(
+                                Some(&pc.conn),
+                                None,
+                                StopReason::NotificationReceived,
+                            );
                             self.exit_established(pc)
                         }
 
@@ -7260,8 +7242,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "route refresh",
                                 "message_contents" => format!("{m}").as_str()
                             );
-                            lock!(self.message_history)
-                                .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             if let Err(e) = self.handle_refresh(m, &pc) {
                                 session_log!(
@@ -7304,7 +7284,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "error_code" => format!("{error_code:?}"),
                         "error_subcode" => format!("{error_subcode:?}")
                     );
-                    self.send_notification(&pc.conn, error_code, error_subcode);
+                    let stop_reason = StopReason::ParseError {
+                        error_code,
+                        error_subcode,
+                    };
+                    self.stop(Some(&pc.conn), None, stop_reason);
                     self.exit_established(pc)
                 }
 
@@ -7340,6 +7324,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.peer_id()
         );
 
+        // The outer FSM loop can observe shutdown before Established cleanup,
+        // or after SessionSetup has installed fanout entries. Clean up regardless
+        // of which state observed the request.
+        self.router.remove_fanout(self.peer_id());
+        self.db.remove_bgp_prefixes_from_peer(&self.peer_id());
         self.cleanup_connections();
 
         // Join the connector thread if one is running to ensure clean shutdown
@@ -7355,17 +7344,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Disable session-level timers
         self.clock.stop_all();
 
-        let previous = self.state();
-        let next = FsmStateKind::Idle;
-        if previous != next {
-            session_log_lite!(
-                self,
-                info,
-                "fsm transition {previous} -> {next}"
-            );
-            // Go back to the beginning of the state machine.
-            *(lock!(self.state)) = next;
-        }
+        self.record_state_transition(self.state(), FsmStateKind::Idle);
 
         match self.shutdown_state.finish_shutdown() {
             Ok(()) => {
@@ -7460,6 +7439,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Ok(result) => match result {
                     CheckerResult::Accept => {}
                     CheckerResult::Drop => {
+                        self.counters
+                            .open_handle_failures
+                            .fetch_add(1, Ordering::Relaxed);
                         // Dropping an OPEN rejects the connection, not just
                         // the message.
                         self.send_rejected_notification(conn);
@@ -7532,58 +7514,69 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
+    /// Record, log, and account for a send attempt, then return its result.
+    fn send_message(&self, conn: &Cnx, msg: Message) -> Result<(), Error> {
+        let kind = msg.kind();
+        let title = msg.title();
+        lock!(self.message_history).send(msg.clone(), *conn.id());
+
+        if matches!(kind, MessageKind::KeepAlive) {
+            session_log!(self, trace, conn, "sending {title}";
+                "message" => title
+            );
+        } else {
+            session_log!(self, info, conn, "sending {title}";
+                "message" => title,
+                "message_contents" => format!("{msg}")
+            );
+        }
+
+        let (sent, failed) = match kind {
+            MessageKind::Open => {
+                (&self.counters.opens_sent, &self.counters.open_send_failure)
+            }
+            MessageKind::Notification => (
+                &self.counters.notifications_sent,
+                &self.counters.notification_send_failure,
+            ),
+            MessageKind::Update => (
+                &self.counters.updates_sent,
+                &self.counters.update_send_failure,
+            ),
+            MessageKind::KeepAlive => (
+                &self.counters.keepalives_sent,
+                &self.counters.keepalive_send_failure,
+            ),
+            MessageKind::RouteRefresh => (
+                &self.counters.route_refresh_sent,
+                &self.counters.route_refresh_send_failure,
+            ),
+        };
+        match conn.send(msg) {
+            Ok(()) => {
+                sent.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(e) => {
+                failed.fetch_add(1, Ordering::Relaxed);
+                session_log!(self, error, conn, "failed to send {title}: {e}";
+                    "message" => title,
+                    "error" => e.to_string()
+                );
+                Err(e)
+            }
+        }
+    }
+
     /// Send a keepalive message to the session peer.
     fn send_keepalive(&self, conn: &Cnx) {
-        session_log!(
-            self,
-            trace,
-            conn,
-            "sending keepalive";
-            "message" => "keepalive"
-        );
-        if let Err(e) = conn.send(Message::KeepAlive) {
-            session_log!(self, error, conn, "failed to send keepalive: {e}";
-                "error" => e.to_string()
-            );
-            self.counters
-                .keepalive_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.counters
-                .keepalives_sent
-                .fetch_add(1, Ordering::Relaxed);
+        if self.send_message(conn, Message::KeepAlive).is_ok() {
             conn_timer!(conn, keepalive).restart();
         }
     }
 
     fn send_route_refresh(&self, conn: &Cnx, af: Afi) {
-        session_log!(
-            self,
-            info,
-            conn,
-            "sending route refresh";
-            "message" => "route refresh"
-        );
-        let rr = Message::RouteRefresh(RouteRefreshMessage {
-            afi: af.into(),
-            safi: Safi::Unicast.into(),
-        });
-        if let Err(e) = conn.send(rr) {
-            session_log!(
-                self,
-                error,
-                conn,
-                "failed to send route refresh: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .route_refresh_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.counters
-                .route_refresh_sent
-                .fetch_add(1, Ordering::Relaxed);
-        }
+        let _ = self.send_message(conn, RouteRefreshMessage::new(af).into());
     }
 
     fn send_hold_timer_expired_notification(&self, conn: &Cnx) {
@@ -7648,34 +7641,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             error_subcode,
             data: Vec::new(),
         };
-
-        session_log!(
-            self,
-            info,
-            conn,
-            "sending notification: {error_code} / {error_subcode}";
-            "message" => "notification",
-            "message_contents" => format!("{notification}")
-        );
-
-        let msg = Message::Notification(notification);
-        lock!(self.message_history).send(msg.clone(), *conn.id());
-
-        if let Err(e) = conn.send(msg) {
-            session_log!(
-                self,
-                error,
-                conn,
-                "failed to send notification: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .notification_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        self.counters
-            .notifications_sent
-            .fetch_add(1, Ordering::Relaxed);
+        let _ = self.send_message(conn, Message::Notification(notification));
     }
 
     /// Send an open message to the session peer.
@@ -7734,24 +7700,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         drop(msg);
-        lock!(self.message_history).send(out.clone(), *conn.id());
-
-        self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
-        if let Err(e) = conn.send(out) {
-            session_log!(
-                self,
-                error,
-                conn,
-                "send_open failed: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .open_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-            Err(e)
-        } else {
-            Ok(())
-        }
+        self.send_message(conn, out)
     }
 
     fn v4_over_v6_nexthop(&self) -> bool {
@@ -8111,38 +8060,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: Message,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        // Record in message history
-        lock!(self.message_history).send(update.clone(), *pc.conn.id());
-
-        // Update counters
-        self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
-
-        // Log
-        session_log!(
-            self,
-            info,
-            pc.conn,
-            "sending update";
-            "message" => "update",
-            "message_contents" => format!("{update}")
-        );
-
-        // Send
-        if let Err(e) = pc.conn.send(update) {
-            session_log!(
-                self,
-                error,
-                pc.conn,
-                "failed to send update: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .update_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(e);
-        }
-
-        Ok(())
+        self.send_message(&pc.conn, update)
     }
 
     fn transition_from_idle(&self) -> FsmState<Cnx> {
@@ -8351,6 +8269,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 if let Some(c2) = conn2 {
                     self.send_notification(c2, error_code, error_subcode);
                 }
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                session_timer!(self, connect_retry).stop();
+            }
+            StopReason::NotificationReceived => {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
@@ -9513,6 +9437,563 @@ mod tests {
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
+    fn with_test_session(
+        name: &str,
+        test: impl FnOnce(
+            Arc<SessionRunner<BgpConnectionChannel>>,
+            Receiver<FsmEvent<BgpConnectionChannel>>,
+        ),
+    ) {
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db = rdb::test::get_test_db(name, log.clone()).unwrap();
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(64512),
+                id: 100,
+            },
+            log,
+            db.db().clone(),
+            Arc::new(Mutex::new(crate::router::SessionMap::new())),
+        ));
+        let local = "192.0.2.1:179".parse().unwrap();
+        let peer = "192.0.2.2:179".parse().unwrap();
+        let config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        let (runner, rx) = create_test_session(&router, "peer", peer, config);
+        test(runner, rx);
+    }
+
+    fn test_peer_connection(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        direction: ConnectionDirection,
+    ) -> (
+        PeerConnection<BgpConnectionChannel>,
+        crate::connection_channel::Endpoint<Message>,
+    ) {
+        let (endpoint, remote) = channel();
+        let conn =
+            Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                "192.0.2.1:179".parse().unwrap(),
+                "192.0.2.2:179".parse().unwrap(),
+                endpoint,
+                runner.event_tx.clone(),
+                crate::IO_TIMEOUT,
+                runner.log.clone(),
+                direction,
+                &lock!(runner.session),
+            ));
+        (
+            PeerConnection {
+                conn,
+                id: 200,
+                asn: 64513,
+                caps: BTreeSet::new(),
+                ipv4_unicast: AfiSafiState::Negotiated,
+                ipv6_unicast: AfiSafiState::Unconfigured,
+            },
+            remote,
+        )
+    }
+
+    #[test]
+    fn test_shutdown_cleanup_and_transition_accounting() {
+        for previous in [
+            FsmStateKind::Established,
+            FsmStateKind::SessionSetup,
+            FsmStateKind::Idle,
+        ] {
+            with_test_session("shutdown_cleanup", |runner, _rx| {
+                let (pc, _remote) = test_peer_connection(
+                    &runner,
+                    ConnectionDirection::Outbound,
+                );
+                lock!(runner.connection_registry)
+                    .register(ConnectionKind::Full(pc.clone()))
+                    .unwrap();
+                conn_timer!(pc.conn, hold).restart();
+                conn_timer!(pc.conn, keepalive).restart();
+                session_timer!(runner, connect_retry).restart();
+                session_timer!(runner, idle_hold).restart();
+                runner
+                    .router
+                    .add_fanout4(runner.peer_id(), runner.event_tx.clone());
+                runner
+                    .router
+                    .add_fanout6(runner.peer_id(), runner.event_tx.clone());
+                let prefix: Ipv4Net = "203.0.113.0/24".parse().unwrap();
+                runner.update_rib(
+                    &UpdateMessage {
+                        nlri: vec![prefix],
+                        path_attributes: vec![
+                            PathAttributeValue::NextHop(
+                                "192.0.2.2".parse().unwrap(),
+                            )
+                            .into(),
+                        ],
+                        ..Default::default()
+                    },
+                    &pc,
+                );
+                let mut other_path =
+                    runner.db.get_prefix_paths(&prefix.into()).pop().unwrap();
+                let other_peer = PeerId::Ip("192.0.2.9".parse().unwrap());
+                other_path.bgp.as_mut().unwrap().peer = other_peer.clone();
+                runner.db.add_bgp_prefixes(&[prefix.into()], other_path);
+
+                *lock!(runner.state) = previous;
+                let old_time = Instant::now() - Duration::from_secs(5);
+                *lock!(runner.last_state_change) = old_time;
+                runner.shutdown();
+                runner.on_shutdown();
+
+                assert_eq!(runner.connection_count(), 0);
+                assert!(!conn_timer!(pc.conn, hold).enabled());
+                assert!(!conn_timer!(pc.conn, keepalive).enabled());
+                assert!(!session_timer!(runner, connect_retry).enabled());
+                assert!(!session_timer!(runner, idle_hold).enabled());
+                assert!(read_lock!(runner.fanout4).is_empty());
+                assert!(read_lock!(runner.fanout6).is_empty());
+                let paths = runner.db.get_prefix_paths(&prefix.into());
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0].bgp.as_ref().unwrap().peer, other_peer);
+                assert_eq!(runner.state(), FsmStateKind::Idle);
+                assert_eq!(runner.shutdown_state(), ShutdownState::Complete);
+                let transitioned = previous != FsmStateKind::Idle;
+                assert_eq!(
+                    runner.counters.transitions_to_idle.load(Ordering::Relaxed),
+                    u64::from(transitioned)
+                );
+                assert_eq!(
+                    *lock!(runner.last_state_change) > old_time,
+                    transitioned
+                );
+                let history = lock!(runner.fsm_event_history);
+                assert_eq!(history.major.len(), usize::from(transitioned));
+                if transitioned {
+                    let event = history.major.front().unwrap();
+                    assert_eq!(event.previous_state, Some(previous));
+                    assert_eq!(event.current_state, FsmStateKind::Idle);
+                    assert!(matches!(
+                        event.event_category,
+                        FsmEventCategory::StateTransition
+                    ));
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn test_non_active_messages_are_counted() {
+        for established in [false, true] {
+            for registered in [false, true] {
+                with_test_session("non_active_message", |runner, rx| {
+                    let (pc, _remote) = test_peer_connection(
+                        &runner,
+                        ConnectionDirection::Outbound,
+                    );
+                    let (other, _other_remote) = test_peer_connection(
+                        &runner,
+                        ConnectionDirection::Inbound,
+                    );
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Full(pc.clone()))
+                        .unwrap();
+                    if registered {
+                        lock!(runner.connection_registry)
+                            .register(ConnectionKind::Partial(
+                                other.conn.clone(),
+                            ))
+                            .unwrap();
+                    }
+                    runner
+                        .event_tx
+                        .send(FsmEvent::Connection(ConnectionEvent::Message {
+                            msg: Message::Update(UpdateMessage::default()),
+                            conn_id: *other.conn.id(),
+                        }))
+                        .unwrap();
+                    if established {
+                        assert!(matches!(
+                            runner.fsm_established(&rx, pc),
+                            FsmState::Established(_)
+                        ));
+                    } else {
+                        // OpenSent loops after ignoring the message; a valid OPEN lets it return.
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::Message {
+                                    msg: OpenMessage::new4(
+                                        64513, 30, 200, false,
+                                    )
+                                    .into(),
+                                    conn_id: *pc.conn.id(),
+                                },
+                            ))
+                            .unwrap();
+                        assert!(matches!(
+                            runner.fsm_open_sent(&rx, pc.conn),
+                            FsmState::OpenConfirm(_)
+                        ));
+                    }
+                    assert_eq!(
+                        runner
+                            .counters
+                            .updates_received
+                            .load(Ordering::Relaxed),
+                        1
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .unexpected_update_message
+                            .load(Ordering::Relaxed),
+                        1
+                    );
+                    assert_eq!(
+                        lock!(runner.message_history)
+                            .received
+                            .iter()
+                            .filter(|entry| matches!(
+                                entry.message,
+                                Message::Update(_)
+                            ))
+                            .count(),
+                        1
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_same_direction_connections_are_counted_as_declined() {
+        for direction in
+            [ConnectionDirection::Inbound, ConnectionDirection::Outbound]
+        {
+            for open_confirm in [false, true] {
+                with_test_session("same_direction", |runner, rx| {
+                    let (pc, remote) = test_peer_connection(&runner, direction);
+                    let (extra, _extra_remote) =
+                        test_peer_connection(&runner, direction);
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Full(pc.clone()))
+                        .unwrap();
+                    let extra = Arc::try_unwrap(extra.conn).ok().unwrap();
+                    runner
+                        .event_tx
+                        .send(FsmEvent::Session(match direction {
+                            ConnectionDirection::Inbound => {
+                                SessionEvent::TcpConnectionAcked(extra)
+                            }
+                            ConnectionDirection::Outbound => {
+                                SessionEvent::TcpConnectionConfirmed(extra)
+                            }
+                        }))
+                        .unwrap();
+                    if open_confirm {
+                        assert!(matches!(
+                            runner.fsm_open_confirm(&rx, pc.clone()),
+                            FsmState::OpenConfirm(_)
+                        ));
+                    } else {
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::Message {
+                                    msg: OpenMessage::new4(
+                                        64513, 30, 200, false,
+                                    )
+                                    .into(),
+                                    conn_id: *pc.conn.id(),
+                                },
+                            ))
+                            .unwrap();
+                        assert!(matches!(
+                            runner.fsm_open_sent(&rx, pc.conn.clone()),
+                            FsmState::OpenConfirm(_)
+                        ));
+                    }
+                    assert_eq!(
+                        runner
+                            .counters
+                            .passive_connections_declined
+                            .load(Ordering::Relaxed),
+                        u64::from(direction == ConnectionDirection::Inbound)
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .active_connections_declined
+                            .load(Ordering::Relaxed),
+                        u64::from(direction == ConnectionDirection::Outbound)
+                    );
+                    assert_eq!(runner.connection_count(), 1);
+                    assert!(runner.get_conn(pc.conn.id()).is_some());
+                    assert!(
+                        remote
+                            .rx
+                            .try_iter()
+                            .all(|msg| matches!(msg, Message::KeepAlive))
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_keepalive_timer_follows_send_result_in_fsm() {
+        for state in [
+            FsmStateKind::OpenConfirm,
+            FsmStateKind::ConnectionCollision,
+            FsmStateKind::SessionSetup,
+        ] {
+            for connected in [false, true] {
+                with_test_session("keepalive_timer", |runner, rx| {
+                    let (pc, remote) = test_peer_connection(
+                        &runner,
+                        ConnectionDirection::Outbound,
+                    );
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Full(pc.clone()))
+                        .unwrap();
+                    let _remote = connected.then_some(remote);
+                    conn_timer!(pc.conn, keepalive).restart();
+                    conn_timer!(pc.conn, keepalive)
+                        .tick(Duration::from_secs(1));
+                    let remaining = conn_timer!(pc.conn, keepalive).remaining();
+                    if state != FsmStateKind::SessionSetup {
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::KeepaliveTimerExpires(
+                                    *pc.conn.id(),
+                                ),
+                            ))
+                            .unwrap();
+                    }
+                    let next = match state {
+                        FsmStateKind::OpenConfirm => {
+                            runner.fsm_open_confirm(&rx, pc.clone())
+                        }
+                        FsmStateKind::ConnectionCollision => {
+                            let (other, _other_remote) = test_peer_connection(
+                                &runner,
+                                ConnectionDirection::Inbound,
+                            );
+                            lock!(runner.connection_registry)
+                                .register(ConnectionKind::Partial(
+                                    other.conn.clone(),
+                                ))
+                                .unwrap();
+                            // End the collision loop by expiring the other connection.
+                            conn_timer!(other.conn, hold).restart();
+                            runner
+                                .event_tx
+                                .send(FsmEvent::Connection(
+                                    ConnectionEvent::HoldTimerExpires(
+                                        *other.conn.id(),
+                                    ),
+                                ))
+                                .unwrap();
+                            runner.connection_collision_open_confirm(
+                                &rx,
+                                pc.clone(),
+                                other.conn,
+                            )
+                        }
+                        FsmStateKind::SessionSetup => {
+                            runner.fsm_session_setup(pc.clone())
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        next.kind(),
+                        if state == FsmStateKind::SessionSetup {
+                            FsmStateKind::Established
+                        } else {
+                            FsmStateKind::OpenConfirm
+                        }
+                    );
+                    let expected_remaining = if connected {
+                        conn_timer!(pc.conn, keepalive).interval
+                    } else {
+                        remaining
+                    };
+                    assert_eq!(
+                        conn_timer!(pc.conn, keepalive).remaining(),
+                        expected_remaining
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .keepalive_send_failure
+                            .load(Ordering::Relaxed),
+                        u64::from(!connected)
+                    );
+                    assert_eq!(
+                        runner.counters.keepalives_sent.load(Ordering::Relaxed),
+                        u64::from(connected)
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_send_wrappers_record_history_and_counters() {
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db = rdb::test::get_test_db("send_history", log.clone()).unwrap();
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(64512),
+                id: 100,
+            },
+            log.clone(),
+            db.db().clone(),
+            Arc::new(Mutex::new(crate::router::SessionMap::new())),
+        ));
+        let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
+        let peer: SocketAddr = "192.0.2.2:179".parse().unwrap();
+        let config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        let (runner, _rx) =
+            create_test_session(&router, "peer", peer, config.clone());
+        let (endpoint, remote) = channel();
+        let conn =
+            Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                local,
+                peer,
+                endpoint,
+                runner.event_tx.clone(),
+                crate::IO_TIMEOUT,
+                log,
+                ConnectionDirection::Outbound,
+                &config,
+            ));
+        let pc = PeerConnection {
+            conn: conn.clone(),
+            id: 200,
+            asn: 64513,
+            caps: BTreeSet::new(),
+            ipv4_unicast: AfiSafiState::Unconfigured,
+            ipv6_unicast: AfiSafiState::Unconfigured,
+        };
+        let update = Message::Update(UpdateMessage::default());
+        let expected = vec![
+            Message::Open(OpenMessage::new4(64512, 6, 100, false)),
+            Message::KeepAlive,
+            Message::RouteRefresh(RouteRefreshMessage {
+                afi: Afi::Ipv6.into(),
+                safi: Safi::Unicast.into(),
+            }),
+            Message::Notification(NotificationMessage {
+                error_code: ErrorCode::Cease,
+                error_subcode: ErrorSubcode::Cease(
+                    CeaseErrorSubcode::ConnectionRejected,
+                ),
+                data: vec![],
+            }),
+            update.clone(),
+        ];
+        let mut remote = Some(remote);
+        let mut expected_history = Vec::new();
+        for connected in [true, false] {
+            if !connected {
+                drop(remote.take());
+            }
+            conn_timer!(conn, keepalive).stop();
+            assert_eq!(runner.send_open(&conn).is_ok(), connected);
+            runner.send_keepalive(&conn);
+            runner.send_route_refresh(&conn, Afi::Ipv6);
+            runner.send_rejected_notification(&conn);
+            assert_eq!(
+                runner.send_update_message(update.clone(), &pc).is_ok(),
+                connected
+            );
+
+            if let Some(remote) = &remote {
+                assert_eq!(remote.rx.try_iter().collect::<Vec<_>>(), expected);
+            }
+            assert_eq!(conn_timer!(conn, keepalive).enabled(), connected);
+            expected_history.extend(expected.iter().cloned());
+            let history = lock!(runner.message_history);
+            assert!(history.received.is_empty());
+            assert_eq!(
+                history
+                    .sent
+                    .iter()
+                    .rev()
+                    .map(|entry| entry.message.clone())
+                    .collect::<Vec<_>>(),
+                expected_history,
+                "each attempt is recorded exactly once, connected={connected}",
+            );
+            assert!(
+                history
+                    .sent
+                    .iter()
+                    .all(|entry| entry.connection_id == *conn.id())
+            );
+            drop(history);
+
+            let failures = u64::from(!connected);
+            for (sent, failed) in [
+                (
+                    &runner.counters.opens_sent,
+                    &runner.counters.open_send_failure,
+                ),
+                (
+                    &runner.counters.notifications_sent,
+                    &runner.counters.notification_send_failure,
+                ),
+                (
+                    &runner.counters.updates_sent,
+                    &runner.counters.update_send_failure,
+                ),
+                (
+                    &runner.counters.keepalives_sent,
+                    &runner.counters.keepalive_send_failure,
+                ),
+                (
+                    &runner.counters.route_refresh_sent,
+                    &runner.counters.route_refresh_send_failure,
+                ),
+            ] {
+                assert_eq!(sent.load(Ordering::Relaxed), 1);
+                assert_eq!(failed.load(Ordering::Relaxed), failures);
+            }
+        }
+
+        // A policy-dropped OPEN never reaches the send helper, even when the
+        // transport would fail. It must not add history or count an attempt.
+        *write_lock!(router.policy.shaper) = Some(
+            crate::policy::load_shaper(
+                "fn open(m, asn, addr) { ShaperResult::Drop }
+             fn update(m, asn, addr) { m.emit() }",
+            )
+            .unwrap(),
+        );
+        assert!(runner.send_open(&conn).is_ok());
+        assert_eq!(
+            lock!(runner.message_history).sent.len(),
+            expected_history.len()
+        );
+        assert_eq!(runner.counters.opens_sent.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            runner.counters.open_send_failure.load(Ordering::Relaxed),
+            1
+        );
+    }
+
     #[test]
     fn shutdown_state_transitions() {
         let s = AtomicShutdownState::new();
@@ -9652,12 +10133,14 @@ mod tests {
             Single,
             CollisionExisting,
             CollisionIncoming,
+            CollisionIncomingOpenConfirm,
         }
 
         for path in [
             OpenSentPath::Single,
             OpenSentPath::CollisionExisting,
             OpenSentPath::CollisionIncoming,
+            OpenSentPath::CollisionIncomingOpenConfirm,
         ] {
             for (policy, hold_time, notification) in [
                 (
@@ -9751,7 +10234,8 @@ mod tests {
                 let incoming = match path {
                     OpenSentPath::Single => None,
                     OpenSentPath::CollisionExisting
-                    | OpenSentPath::CollisionIncoming => {
+                    | OpenSentPath::CollisionIncoming
+                    | OpenSentPath::CollisionIncomingOpenConfirm => {
                         Some(make_conn(ConnectionDirection::Inbound))
                     }
                 };
@@ -9759,12 +10243,19 @@ mod tests {
                     OpenSentPath::Single | OpenSentPath::CollisionExisting => {
                         (&existing, &existing_peer)
                     }
-                    OpenSentPath::CollisionIncoming => {
+                    OpenSentPath::CollisionIncoming
+                    | OpenSentPath::CollisionIncomingOpenConfirm => {
                         let (conn, remote) = incoming.as_ref().unwrap();
                         (conn, remote)
                     }
                 };
-                session_timer!(runner, connect_retry).restart();
+                // Collision entry leaves the connect-retry timer stopped.
+                // The single-connection case also exercises stop's timer cleanup.
+                if matches!(path, OpenSentPath::Single) {
+                    session_timer!(runner, connect_retry).restart();
+                } else {
+                    session_timer!(runner, connect_retry).stop();
+                }
                 runner
                     .event_tx
                     .send(FsmEvent::Connection(ConnectionEvent::Message {
@@ -9776,6 +10267,28 @@ mod tests {
                     .unwrap();
 
                 let state = match &incoming {
+                    Some((conn, _))
+                        if matches!(
+                            path,
+                            OpenSentPath::CollisionIncomingOpenConfirm
+                        ) =>
+                    {
+                        let pc = PeerConnection {
+                            conn: existing.clone(),
+                            id: 200,
+                            asn: 64513,
+                            caps: BTreeSet::new(),
+                            ipv4_unicast: AfiSafiState::Unconfigured,
+                            ipv6_unicast: AfiSafiState::Unconfigured,
+                        };
+                        lock!(runner.connection_registry)
+                            .upgrade_to_full(pc.clone());
+                        runner.connection_collision_open_confirm(
+                            &rx,
+                            pc,
+                            conn.clone(),
+                        )
+                    }
                     Some((conn, _)) => runner.connection_collision_open_sent(
                         &rx,
                         existing.clone(),
@@ -9805,7 +10318,7 @@ mod tests {
                             .counters
                             .connection_retries
                             .load(Ordering::Relaxed),
-                        1,
+                        u64::from(matches!(path, OpenSentPath::Single)),
                         "{case}"
                     );
                     assert!(
@@ -9821,8 +10334,26 @@ mod tests {
                         } else {
                             (&existing, &existing_peer)
                         };
-                        let FsmState::OpenSent(retained) = state else {
-                            panic!("{case}: expected OpenSent, got {state}");
+                        let retained = match state {
+                            FsmState::OpenConfirm(pc)
+                                if matches!(
+                                    path,
+                                    OpenSentPath::CollisionIncomingOpenConfirm
+                                ) =>
+                            {
+                                pc.conn
+                            }
+                            FsmState::OpenSent(conn)
+                                if !matches!(
+                                    path,
+                                    OpenSentPath::CollisionIncomingOpenConfirm
+                                ) =>
+                            {
+                                conn
+                            }
+                            state => panic!(
+                                "{case}: unexpected fallback state {state}"
+                            ),
                         };
                         assert_eq!(retained.id(), survivor.id(), "{case}");
                         assert_eq!(runner.connection_count(), 1, "{case}");
@@ -9836,6 +10367,10 @@ mod tests {
                         );
                         assert!(
                             conn_timer!(survivor, hold).enabled(),
+                            "{case}"
+                        );
+                        assert!(
+                            conn_timer!(survivor, keepalive).enabled(),
                             "{case}"
                         );
                     } else {

@@ -2709,23 +2709,19 @@ mod tests {
     #[test]
     fn route_refresh_round_trip() {
         // IPv4 Unicast route refresh
-        let rr0 = RouteRefreshMessage {
-            afi: Afi::Ipv4.into(),
-            safi: Safi::Unicast.into(),
-        };
+        let rr0 = RouteRefreshMessage::new(Afi::Ipv4);
 
         let buf = route_refresh_message_to_wire(&rr0);
+        assert_eq!(buf, [0, 1, 0, 1]);
         let rr1 = route_refresh_message_from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr0, rr1);
 
         // IPv6 Unicast route refresh
-        let rr2 = RouteRefreshMessage {
-            afi: Afi::Ipv6.into(),
-            safi: Safi::Unicast.into(),
-        };
+        let rr2 = RouteRefreshMessage::new(Afi::Ipv6);
 
         let buf = route_refresh_message_to_wire(&rr2);
+        assert_eq!(buf, [0, 2, 0, 1]);
         let rr3 = route_refresh_message_from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr2, rr3);
