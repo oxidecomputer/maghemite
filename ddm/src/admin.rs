@@ -577,7 +577,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 }
             }
         }
-        // remove peers back to front so we don't shift the order our from under
+        // remove peers back to front so we don't shift the order out from under
         // ourselves for the indexes we just gathered.
         for i in remove_idx.iter().rev() {
             ctx.peers.remove(*i);
