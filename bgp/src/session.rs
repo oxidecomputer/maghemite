@@ -1221,7 +1221,9 @@ pub struct SessionCounters {
     pub unexpected_notification_message: AtomicU64,
     pub update_nexhop_missing: AtomicU64,
     pub open_handle_failures: AtomicU64, // incremented for any rejected OPEN
-    pub unnegotiated_address_family: AtomicU64, // incremented per UPDATE
+    // Incremented per MP_REACH_NLRI or MP_UNREACH_NLRI attribute filtered out
+    // because its address family was not negotiated, not per UPDATE.
+    pub unnegotiated_address_family: AtomicU64,
 
     // Send failure counters
     pub notification_send_failure: AtomicU64,
@@ -5385,8 +5387,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         collision_log!(
             self,
             info,
-            &exist.conn,
             &new,
+            &exist.conn,
             "collision detected: local id {}, remote id {}",
             self.id,
             om.id
@@ -5402,8 +5404,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         collision_log!(
             self,
             info,
-            &exist.conn,
             &new,
+            &exist.conn,
             "collision resolution: {resolution}"
         );
 
@@ -5714,7 +5716,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         }
 
                                         // Resolve collision on first Open - don't wait for both
-                                        collision_log!(self, info, exist, new,
+                                        collision_log!(self, info, new, exist,
                                             "exist conn received Open (conn_id: {}), resolving collision immediately",
                                             conn_id.short();
                                         );
@@ -5726,7 +5728,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             self.asn.as_u32(),
                                             om.asn(),
                                         );
-                                        collision_log!(self, info, exist, new,
+                                        collision_log!(self, info, new, exist,
                                             "collision resolution: {resolution}",
                                         );
 
@@ -7014,7 +7016,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             return FsmState::Established(pc);
                                         }
                                         CollisionResolution::NewWins(_) => {
-                                            // incoming_conn wins: close pc, transition to SessionSetup
+                                            // incoming_conn wins: close pc and wait for its KEEPALIVE.
                                             self.bump_msg_counter(
                                                 msg_kind, false,
                                             );
@@ -7054,7 +7056,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     new_pc.clone(),
                                                 );
 
-                                            return FsmState::SessionSetup(
+                                            return FsmState::OpenConfirm(
                                                 new_pc,
                                             );
                                         }
@@ -10504,7 +10506,7 @@ mod tests {
         // Check the returned state and the surviving connection separately.
         let retained = match (expected_winner, state) {
             (ExpectedWinner::Existing, FsmState::Established(pc)) => pc,
-            (ExpectedWinner::Incoming, FsmState::SessionSetup(pc)) => pc,
+            (ExpectedWinner::Incoming, FsmState::OpenConfirm(pc)) => pc,
             (_, other) => panic!("{case}: unexpected state {other}"),
         };
         let (winner, loser, winning_peer, rejected_peer, hold_time, replies) =
@@ -10561,6 +10563,24 @@ mod tests {
             })],
             "{case}: loser's messages",
         );
+
+        if matches!(expected_winner, ExpectedWinner::Incoming) {
+            // The winning connection must receive its own KEEPALIVE before
+            // session setup can advertise routes and enter Established.
+            runner
+                .event_tx
+                .send(FsmEvent::Connection(ConnectionEvent::Message {
+                    msg: Message::KeepAlive,
+                    conn_id: *incoming.id(),
+                }))
+                .unwrap();
+            let FsmState::SessionSetup(confirmed) =
+                runner.fsm_open_confirm(&rx, retained)
+            else {
+                panic!("{case}: KEEPALIVE must complete confirmation");
+            };
+            assert_eq!(confirmed.conn.id(), incoming.id(), "{case}");
+        }
     }
 
     #[test]
