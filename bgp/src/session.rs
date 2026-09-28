@@ -9577,10 +9577,10 @@ mod tests {
                     let event = history.major.front().unwrap();
                     assert_eq!(event.previous_state, Some(previous));
                     assert_eq!(event.current_state, FsmStateKind::Idle);
-                    assert!(matches!(
+                    assert_eq!(
                         event.event_category,
                         FsmEventCategory::StateTransition
-                    ));
+                    );
                 }
             });
         }
@@ -9617,10 +9617,10 @@ mod tests {
                         }))
                         .unwrap();
                     if established {
-                        assert!(matches!(
-                            runner.fsm_established(&rx, pc),
-                            FsmState::Established(_)
-                        ));
+                        assert_eq!(
+                            runner.fsm_established(&rx, pc).kind(),
+                            FsmStateKind::Established
+                        );
                     } else {
                         // OpenSent loops after ignoring the message; a valid OPEN lets it return.
                         runner
@@ -9635,10 +9635,10 @@ mod tests {
                                 },
                             ))
                             .unwrap();
-                        assert!(matches!(
-                            runner.fsm_open_sent(&rx, pc.conn),
-                            FsmState::OpenConfirm(_)
-                        ));
+                        assert_eq!(
+                            runner.fsm_open_sent(&rx, pc.conn).kind(),
+                            FsmStateKind::OpenConfirm
+                        );
                     }
                     assert_eq!(
                         runner
@@ -9696,10 +9696,10 @@ mod tests {
                         }))
                         .unwrap();
                     if open_confirm {
-                        assert!(matches!(
-                            runner.fsm_open_confirm(&rx, pc.clone()),
-                            FsmState::OpenConfirm(_)
-                        ));
+                        assert_eq!(
+                            runner.fsm_open_confirm(&rx, pc.clone()).kind(),
+                            FsmStateKind::OpenConfirm
+                        );
                     } else {
                         runner
                             .event_tx
@@ -9713,10 +9713,10 @@ mod tests {
                                 },
                             ))
                             .unwrap();
-                        assert!(matches!(
-                            runner.fsm_open_sent(&rx, pc.conn.clone()),
-                            FsmState::OpenConfirm(_)
-                        ));
+                        assert_eq!(
+                            runner.fsm_open_sent(&rx, pc.conn.clone()).kind(),
+                            FsmStateKind::OpenConfirm
+                        );
                     }
                     assert_eq!(
                         runner
@@ -10374,10 +10374,7 @@ mod tests {
                             "{case}"
                         );
                     } else {
-                        assert!(
-                            matches!(state, FsmState::Idle),
-                            "{case}: got {state}"
-                        );
+                        assert_eq!(state.kind(), FsmStateKind::Idle, "{case}");
                         assert_eq!(runner.connection_count(), 0, "{case}");
                     }
                 } else {

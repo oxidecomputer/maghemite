@@ -3066,36 +3066,32 @@ mod tests {
 
         // First error: MalformedNextHop from parsing
         let (reason, action) = &errs[0];
-        assert!(
-            matches!(action, AttributeAction::TreatAsWithdraw),
+        assert_eq!(
+            *action,
+            AttributeAction::TreatAsWithdraw,
             "Expected TreatAsWithdraw action"
         );
-        match reason {
-            UpdateParseErrorReason::MalformedNextHop { expected, got } => {
-                assert_eq!(*expected, 4, "Expected length should be 4");
-                assert_eq!(*got, 16, "Got length should be 16");
+        assert_eq!(
+            *reason,
+            UpdateParseErrorReason::MalformedNextHop {
+                expected: 4,
+                got: 16
             }
-            other => panic!(
-                "Expected MalformedNextHop {{ expected: 4, got: 16 }}, got {:?}",
-                other
-            ),
-        }
+        );
 
         // Second error: MissingAttribute for NEXT_HOP (malformed doesn't count)
         let (reason2, action2) = &errs[1];
-        assert!(
-            matches!(action2, AttributeAction::TreatAsWithdraw),
+        assert_eq!(
+            *action2,
+            AttributeAction::TreatAsWithdraw,
             "Expected TreatAsWithdraw action for missing attr"
         );
-        assert!(
-            matches!(
-                reason2,
-                UpdateParseErrorReason::MissingAttribute {
-                    type_code: PathAttributeTypeCode::NextHop
-                }
-            ),
-            "Second error should be MissingAttribute for NextHop, got {:?}",
-            reason2
+        assert_eq!(
+            *reason2,
+            UpdateParseErrorReason::MissingAttribute {
+                type_code: PathAttributeTypeCode::NextHop
+            },
+            "Second error should be MissingAttribute for NextHop"
         );
 
         // The NLRI should still be parsed (for processing as withdrawals)
@@ -4232,23 +4228,13 @@ mod tests {
 
             let (reason, action) = result.expect_err("should return error");
 
-            match reason {
+            assert_eq!(
+                reason,
                 UpdateParseErrorReason::InvalidAttributeFlags {
-                    type_code,
-                    flags,
-                } => {
-                    assert_eq!(
-                        type_code,
-                        u8::from(PathAttributeTypeCode::Origin),
-                        "should include the attribute type code"
-                    );
-                    assert_eq!(
-                        flags, bad_flags,
-                        "should include the invalid flags"
-                    );
+                    type_code: u8::from(PathAttributeTypeCode::Origin),
+                    flags: bad_flags,
                 }
-                _ => panic!("expected InvalidAttributeFlags error"),
-            }
+            );
 
             assert_eq!(
                 action,
@@ -4491,10 +4477,10 @@ mod tests {
             assert_eq!(errs.len(), 1, "Expected 1 error (AGGREGATOR)");
 
             let (reason, action) = &errs[0];
-            assert!(
-                matches!(action, AttributeAction::Discard),
-                "AGGREGATOR error should be Discard, got {:?}",
-                action
+            assert_eq!(
+                *action,
+                AttributeAction::Discard,
+                "AGGREGATOR error should be Discard"
             );
             // The actual error type may vary based on how parsing fails
             // (UnrecognizedMandatoryAttribute, AttributeLengthError, or AttributeParseError)
@@ -5469,18 +5455,12 @@ mod tests {
             let msg = result.unwrap();
 
             // Find ATOMIC_AGGREGATE attribute
-            let atomic_attr = msg
-                .path_attributes
+            msg.path_attributes
                 .iter()
                 .find(|attr| {
                     matches!(attr.value, PathAttributeValue::AtomicAggregate)
                 })
                 .expect("Should have ATOMIC_AGGREGATE attribute");
-
-            assert!(matches!(
-                atomic_attr.value,
-                PathAttributeValue::AtomicAggregate
-            ));
         }
 
         #[test]

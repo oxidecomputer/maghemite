@@ -639,12 +639,9 @@ mod tests {
 
         // Only the first worker retains its sender. A duplicate spawn would
         // keep the second channel connected, even with all timers disabled.
-        assert!(matches!(first, Err(TryRecvError::Empty)));
-        assert!(matches!(second, Err(TryRecvError::Disconnected)));
-        assert!(matches!(
-            first_rx.try_recv(),
-            Err(TryRecvError::Disconnected)
-        ));
+        assert_eq!(first.err(), Some(TryRecvError::Empty));
+        assert_eq!(second.err(), Some(TryRecvError::Disconnected));
+        assert_eq!(first_rx.try_recv().err(), Some(TryRecvError::Disconnected));
     }
 
     #[test]
@@ -673,12 +670,9 @@ mod tests {
         dropped.store(true, Ordering::Relaxed);
         drop(clock);
 
-        assert!(matches!(first, Err(TryRecvError::Empty)));
-        assert!(matches!(second, Err(TryRecvError::Disconnected)));
-        assert!(matches!(
-            first_rx.try_recv(),
-            Err(TryRecvError::Disconnected)
-        ));
+        assert_eq!(first.err(), Some(TryRecvError::Empty));
+        assert_eq!(second.err(), Some(TryRecvError::Disconnected));
+        assert_eq!(first_rx.try_recv().err(), Some(TryRecvError::Disconnected));
     }
 
     #[test]
@@ -707,18 +701,18 @@ mod tests {
         // Disabled timers neither advance nor emit events.
         step(Duration::from_secs(3));
         assert_eq!(timer.remaining(), Duration::from_secs(3));
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty));
         timer.restart();
         step(Duration::from_secs(2));
         assert_eq!(timer.remaining(), Duration::from_secs(1));
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty));
         step(Duration::from_secs(1));
         assert!(matches!(
             rx.try_recv(),
             Ok(FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires))
         ));
         assert_eq!(timer.remaining(), Duration::from_secs(3));
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty));
     }
 
     #[test]
@@ -753,7 +747,7 @@ mod tests {
         timer.restart();
         step(Duration::from_secs(6));
         assert_eq!(timer.remaining(), Duration::from_secs(1));
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty));
         step(Duration::from_secs(1));
         assert!(matches!(
             rx.try_recv(),
@@ -761,10 +755,10 @@ mod tests {
                 if id == conn_id
         ));
         assert_eq!(timer.remaining(), Duration::from_secs(7));
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty));
         timer.disable();
         step(Duration::from_secs(7));
         assert_eq!(timer.remaining(), Duration::from_secs(7));
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty));
     }
 }
