@@ -47,6 +47,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::{
+    cmp::Ordering::{Equal, Greater, Less},
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -210,10 +211,8 @@ impl Display for CollisionResolution {
 }
 
 /// Pure function to determine which connection wins in a collision.
-///
+/// The first comparison is by BGP-ID per RFC 4271 Section 6.8:
 /// ```text
-///    RFC 4271 Section 6.8
-///
 ///    1) The BGP Identifier of the local system is compared to the BGP
 ///       Identifier of the remote system (as specified in the OPEN
 ///       message).  Comparing BGP Identifiers is done by converting them
@@ -243,13 +242,33 @@ impl Display for CollisionResolution {
 ///       message with the Error Code Cease.
 /// ```
 ///
+/// If the BGP-IDs match (eBGP w/ AS-wide BGP-IDs), then a second comparison of
+/// ASNs is performed per RFC 6286 Section 2.3:
+/// ```text
+///       For a BGP speaker that supports the AS-wide Unique BGP Identifier,
+///       the procedures for connection collision resolution are extended as
+///       follows to deal with the case in which the two BGP speakers share the
+///       same BGP Identifier (thus, it is only applicable to an external
+///       peer):
+///
+///          If the BGP Identifiers of the peers involved in the connection
+///          collision are identical, then the connection initiated by the BGP
+///          speaker with the larger AS number is preserved.
+///
+///       This extension covers cases in which the 4-octet AS numbers are
+///       involved [RFC4893].
+/// ```
+///
 /// # Arguments
-/// * `exist_direction` - direction of the existing connection (Inbound or Outbound)
+/// * `exist_direction` - direction of the existing connection ({In,Out}bound)
 /// * `local_bgp_id`  - Our BGP Identifier
 /// * `remote_bgp_id` - Peer's BGP Identifier
+/// * `local_bgp_asn`  - Our ASN
+/// * `remote_bgp_asn` - Peer's ASN
 ///
 /// # Returns
-/// `CollisionResolution` indicating whether exist or new connection wins
+/// `CollisionResolution` indicating whether exist or new connection wins, and
+/// the criteria by which the decision was made (BGP-ID or ASN)
 pub fn collision_resolution(
     exist_direction: ConnectionDirection,
     local_bgp_id: u32,
@@ -257,57 +276,34 @@ pub fn collision_resolution(
     local_asn: u32,
     remote_asn: u32,
 ) -> CollisionResolution {
-    let mut criteria = CollisionResolutionCriteria::HighestBgpId;
-    if local_bgp_id < remote_bgp_id {
-        // The peer has a higher RID, keep the connection they initiated
-        match exist_direction {
-            ConnectionDirection::Inbound => {
-                CollisionResolution::ExistWins(criteria)
-            }
-            ConnectionDirection::Outbound => {
-                CollisionResolution::NewWins(criteria)
-            }
-        }
-    } else if local_bgp_id > remote_bgp_id {
-        // The local system has a higher RID, keep the connection we initiated
-        match exist_direction {
-            ConnectionDirection::Inbound => {
-                CollisionResolution::NewWins(criteria)
-            }
-            ConnectionDirection::Outbound => {
-                CollisionResolution::ExistWins(criteria)
-            }
-        }
+    let (local, remote, criteria) = if local_bgp_id != remote_bgp_id {
+        (
+            local_bgp_id,
+            remote_bgp_id,
+            CollisionResolutionCriteria::HighestBgpId,
+        )
     } else {
-        // Our BGP-IDs are identical (eBGP only), so fallback to ASN comparison.
-        // RFC 6286:
-        // ```text
-        // If the BGP Identifiers of the peers involved in the connection
-        // collision are identical, then the connection initiated by the BGP
-        // speaker with the larger AS number is preserved.
-        // ```
-        criteria = CollisionResolutionCriteria::HighestAsn;
+        // RFC 6286: matching BGP-IDs fall back to ASN comparison.
+        (
+            local_asn,
+            remote_asn,
+            CollisionResolutionCriteria::HighestAsn,
+        )
+    };
 
-        if local_asn < remote_asn {
-            // The peer has a higher ASN, keep the connection they initiated
-            match exist_direction {
-                ConnectionDirection::Inbound => {
-                    CollisionResolution::ExistWins(criteria)
-                }
-                ConnectionDirection::Outbound => {
-                    CollisionResolution::NewWins(criteria)
-                }
-            }
-        } else {
-            match exist_direction {
-                ConnectionDirection::Inbound => {
-                    CollisionResolution::NewWins(criteria)
-                }
-                ConnectionDirection::Outbound => {
-                    CollisionResolution::ExistWins(criteria)
-                }
-            }
-        }
+    // Preserve the connection initiated by the winning speaker.
+    let winning_direction = match local.cmp(&remote) {
+        Less => ConnectionDirection::Inbound,
+        Greater => ConnectionDirection::Outbound,
+        // Matching BGP-ID and ASN is rejected during OPEN validation, but we'll
+        // cover our bases and make a deliberate (albeit arbitrary) choice.
+        Equal => ConnectionDirection::Outbound,
+    };
+
+    if exist_direction == winning_direction {
+        CollisionResolution::ExistWins(criteria)
+    } else {
+        CollisionResolution::NewWins(criteria)
     }
 }
 
