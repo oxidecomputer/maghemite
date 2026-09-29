@@ -69,10 +69,7 @@ pub async fn read_bestpath_fanout(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
     let ctx = ctx.context();
-    let fanout = ctx
-        .db
-        .get_bestpath_fanout()
-        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+    let fanout = ctx.db.get_bestpath_fanout();
 
     Ok(HttpResponseOk(BestpathFanoutResponse { fanout }))
 }
@@ -84,9 +81,7 @@ pub async fn update_bestpath_fanout(
     let ctx = ctx.context();
     let rq = request.into_inner();
 
-    ctx.db
-        .set_bestpath_fanout(rq.fanout)
-        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+    ctx.db.set_bestpath_fanout(rq.fanout);
 
     Ok(HttpResponseUpdatedNoContent())
 }

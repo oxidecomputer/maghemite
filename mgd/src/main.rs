@@ -9,20 +9,12 @@ use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
-use mg_api_types::bfd::BfdPeerConfig;
-use mg_api_types::bgp::config::{
-    BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig,
-};
-use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
-use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use signal::handle_signals;
 use slog::Logger;
-use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread::Builder;
@@ -80,10 +72,6 @@ struct RunArgs {
     #[arg(long, default_value_t = false)]
     no_bgp_dispatcher: bool,
 
-    /// Where to store the local database
-    #[arg(long, default_value = "/var/run")]
-    data_dir: String,
-
     /// Register as an oximemeter producer.
     #[arg(long)]
     with_stats: bool,
@@ -128,11 +116,10 @@ async fn run(args: RunArgs) {
         .await
         .expect("set up refresh signal handler");
 
-    let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
-        .expect("open datastore file");
+    let db = rdb::Db::new(log.clone());
     let bgp = init_bgp(&args, &log);
 
-    let tep_ula = get_tunnel_endpoint_ula(&db);
+    let tep_ula = get_tunnel_endpoint_ula();
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
@@ -155,8 +142,8 @@ async fn run(args: RunArgs) {
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         dlog!(log, error, "error sending handler context to signal handler: {e}";
-            "params" => format!("tep {tep_ula}, dir {}, oximeter_port {}",
-                args.data_dir.clone(), args.oximeter_port
+            "params" => format!("tep {tep_ula}, oximeter_port {}",
+                args.oximeter_port
             ),
             "error" => format!("{e}")
         );
@@ -183,24 +170,6 @@ async fn run(args: RunArgs) {
             })
             .expect("failed to start mg-lower");
     }
-
-    start_bgp_routers(
-        context.clone(),
-        db.get_bgp_routers()
-            .expect("get BGP routers from datastore"),
-        db.get_bgp_neighbors()
-            .expect("get BGP neighbors from data store"),
-        db.get_unnumbered_bgp_neighbors()
-            .expect("get BGP unnumbered neighbors from data store"),
-    );
-
-    start_bfd_sessions(
-        context.clone(),
-        db.get_bfd_neighbors()
-            .expect("get BFD neighbors from data store"),
-    );
-
-    initialize_static_routes(&db, &context.log);
 
     let hostname = hostname::get()
         .expect("failed to get hostname")
@@ -307,469 +276,12 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
     bgp_context
 }
 
-fn start_bgp_routers(
-    context: Arc<HandlerContext>,
-    routers: BTreeMap<u32, BgpRouterInfo>,
-    neighbors: Vec<BgpNeighborInfo>,
-    uneighbors: Vec<BgpUnnumberedNeighborInfo>,
-) {
-    dlog!(context.log, info, "starting bgp routers: {routers:#?}");
-    let mut guard = context.bgp.router.lock().expect("lock bgp routers");
-    for (asn, info) in routers {
-        bgp_admin::helpers::add_router(
-            context.clone(),
-            mg_api_types::bgp::config::Router {
-                asn,
-                id: info.id,
-                listen: info.listen.clone(),
-                graceful_shutdown: info.graceful_shutdown,
-            },
-            &mut guard,
-        )
-        .unwrap_or_else(|_| panic!("add BGP router {asn} {info:#?}"));
-    }
-    drop(guard);
-
-    for nbr in neighbors {
-        bgp_admin::helpers::add_neighbor(
-            context.clone(),
-            mg_api_types::bgp::config::Neighbor {
-                asn: nbr.asn,
-                group: nbr.group.clone(),
-                name: nbr.name.clone(),
-                host: nbr.host.into(),
-                parameters: BgpPeerParameters {
-                    remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
-                    hold_time: nbr.parameters.hold_time,
-                    idle_hold_time: nbr.parameters.idle_hold_time,
-                    delay_open: nbr.parameters.delay_open,
-                    connect_retry: nbr.parameters.connect_retry,
-                    keepalive: nbr.parameters.keepalive,
-                    resolution: nbr.parameters.resolution,
-                    passive: nbr.parameters.passive,
-                    md5_auth_key: nbr.parameters.md5_auth_key.clone(),
-                    multi_exit_discriminator: nbr
-                        .parameters
-                        .multi_exit_discriminator,
-                    communities: nbr.parameters.communities.clone(),
-                    local_pref: nbr.parameters.local_pref,
-                    enforce_first_as: nbr.parameters.enforce_first_as,
-                    deterministic_collision_resolution: false,
-                    idle_hold_jitter: None,
-                    connect_retry_jitter: None,
-                    ipv4_unicast: if nbr.parameters.ipv4_enabled {
-                        Some(Ipv4UnicastConfig {
-                            nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import4
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export4
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    ipv6_unicast: if nbr.parameters.ipv6_enabled {
-                        Some(Ipv6UnicastConfig {
-                            nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import6
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export6
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    vlan_id: nbr.parameters.vlan_id,
-                    src_addr: nbr.parameters.src_addr,
-                    src_port: nbr.parameters.src_port,
-                },
-            },
-            true,
-        )
-        .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
-    }
-
-    for nbr in uneighbors {
-        bgp_admin::helpers::add_unnumbered_neighbor(
-            context.clone(),
-            mg_api_types::bgp::config::UnnumberedNeighbor {
-                asn: nbr.asn,
-                group: nbr.group.clone(),
-                name: nbr.name.clone(),
-                interface: nbr.interface.clone(),
-                act_as_a_default_ipv6_router: nbr.router_lifetime,
-                parameters: BgpPeerParameters {
-                    remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
-                    hold_time: nbr.parameters.hold_time,
-                    idle_hold_time: nbr.parameters.idle_hold_time,
-                    delay_open: nbr.parameters.delay_open,
-                    connect_retry: nbr.parameters.connect_retry,
-                    keepalive: nbr.parameters.keepalive,
-                    resolution: nbr.parameters.resolution,
-                    passive: nbr.parameters.passive,
-                    md5_auth_key: nbr.parameters.md5_auth_key.clone(),
-                    multi_exit_discriminator: nbr
-                        .parameters
-                        .multi_exit_discriminator,
-                    communities: nbr.parameters.communities.clone(),
-                    local_pref: nbr.parameters.local_pref,
-                    enforce_first_as: nbr.parameters.enforce_first_as,
-                    deterministic_collision_resolution: false,
-                    idle_hold_jitter: None,
-                    connect_retry_jitter: None,
-                    ipv4_unicast: if nbr.parameters.ipv4_enabled {
-                        Some(Ipv4UnicastConfig {
-                            nexthop: nbr.parameters.nexthop4,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import4
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export4
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    ipv6_unicast: if nbr.parameters.ipv6_enabled {
-                        Some(Ipv6UnicastConfig {
-                            nexthop: nbr.parameters.nexthop6,
-                            import_policy: nbr
-                                .parameters
-                                .allow_import6
-                                .clone()
-                                .into(),
-                            export_policy: nbr
-                                .parameters
-                                .allow_export6
-                                .clone()
-                                .into(),
-                        })
-                    } else {
-                        None
-                    },
-                    vlan_id: nbr.parameters.vlan_id,
-                    src_addr: nbr.parameters.src_addr,
-                    src_port: nbr.parameters.src_port,
-                },
-            },
-            true,
-        )
-        .unwrap_or_else(|_| panic!("add BGP unnumbered neighbor {nbr:#?}"));
-    }
-}
-
-fn start_bfd_sessions(
-    context: Arc<HandlerContext>,
-    configs: Vec<BfdPeerConfig>,
-) {
-    dlog!(context.log, info, "starting bfd sessions: {configs:#?}");
-    for config in configs {
-        bfd_admin::add_peer(context.clone(), config)
-            .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
-    }
-}
-
-// Read static routes from disk, normalize prefixes by unsetting host bits,
-// deduplicate, and re-add them to the db (updating both the on-disk db and
-// the rib). This handles migration from old versions where host bits weren't
-// automatically zeroed, and consolidates routes that differ only in host bits
-// into ECMP routes.
-fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
-    let routes = db
-        .get_static(None)
-        .expect("failed to get static routes from db");
-
-    let original_count = routes.len();
-
-    // Normalize all prefixes by unsetting host bits and deduplicate.
-    // BTreeSet automatically deduplicates routes that become identical after
-    // normalization (same prefix + nexthop + vlan_id + rib_priority).
-    let normalized: BTreeSet<rdb::StaticRouteKey> = routes
-        .iter()
-        .map(|srk| {
-            let mut normalized = *srk;
-            // Clear host bits by reconstructing from network address
-            normalized.prefix = match normalized.prefix {
-                IpNet::V4(net) => {
-                    IpNet::V4(Ipv4Net::new_unchecked(net.prefix(), net.width()))
-                }
-                IpNet::V6(net) => {
-                    IpNet::V6(Ipv6Net::new_unchecked(net.prefix(), net.width()))
-                }
-            };
-            normalized
-        })
-        .collect();
-
-    let normalized_count = normalized.len();
-
-    // Remove all old routes (both normalized and unnormalized) from the
-    // persistent DB to ensure a clean state.
-    db.remove_static_routes(&routes).unwrap_or_else(|e| {
-        panic!("failed to remove old static routes during normalization: {e}")
-    });
-
-    // Add back the normalized, deduplicated routes.
-    let normalized_vec: Vec<_> = normalized.into_iter().collect();
-    db.add_static_routes(&normalized_vec).unwrap_or_else(|e| {
-        panic!(
-            "failed to add normalized static routes {normalized_vec:#?}: {e}"
-        )
-    });
-
-    // Log information about the normalization process if any changes occurred.
-    if original_count != normalized_count {
-        slog::info!(
-            log,
-            "normalized static routes on startup";
-            "original_count" => original_count,
-            "normalized_count" => normalized_count,
-            "deduplicated" => original_count - normalized_count,
-        );
-    }
-}
-
-fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
-    if let Some(addr) = db.get_tep_addr().unwrap() {
-        return addr;
-    }
-
+// TODO: check whether this needs to be stable across mgd restarts
+fn get_tunnel_endpoint_ula() -> Ipv6Addr {
     // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
     let mut r = [0u8; 7];
     rand::fill(&mut r);
-    let tep_ula = Ipv6Addr::from([
+    Ipv6Addr::from([
         0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
-    ]);
-
-    db.set_tep_addr(tep_ula).unwrap();
-
-    tep_ula
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rdb::StaticRouteKey;
-    use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::str::FromStr;
-    use tempfile::TempDir;
-
-    fn setup_test_db() -> (rdb::Db, TempDir, Logger) {
-        let temp_dir = TempDir::new().unwrap();
-        let log = mg_common::log::init_logger();
-        let db = rdb::Db::new(temp_dir.path().to_str().unwrap(), log.clone())
-            .unwrap();
-        (db, temp_dir, log)
-    }
-
-    #[test]
-    fn test_initialize_static_routes_deduplicates_same_nexthop() {
-        let (db, _temp, log) = setup_test_db();
-
-        // Add two routes with different host bits but same nexthop
-        // They should normalize to the same route and deduplicate
-        let routes = vec![
-            StaticRouteKey {
-                prefix: "10.0.0.1/24".parse().unwrap(),
-                nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-            StaticRouteKey {
-                prefix: "10.0.0.5/24".parse().unwrap(),
-                nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-        ];
-
-        db.add_static_routes(&routes).unwrap();
-
-        // Verify we have 2 routes before normalization
-        let before = db.get_static(None).unwrap();
-        assert_eq!(before.len(), 2);
-
-        // Run initialization
-        initialize_static_routes(&db, &log);
-
-        // Verify we have 1 route after normalization (deduplicated)
-        let after = db.get_static(None).unwrap();
-        assert_eq!(after.len(), 1);
-
-        // Verify the route has the normalized prefix
-        let route = &after[0];
-        assert_eq!(
-            route.prefix,
-            "10.0.0.0/24".parse::<oxnet::IpNet>().unwrap(),
-        );
-        assert_eq!(
-            route.nexthop,
-            IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap())
-        );
-    }
-
-    #[test]
-    fn test_initialize_static_routes_creates_ecmp() {
-        let (db, _temp, log) = setup_test_db();
-
-        // Add two routes with different host bits AND different nexthops
-        // They should normalize to the same prefix but keep both routes (ECMP)
-        let routes = vec![
-            StaticRouteKey {
-                prefix: "10.0.0.1/24".parse().unwrap(),
-                nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-            StaticRouteKey {
-                prefix: "10.0.0.5/24".parse().unwrap(),
-                nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.2").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-        ];
-
-        db.add_static_routes(&routes).unwrap();
-
-        // Verify we have 2 routes before normalization
-        let before = db.get_static(None).unwrap();
-        assert_eq!(before.len(), 2);
-
-        // Run initialization
-        initialize_static_routes(&db, &log);
-
-        // Verify we still have 2 routes after normalization (ECMP)
-        let after = db.get_static(None).unwrap();
-        assert_eq!(after.len(), 2);
-
-        // Verify both routes have the normalized prefix but different nexthops
-        for route in &after {
-            assert_eq!(
-                route.prefix,
-                "10.0.0.0/24".parse::<oxnet::IpNet>().unwrap()
-            );
-        }
-        assert_ne!(after[0].nexthop, after[1].nexthop);
-    }
-
-    #[test]
-    fn test_initialize_static_routes_preserves_normalized() {
-        let (db, _temp, log) = setup_test_db();
-
-        // Add a route that's already normalized
-        let routes = vec![StaticRouteKey {
-            prefix: "10.0.0.0/24".parse().unwrap(),
-            nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
-            vlan_id: None,
-            rib_priority: 0,
-        }];
-
-        db.add_static_routes(&routes).unwrap();
-
-        // Run initialization
-        initialize_static_routes(&db, &log);
-
-        // Verify the route is unchanged
-        let after = db.get_static(None).unwrap();
-        assert_eq!(after.len(), 1);
-        assert_eq!(after[0], routes[0]);
-    }
-
-    #[test]
-    fn test_initialize_static_routes_empty_db() {
-        let (db, _temp, log) = setup_test_db();
-
-        // Run initialization on empty DB - should not panic
-        initialize_static_routes(&db, &log);
-
-        // Verify DB is still empty
-        let after = db.get_static(None).unwrap();
-        assert_eq!(after.len(), 0);
-    }
-
-    #[test]
-    fn test_initialize_static_routes_ipv6() {
-        let (db, _temp, log) = setup_test_db();
-
-        // Test IPv6 normalization
-        let routes = vec![
-            StaticRouteKey {
-                prefix: "2001:db8::1/64".parse::<oxnet::IpNet>().unwrap(),
-                nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-            StaticRouteKey {
-                prefix: "2001:db8::5/64".parse::<oxnet::IpNet>().unwrap(),
-                nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::2").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-        ];
-
-        db.add_static_routes(&routes).unwrap();
-
-        // Run initialization
-        initialize_static_routes(&db, &log);
-
-        // Verify we have 2 routes (ECMP) with normalized prefix
-        let after = db.get_static(None).unwrap();
-        assert_eq!(after.len(), 2);
-        for route in &after {
-            assert_eq!(
-                route.prefix,
-                "2001:db8::/64".parse::<oxnet::IpNet>().unwrap()
-            );
-        }
-    }
-
-    #[test]
-    fn test_initialize_static_routes_mixed_families() {
-        let (db, _temp, log) = setup_test_db();
-
-        // Test mixed IPv4 and IPv6 routes
-        let routes = vec![
-            StaticRouteKey {
-                prefix: "10.0.0.1/24".parse::<oxnet::IpNet>().unwrap(),
-                nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-            StaticRouteKey {
-                prefix: "2001:db8::1/64".parse::<oxnet::IpNet>().unwrap(),
-                nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
-                vlan_id: None,
-                rib_priority: 0,
-            },
-        ];
-
-        db.add_static_routes(&routes).unwrap();
-
-        // Run initialization
-        initialize_static_routes(&db, &log);
-
-        // Verify both routes are normalized
-        let after = db.get_static(None).unwrap();
-        assert_eq!(after.len(), 2);
-        assert!(after[0].prefix.is_network_address());
-        assert!(after[1].prefix.is_network_address());
-    }
+    ])
 }

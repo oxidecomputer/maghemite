@@ -6192,39 +6192,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Collect the prefixes this router is originating.
         let originated4 = if pc.ipv4_unicast.negotiated() {
-            match self.db.get_origin4(self.asn) {
-                Ok(value) => value,
-                Err(e) => {
-                    //TODO possible death loop. Should we just panic here?
-                    session_log!(
-                        self,
-                        error,
-                        pc.conn,
-                        "failed to get originated routes from db";
-                        "error" => format!("{e}")
-                    );
-                    return FsmState::SessionSetup(pc);
-                }
-            }
+            self.db.get_origin4(self.asn)
         } else {
             Vec::new()
         };
 
         let originated6 = if pc.ipv6_unicast.negotiated() {
-            match self.db.get_origin6(self.asn) {
-                Ok(value) => value,
-                Err(e) => {
-                    //TODO possible death loop. Should we just panic here?
-                    session_log!(
-                        self,
-                        error,
-                        pc.conn,
-                        "failed to get originated routes from db";
-                        "error" => format!("{e}")
-                    );
-                    return FsmState::SessionSetup(pc);
-                }
-            }
+            self.db.get_origin6(self.asn)
         } else {
             Vec::new()
         };
@@ -6300,12 +6274,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         sa: &ShaperApplication,
     ) -> anyhow::Result<()> {
         // Get originated IPv4 routes
-        let originated4 = match self.db.get_origin4(self.asn) {
-            Ok(originated) => originated,
-            Err(e) => {
-                anyhow::bail!("failed to get originated IPv4 from db: {e}");
-            }
-        };
+        let originated4 = self.db.get_origin4(self.asn);
 
         if !originated4.is_empty() {
             self.send_update(
@@ -6316,12 +6285,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Get originated IPv6 routes
-        let originated6 = match self.db.get_origin6(self.asn) {
-            Ok(originated) => originated,
-            Err(e) => {
-                anyhow::bail!("failed to get originated IPv6 from db: {e}");
-            }
-        };
+        let originated6 = self.db.get_origin6(self.asn);
 
         if !originated6.is_empty() {
             self.send_update(
@@ -6423,20 +6387,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 AdminEvent::ExportPolicyChanged(previous) => {
                     match previous {
                         ImportExportPolicy::V4(previous4) => {
-                            let originated = match self.db.get_origin4(self.asn)
-                            {
-                                Ok(value) => value,
-                                Err(e) => {
-                                    session_log!(
-                                        self,
-                                        error,
-                                        pc.conn,
-                                        "failed to get originated IPv4 routes from db";
-                                        "error" => format!("{e}")
-                                    );
-                                    return FsmState::SessionSetup(pc);
-                                }
-                            };
+                            let originated = self.db.get_origin4(self.asn);
 
                             // Determine which routes to announce/withdraw based on policy change
                             let session = lock!(self.session);
@@ -6527,20 +6478,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             FsmState::Established(pc)
                         }
                         ImportExportPolicy::V6(previous6) => {
-                            let originated = match self.db.get_origin6(self.asn)
-                            {
-                                Ok(value) => value,
-                                Err(e) => {
-                                    session_log!(
-                                        self,
-                                        error,
-                                        pc.conn,
-                                        "failed to get originated IPv6 routes from db";
-                                        "error" => format!("{e}")
-                                    );
-                                    return FsmState::SessionSetup(pc);
-                                }
-                            };
+                            let originated = self.db.get_origin6(self.asn);
 
                             // Determine which routes to announce/withdraw based on policy change
                             let session = lock!(self.session);
@@ -8484,20 +8422,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let originated = match self.db.get_origin4(self.asn) {
-            Ok(value) => value,
-            Err(e) => {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to get originated IPv4 routes from db";
-                    "error" => format!("{e}")
-                );
-                // This is not a protocol level issue
-                return Ok(());
-            }
-        };
+        let originated = self.db.get_origin4(self.asn);
 
         if !originated.is_empty() {
             self.send_update(
@@ -8517,20 +8442,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let originated = match self.db.get_origin6(self.asn) {
-            Ok(value) => value,
-            Err(e) => {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to get originated IPv6 routes from db";
-                    "error" => format!("{e}")
-                );
-                // This is not a protocol level issue
-                return Ok(());
-            }
-        };
+        let originated = self.db.get_origin6(self.asn);
 
         if !originated.is_empty() {
             self.send_update(
@@ -8574,19 +8486,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
-        let originated4 = match self.db.get_origin4(self.asn) {
-            Ok(value) => value,
-            Err(e) => {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to get originated ipv4 routes from db: {e}";
-                    "error" => format!("{e}")
-                );
-                Vec::new()
-            }
-        };
+        let originated4 = self.db.get_origin4(self.asn);
 
         let withdrawn: Vec<IpNet> = update
             .withdrawn
@@ -8714,19 +8614,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
-                    let originated6 = match self.db.get_origin6(self.asn) {
-                        Ok(value) => value,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "failed to get originated ipv6 routes from db: {e}";
-                                "error" => format!("{e}")
-                            );
-                            Vec::new()
-                        }
-                    };
+                    let originated6 = self.db.get_origin6(self.asn);
 
                     let nexthop6 = match &reach6.nexthop {
                         BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
@@ -8814,19 +8702,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .remove_bgp_prefixes(&mp_withdrawn4, &self.peer_id());
                 }
                 MpUnreachNlri::Ipv6Unicast(unreach6) => {
-                    let originated6 = match self.db.get_origin6(self.asn) {
-                        Ok(value) => value,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "failed to get originated ipv6 routes for withdrawal: {e}";
-                                "error" => format!("{e}")
-                            );
-                            Vec::new()
-                        }
-                    };
+                    let originated6 = self.db.get_origin6(self.asn);
 
                     let withdrawn6: Vec<IpNet> = unreach6
                         .withdrawn

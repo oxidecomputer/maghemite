@@ -572,8 +572,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn set_origin4(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
-        let origin4 = self.db.get_origin4(self.config.asn)?;
+    pub fn set_origin4(&self, prefixes: Vec<IpNet>) {
+        let origin4 = self.db.get_origin4(self.config.asn);
         let current: BTreeSet<&Ipv4Net> = origin4.iter().collect();
 
         let prefix4: Vec<Ipv4Net> = prefixes
@@ -593,25 +593,23 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let to_announce: Vec<Ipv4Net> =
             new.difference(&current).map(|x| **x).collect();
 
-        self.db.set_origin4(self.config.asn, &prefix4)?;
+        self.db.set_origin4(self.config.asn, &prefix4);
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
             self.withdraw_origin4(to_withdraw);
             self.announce_origin4(to_announce);
         }
-        Ok(())
     }
 
-    pub fn clear_origin4(&self) -> Result<(), Error> {
-        let current = self.db.get_origin4(self.config.asn)?;
+    pub fn clear_origin4(&self) {
+        let current = self.db.get_origin4(self.config.asn);
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
             self.withdraw_origin4(current);
         }
-        self.db.clear_origin4(self.config.asn)?;
-        Ok(())
+        self.db.clear_origin4(self.config.asn);
     }
 
     fn announce_origin4(&self, prefixes: Vec<Ipv4Net>) {
@@ -676,8 +674,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn set_origin6(&self, prefixes: Vec<IpNet>) -> Result<(), Error> {
-        let origin6 = self.db.get_origin6(self.config.asn)?;
+    pub fn set_origin6(&self, prefixes: Vec<IpNet>) {
+        let origin6 = self.db.get_origin6(self.config.asn);
         let current: BTreeSet<&Ipv6Net> = origin6.iter().collect();
 
         let prefix6: Vec<Ipv6Net> = prefixes
@@ -697,34 +695,32 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let to_announce: Vec<Ipv6Net> =
             new.difference(&current).map(|x| **x).collect();
 
-        self.db.set_origin6(self.config.asn, &prefix6)?;
+        self.db.set_origin6(self.config.asn, &prefix6);
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
             self.withdraw_origin6(to_withdraw);
             self.announce_origin6(to_announce);
         }
-        Ok(())
     }
 
-    pub fn clear_origin6(&self) -> Result<(), Error> {
-        let current = self.db.get_origin6(self.config.asn)?;
+    pub fn clear_origin6(&self) {
+        let current = self.db.get_origin6(self.config.asn);
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
             self.withdraw_origin6(current);
         }
-        self.db.clear_origin6(self.config.asn)?;
-        Ok(())
+        self.db.clear_origin6(self.config.asn);
     }
 
     /// Prefixes this router is currently originating into IPv4 unicast.
-    pub fn originated4(&self) -> Result<Vec<Ipv4Net>, rdb::error::Error> {
+    pub fn originated4(&self) -> Vec<Ipv4Net> {
         self.db.get_origin4(self.config.asn)
     }
 
     /// Prefixes this router is currently originating into IPv6 unicast.
-    pub fn originated6(&self) -> Result<Vec<Ipv6Net>, rdb::error::Error> {
+    pub fn originated6(&self) -> Vec<Ipv6Net> {
         self.db.get_origin6(self.config.asn)
     }
 
@@ -820,24 +816,23 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         path_attributes
     }
 
-    pub fn graceful_shutdown(&self, enabled: bool) -> Result<(), Error> {
+    pub fn graceful_shutdown(&self, enabled: bool) {
         if enabled != self.graceful_shutdown.load(Ordering::Relaxed) {
             self.graceful_shutdown.store(enabled, Ordering::Relaxed);
 
             // Skip network propagation if router is shutdown
             if !self.shutdown.load(Ordering::Acquire) {
-                self.announce_all()?;
+                self.announce_all();
             }
         }
-        Ok(())
     }
 
     pub fn in_graceful_shutdown(&self) -> bool {
         self.graceful_shutdown.load(Ordering::Relaxed)
     }
 
-    fn announce_all(&self) -> Result<(), Error> {
-        let originated4 = self.db.get_origin4(self.config.asn)?;
+    fn announce_all(&self) {
+        let originated4 = self.db.get_origin4(self.config.asn);
 
         if !originated4.is_empty() {
             slog::debug!(
@@ -851,7 +846,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
 
         // Also announce IPv6 originated routes
-        let originated6 = self.db.get_origin6(self.config.asn)?;
+        let originated6 = self.db.get_origin6(self.config.asn);
 
         if !originated6.is_empty() {
             slog::debug!(
@@ -863,8 +858,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
             read_lock!(self.fanout6).send_all(originated6, vec![]);
         }
-
-        Ok(())
     }
 }
 

@@ -75,10 +75,7 @@ pub async fn static_add_v4_route(
     let prefixes: Vec<IpNet> = routes.iter().map(|r| r.prefix).collect();
     validate_prefixes(&prefixes)?;
 
-    ctx.context()
-        .db
-        .add_static_routes(&routes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    ctx.context().db.add_static_routes(&routes);
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -93,21 +90,14 @@ pub async fn static_remove_v4_route(
         .into_iter()
         .map(static_route_key_from_v4)
         .collect();
-    ctx.context()
-        .db
-        .remove_static_routes(&routes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    ctx.context().db.remove_static_routes(&routes);
     Ok(HttpResponseDeleted())
 }
 
 pub async fn static_list_v4_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
-    let static_db = ctx
-        .context()
-        .db
-        .get_static(Some(AddressFamily::Ipv4))
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let static_db = ctx.context().db.get_static(Some(AddressFamily::Ipv4));
 
     let mut static_rib: GetRibResult = BTreeMap::new();
     for srk in static_db {
@@ -135,10 +125,7 @@ pub async fn static_add_v6_route(
     let prefixes: Vec<IpNet> = routes.iter().map(|r| r.prefix).collect();
     validate_prefixes(&prefixes)?;
 
-    ctx.context()
-        .db
-        .add_static_routes(&routes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    ctx.context().db.add_static_routes(&routes);
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -153,21 +140,14 @@ pub async fn static_remove_v6_route(
         .into_iter()
         .map(static_route_key_from_v6)
         .collect();
-    ctx.context()
-        .db
-        .remove_static_routes(&routes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    ctx.context().db.remove_static_routes(&routes);
     Ok(HttpResponseDeleted())
 }
 
 pub async fn static_list_v6_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
-    let static_db = ctx
-        .context()
-        .db
-        .get_static(Some(AddressFamily::Ipv6))
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let static_db = ctx.context().db.get_static(Some(AddressFamily::Ipv6));
 
     let mut static_rib: GetRibResult = BTreeMap::new();
     for srk in static_db {

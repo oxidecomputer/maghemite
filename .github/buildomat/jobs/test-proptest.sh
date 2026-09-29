@@ -7,7 +7,6 @@
 #: output_rules = [
 #:   "/work/*.log",
 #:   "/work/proptest-regressions/*",
-#:   "/tmp/*.db",
 #: ]
 #: access_repos = [
 #:   "oxidecomputer/dendrite",

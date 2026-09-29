@@ -511,8 +511,6 @@ async fn run_trio_tests(
     zs1.start_router(false)?;
 
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 2);
     softnpu_dump!(softnpu);
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])

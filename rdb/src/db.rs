@@ -4,17 +4,16 @@
 
 //! The routing database (rdb).
 //!
-//! This is the maghemite routing database. The routing database holds both
-//! volatile and non-volatile information. Non-volatile information is stored
-//! in a sled key-value store that is persisted to disk via flush operations.
-//! Volatile information is stored in in-memory data structures such as hash
-//! sets.
+//! This is the maghemite routing database. It holds routing configuration
+//! (BGP routers, neighbors, originated prefixes, static routes and settings)
+//! and the routes learned or selected from that configuration. Everything is
+//! held in memory; nothing is written to disk, so all of it is lost when the
+//! process exits.
 use crate::bestpath::bestpaths;
 use crate::error::Error;
 use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
-use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
 use mg_api_types::rdb::path::Path;
@@ -22,74 +21,55 @@ use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{sleep, spawn};
 
-const UNIT_PERSISTENT: &str = "persistent";
 const UNIT_RIB: &str = "rib";
-
-/// The handle used to open a persistent key-value tree for BGP IPv4 origin
-/// information.
-const BGP_ORIGIN4: &str = "bgp_origin";
-
-/// The handle used to open a persistent key-value tree for BGP IPv6 origin
-/// information.
-const BGP_ORIGIN6: &str = "bgp_origin6";
-
-/// The handle used to open a persistent key-value tree for BGP router
-/// information.
-const BGP_ROUTER: &str = "bgp_router";
-
-/// The handle used to open a persistent key-value tree for BGP neighbor
-/// information.
-const BGP_NEIGHBOR: &str = "bgp_neighbor";
-
-/// The handle used to open a persistent key-value tree for BGP neighbor
-/// information.
-const BGP_UNNUMBERED_NEIGHBOR: &str = "bgp_unnumbered_neighbor";
-
-/// The handle used to open a persistent key-value tree for settings
-/// information.
-const SETTINGS: &str = "settings";
-
-/// The handle used to open a persistent key-value tree for IPv4 static routes.
-const STATIC4_ROUTES: &str = "static4_routes";
-
-/// The handle used to open a persistent key-value tree for IPv6 static routes.
-const STATIC6_ROUTES: &str = "static6_routes";
-
-/// Key used in settings tree for tunnel endpoint setting
-const TEP_KEY: &str = "tep";
-
-/// The handle used to open a persistent key-value tree for BFD neighbor
-/// information.
-const BFD_NEIGHBOR: &str = "bfd_neighbor";
-
-/// Key used in settings tree for bestpath fanout setting
-const BESTPATH_FANOUT: &str = "bestpath_fanout";
 
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 use crate::rib::{Rib, Rib4, Rib6};
 
-/// The central routing information base. Both persistent an volatile route
+/// The central routing information base. Both routing configuration and route
 /// information is managed through this structure.
 #[derive(Clone)]
 pub struct Db {
-    /// A sled database handle where persistent routing information is stored.
-    persistent: sled::Db,
+    /// BGP routers, keyed by ASN.
+    bgp_routers: Arc<Mutex<BTreeMap<u32, BgpRouterInfo>>>,
+
+    /// BGP neighbors, keyed by the ASN of the router they belong to and the
+    /// neighbor's address.
+    bgp_neighbors: Arc<Mutex<BTreeMap<(u32, IpAddr), BgpNeighborInfo>>>,
+
+    /// BGP unnumbered neighbors, keyed by the ASN of the router they belong
+    /// to and the neighbor's interface name.
+    bgp_unnumbered_neighbors:
+        Arc<Mutex<BTreeMap<(u32, String), BgpUnnumberedNeighborInfo>>>,
+
+    /// IPv4 prefixes originated by BGP, keyed by the ASN of the router
+    /// originating them.
+    origin4: Arc<Mutex<BTreeMap<u32, BTreeSet<Ipv4Net>>>>,
+
+    /// IPv6 prefixes originated by BGP, keyed by the ASN of the router
+    /// originating them.
+    origin6: Arc<Mutex<BTreeMap<u32, BTreeSet<Ipv6Net>>>>,
+
+    /// Administratively added static routes (both address families).
+    static_routes: Arc<Mutex<BTreeSet<StaticRouteKey>>>,
+
+    /// Maximum number of paths bestpath selects per prefix.
+    bestpath_fanout: Arc<RwLock<NonZeroU8>>,
 
     /// IPv4 Unicast routes learned from BGP update messages or administratively
-    /// added static routes. These are volatile.
+    /// added static routes.
     rib4_in: Arc<Mutex<Rib4>>,
 
     /// IPv4 Unicast routes selected from rib_in according to local policy and
@@ -97,7 +77,7 @@ pub struct Db {
     rib4_loc: Arc<Mutex<Rib4>>,
 
     /// IPv6 Unicast routes learned from BGP update messages or administratively
-    /// added static routes. These are volatile.
+    /// added static routes.
     rib6_in: Arc<Mutex<Rib6>>,
 
     /// IPv6 Unicast routes selected from rib_in according to local policy and
@@ -125,33 +105,6 @@ const _: () = {
     assert_send_sync::<Db>()
 };
 
-/// Width in bytes of the ASN prefix prepended to keys in router-scoped trees
-/// (neighbors, originated prefixes). Scoping every per-router key by ASN keeps
-/// state belonging to distinct routers from colliding in the shared sled trees
-/// and lets a router's state be enumerated/dropped with a single prefix scan.
-const ASN_KEY_LEN: usize = 4;
-
-/// Prepend `asn` to `key`, producing the on-disk key for a router-scoped entry.
-fn asn_scoped_key(asn: u32, key: &[u8]) -> Vec<u8> {
-    let mut buf = asn.to_be_bytes().to_vec();
-    buf.extend_from_slice(key);
-    buf
-}
-
-/// Strip the ASN prefix from a router-scoped key, yielding the inner key bytes.
-fn strip_asn(key: &[u8]) -> &[u8] {
-    &key[ASN_KEY_LEN..]
-}
-
-/// Remove every entry in `tree` scoped to `asn`.
-fn remove_asn_scoped(tree: &sled::Tree, asn: u32) -> Result<(), Error> {
-    for item in tree.scan_prefix(asn.to_be_bytes()) {
-        let (key, _) = item?;
-        tree.remove(key)?;
-    }
-    Ok(())
-}
-
 #[derive(Clone)]
 struct Watcher {
     tag: String,
@@ -160,11 +113,19 @@ struct Watcher {
 
 //TODO we need bulk operations with atomic semantics here.
 impl Db {
-    /// Create a new routing database that stores persistent data at `path`.
-    pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
+    /// Create a new, empty routing database.
+    pub fn new(log: Logger) -> Self {
         let rib_loc = Arc::new(Mutex::new(Rib::new()));
-        Ok(Self {
-            persistent: sled::open(path)?,
+        Self {
+            bgp_routers: Arc::new(Mutex::new(BTreeMap::new())),
+            bgp_neighbors: Arc::new(Mutex::new(BTreeMap::new())),
+            bgp_unnumbered_neighbors: Arc::new(Mutex::new(BTreeMap::new())),
+            origin4: Arc::new(Mutex::new(BTreeMap::new())),
+            origin6: Arc::new(Mutex::new(BTreeMap::new())),
+            static_routes: Arc::new(Mutex::new(BTreeSet::new())),
+            bestpath_fanout: Arc::new(RwLock::new(
+                NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap(),
+            )),
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
@@ -174,7 +135,7 @@ impl Db {
             reaper: Reaper::new(rib_loc),
             slot: Arc::new(RwLock::new(None)),
             log,
-        })
+        }
     }
 
     pub fn set_reaper_interval(&self, interval: std::time::Duration) {
@@ -280,245 +241,47 @@ impl Db {
         }
     }
 
-    pub fn add_bgp_router(
-        &self,
-        asn: u32,
-        info: BgpRouterInfo,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ROUTER)?;
-        let key = asn.to_string();
-        let value = serde_json::to_string(&info)?;
-        tree.insert(key.as_str(), value.as_str())?;
-        tree.flush()?;
-        Ok(())
+    pub fn add_bgp_router(&self, asn: u32, info: BgpRouterInfo) {
+        lock!(self.bgp_routers).insert(asn, info);
     }
 
-    pub fn remove_bgp_router(&self, asn: u32) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ROUTER)?;
-        let key = asn.to_string();
-        tree.remove(key.as_str())?;
-        tree.flush()?;
-        Ok(())
+    pub fn remove_bgp_router(&self, asn: u32) {
+        lock!(self.bgp_routers).remove(&asn);
     }
 
-    pub fn get_bgp_routers(
-        &self,
-    ) -> Result<BTreeMap<u32, BgpRouterInfo>, Error> {
-        let tree = self.persistent.open_tree(BGP_ROUTER)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(self,
-                            error,
-                            "error fetching bgp router entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                let key = match String::from_utf8_lossy(&key).parse() {
-                    Ok(item) => item,
-                    Err(e) => {
-                        rdb_log!(self,
-                            error,
-                            "error parsing bgp router entry key {key:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&value);
-                let value: BgpRouterInfo = match serde_json::from_str(&value) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        rdb_log!(self,
-                            error,
-                            "error parsing bgp router entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some((key, value))
-            })
-            .collect();
-        Ok(result)
+    pub fn get_bgp_routers(&self) -> BTreeMap<u32, BgpRouterInfo> {
+        lock!(self.bgp_routers).clone()
     }
 
-    pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        let key = asn_scoped_key(nbr.asn, nbr.host.ip().to_string().as_bytes());
-        let value = serde_json::to_string(&nbr)?;
-        tree.insert(key, value.as_str())?;
-        tree.flush()?;
-        Ok(())
+    pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) {
+        lock!(self.bgp_neighbors).insert((nbr.asn, nbr.host.ip()), nbr);
     }
 
-    pub fn add_unnumbered_bgp_neighbor(
-        &self,
-        nbr: BgpUnnumberedNeighborInfo,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        let key = asn_scoped_key(nbr.asn, nbr.interface.as_bytes());
-        let value = serde_json::to_string(&nbr)?;
-        tree.insert(key, value.as_str())?;
-        tree.flush()?;
-        Ok(())
+    pub fn add_unnumbered_bgp_neighbor(&self, nbr: BgpUnnumberedNeighborInfo) {
+        lock!(self.bgp_unnumbered_neighbors)
+            .insert((nbr.asn, nbr.interface.clone()), nbr);
     }
 
-    pub fn remove_unnumbered_bgp_neighbor(
-        &self,
-        asn: Asn,
-        interface: &str,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        tree.remove(asn_scoped_key(asn.as_u32(), interface.as_bytes()))?;
-        tree.flush()?;
-        Ok(())
+    pub fn remove_unnumbered_bgp_neighbor(&self, asn: Asn, interface: &str) {
+        lock!(self.bgp_unnumbered_neighbors)
+            .remove(&(asn.as_u32(), interface.to_string()));
     }
 
-    pub fn remove_bgp_neighbor(
-        &self,
-        asn: Asn,
-        addr: IpAddr,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        tree.remove(asn_scoped_key(asn.as_u32(), addr.to_string().as_bytes()))?;
-        tree.flush()?;
-        Ok(())
+    pub fn remove_bgp_neighbor(&self, asn: Asn, addr: IpAddr) {
+        lock!(self.bgp_neighbors).remove(&(asn.as_u32(), addr));
     }
 
-    pub fn get_bgp_neighbors(&self) -> Result<Vec<BgpNeighborInfo>, Error> {
-        let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (_key, value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching bgp neighbor entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&value);
-                let value: BgpNeighborInfo = match serde_json::from_str(&value)
-                {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bgp neighbor entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
+    pub fn get_bgp_neighbors(&self) -> Vec<BgpNeighborInfo> {
+        lock!(self.bgp_neighbors).values().cloned().collect()
     }
 
     pub fn get_unnumbered_bgp_neighbors(
         &self,
-    ) -> Result<Vec<BgpUnnumberedNeighborInfo>, Error> {
-        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (_key, value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching unnumbered bgp neighbor entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&value);
-                let value: BgpUnnumberedNeighborInfo = match serde_json::from_str(&value)
-                {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing unnumbered bgp neighbor entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
-    }
-
-    pub fn add_bfd_neighbor(&self, cfg: BfdPeerConfig) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
-        let key = cfg.peer.to_string();
-        let value = serde_json::to_string(&cfg)?;
-        tree.insert(key.as_str(), value.as_str())?;
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn remove_bfd_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
-        let key = addr.to_string();
-        tree.remove(key)?;
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn get_bfd_neighbors(&self) -> Result<Vec<BfdPeerConfig>, Error> {
-        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (_key, value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bfd entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&value);
-                let value: BfdPeerConfig = match serde_json::from_str(&value) {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bfd entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT,
-                            "error" => format!("{e}")
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
+    ) -> Vec<BgpUnnumberedNeighborInfo> {
+        lock!(self.bgp_unnumbered_neighbors)
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn create_origin4(
@@ -528,69 +291,35 @@ impl Db {
     ) -> Result<(), Error> {
         rdb_log!(self, info,
             "create origin4 (asn {asn}): {ps:?}";
-            "unit" => UNIT_PERSISTENT
+            "unit" => UNIT_RIB
         );
 
-        let current = self.get_origin4(asn)?;
-        if !current.is_empty() {
+        if !self.get_origin4(asn).is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));
         }
 
-        self.set_origin4(asn, ps)
+        self.set_origin4(asn, ps);
+        Ok(())
     }
 
-    pub fn set_origin4(&self, asn: Asn, ps: &[Ipv4Net]) -> Result<(), Error> {
-        let asn = asn.as_u32();
-        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        remove_asn_scoped(&tree, asn)?;
-        for p in ps.iter() {
-            tree.insert(asn_scoped_key(asn, &p.db_key()), "")?;
+    pub fn set_origin4(&self, asn: Asn, ps: &[Ipv4Net]) {
+        let mut origin = lock!(self.origin4);
+        if ps.is_empty() {
+            origin.remove(&asn.as_u32());
+        } else {
+            origin.insert(asn.as_u32(), ps.iter().copied().collect());
         }
-        tree.flush()?;
-        Ok(())
     }
 
-    pub fn clear_origin4(&self, asn: Asn) -> Result<(), Error> {
-        let asn = asn.as_u32();
-        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        remove_asn_scoped(&tree, asn)?;
-        tree.flush()?;
-        Ok(())
+    pub fn clear_origin4(&self, asn: Asn) {
+        lock!(self.origin4).remove(&asn.as_u32());
     }
 
-    pub fn get_origin4(&self, asn: Asn) -> Result<Vec<Ipv4Net>, Error> {
-        let asn = asn.as_u32();
-        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        let result = tree
-            .scan_prefix(asn.to_be_bytes())
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching bgp origin entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(match Ipv4Net::from_db_key(strip_asn(&key)) {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bgp origin entry value {key:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                })
-            })
-            .collect();
-        Ok(result)
+    pub fn get_origin4(&self, asn: Asn) -> Vec<Ipv4Net> {
+        lock!(self.origin4)
+            .get(&asn.as_u32())
+            .map(|ps| ps.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     pub fn create_origin6(
@@ -598,66 +327,32 @@ impl Db {
         asn: Asn,
         ps: &[Ipv6Net],
     ) -> Result<(), Error> {
-        let current = self.get_origin6(asn)?;
-        if !current.is_empty() {
+        if !self.get_origin6(asn).is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));
         }
 
-        self.set_origin6(asn, ps)
+        self.set_origin6(asn, ps);
+        Ok(())
     }
 
-    pub fn set_origin6(&self, asn: Asn, ps: &[Ipv6Net]) -> Result<(), Error> {
-        let asn = asn.as_u32();
-        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        remove_asn_scoped(&tree, asn)?;
-        for p in ps.iter() {
-            tree.insert(asn_scoped_key(asn, &p.db_key()), "")?;
+    pub fn set_origin6(&self, asn: Asn, ps: &[Ipv6Net]) {
+        let mut origin = lock!(self.origin6);
+        if ps.is_empty() {
+            origin.remove(&asn.as_u32());
+        } else {
+            origin.insert(asn.as_u32(), ps.iter().copied().collect());
         }
-        tree.flush()?;
-        Ok(())
     }
 
-    pub fn clear_origin6(&self, asn: Asn) -> Result<(), Error> {
-        let asn = asn.as_u32();
-        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        remove_asn_scoped(&tree, asn)?;
-        tree.flush()?;
-        Ok(())
+    pub fn clear_origin6(&self, asn: Asn) {
+        lock!(self.origin6).remove(&asn.as_u32());
     }
 
-    pub fn get_origin6(&self, asn: Asn) -> Result<Vec<Ipv6Net>, Error> {
-        let asn = asn.as_u32();
-        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        let result = tree
-            .scan_prefix(asn.to_be_bytes())
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching bgp origin entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(match Ipv6Net::from_db_key(strip_asn(&key)) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bgp origin entry value {key:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                })
-            })
-            .collect();
-        Ok(result)
+    pub fn get_origin6(&self, asn: Asn) -> Vec<Ipv6Net> {
+        lock!(self.origin6)
+            .get(&asn.as_u32())
+            .map(|ps| ps.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     pub fn get_prefix_paths(&self, prefix: &IpNet) -> Vec<Path> {
@@ -704,15 +399,7 @@ impl Db {
         rib_loc: &mut Rib4,
         prefix: &Ipv4Net,
     ) {
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_PERSISTENT
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
+        let fanout = self.get_bestpath_fanout();
 
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
@@ -741,15 +428,7 @@ impl Db {
         rib_loc: &mut Rib6,
         prefix: &Ipv6Net,
     ) {
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_PERSISTENT
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
+        let fanout = self.get_bestpath_fanout();
 
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
@@ -779,16 +458,8 @@ impl Db {
     where
         F: Fn(&IpNet, &BTreeSet<Path>) -> bool,
     {
-        // Fetch fanout once before the loops to avoid repeated sled access
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_RIB
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
+        // Fetch fanout once before the loops to avoid repeated lock acquisition
+        let fanout = self.get_bestpath_fanout();
 
         {
             // only grab the lock once, release it once the loop ends
@@ -890,63 +561,16 @@ impl Db {
         };
     }
 
-    fn add_static_routes_to_tree(
-        &self,
-        tree: Tree,
-        routes: &[StaticRouteKey],
-        pcn: &mut PrefixChangeNotification,
-    ) -> Result<(), Error> {
-        let mut route_keys = Vec::new();
+    pub fn add_static_routes(&self, routes: &[StaticRouteKey]) {
+        lock!(self.static_routes).extend(routes.iter().copied());
 
-        for route in routes {
-            let key = serde_json::to_string(&route)?;
-            route_keys.push(key);
-        }
-
-        tree.transaction(|tx_db| {
-            for key in &route_keys {
-                tx_db.insert(key.as_str(), "")?;
-            }
-            Ok(())
-        })?;
-        tree.flush()?;
-
+        let mut pcn = PrefixChangeNotification::default();
         for route in routes {
             self.add_prefix_path(&route.prefix, &Path::from(*route));
             pcn.changed.insert(route.prefix);
         }
 
-        Ok(())
-    }
-
-    pub fn add_static_routes(
-        &self,
-        routes: &[StaticRouteKey],
-    ) -> Result<(), Error> {
-        let mut pcn = PrefixChangeNotification::default();
-        let (routes4, routes6) = routes.iter().cloned().fold(
-            (Vec::new(), Vec::new()),
-            |(mut v4, mut v6), srk| {
-                match srk.prefix {
-                    IpNet::V4(_) => v4.push(srk),
-                    IpNet::V6(_) => v6.push(srk),
-                }
-                (v4, v6)
-            },
-        );
-
-        {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            self.add_static_routes_to_tree(tree, &routes4, &mut pcn)?;
-        }
-
-        {
-            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-            self.add_static_routes_to_tree(tree, &routes6, &mut pcn)?;
-        }
-
         self.notify(pcn);
-        Ok(())
     }
 
     pub fn add_bgp_prefixes(&self, prefixes: &[IpNet], path: Path) {
@@ -958,108 +582,47 @@ impl Db {
         self.notify(pcn);
     }
 
-    fn get_static_from_tree(
-        &self,
-        tree: Tree,
-    ) -> Result<Vec<StaticRouteKey>, Error> {
-        Ok(tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, _) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching static route entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-
-                let key = String::from_utf8_lossy(&key);
-                // XXX: figure out how to handle removal of old static routes
-                //      where the host bits aren't zeroed out
-                let rkey: StaticRouteKey = match serde_json::from_str(&key) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing static route entry {key:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(rkey)
+    pub fn get_static(&self, af: Option<AddressFamily>) -> Vec<StaticRouteKey> {
+        lock!(self.static_routes)
+            .iter()
+            .filter(|r| match af {
+                Some(AddressFamily::Ipv4) => r.prefix.is_ipv4(),
+                Some(AddressFamily::Ipv6) => r.prefix.is_ipv6(),
+                None => true,
             })
-            .collect())
+            .copied()
+            .collect()
     }
 
-    pub fn get_static(
-        &self,
-        af: Option<AddressFamily>,
-    ) -> Result<Vec<StaticRouteKey>, Error> {
-        match af {
-            Some(AddressFamily::Ipv4) => {
-                let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-                self.get_static_from_tree(tree)
-            }
-            Some(AddressFamily::Ipv6) => {
-                let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-                self.get_static_from_tree(tree)
-            }
-            None => {
-                let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-                let mut routes = self.get_static_from_tree(tree)?;
-                let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-                routes.extend(self.get_static_from_tree(tree)?);
-                Ok(routes)
-            }
-        }
+    pub fn get_static4_count(&self) -> usize {
+        self.get_static(Some(AddressFamily::Ipv4)).len()
     }
 
-    pub fn get_static4_count(&self) -> Result<usize, Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-        Ok(tree.len())
-    }
-
-    pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static(Some(AddressFamily::Ipv4))?;
+    pub fn get_static_nexthop4_count(&self) -> usize {
+        let entries = self.get_static(Some(AddressFamily::Ipv4));
         let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
         }
-        Ok(nexthops.len())
+        nexthops.len()
     }
 
-    pub fn get_static6_count(&self) -> Result<usize, Error> {
-        let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-        Ok(tree.len())
+    pub fn get_static6_count(&self) -> usize {
+        self.get_static(Some(AddressFamily::Ipv6)).len()
     }
 
-    pub fn get_static_nexthop6_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static(Some(AddressFamily::Ipv6))?;
+    pub fn get_static_nexthop6_count(&self) -> usize {
+        let entries = self.get_static(Some(AddressFamily::Ipv6));
         let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
         }
-        Ok(nexthops.len())
+        nexthops.len()
     }
 
     pub fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
         // Fetch fanout once before modifying paths
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_RIB
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
+        let fanout = self.get_bestpath_fanout();
 
         let mut pcn = PrefixChangeNotification::default();
         let mut pcn6 = PrefixChangeNotification::default();
@@ -1256,63 +819,23 @@ impl Db {
         }
     }
 
-    fn remove_static_routes_from_tree(
-        &self,
-        tree: Tree,
-        routes: &[StaticRouteKey],
-    ) -> Result<(), Error> {
-        let mut pcn = PrefixChangeNotification::default();
-
-        let mut route_keys = Vec::new();
-        for route in routes {
-            let key = serde_json::to_string(route)?;
-            route_keys.push(key);
-            pcn.changed.insert(route.prefix);
+    pub fn remove_static_routes(&self, routes: &[StaticRouteKey]) {
+        {
+            let mut static_routes = lock!(self.static_routes);
+            for route in routes {
+                static_routes.remove(route);
+            }
         }
 
-        tree.transaction(|tx_db| {
-            for key in &route_keys {
-                tx_db.remove(key.as_str())?;
-            }
-            Ok(())
-        })?;
-        tree.flush()?;
-
+        let mut pcn = PrefixChangeNotification::default();
         for route in routes {
             self.remove_prefix_path(&route.prefix, |rib_path: &Path| {
                 rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
             });
+            pcn.changed.insert(route.prefix);
         }
 
         self.notify(pcn);
-        Ok(())
-    }
-
-    pub fn remove_static_routes(
-        &self,
-        routes: &[StaticRouteKey],
-    ) -> Result<(), Error> {
-        let (routes4, routes6) = routes.iter().fold(
-            (Vec::new(), Vec::new()),
-            |(mut r4, mut r6), srk| {
-                match srk.prefix {
-                    IpNet::V4(_) => r4.push(*srk),
-                    IpNet::V6(_) => r6.push(*srk),
-                }
-                (r4, r6)
-            },
-        );
-
-        {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            self.remove_static_routes_from_tree(tree, &routes4)?;
-        }
-        {
-            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-            self.remove_static_routes_from_tree(tree, &routes6)?;
-        }
-
-        Ok(())
     }
 
     // for each route in @prefixes, remove all bgp paths learned from @peer
@@ -1352,57 +875,13 @@ impl Db {
         self.generation.load(Ordering::SeqCst)
     }
 
-    pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let result = tree.get(TEP_KEY)?;
-        let value = match result {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-        let octets: [u8; 16] = (*value).try_into().map_err(|_| {
-            Error::DbValue(format!(
-                "rdb: tep length error exepcted 16 bytes found {}",
-                value.len(),
-            ))
-        })?;
-
-        Ok(Some(Ipv6Addr::from(octets)))
+    pub fn get_bestpath_fanout(&self) -> NonZeroU8 {
+        *read_lock!(self.bestpath_fanout)
     }
 
-    pub fn set_tep_addr(&self, addr: Ipv6Addr) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let key = addr.octets();
-        tree.insert(TEP_KEY, &key)?;
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn get_bestpath_fanout(&self) -> Result<NonZeroU8, Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let fan = match tree.get(BESTPATH_FANOUT)? {
-            // fanout was not in db
-            None => DEFAULT_BESTPATH_FANOUT,
-            Some(value) => {
-                let value: [u8; 1] = (*value).try_into().map_err(|_| {
-                    Error::DbKey("invalid bestpath_fanout value in db".into())
-                })?;
-                value[0]
-            }
-        };
-
-        Ok(match NonZeroU8::new(fan) {
-            // fanout was in db but was 0 (unexpected)
-            None => NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap(),
-            Some(fanout) => fanout,
-        })
-    }
-
-    pub fn set_bestpath_fanout(&self, fanout: NonZeroU8) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        tree.insert(BESTPATH_FANOUT, &[fanout.get()])?;
-        tree.flush()?;
+    pub fn set_bestpath_fanout(&self, fanout: NonZeroU8) {
+        *write_lock!(self.bestpath_fanout) = fanout;
         self.trigger_bestpath_when(|_pfx, _paths| true);
-        Ok(())
     }
 
     pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
@@ -1525,7 +1004,7 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
+        StaticRouteKey, db::Db, types::Asn,
         types::test_helpers::path_vecs_equal,
     };
     use client_common::eprintln_nopipe;
@@ -1537,9 +1016,8 @@ mod test {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
-    fn get_test_db() -> TestDb {
-        let log = init_file_logger("rib.log");
-        crate::test::get_test_db("rib_test", log).expect("create db")
+    fn get_test_db() -> Db {
+        Db::new(init_file_logger("rib.log"))
     }
 
     pub fn check_prefix_path(
@@ -1665,11 +1143,7 @@ mod test {
         let static_path1 = Path::from(static_key1);
 
         // setup
-        std::fs::create_dir_all("/tmp").expect("create tmp dir");
-        let log = init_file_logger("rib.log");
-        let db_path = "/tmp/rib.db".to_string();
-        let _ = std::fs::remove_dir_all(&db_path);
-        let db = Db::new(&db_path, log.clone()).expect("create db");
+        let db = Db::new(init_file_logger("rib.log"));
 
         // Start test cases
 
@@ -1682,8 +1156,7 @@ mod test {
         // Adding two static routes with the same identity (nexthop, vlan_id)
         // should result in the second replacing the first.
         // =====================================================================
-        db.add_static_routes(&[static_key0])
-            .expect("add static_key0");
+        db.add_static_routes(&[static_key0]);
 
         // Verify static_path0 is installed
         let rib_in_paths = vec![static_path0.clone()];
@@ -1692,8 +1165,7 @@ mod test {
 
         // Add static_key0_updated (same identity, different rib_priority)
         // This should REPLACE static_path0, not add a second path
-        db.add_static_routes(&[static_key0_updated])
-            .expect("add static_key0_updated");
+        db.add_static_routes(&[static_key0_updated]);
 
         // Verify only static_path0_updated exists (replacement occurred)
         let rib_in_paths = vec![static_path0_updated.clone()];
@@ -1704,8 +1176,7 @@ mod test {
         // Test 2: ECMP - multiple static routes with different identities
         // Adding a static route with a different nexthop should coexist.
         // =====================================================================
-        db.add_static_routes(&[static_key1])
-            .expect("add static_key1");
+        db.add_static_routes(&[static_key1]);
 
         // Verify both paths coexist (ECMP)
         // static_path0_updated (nexthop=remote_ip0) and static_path1 (nexthop=remote_ip1)
@@ -1722,8 +1193,7 @@ mod test {
         // Removing static_key0 should only remove static_path0_updated,
         // leaving static_path1 intact (different identity).
         // =====================================================================
-        db.remove_static_routes(&[static_key0])
-            .expect("remove static_key0");
+        db.remove_static_routes(&[static_key0]);
 
         // Verify static_path1 still exists
         let rib_in_paths = vec![static_path1.clone()];
@@ -1838,8 +1308,7 @@ mod test {
 
         // removal of final static route (from static_key1) should result
         // in the prefix being completely deleted
-        db.remove_static_routes(&[static_key1])
-            .expect("remove_static_routes_failed for {static_key1}");
+        db.remove_static_routes(&[static_key1]);
         // expected current state
         // rib_in: (empty)
         // loc_rib: (empty)
@@ -1876,10 +1345,10 @@ mod test {
         };
 
         // Add the route
-        db.add_static_routes(&[static_route]).unwrap();
+        db.add_static_routes(&[static_route]);
 
         // Verify route was added
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0], static_route);
 
@@ -1889,10 +1358,10 @@ mod test {
         assert!(rib_routes.contains_key(&IpNet::V4(prefix4)));
 
         // Remove the route
-        db.remove_static_routes(&[static_route]).unwrap();
+        db.remove_static_routes(&[static_route]);
 
         // Verify route was removed
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert!(routes.is_empty());
 
         // Check that RIB is empty
@@ -1918,10 +1387,10 @@ mod test {
         };
 
         // Add the route
-        db.add_static_routes(&[static_route]).unwrap();
+        db.add_static_routes(&[static_route]);
 
         // Verify route was added
-        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv6));
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0], static_route);
 
@@ -1931,10 +1400,10 @@ mod test {
         assert!(rib_routes.contains_key(&IpNet::V6(prefix6)));
 
         // Remove the route
-        db.remove_static_routes(&[static_route]).unwrap();
+        db.remove_static_routes(&[static_route]);
 
         // Verify route was removed
-        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv6));
         assert!(routes.is_empty());
 
         // Check that RIB is empty
@@ -1967,11 +1436,10 @@ mod test {
         };
 
         // Add both routes
-        db.add_static_routes(&[route_no_vlan, route_with_vlan])
-            .unwrap();
+        db.add_static_routes(&[route_no_vlan, route_with_vlan]);
 
         // Verify both routes were added correctly
-        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv6));
         assert_eq!(routes.len(), 2);
 
         let no_vlan_route =
@@ -1982,8 +1450,7 @@ mod test {
         assert_eq!(vlan_route.vlan_id, Some(4094));
 
         // Clean up
-        db.remove_static_routes(&[route_no_vlan, route_with_vlan])
-            .unwrap();
+        db.remove_static_routes(&[route_no_vlan, route_with_vlan]);
     }
 
     #[test]
@@ -2011,32 +1478,32 @@ mod test {
         };
 
         // Add both routes
-        db.add_static_routes(&[route4, route6]).unwrap();
+        db.add_static_routes(&[route4, route6]);
 
         // Test IPv4-only retrieval
-        let ipv4_routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        let ipv4_routes = db.get_static(Some(AddressFamily::Ipv4));
         assert_eq!(ipv4_routes.len(), 1);
         assert_eq!(ipv4_routes[0], route4);
 
         // Test IPv6-only retrieval
-        let ipv6_routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        let ipv6_routes = db.get_static(Some(AddressFamily::Ipv6));
         assert_eq!(ipv6_routes.len(), 1);
         assert_eq!(ipv6_routes[0], route6);
 
         // Test all address families retrieval
-        let all_routes = db.get_static(None).unwrap();
+        let all_routes = db.get_static(None);
         assert_eq!(all_routes.len(), 2);
         assert!(all_routes.contains(&route4));
         assert!(all_routes.contains(&route6));
 
         // Test counts
-        assert_eq!(db.get_static4_count().unwrap(), 1);
-        assert_eq!(db.get_static6_count().unwrap(), 1);
+        assert_eq!(db.get_static4_count(), 1);
+        assert_eq!(db.get_static6_count(), 1);
 
         // Remove routes and verify cleanup
-        db.remove_static_routes(&[route4, route6]).unwrap();
-        assert_eq!(db.get_static4_count().unwrap(), 0);
-        assert_eq!(db.get_static6_count().unwrap(), 0);
+        db.remove_static_routes(&[route4, route6]);
+        assert_eq!(db.get_static4_count(), 0);
+        assert_eq!(db.get_static6_count(), 0);
     }
 
     #[test]
@@ -2063,23 +1530,23 @@ mod test {
         };
 
         // Add both routes
-        db.add_static_routes(&[route1, route2]).unwrap();
+        db.add_static_routes(&[route1, route2]);
 
         // Verify both routes were added
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert_eq!(routes.len(), 2);
         assert!(routes.contains(&route1));
         assert!(routes.contains(&route2));
 
         // Remove one route, other should remain
-        db.remove_static_routes(&[route1]).unwrap();
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        db.remove_static_routes(&[route1]);
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0], route2);
 
         // Remove final route
-        db.remove_static_routes(&[route2]).unwrap();
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        db.remove_static_routes(&[route2]);
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert!(routes.is_empty());
     }
 
@@ -2108,11 +1575,10 @@ mod test {
         };
 
         // Add both routes
-        db.add_static_routes(&[route_no_vlan, route_with_vlan])
-            .unwrap();
+        db.add_static_routes(&[route_no_vlan, route_with_vlan]);
 
         // Verify both routes were added correctly
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert_eq!(routes.len(), 2);
 
         let no_vlan_route =
@@ -2123,8 +1589,7 @@ mod test {
         assert_eq!(vlan_route.vlan_id, Some(4094));
 
         // Clean up
-        db.remove_static_routes(&[route_no_vlan, route_with_vlan])
-            .unwrap();
+        db.remove_static_routes(&[route_no_vlan, route_with_vlan]);
     }
 
     #[test]
@@ -2155,8 +1620,8 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
 
-        db.add_static_routes(&[route]).unwrap();
-        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        db.add_static_routes(&[route]);
+        let routes = db.get_static(Some(AddressFamily::Ipv4));
         assert_eq!(routes.len(), 1);
 
         // Verify the stored route has the correct prefix
@@ -2169,7 +1634,7 @@ mod test {
             panic!("Expected IPv4 prefix");
         }
 
-        db.remove_static_routes(&[route]).unwrap();
+        db.remove_static_routes(&[route]);
     }
 
     #[test]
@@ -2188,7 +1653,7 @@ mod test {
         db.create_origin4(ASN, &prefixes).expect("create origin4");
 
         // Get origin4 - should return created prefixes
-        let retrieved = db.get_origin4(ASN).expect("get origin4");
+        let retrieved = db.get_origin4(ASN);
         assert_eq!(retrieved.len(), 2);
         assert!(retrieved.contains(&prefixes[0]));
         assert!(retrieved.contains(&prefixes[1]));
@@ -2199,39 +1664,32 @@ mod test {
         // A different ASN must not see the first ASN's origins, and may
         // create its own without conflicting.
         const OTHER_ASN: Asn = Asn::FourOctet(65002);
-        assert!(
-            db.get_origin4(OTHER_ASN)
-                .expect("get other origin4")
-                .is_empty()
-        );
+        assert!(db.get_origin4(OTHER_ASN).is_empty());
         let other_prefixes =
             vec![Ipv4Net::new_unchecked(Ipv4Addr::new(203, 0, 113, 0), 24)];
         db.create_origin4(OTHER_ASN, &other_prefixes)
             .expect("create other origin4");
-        assert_eq!(db.get_origin4(ASN).expect("get origin4").len(), 2);
+        assert_eq!(db.get_origin4(ASN).len(), 2);
 
         // Update origin4 with different prefixes
         let new_prefixes =
             vec![Ipv4Net::new_unchecked(Ipv4Addr::new(172, 16, 0, 0), 12)];
-        db.set_origin4(ASN, &new_prefixes).expect("set origin4");
+        db.set_origin4(ASN, &new_prefixes);
 
-        let updated = db.get_origin4(ASN).expect("get updated origin4");
+        let updated = db.get_origin4(ASN);
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0], new_prefixes[0]);
 
         // Clear origin4 - must only clear this ASN's entries
-        db.clear_origin4(ASN).expect("clear origin4");
-        let empty = db.get_origin4(ASN).expect("get empty origin4");
+        db.clear_origin4(ASN);
+        let empty = db.get_origin4(ASN);
         assert!(empty.is_empty());
-        assert_eq!(
-            db.get_origin4(OTHER_ASN).expect("get other origin4").len(),
-            1
-        );
+        assert_eq!(db.get_origin4(OTHER_ASN).len(), 1);
 
         // Create again after clear - should succeed
         db.create_origin4(ASN, &prefixes)
             .expect("create after clear");
-        let final_result = db.get_origin4(ASN).expect("get final origin4");
+        let final_result = db.get_origin4(ASN);
         assert_eq!(final_result.len(), 2);
     }
 
@@ -2257,7 +1715,7 @@ mod test {
         db.create_origin6(ASN, &prefixes).expect("create origin6");
 
         // Get origin6 - should return created prefixes
-        let retrieved = db.get_origin6(ASN).expect("get origin6");
+        let retrieved = db.get_origin6(ASN);
         assert_eq!(retrieved.len(), 2);
         assert!(retrieved.contains(&prefixes[0]));
         assert!(retrieved.contains(&prefixes[1]));
@@ -2267,67 +1725,29 @@ mod test {
 
         // A different ASN must not see the first ASN's origins.
         const OTHER_ASN: Asn = Asn::FourOctet(65002);
-        assert!(
-            db.get_origin6(OTHER_ASN)
-                .expect("get other origin6")
-                .is_empty()
-        );
+        assert!(db.get_origin6(OTHER_ASN).is_empty());
 
         // Update origin6 with different prefixes
         let new_prefixes = vec![Ipv6Net::new_unchecked(
             Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
             48,
         )];
-        db.set_origin6(ASN, &new_prefixes).expect("set origin6");
+        db.set_origin6(ASN, &new_prefixes);
 
-        let updated = db.get_origin6(ASN).expect("get updated origin6");
+        let updated = db.get_origin6(ASN);
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0], new_prefixes[0]);
 
         // Clear origin6
-        db.clear_origin6(ASN).expect("clear origin6");
-        let empty = db.get_origin6(ASN).expect("get empty origin6");
+        db.clear_origin6(ASN);
+        let empty = db.get_origin6(ASN);
         assert!(empty.is_empty());
 
         // Create again after clear - should succeed
         db.create_origin6(ASN, &prefixes)
             .expect("create after clear");
-        let final_result = db.get_origin6(ASN).expect("get final origin6");
+        let final_result = db.get_origin6(ASN);
         assert_eq!(final_result.len(), 2);
-    }
-
-    #[test]
-    fn test_prefix4_db_key_serialization() {
-        let prefix =
-            Ipv4Net::new_unchecked(Ipv4Addr::new(192, 168, 100, 0), 24);
-        let key = prefix.db_key();
-
-        // IPv4 address should be 4 bytes + 1 byte for length
-        assert_eq!(key.len(), 5);
-        assert_eq!(key[4], 24); // length byte
-
-        // Test round-trip serialization
-        let recovered =
-            Ipv4Net::from_db_key(&key).expect("recover from db key");
-        assert_eq!(recovered, prefix);
-    }
-
-    #[test]
-    fn test_prefix6_db_key_serialization() {
-        let prefix = Ipv6Net::new_unchecked(
-            Ipv6Addr::new(0x2001, 0xdb8, 0xdead, 0xbeef, 0, 0, 0, 0),
-            64,
-        );
-        let key = prefix.db_key();
-
-        // IPv6 address should be 16 bytes + 1 byte for length
-        assert_eq!(key.len(), 17);
-        assert_eq!(key[16], 64); // length byte
-
-        // Test round-trip serialization
-        let recovered =
-            Ipv6Net::from_db_key(&key).expect("recover from db key");
-        assert_eq!(recovered, prefix);
     }
 
     #[test]
@@ -2371,7 +1791,7 @@ mod test {
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
-        db.add_static_routes(&[static_key4]).unwrap();
+        db.add_static_routes(&[static_key4]);
 
         // Verify path starts not-shutdown.
         let paths = db.get_prefix_paths(&IpNet::V4(prefix4));
@@ -2402,7 +1822,7 @@ mod test {
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
-        db.add_static_routes(&[static_key6]).unwrap();
+        db.add_static_routes(&[static_key6]);
 
         db.set_nexthop_shutdown(nexthop6, true);
         let paths = db.get_prefix_paths(&IpNet::V6(prefix6));

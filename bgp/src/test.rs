@@ -325,11 +325,7 @@ where
             logical_router.name
         ));
 
-        // Create database with unique path per test function
-        let db_path =
-            format!("/tmp/{}.{actual_test_name}.db", logical_router.name);
-        let _ = std::fs::remove_dir_all(&db_path);
-        let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
+        let db = rdb::Db::new(log.clone());
 
         // Create shared session map
         let sessions: Arc<Mutex<SessionMap<Cnx>>> =
@@ -1838,10 +1834,8 @@ fn unnumbered_peering_helper(
     let log = init_file_logger(&format!("{}.log", test_name));
 
     // Create databases
-    let db1 = rdb::test::get_test_db(&format!("{}_r1", test_name), log.clone())
-        .expect("create db1");
-    let db2 = rdb::test::get_test_db(&format!("{}_r2", test_name), log.clone())
-        .expect("create db2");
+    let db1 = rdb::Db::new(log.clone());
+    let db2 = rdb::Db::new(log.clone());
 
     // Create mock NDP managers
     let mock_ndp1 = UnnumberedManagerMock::new();
@@ -1924,7 +1918,7 @@ fn unnumbered_peering_helper(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -1933,7 +1927,7 @@ fn unnumbered_peering_helper(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.clone(),
         sessions2.clone(),
     ));
 
@@ -2536,7 +2530,6 @@ struct UnnumberedRouterHandle {
     dispatchers: Vec<Arc<Dispatcher<BgpConnectionChannel>>>,
     mock_ndp: Arc<UnnumberedManagerMock>,
     sessions: Vec<Arc<SessionRunner<BgpConnectionChannel>>>,
-    _db_guard: rdb::test::TestDb,
 }
 
 impl UnnumberedRouterHandle {
@@ -2645,11 +2638,9 @@ fn unnumbered_pair(
 ) -> UnnumberedTopology {
     let log = init_file_logger(&format!("{}.log", test_name));
 
-    // Create databases with unique paths
-    let db1 = rdb::test::get_test_db(&format!("{}_r1", test_name), log.clone())
-        .expect("create db1");
-    let db2 = rdb::test::get_test_db(&format!("{}_r2", test_name), log.clone())
-        .expect("create db2");
+    // Create databases
+    let db1 = rdb::Db::new(log.clone());
+    let db2 = rdb::Db::new(log.clone());
 
     // Create mock NDP managers
     let mock_ndp1 = UnnumberedManagerMock::new();
@@ -2711,7 +2702,7 @@ fn unnumbered_pair(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -2720,7 +2711,7 @@ fn unnumbered_pair(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.clone(),
         sessions2.clone(),
     ));
 
@@ -2816,14 +2807,12 @@ fn unnumbered_pair(
                 dispatchers: vec![dispatcher1],
                 mock_ndp: mock_ndp1,
                 sessions: vec![session1],
-                _db_guard: db1,
             },
             UnnumberedRouterHandle {
                 router: router2,
                 dispatchers: vec![dispatcher2],
                 mock_ndp: mock_ndp2,
                 sessions: vec![session2],
-                _db_guard: db2,
             },
         ],
     }
@@ -2852,13 +2841,10 @@ fn unnumbered_three_router_chain(
 ) -> UnnumberedTopology {
     let log = init_file_logger(&format!("{}.log", test_name));
 
-    // Create databases with unique paths
-    let db1 = rdb::test::get_test_db(&format!("{}_r1", test_name), log.clone())
-        .expect("create db1");
-    let db2 = rdb::test::get_test_db(&format!("{}_r2", test_name), log.clone())
-        .expect("create db2");
-    let db3 = rdb::test::get_test_db(&format!("{}_r3", test_name), log.clone())
-        .expect("create db3");
+    // Create databases
+    let db1 = rdb::Db::new(log.clone());
+    let db2 = rdb::Db::new(log.clone());
+    let db3 = rdb::Db::new(log.clone());
 
     // Create mock NDP managers
     let mock_ndp1 = UnnumberedManagerMock::new();
@@ -2977,7 +2963,7 @@ fn unnumbered_three_router_chain(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -2986,7 +2972,7 @@ fn unnumbered_three_router_chain(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.clone(),
         sessions2.clone(),
     ));
     let router3 = Arc::new(Router::new(
@@ -2995,7 +2981,7 @@ fn unnumbered_three_router_chain(
             id: 3,
         },
         log.clone(),
-        db3.db().clone(),
+        db3.clone(),
         sessions3.clone(),
     ));
 
@@ -3163,21 +3149,18 @@ fn unnumbered_three_router_chain(
                 dispatchers: vec![disp1],
                 mock_ndp: mock_ndp1,
                 sessions: vec![session1],
-                _db_guard: db1,
             },
             UnnumberedRouterHandle {
                 router: router2,
                 dispatchers: vec![disp2_eth0, disp2_eth1],
                 mock_ndp: mock_ndp2,
                 sessions: vec![session2_r1, session2_r3],
-                _db_guard: db2,
             },
             UnnumberedRouterHandle {
                 router: router3,
                 dispatchers: vec![disp3],
                 mock_ndp: mock_ndp3,
                 sessions: vec![session3],
-                _db_guard: db3,
             },
         ],
     }
@@ -3877,10 +3860,8 @@ fn test_unnumbered_interface_lifecycle() {
     // Setup: Two routers with interface CONFIGURED but NOT on system
     // =========================================================================
 
-    let db1 = rdb::test::get_test_db("unnumbered_lifecycle_r1", log.clone())
-        .expect("create db1");
-    let db2 = rdb::test::get_test_db("unnumbered_lifecycle_r2", log.clone())
-        .expect("create db2");
+    let db1 = rdb::Db::new(log.clone());
+    let db2 = rdb::Db::new(log.clone());
 
     let mock_ndp1 = UnnumberedManagerMock::new();
     let mock_ndp2 = UnnumberedManagerMock::new();
@@ -3937,7 +3918,7 @@ fn test_unnumbered_interface_lifecycle() {
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -3946,7 +3927,7 @@ fn test_unnumbered_interface_lifecycle() {
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.clone(),
         sessions2.clone(),
     ));
 
@@ -4246,8 +4227,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
     let log = init_file_logger(&format!("{test_name}.log"));
 
     // Create a database and single (shared) session map for both routers.
-    let db = rdb::test::get_test_db(test_name, log.clone())
-        .expect("created test db");
+    let db = rdb::Db::new(log.clone());
     let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
         Arc::new(Mutex::new(SessionMap::new()));
 
@@ -4257,7 +4237,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
             id: 1,
         },
         log.clone(),
-        db.db().clone(),
+        db.clone(),
         sessions.clone(),
     ));
     let router_b = Arc::new(Router::new(
@@ -4266,7 +4246,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
             id: 2,
         },
         log.clone(),
-        db.db().clone(),
+        db.clone(),
         sessions.clone(),
     ));
 
@@ -4366,8 +4346,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let test_name = "recreated_router_does_not_claim_predecessors_sessions";
     let log = init_file_logger(&format!("{test_name}.log"));
 
-    let db = rdb::test::get_test_db(test_name, log.clone())
-        .expect("created test db");
+    let db = rdb::Db::new(log.clone());
     let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
         Arc::new(Mutex::new(SessionMap::new()));
 
@@ -4382,7 +4361,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let old_router = Arc::new(Router::new(
         config,
         log.clone(),
-        db.db().clone(),
+        db.clone(),
         sessions.clone(),
     ));
 
@@ -4433,7 +4412,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let new_router = Arc::new(Router::new(
         config,
         log.clone(),
-        db.db().clone(),
+        db.clone(),
         sessions.clone(),
     ));
 
@@ -4498,8 +4477,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
     let test_name = "admin_events_do_not_reach_other_routers_sessions";
     let log = init_file_logger(&format!("{test_name}.log"));
 
-    let db = rdb::test::get_test_db(test_name, log.clone())
-        .expect("created test db");
+    let db = rdb::Db::new(log.clone());
 
     let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
         Arc::new(Mutex::new(SessionMap::new()));
@@ -4510,7 +4488,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
             id: 1,
         },
         log.clone(),
-        db.db().clone(),
+        db.clone(),
         sessions.clone(),
     ));
     let router_b = Arc::new(Router::new(
@@ -4519,7 +4497,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
             id: 2,
         },
         log.clone(),
-        db.db().clone(),
+        db.clone(),
         sessions.clone(),
     ));
 

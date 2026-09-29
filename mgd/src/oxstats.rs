@@ -684,44 +684,24 @@ impl Stats {
     }
 
     fn static_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
-        let mut samples = Vec::new();
-
-        match self.db.get_static4_count() {
-            Ok(count) => {
-                samples.push(static_counter!(
-                    self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
-                    StaticRoutes,
-                    count as u64
-                ));
-            }
-            Err(e) => {
-                olog!(self.log, warn, "failed to produce static4 count: {e}");
-            }
-        }
-        match self.db.get_static_nexthop4_count() {
-            Ok(count) => {
-                samples.push(static_counter!(
-                    self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
-                    StaticNexthops,
-                    count as u64
-                ));
-            }
-            Err(e) => {
-                olog!(
-                    self.log,
-                    warn,
-                    "failed to produce static_nexthop4 count: {e}"
-                );
-            }
-        }
-
-        Ok(samples)
+        Ok(vec![
+            static_counter!(
+                self.hostname.clone().into(),
+                self.rack_id,
+                self.sled_id,
+                self.start_time,
+                StaticRoutes,
+                self.db.get_static4_count() as u64
+            ),
+            static_counter!(
+                self.hostname.clone().into(),
+                self.rack_id,
+                self.sled_id,
+                self.start_time,
+                StaticNexthops,
+                self.db.get_static_nexthop4_count() as u64
+            ),
+        ])
     }
 
     fn rib_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {

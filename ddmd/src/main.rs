@@ -83,10 +83,6 @@ struct Arg {
     #[arg(long, default_value_t = dpd_client::default_port())]
     dpd_port: u16,
 
-    /// Where to store the local database
-    #[arg(long, default_value = "/var/run")]
-    data_dir: String,
-
     /// DNS servers used to find nexus.
     #[arg(long)]
     dns_servers: Vec<String>,
@@ -144,7 +140,7 @@ async fn run() {
         .await
         .expect("set up refresh signal handler");
 
-    let db = Db::new(&format!("{}/ddmdb", arg.data_dir), log.clone()).unwrap();
+    let db = Db::default();
 
     let dpd = match arg.dendrite {
         true => Some(DpdConfig {

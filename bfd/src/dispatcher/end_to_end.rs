@@ -88,18 +88,14 @@ impl ListenerBackend for PreBoundSocketBackend {
 }
 
 /// Build a `Daemon` whose listener is bound to an ephemeral loopback port, and
-/// return the daemon, that listening address, and the backing test db (which
-/// must be kept alive for the duration of the test).
-async fn build_daemon(
-    test_name: &str,
-) -> (Daemon, SocketAddr, rdb::test::TestDb) {
+/// return the daemon, that listening address, and a routing db for its peers.
+async fn build_daemon() -> (Daemon, SocketAddr, rdb::Db) {
     let log = test_logger();
     let socket = UdpSocket::bind((LOCALHOST, 0))
         .await
         .expect("bind loopback socket");
     let listen_addr = socket.local_addr().expect("socket has local addr");
-    let db =
-        rdb::test::get_test_db(test_name, log.clone()).expect("create test db");
+    let db = rdb::Db::new(log.clone());
     let daemon = Daemon::with_dispatcher(
         Dispatcher::with_backend(Arc::new(PreBoundSocketBackend::new(socket))),
         log,
@@ -109,13 +105,13 @@ async fn build_daemon(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_sessions_converge_then_peer_loss_drives_down() {
-    let (mut daemon_a, addr_a, db_a) = build_daemon("bfd_e2e_a").await;
-    let (mut daemon_b, addr_b, db_b) = build_daemon("bfd_e2e_b").await;
+    let (mut daemon_a, addr_a, db_a) = build_daemon().await;
+    let (mut daemon_b, addr_b, db_b) = build_daemon().await;
 
     // A's egress targets B's listener and vice versa.
     daemon_a
         .add_peer(
-            db_a.db().clone(),
+            db_a.clone(),
             AddPeerRequest {
                 remote_addr: addr_b,
                 listen_addr: addr_a,
@@ -127,7 +123,7 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
         .expect("add peer to daemon a");
     daemon_b
         .add_peer(
-            db_b.db().clone(),
+            db_b.clone(),
             AddPeerRequest {
                 remote_addr: addr_a,
                 listen_addr: addr_b,
@@ -159,7 +155,4 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
     })
     .await
     .expect("session a goes Down after peer loss");
-
-    // Keep the dbs alive until the end so their tasks don't see a vanished db.
-    drop((db_a, db_b));
 }

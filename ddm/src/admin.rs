@@ -175,22 +175,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let originated = ctx
-            .db
-            .originated()
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-        Ok(HttpResponseOk(originated))
+        Ok(HttpResponseOk(ctx.db.originated()))
     }
 
     async fn get_originated_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<TunnelOrigin>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let originated = ctx
-            .db
-            .originated_tunnel()
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-        Ok(HttpResponseOk(originated))
+        Ok(HttpResponseOk(ctx.db.originated_tunnel()))
     }
 
     async fn get_prefixes(
@@ -234,9 +226,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
         let prefixes = request.into_inner();
-        ctx.db
-            .originate(&prefixes)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        ctx.db.originate(&prefixes);
 
         for e in &ctx.event_channels {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
@@ -247,18 +237,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             })?;
         }
 
-        match ctx.db.originated_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_underlay_prefixes
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated underlay prefixes stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_underlay_prefixes
+            .store(ctx.db.originated_count() as u64, Ordering::Relaxed);
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -270,9 +251,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
-        ctx.db
-            .originate_tunnel(&endpoints)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        ctx.db.originate_tunnel(&endpoints);
 
         for e in &ctx.event_channels {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
@@ -283,18 +262,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             })?;
         }
 
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunnel endpoints stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_tunnel_endpoints
+            .store(ctx.db.originated_tunnel_count() as u64, Ordering::Relaxed);
         Ok(HttpResponseUpdatedNoContent())
     }
 
@@ -304,9 +274,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
         let prefixes = request.into_inner();
-        ctx.db
-            .withdraw(&prefixes)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        ctx.db.withdraw(&prefixes);
 
         for e in &ctx.event_channels {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
@@ -317,18 +285,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             })?;
         }
 
-        match ctx.db.originated_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_underlay_prefixes
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated underlay prefixes stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_underlay_prefixes
+            .store(ctx.db.originated_count() as u64, Ordering::Relaxed);
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -340,9 +299,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
-        ctx.db
-            .withdraw_tunnel(&endpoints)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        ctx.db.withdraw_tunnel(&endpoints);
 
         for e in &ctx.event_channels {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
@@ -353,18 +310,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             })?;
         }
 
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunel endpoints stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_tunnel_endpoints
+            .store(ctx.db.originated_tunnel_count() as u64, Ordering::Relaxed);
 
         Ok(HttpResponseUpdatedNoContent())
     }

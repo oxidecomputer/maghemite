@@ -2,7 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::error::Error;
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 
 #[cfg(test)]
@@ -171,56 +170,6 @@ impl Policy4Key {
     }
 }
 
-/// Database key trait for prefix types
-pub trait PrefixDbKey: Sized {
-    fn db_key(&self) -> Vec<u8>;
-    fn from_db_key(v: &[u8]) -> Result<Self, Error>;
-}
-
-impl PrefixDbKey for Ipv4Net {
-    fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.addr().octets().into();
-        buf.push(self.width());
-        buf
-    }
-
-    fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        if v.len() < 5 {
-            Err(Error::DbKey(format!(
-                "buffer to short for prefix 4 key {} < 5",
-                v.len()
-            )))
-        } else {
-            Ok(Ipv4Net::new_unchecked(
-                Ipv4Addr::new(v[0], v[1], v[2], v[3]),
-                v[4],
-            ))
-        }
-    }
-}
-
-impl PrefixDbKey for Ipv6Net {
-    fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.addr().octets().into();
-        buf.push(self.width());
-        buf
-    }
-
-    fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        if v.len() < 17 {
-            Err(Error::DbKey(format!(
-                "buffer too short for prefix 6 key {} < 17",
-                v.len()
-            )))
-        } else {
-            let octets: [u8; 16] = v[0..16].try_into().map_err(|_| {
-                Error::DbKey("failed to convert to IPv6 octets".to_string())
-            })?;
-            Ok(Ipv6Net::new_unchecked(Ipv6Addr::from(octets), v[16]))
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Asn {
     TwoOctet(u16),
@@ -365,7 +314,10 @@ mod test {
     use super::*;
     use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
     use std::{
-        cmp::Ordering, collections::BTreeSet, net::IpAddr, str::FromStr,
+        cmp::Ordering,
+        collections::BTreeSet,
+        net::{IpAddr, Ipv6Addr},
+        str::FromStr,
     };
 
     fn bgp_path(
