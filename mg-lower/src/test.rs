@@ -81,10 +81,13 @@ async fn sync_prefix_test() {
         assert_eq!(ddm.tunnel_originated.lock().unwrap().len(), 4);
         assert_eq!(dpd.v4_count(), 4);
 
-        // Every dpd route call must carry this router's id.
-        let routers_seen = dpd.route_call_routers.lock().unwrap();
-        assert!(!routers_seen.is_empty());
-        assert!(routers_seen.iter().all(|x| *x == TABLE));
+        // Every route landed in this router's table.
+        let tables = dpd.v4_routes.lock().unwrap();
+        assert_eq!(
+            tables.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([TABLE])
+        );
+        assert_eq!(tables[&TABLE].len(), 4);
 
         tx.send(()).unwrap();
     });
@@ -772,17 +775,15 @@ async fn two_router_lifecycle() {
             assert_eq!(tep_for("2.0.0.0/24"), tep2);
         }
 
-        // Every dpd route call carried one of the two router ids, and both
-        // routers made calls.
+        // Each router's route landed in its own table, and nowhere else.
         {
-            let seen = dpd.route_call_routers.lock().unwrap();
-            let (t1, t2) = (r1.id(), r2.id());
-            assert!(
-                seen.iter().all(|x| *x == t1 || *x == t2),
-                "dpd route call with unknown router id"
+            let tables = dpd.v4_routes.lock().unwrap();
+            assert_eq!(
+                tables.keys().copied().collect::<BTreeSet<_>>(),
+                BTreeSet::from([r1.id(), r2.id()])
             );
-            assert!(seen.contains(&t1));
-            assert!(seen.contains(&t2));
+            assert_eq!(tables[&r1.id()].len(), 1);
+            assert_eq!(tables[&r2.id()].len(), 1);
         }
 
         // Shut down r1: it is deleted from dpd, its tunnel origins are

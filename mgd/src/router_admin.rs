@@ -11,11 +11,11 @@
 //! emptied in place. There is deliberately no per-router CRUD.
 //!
 //! An apply is serialized against every other configuration writer by
-//! [`HandlerContext::apply_lock`] and runs in two steps: [`plan_apply`]
-//! validates the whole request — its own shape and its fit against the live
-//! daemon state — without touching anything, then [`execute_apply`] carries
-//! the plan out in fixed phases (teardown, release, claim). A request that
-//! is invalid anywhere therefore leaves the daemon exactly as it was.
+//! [`HandlerContext::apply_lock`]. The whole request is validated before
+//! anything is touched, so a request that is invalid anywhere leaves the
+//! daemon exactly as it was. Then routers absent from the request are torn
+//! down, peers moving between routers are removed from their old router
+//! ([`release_moved`]), and each router is converged onto its spec.
 
 use crate::admin::HandlerContext;
 use crate::bfd_admin;
@@ -27,7 +27,6 @@ use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path, Query,
     RequestContext, TypedBody,
 };
-use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::config::{
     ApplyRequest, Neighbor, PeerInfo, UnnumberedNeighbor,
 };
@@ -38,7 +37,7 @@ use mg_api_types::router::{
 use mg_common::lock;
 use oxnet::IpNet;
 use rdb::{DEFAULT_ROUTER_ID, RibExt, RouterId, StaticRouteKey};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU8;
 use std::sync::Arc;
@@ -125,154 +124,67 @@ pub(crate) async fn multi_router_apply(
 ///
 /// Serialized with every other configuration writer through
 /// `apply_lock`. Nothing is mutated on behalf of `rq` until the whole
-/// request has been validated against the live state ([`plan_apply`]).
+/// request has been validated.
 pub(crate) async fn do_multi_router_apply(
     ctx: &Arc<HandlerContext>,
     rq: MultiRouterApplyRequest,
 ) -> Result<(), HttpError> {
     let _serialized = ctx.apply_lock.lock().await;
-    let plan = plan_apply(ctx, rq)?;
-    execute_apply(ctx, plan).await
-}
-
-/// A validated, fully resolved apply. Building one touches no daemon state.
-struct ApplyPlan {
-    /// Live routers whose id is absent from the request, to tear down before
-    /// anything is created.
-    teardown: Vec<RouterId>,
-    /// Desired routers in application order: the default router first. An
-    /// absent default router is included with an empty spec.
-    routers: Vec<RouterPlan>,
-}
-
-struct RouterPlan {
-    spec: RouterSpec,
-    /// Validated complete static route set.
-    statics: BTreeSet<StaticRouteKey>,
-    /// Validated complete BFD peer set, by peer address.
-    bfd: BTreeMap<IpAddr, BfdPeerConfig>,
-    /// The router does not exist (or is being re-created) and must be
-    /// created before its spec is applied.
-    create: bool,
-}
-
-impl RouterPlan {
-    /// The plan that empties an existing router's configuration.
-    fn empty(info: &RouterInfo) -> Self {
-        RouterPlan {
-            spec: RouterSpec {
-                name: info.name.clone(),
-                id: info.id,
-                bgp: None,
-                static4: Vec::new(),
-                static6: Vec::new(),
-                bfd_peers: Vec::new(),
-            },
-            statics: BTreeSet::new(),
-            bfd: BTreeMap::new(),
-            create: false,
-        }
-    }
-}
-
-/// Validate `rq` — its own shape, then its fit against the live routers —
-/// and resolve it into an [`ApplyPlan`]. Pure: reads daemon state, mutates
-/// nothing.
-fn plan_apply(
-    ctx: &Arc<HandlerContext>,
-    rq: MultiRouterApplyRequest,
-) -> Result<ApplyPlan, HttpError> {
     validate_apply_request(&rq)?;
-
-    let live = ctx.db.list_routers();
-
     for spec in &rq.routers {
         validate_router_spec(spec)?;
-        if (spec.name == rdb::DEFAULT_ROUTER) != (spec.id == DEFAULT_ROUTER_ID)
-        {
-            return Err(HttpError::for_bad_request(
-                None,
-                format!(
-                    "router {:?}: the {:?} router's id is {DEFAULT_ROUTER_ID}",
-                    spec.name,
-                    rdb::DEFAULT_ROUTER,
-                ),
-            ));
-        }
     }
 
-    // The default router is applied first: it may drop live peer claims
-    // that another router in the same request is picking up.
-    let mut routers = Vec::with_capacity(rq.routers.len() + 1);
-    if !rq.routers.iter().any(|s| s.id == DEFAULT_ROUTER_ID)
-        && let Some(info) = live.iter().find(|r| r.id == DEFAULT_ROUTER_ID)
-    {
-        routers.push(RouterPlan::empty(info));
-    }
+    // The default router always exists; a request without it empties it.
     let mut specs = rq.routers;
-    specs.sort_by_key(|s| s.id != DEFAULT_ROUTER_ID);
-    for spec in specs {
-        let statics = static_keys(&spec)?;
-        let bfd = spec.bfd_peers.iter().map(|p| (p.peer, *p)).collect();
-        let create = !live.iter().any(|r| r.id == spec.id);
-        routers.push(RouterPlan {
-            spec,
-            statics,
-            bfd,
-            create,
+    if !specs.iter().any(|s| s.id == DEFAULT_ROUTER_ID) {
+        specs.push(RouterSpec {
+            name: rdb::DEFAULT_ROUTER.to_string(),
+            id: DEFAULT_ROUTER_ID,
+            bgp: None,
+            static4: Vec::new(),
+            static6: Vec::new(),
+            bfd_peers: Vec::new(),
         });
     }
 
-    let teardown = live
-        .iter()
-        .map(|r| r.id)
-        .filter(|id| !routers.iter().any(|rp| rp.spec.id == *id))
-        .collect();
-
-    Ok(ApplyPlan { teardown, routers })
-}
-
-/// Carry out a plan in fixed phases.
-async fn execute_apply(
-    ctx: &Arc<HandlerContext>,
-    plan: ApplyPlan,
-) -> Result<(), HttpError> {
-    // 1. Tear down routers whose id is absent from the request.
-    for id in &plan.teardown {
-        teardown_router(ctx, *id).await?;
+    for info in ctx.db.list_routers() {
+        if !specs.iter().any(|s| s.id == info.id) {
+            teardown_router(ctx, info.id).await?;
+        }
     }
 
-    // 2. Release: every surviving router first drops the BGP and BFD peers
-    //    it no longer wants (an absent default router drops everything), so
-    //    a peer moving between routers is free before anyone claims it —
-    //    whatever order the specs were listed in. Renames happen here too,
-    //    so no surviving router holds a name a new router is created with.
-    for rp in plan.routers.iter().filter(|rp| !rp.create) {
-        let rdb = ctx.db.router(rp.spec.id).map_err(Error::from)?;
-        if rdb.name() != rp.spec.name {
+    // Rename before any router is created, so a name freed by a rename is
+    // available to a router created in the same request.
+    for spec in &specs {
+        if let Ok(rdb) = ctx.db.router(spec.id)
+            && rdb.name() != spec.name
+        {
             ctx.db
-                .rename_router(rp.spec.id, &rp.spec.name)
+                .rename_router(spec.id, &spec.name)
                 .map_err(Error::from)?;
         }
-        release_bgp(ctx, &rdb, &rp.spec).await?;
-        release_bfd(ctx, &rdb, rp).await?;
     }
 
-    // 3. Claim: create missing routers, then converge each onto its spec.
-    for rp in plan.routers {
-        let rdb = if rp.create {
-            ctx.db
+    release_moved(ctx, &specs).await?;
+
+    for spec in &specs {
+        let rdb = match ctx.db.router(spec.id) {
+            Ok(rdb) => rdb,
+            Err(rdb::error::Error::NotFound(_)) => ctx
+                .db
                 .create_router(RouterInfo {
-                    id: rp.spec.id,
-                    name: rp.spec.name.clone(),
+                    id: spec.id,
+                    name: spec.name.clone(),
                     tep: random_tep_ula(),
                 })
-                .map_err(|e| HttpError::from(Error::from(e)))?
-        } else {
-            ctx.db.router(rp.spec.id).map_err(Error::from)?
+                .map_err(Error::from)?,
+            Err(e) => return Err(Error::from(e).into()),
         };
         ctx.lower.ensure(&rdb, &ctx.log, &ctx.mg_lower_stats);
-        apply_router_plan(ctx, &rdb, rp).await?;
+        apply_bgp(ctx, &rdb, spec).await?;
+        apply_static(&rdb, &static_keys(spec)?)?;
+        apply_bfd(ctx, &rdb, spec).await?;
     }
 
     Ok(())
@@ -328,6 +240,14 @@ fn validate_router_spec(spec: &RouterSpec) -> Result<(), HttpError> {
         }
     }
 
+    if (spec.name == rdb::DEFAULT_ROUTER) != (spec.id == DEFAULT_ROUTER_ID) {
+        return Err(bad(format!(
+            "the {:?} router's id is {DEFAULT_ROUTER_ID}",
+            rdb::DEFAULT_ROUTER,
+        )));
+    }
+
+    static_keys(spec)?;
     Ok(())
 }
 
@@ -408,14 +328,7 @@ async fn teardown_router(
     // contents, so it must run before the RIB is torn down.
     ctx.lower.stop(id).await;
 
-    let asns: Vec<u32> = lock!(ctx.bgp.router)
-        .keys()
-        .filter(|(r, _)| *r == id)
-        .map(|(_, asn)| *asn)
-        .collect();
-    for asn in asns {
-        bgp_admin::do_delete_router(ctx, &rdb, asn).await?;
-    }
+    delete_bgp_routers(ctx, &rdb).await?;
 
     let peers: Vec<IpAddr> = rdb
         .get_bfd_neighbors()
@@ -428,6 +341,22 @@ async fn teardown_router(
     ctx.db
         .delete_router(id)
         .map_err(|e| HttpError::from(Error::from(e)))?;
+    Ok(())
+}
+
+/// Delete every BGP router under this logical router.
+async fn delete_bgp_routers(
+    ctx: &Arc<HandlerContext>,
+    rdb: &rdb::RouterDb,
+) -> Result<(), HttpError> {
+    let asns: Vec<u32> = lock!(ctx.bgp.router)
+        .keys()
+        .filter(|(id, _)| *id == rdb.id())
+        .map(|(_, asn)| *asn)
+        .collect();
+    for asn in asns {
+        bgp_admin::do_delete_router(ctx, rdb, asn).await?;
+    }
     Ok(())
 }
 
@@ -455,105 +384,67 @@ async fn remove_bfd_peers(
     Ok(())
 }
 
-/// Release phase for an existing router: drop the BGP routers and peers its
-/// spec no longer wants, so those peers are claimable by other routers in
-/// the same apply. The claim phase (`apply_bgp`) then only adds/updates.
-async fn release_bgp(
+/// Remove from every live router the BGP and BFD peers that `specs` give to
+/// a different router, so the new owner can add them whatever order the
+/// routers are applied in. Peers no spec wants are left to their router's
+/// own apply.
+async fn release_moved(
     ctx: &Arc<HandlerContext>,
-    rdb: &rdb::RouterDb,
-    spec: &RouterSpec,
+    specs: &[RouterSpec],
 ) -> Result<(), HttpError> {
-    delete_stale_bgp_routers(ctx, rdb, spec).await?;
-
-    let Some(bgp) = &spec.bgp else {
-        return Ok(());
-    };
-
-    let wanted_addrs: HashSet<IpAddr> =
-        bgp.peers.values().flatten().map(|p| p.host.ip()).collect();
-    let wanted_ifxs: HashSet<&str> = bgp
-        .unnumbered_peers
-        .values()
-        .flatten()
-        .map(|p| p.interface.as_str())
-        .collect();
-
-    let numbered = rdb
-        .get_bgp_neighbors()
-        .map_err(|e| HttpError::from(Error::from(e)))?;
-    for nbr in numbered {
-        if nbr.asn == bgp.asn && !wanted_addrs.contains(&nbr.host.ip()) {
-            bgp_admin::helpers::remove_neighbor(
-                ctx.clone(),
-                rdb,
-                nbr.asn,
-                nbr.host.ip(),
-            )
-            .await?;
+    let mut numbered: HashMap<IpAddr, RouterId> = HashMap::new();
+    let mut unnumbered: HashMap<&str, RouterId> = HashMap::new();
+    let mut bfd: HashMap<IpAddr, RouterId> = HashMap::new();
+    for spec in specs {
+        if let Some(bgp) = &spec.bgp {
+            for p in bgp.peers.values().flatten() {
+                numbered.insert(p.host.ip(), spec.id);
+            }
+            for p in bgp.unnumbered_peers.values().flatten() {
+                unnumbered.insert(p.interface.as_str(), spec.id);
+            }
+        }
+        for p in &spec.bfd_peers {
+            bfd.insert(p.peer, spec.id);
         }
     }
-    let unnumbered = rdb
-        .get_unnumbered_bgp_neighbors()
-        .map_err(|e| HttpError::from(Error::from(e)))?;
-    for nbr in unnumbered {
-        if nbr.asn == bgp.asn && !wanted_ifxs.contains(nbr.interface.as_str()) {
-            bgp_admin::helpers::remove_unnumbered_neighbor(
-                ctx.clone(),
-                rdb,
-                nbr.asn,
-                &nbr.interface,
-            )
-            .await?;
+
+    for info in ctx.db.list_routers() {
+        let rdb = ctx.db.router(info.id).map_err(Error::from)?;
+        let moved =
+            |owner: Option<&RouterId>| owner.is_some_and(|o| *o != info.id);
+
+        for nbr in rdb.get_bgp_neighbors().map_err(Error::from)? {
+            if moved(numbered.get(&nbr.host.ip())) {
+                bgp_admin::helpers::remove_neighbor(
+                    ctx.clone(),
+                    &rdb,
+                    nbr.asn,
+                    nbr.host.ip(),
+                )
+                .await?;
+            }
         }
+        for nbr in rdb.get_unnumbered_bgp_neighbors().map_err(Error::from)? {
+            if moved(unnumbered.get(nbr.interface.as_str())) {
+                bgp_admin::helpers::remove_unnumbered_neighbor(
+                    ctx.clone(),
+                    &rdb,
+                    nbr.asn,
+                    &nbr.interface,
+                )
+                .await?;
+            }
+        }
+        let peers: Vec<IpAddr> = rdb
+            .get_bfd_neighbors()
+            .map_err(Error::from)?
+            .into_iter()
+            .map(|p| p.peer)
+            .filter(|p| moved(bfd.get(p)))
+            .collect();
+        remove_bfd_peers(ctx, &rdb, &peers).await?;
     }
-    Ok(())
-}
-
-/// Release phase for BFD: drop this router's peers that are unwanted or
-/// whose config changed (a changed config is remove + re-add: BFD sessions
-/// are cheap to restart).
-async fn release_bfd(
-    ctx: &Arc<HandlerContext>,
-    rdb: &rdb::RouterDb,
-    rp: &RouterPlan,
-) -> Result<(), HttpError> {
-    let stale: Vec<IpAddr> = rdb
-        .get_bfd_neighbors()
-        .map_err(Error::from)?
-        .into_iter()
-        .filter(|current| rp.bfd.get(&current.peer) != Some(current))
-        .map(|current| current.peer)
-        .collect();
-    remove_bfd_peers(ctx, rdb, &stale).await
-}
-
-/// Drop any BGP router under this logical router whose ASN is no longer the
-/// desired one (or all of them if BGP is being disabled).
-async fn delete_stale_bgp_routers(
-    ctx: &Arc<HandlerContext>,
-    rdb: &rdb::RouterDb,
-    spec: &RouterSpec,
-) -> Result<(), HttpError> {
-    let desired_asn = spec.bgp.as_ref().map(|b| b.asn);
-    let stale: Vec<u32> = lock!(ctx.bgp.router)
-        .keys()
-        .filter(|(id, asn)| *id == rdb.id() && Some(*asn) != desired_asn)
-        .map(|(_, asn)| *asn)
-        .collect();
-    for asn in stale {
-        bgp_admin::do_delete_router(ctx, rdb, asn).await?;
-    }
-    Ok(())
-}
-
-async fn apply_router_plan(
-    ctx: &Arc<HandlerContext>,
-    rdb: &rdb::RouterDb,
-    rp: RouterPlan,
-) -> Result<(), HttpError> {
-    apply_bgp(ctx, rdb, &rp.spec).await?;
-    apply_static(rdb, &rp.statics)?;
-    apply_bfd(ctx, rdb, rp).await?;
     Ok(())
 }
 
@@ -562,10 +453,8 @@ async fn apply_bgp(
     rdb: &rdb::RouterDb,
     spec: &RouterSpec,
 ) -> Result<(), HttpError> {
-    delete_stale_bgp_routers(ctx, rdb, spec).await?;
-
     let Some(bgp) = &spec.bgp else {
-        return Ok(());
+        return delete_bgp_routers(ctx, rdb).await;
     };
 
     let desired_fanout = bgp.max_paths.unwrap_or(
@@ -583,6 +472,8 @@ async fn apply_bgp(
         })?;
     }
 
+    // do_bgp_apply creates a missing BGP router with a default id and listen
+    // address; creating it here first makes the spec's win.
     bgp_admin::helpers::ensure_router(
         ctx.clone(),
         rdb,
@@ -595,6 +486,7 @@ async fn apply_bgp(
     )
     .await?;
 
+    // Deletes BGP routers with any other ASN and converges the peers.
     bgp_admin::do_bgp_apply(
         ctx,
         rdb,
@@ -638,24 +530,27 @@ fn apply_static(
     Ok(())
 }
 
+/// Converge the router's BFD peers onto the spec. A peer whose config
+/// changed is removed and re-added: BFD sessions are cheap to restart.
 async fn apply_bfd(
     ctx: &Arc<HandlerContext>,
     rdb: &rdb::RouterDb,
-    rp: RouterPlan,
+    spec: &RouterSpec,
 ) -> Result<(), HttpError> {
-    let existing: HashSet<IpAddr> = rdb
-        .get_bfd_neighbors()
-        .map_err(Error::from)?
-        .into_iter()
+    let current = rdb.get_bfd_neighbors().map_err(Error::from)?;
+    let stale: Vec<IpAddr> = current
+        .iter()
+        .filter(|p| !spec.bfd_peers.contains(p))
         .map(|p| p.peer)
         .collect();
-    for (addr, config) in rp.bfd {
-        if !existing.contains(&addr) {
-            bfd_admin::add_peer(ctx.clone(), rdb.clone(), config)?;
-            rdb.add_bfd_neighbor(config).map_err(Error::from)?;
+    remove_bfd_peers(ctx, rdb, &stale).await?;
+
+    for config in &spec.bfd_peers {
+        if !current.contains(config) {
+            bfd_admin::add_peer(ctx.clone(), rdb.clone(), *config)?;
+            rdb.add_bfd_neighbor(*config).map_err(Error::from)?;
         }
     }
-
     Ok(())
 }
 
@@ -1195,8 +1090,8 @@ mod tests {
 
     /// A-01/A-08: moving a peer from one named router to another in a single
     /// apply converges regardless of the order the specs are listed in,
-    /// because every router releases its unwanted peers before any router
-    /// claims new ones. The live sessions end up owned by the right router.
+    /// because a moving peer is removed from its old router before any
+    /// router is applied. The live sessions end up owned by the right router.
     #[tokio::test]
     async fn peer_transfer_between_named_routers_is_order_independent() {
         for one_first in [true, false] {
@@ -1236,6 +1131,42 @@ mod tests {
             assert_eq!(nbr(two.id), "203.0.113.1");
             assert_eq!(session_owner(&ctx, "203.0.113.2"), Some(one.id));
             assert_eq!(session_owner(&ctx, "203.0.113.1"), Some(two.id));
+        }
+    }
+
+    /// A BFD peer moving between routers converges in one apply when its
+    /// new router is listed before its old one, in both directions.
+    #[tokio::test]
+    async fn bfd_peer_transfer_new_owner_listed_first() {
+        let ctx = test_ctx("bfd_peer_transfer_new_owner_listed_first");
+        let peer = BfdPeerConfig {
+            peer: "203.0.113.9".parse().unwrap(),
+            listen: "127.0.0.1".parse().unwrap(),
+            required_rx: 1_000_000,
+            detection_threshold: NonZeroU8::new(3).unwrap(),
+            mode: SessionMode::SingleHop,
+        };
+        let mut from = spec("one", 65001, "203.0.113.1");
+        let mut to = spec("two", 65002, "203.0.113.2");
+        from.bfd_peers = vec![peer];
+        apply(&ctx, vec![from.clone(), to.clone()])
+            .await
+            .expect("initial apply");
+
+        let bfd = |id: RouterId| {
+            ctx.db.router(id).unwrap().get_bfd_neighbors().unwrap()
+        };
+        // Move the peer to "two", then back to "one".
+        for _ in 0..2 {
+            from.bfd_peers.clear();
+            to.bfd_peers = vec![peer];
+            apply(&ctx, vec![to.clone(), from.clone()])
+                .await
+                .expect("move converges");
+            assert_eq!(bfd(to.id), vec![peer]);
+            assert!(bfd(from.id).is_empty());
+            assert_eq!(lock!(ctx.bfd.daemon).sessions_iter().count(), 1);
+            std::mem::swap(&mut from, &mut to);
         }
     }
 }

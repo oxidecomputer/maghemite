@@ -557,8 +557,6 @@ pub(crate) mod test {
         pub(crate) v4_addrs: HashMap<String, Vec<Ipv4Entry>>,
         pub(crate) v6_addrs: HashMap<String, Vec<Ipv6Entry>>,
         pub(crate) loopback: Mutex<HashMap<RouterId, Vec<Ipv6Entry>>>,
-        /// Every router id passed to a route method, in call order.
-        pub(crate) route_call_routers: Mutex<Vec<RouterId>>,
     }
 
     impl Default for TestDpd {
@@ -571,7 +569,6 @@ pub(crate) mod test {
                 v4_addrs: HashMap::default(),
                 v6_addrs: HashMap::default(),
                 loopback: Mutex::new(HashMap::default()),
-                route_call_routers: Mutex::new(Vec::default()),
             }
         }
     }
@@ -674,7 +671,6 @@ pub(crate) mod test {
             DpdClientError<DpdError>,
         > {
             self.check_router(router)?;
-            self.route_call_routers.lock().unwrap().push(router);
             let result = self
                 .v4_routes
                 .lock()
@@ -695,7 +691,6 @@ pub(crate) mod test {
             DpdClientError<DpdError>,
         > {
             self.check_router(router)?;
-            self.route_call_routers.lock().unwrap().push(router);
             let result = self
                 .v6_routes
                 .lock()
@@ -835,7 +830,6 @@ pub(crate) mod test {
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
             self.check_router(router)?;
-            self.route_call_routers.lock().unwrap().push(router);
             let route = match &body.target {
                 RouteTarget::V4(v4) => Route::V4(v4.clone()),
                 RouteTarget::V6(v6) => Route::V6(v6.clone()),
@@ -858,7 +852,6 @@ pub(crate) mod test {
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
             self.check_router(router)?;
-            self.route_call_routers.lock().unwrap().push(router);
             self.v6_routes
                 .lock()
                 .unwrap()
@@ -880,7 +873,6 @@ pub(crate) mod test {
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
             self.check_router(router)?;
-            self.route_call_routers.lock().unwrap().push(router);
             let mut routers = self.v4_routes.lock().unwrap();
             if let Some(routes) = routers.get_mut(&router) {
                 if let Some(targets) = routes.get_mut(cidr) {
@@ -913,7 +905,6 @@ pub(crate) mod test {
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
             self.check_router(router)?;
-            self.route_call_routers.lock().unwrap().push(router);
             let mut routers = self.v6_routes.lock().unwrap();
             if let Some(routes) = routers.get_mut(&router) {
                 if let Some(targets) = routes.get_mut(cidr) {
