@@ -24,8 +24,8 @@ use crate::error::Error;
 use crate::static_admin::{static_route_key_from_v4, static_route_key_from_v6};
 use crate::validation::validate_prefixes;
 use dropshot::{
-    ClientErrorStatusCode, HttpError, HttpResponseOk,
-    HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
+    HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path, Query,
+    RequestContext, TypedBody,
 };
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::config::{
@@ -131,16 +131,6 @@ pub(crate) async fn do_multi_router_apply(
     rq: MultiRouterApplyRequest,
 ) -> Result<(), HttpError> {
     let _serialized = ctx.apply_lock.lock().await;
-
-    // Retry cleanup of switch tables left dirty by earlier failed
-    // teardowns first: their table indexes stay tombstoned until dpd
-    // confirms they are clean, and a tombstone that scrubs clean now must
-    // not block a legitimate re-creation in this request. This repairs
-    // earlier state; it is not a mutation on behalf of `rq`.
-    ctx.lower
-        .scrub_orphaned_switch_indexes(&ctx.db, &ctx.log)
-        .await;
-
     let plan = plan_apply(ctx, rq)?;
     execute_apply(ctx, plan).await
 }
@@ -185,13 +175,9 @@ impl RouterPlan {
     }
 }
 
-fn conflict(msg: String) -> HttpError {
-    HttpError::for_client_error(None, ClientErrorStatusCode::CONFLICT, msg)
-}
-
-/// Validate `rq` — its own shape, then its fit against the live routers and
-/// tombstones — and resolve it into an [`ApplyPlan`]. Pure: reads daemon
-/// state, mutates nothing.
+/// Validate `rq` — its own shape, then its fit against the live routers —
+/// and resolve it into an [`ApplyPlan`]. Pure: reads daemon state, mutates
+/// nothing.
 fn plan_apply(
     ctx: &Arc<HandlerContext>,
     rq: MultiRouterApplyRequest,
@@ -199,10 +185,6 @@ fn plan_apply(
     validate_apply_request(&rq)?;
 
     let live = ctx.db.list_routers();
-    let tombstones = ctx
-        .db
-        .orphaned_switch_indexes()
-        .map_err(|e| HttpError::from(Error::from(e)))?;
 
     for spec in &rq.routers {
         validate_router_spec(spec)?;
@@ -216,15 +198,6 @@ fn plan_apply(
                     rdb::DEFAULT_ROUTER,
                 ),
             ));
-        }
-        if let Some((_, index)) =
-            tombstones.iter().find(|(id, _)| *id == spec.id)
-        {
-            return Err(conflict(format!(
-                "router {:?}: id {} is tombstoned (switch table {index} \
-                 awaits a clean scrub) and cannot be reused yet",
-                spec.name, spec.id
-            )));
         }
     }
 
@@ -298,7 +271,8 @@ async fn execute_apply(
         } else {
             ctx.db.router(rp.spec.id).map_err(Error::from)?
         };
-        ctx.lower.ensure(&rdb, &ctx.log, &ctx.mg_lower_stats);
+        ctx.lower
+            .ensure(&ctx.db, &rdb, &ctx.log, &ctx.mg_lower_stats);
         apply_router_plan(ctx, &rdb, rp).await?;
     }
 
@@ -429,20 +403,11 @@ async fn teardown_router(
     id: RouterId,
 ) -> Result<(), HttpError> {
     let rdb = ctx.db.router(id).map_err(Error::from)?;
-    let name = rdb.name();
 
     // Stop the router's mg-lower thread first: on shutdown it withdraws the
     // router's ASIC routes and ddm tunnel advertisements based on the RIB
-    // contents, so it must run before the RIB is torn down. `clean` records
-    // whether dpd confirmed the router's switch table was emptied.
-    let clean = ctx.lower.stop(&rdb).await;
-    if !clean {
-        slog::warn!(
-            ctx.log,
-            "teardown of router {name} could not confirm its switch table is \
-             clean; tombstoning its switch table index"
-        );
-    }
+    // contents, so it must run before the RIB is torn down.
+    ctx.lower.stop(&rdb).await;
 
     let asns: Vec<u32> = lock!(ctx.bgp.router)
         .keys()
@@ -462,7 +427,7 @@ async fn teardown_router(
     remove_bfd_peers(ctx, &rdb, &peers).await?;
 
     ctx.db
-        .delete_router(id, clean)
+        .delete_router(id)
         .map_err(|e| HttpError::from(Error::from(e)))?;
     Ok(())
 }
@@ -865,8 +830,6 @@ mod tests {
         );
         assert!(ctx.db.router(r2.id).is_err());
         assert!(!lock!(ctx.bgp.router).contains_key(&(r2.id, 65001)));
-        // The teardown was clean (test platform), so nothing is tombstoned.
-        assert!(ctx.db.orphaned_switch_indexes().unwrap().is_empty());
 
         // The survivor is untouched, including its generated TEP.
         let rdb = ctx.db.router(r1.id).expect("router db");
@@ -1207,77 +1170,6 @@ mod tests {
             assert_eq!(snapshot(&ctx), before, "{what} mutated state");
             assert!(ctx.db.router(two_id).is_err(), "{what} created a router");
         }
-    }
-
-    /// A-03: a router torn down while dpd could not confirm its switch table
-    /// clean leaves a tombstone; until a later scrub releases it, the uuid
-    /// cannot come back (under any name) and a fresh router does not get
-    /// the tombstoned table index. After the scrub the uuid is usable.
-    #[tokio::test]
-    async fn tombstoned_router_id_is_rejected_until_scrubbed() {
-        let ctx = test_ctx("tombstoned_router_id_is_rejected_until_scrubbed");
-        let hook = ctx.lower.test_hook().expect("test lower").clone();
-
-        let one = spec("one", 65001, "203.0.113.1");
-        let two = spec("two", 65002, "203.0.113.2");
-        apply(&ctx, vec![one.clone(), two.clone()])
-            .await
-            .expect("apply both");
-        let two_index = ctx.db.router(two.id).expect("two").switch_index();
-
-        // dpd is "unreachable" for two's teardown: the table index stays
-        // tombstoned and the scrub cannot confirm it clean yet.
-        lock!(hook.dirty_on_stop).insert("two".into());
-        *lock!(hook.scrub_clean) = false;
-        apply(&ctx, vec![one.clone()]).await.expect("tear two down");
-        assert_eq!(
-            ctx.db.orphaned_switch_indexes().unwrap(),
-            vec![(two.id, two_index)]
-        );
-        let before = snapshot(&ctx);
-
-        // Same uuid, same or new name: refused before any mutation.
-        for name in ["two", "three"] {
-            let mut back = two.clone();
-            back.name = name.into();
-            let err = apply(&ctx, vec![one.clone(), back])
-                .await
-                .expect_err("tombstoned id must be rejected");
-            assert_eq!(
-                err.status_code.as_u16(),
-                409,
-                "{}",
-                err.external_message
-            );
-            assert!(err.external_message.contains("tombstoned"));
-            assert_eq!(snapshot(&ctx), before);
-            assert!(ctx.db.router(two.id).is_err());
-        }
-
-        // A router with a fresh uuid is fine and gets a different index.
-        let fresh = spec("two", 65002, "203.0.113.2");
-        apply(&ctx, vec![one.clone(), fresh.clone()])
-            .await
-            .expect("fresh uuid");
-        assert_ne!(
-            ctx.db.router(fresh.id).expect("two").switch_index(),
-            two_index
-        );
-        assert_eq!(
-            ctx.db.orphaned_switch_indexes().unwrap(),
-            vec![(two.id, two_index)]
-        );
-
-        // dpd now confirms the table clean: the next apply's scrub releases
-        // the tombstone and the old uuid may be created again.
-        *lock!(hook.scrub_clean) = true;
-        let mut back = spec("three", 65003, "203.0.113.3");
-        back.id = two.id;
-        apply(&ctx, vec![one.clone(), fresh, back])
-            .await
-            .expect("re-create after scrub");
-        assert!(ctx.db.orphaned_switch_indexes().unwrap().is_empty());
-        assert_eq!(ctx.db.router(two.id).expect("three").name(), "three");
     }
 
     /// A-01: two applies racing each other serialize; the final state is

@@ -23,7 +23,6 @@ use mg_common::stats::MgLowerStats as Stats;
 use oxnet::IpNet;
 use platform::{Ddm, Dpd, SwitchZone};
 use rdb::Rib;
-use rdb::types::RouterId;
 use rdb::{DEFAULT_ROUTE_PRIORITY, PrefixChangeNotification, RouterDb};
 use slog::Logger;
 use std::collections::HashSet;
@@ -72,14 +71,16 @@ const UNIT_EVENT_LOOP: &str = "event_loop";
 /// a watcher to start receiving events, does an initial synchronization, then
 /// responds to changes moving foward. When `shutdown` is set, all of this
 /// router's platform state (ASIC routes, ddm tunnel advertisements) is
-/// withdrawn before returning; the return value reports whether dpd
-/// confirmed the router's switch table is clean (see [`withdraw_all`]). The
-/// loop runs on the calling thread, so callers are responsible for running
-/// this function in a separate thread if asynchronous execution is required.
+/// withdrawn before returning. The loop runs on the calling thread, so
+/// callers are responsible for running this function in a separate thread if
+/// asynchronous execution is required. `routers` is every router's
+/// database; the default router uses it to find switch tables that no router
+/// holds.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     tep: Ipv6Addr, //tunnel endpoint address
     db: RouterDb,
+    routers: rdb::Db,
     log: Logger,
     stats: Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
@@ -87,7 +88,7 @@ pub fn run(
     dpd: &impl Dpd,
     ddm: &impl Ddm,
     sw: &impl SwitchZone,
-) -> bool {
+) {
     loop {
         if shutdown.load(Ordering::Relaxed) {
             return withdraw_all(tep, &db, &log, dpd, ddm, &rt);
@@ -99,9 +100,17 @@ pub fn run(
         // we're initializing
         db.watch(format!("{MG_LOWER_TAG}/{}", db.name()), tx);
 
-        if let Err(e) =
-            full_sync(tep, &db, &log, dpd, ddm, sw, &stats, rt.clone())
-        {
+        if let Err(e) = full_sync(
+            tep,
+            &db,
+            &routers,
+            &log,
+            dpd,
+            ddm,
+            sw,
+            &stats,
+            rt.clone(),
+        ) {
             mgl_log!(log,
                 error,
                 "initialization failed: {e}";
@@ -144,6 +153,7 @@ pub fn run(
                     if let Err(e) = full_sync(
                         tep,
                         &db,
+                        &routers,
                         &log,
                         dpd,
                         ddm,
@@ -180,6 +190,7 @@ pub fn run(
 fn full_sync(
     tep: Ipv6Addr, // tunnel endpoint address
     db: &RouterDb,
+    routers: &rdb::Db,
     log: &Logger,
     dpd: &impl Dpd,
     ddm: &impl Ddm,
@@ -190,14 +201,26 @@ fn full_sync(
     let rib_in = db.full_rib(None);
     let rib_loc = db.loc_rib(None);
 
+    reconcile_switch_table(
+        db.switch_index(),
+        &rib_in,
+        Some(tep),
+        dpd,
+        &rt,
+        log,
+    );
+    if db.switch_index() == 0 {
+        remove_dead_switch_tables(routers, dpd, &rt, log);
+    }
+
     // Make sure our tunnel endpoint address is on the switch ASIC
-    ensure_tep_addr(db.id(), tep, dpd, rt.clone(), log);
+    ensure_tep_addr(db.switch_index(), tep, dpd, rt.clone(), log);
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for prefix in rib_in.keys() {
         sync_prefix(
-            db.id(),
+            db.switch_index(),
             tunnel_origin_id(db),
             tep,
             &rib_loc,
@@ -217,14 +240,6 @@ fn full_sync(
 /// routes from the ASIC, its tunnel advertisements from ddm, and its TEP
 /// address claim. Called when the router is being torn down. Failures are
 /// logged and skipped — teardown should always run to completion.
-///
-/// Returns true only when dpd confirmed the router's switch table is clean
-/// (no routes, TEP withdrawn). ddm failures are excluded: tunnel origins and
-/// the TEP underlay origin are scoped to the router's never-reused id/TEP,
-/// so stale ones cannot be inherited by a later router the way a dirty
-/// switch table can (and the tombstone scrub only repairs switch tables).
-/// Callers use the result to decide whether the router's switch table index
-/// may be reused.
 fn withdraw_all(
     tep: Ipv6Addr,
     db: &RouterDb,
@@ -232,14 +247,13 @@ fn withdraw_all(
     dpd: &impl Dpd,
     ddm: &impl Ddm,
     rt: &Arc<tokio::runtime::Handle>,
-) -> bool {
+) {
     mgl_log!(log, info, "shutting down: withdrawing all platform state";);
 
-    let mut clean = true;
     let nothing = HashSet::new();
     for prefix in db.full_rib(None).keys() {
         let current = match get_routes_for_prefix(
-            db.id(),
+            db.switch_index(),
             dpd,
             prefix,
             rt.clone(),
@@ -253,12 +267,11 @@ fn withdraw_all(
                     "error" => format!("{e}"),
                     "prefix" => format!("{prefix}")
                 );
-                clean = false;
                 continue;
             }
         };
         if let Err(e) = update_dendrite(
-            db.id(),
+            db.switch_index(),
             nothing.iter(),
             current.iter(),
             dpd,
@@ -271,7 +284,6 @@ fn withdraw_all(
                 "error" => format!("{e}"),
                 "prefix" => format!("{prefix}")
             );
-            clean = false;
         }
     }
 
@@ -297,115 +309,134 @@ fn withdraw_all(
     }
 
     // The RIB-driven withdraw above misses anything the volatile RIB no
-    // longer knows about (e.g. routes programmed before an mgd restart), so
-    // for non-default routers scrub the whole dedicated switch table. The
-    // default router's table (index 0) is dendrite's shared implicit table
-    // and must never be scrubbed wholesale.
-    if db.switch_index() != 0 {
-        clean = scrub_switch_table(db.id(), dpd, rt, log) && clean;
-    }
+    // longer knows about (e.g. routes programmed before an mgd restart).
+    reconcile_switch_table(db.switch_index(), &Rib::new(), None, dpd, rt, log);
 
-    clean = withdraw_tep_addr(db.id(), tep, dpd, rt.clone(), log) && clean;
+    withdraw_tep_addr(db.switch_index(), tep, dpd, rt.clone(), log);
 
     // The TEP's underlay /64 was originated into ddm when the router's first
     // tunnel route landed (`ensure_tep_underlay_origin`); withdraw it so the
-    // departed TEP stops being advertised over the underlay. A failure here is
-    // incomplete cleanup, not a cosmetic one: leaving the prefix originated
-    // keeps advertising a TEP that no longer exists. Fold it into `clean` so
-    // the departed router keeps its switch index tombstoned rather than being
-    // released while the underlay still carries its prefix.
-    clean = withdraw_tep_underlay_origin(ddm, tep, rt, log) && clean;
-
-    clean
+    // departed TEP stops being advertised over the underlay.
+    withdraw_tep_underlay_origin(ddm, tep, rt, log);
 }
 
-/// Remove every route from a non-default router's dedicated switch table and
-/// verify with dpd that the table ends up empty. Returns true only on
-/// dpd-confirmed success. Must never be called for the default router: its
-/// table index 0 is dendrite's shared implicit table.
-pub fn scrub_switch_table(
-    router: RouterId,
+/// Empty every switch table that no router holds: its router was deleted,
+/// or mgd restarted and gave the router another index.
+fn remove_dead_switch_tables(
+    routers: &rdb::Db,
     dpd: &impl Dpd,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> bool {
-    let mut clean = true;
-
-    match rt.block_on(async { dpd.route_ipv4_list_full(router).await }) {
-        Ok(routes) => {
-            for r in routes {
-                if let Err(e) = rt.block_on(async {
-                    dpd.route_ipv4_delete_prefix(router, &r.cidr).await
-                }) {
-                    mgl_log!(log,
-                        error,
-                        "scrub: failed to remove {} from switch table: {e}",
-                        r.cidr;
-                        "error" => format!("{e}"),
-                        "prefix" => format!("{}", r.cidr)
-                    );
-                    clean = false;
-                }
-            }
-        }
+) {
+    // Ask dpd before reading the live set: a router is in the live set
+    // before its thread writes to its table, so a new router's table listed
+    // here is never mistaken for a dead one.
+    let tables = match rt.block_on(async { dpd.router_list().await }) {
+        Ok(tables) => tables.into_inner(),
         Err(e) => {
             mgl_log!(log,
                 error,
-                "scrub: failed to list IPv4 switch table routes: {e}";
+                "reconcile: failed to list switch tables: {e}";
                 "error" => format!("{e}")
             );
-            clean = false;
+            return;
         }
+    };
+    let live = routers.switch_indexes();
+    for router in tables.into_iter().filter(|t| !live.contains(t)) {
+        reconcile_switch_table(router, &Rib::new(), None, dpd, rt, log);
     }
+}
 
-    match rt.block_on(async { dpd.route_ipv6_list_full(router).await }) {
-        Ok(routes) => {
-            for r in routes {
-                if let Err(e) = rt.block_on(async {
-                    dpd.route_ipv6_delete_prefix(router, &r.cidr).await
-                }) {
-                    mgl_log!(log,
-                        error,
-                        "scrub: failed to remove {} from switch table: {e}",
-                        r.cidr;
-                        "error" => format!("{e}"),
-                        "prefix" => format!("{}", r.cidr)
-                    );
-                    clean = false;
+/// Remove from a non-default switch table every route whose prefix is not
+/// in `rib`, and every loopback other than `tep`. A router's mg-lower thread
+/// is the only writer to its table, so anything else in it was left by an
+/// earlier run (before an mgd restart, or by a router that held the same
+/// index) and is stale. Table 0 is dendrite's shared default table, which
+/// other components also write to, so it is never reconciled. Errors are
+/// logged and skipped.
+fn reconcile_switch_table(
+    router: u8,
+    rib: &Rib,
+    tep: Option<Ipv6Addr>,
+    dpd: &impl Dpd,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    if router == 0 {
+        return;
+    }
+    rt.block_on(async {
+        match dpd.route_ipv4_list_full(router).await {
+            Ok(routes) => {
+                for r in routes {
+                    if rib.contains_key(&r.cidr.into()) {
+                        continue;
+                    }
+                    if let Err(e) =
+                        dpd.route_ipv4_delete_prefix(router, &r.cidr).await
+                    {
+                        mgl_log!(log,
+                            error,
+                            "reconcile: failed to remove {}: {e}", r.cidr;
+                            "error" => format!("{e}")
+                        );
+                    }
                 }
             }
-        }
-        Err(e) => {
-            mgl_log!(log,
+            Err(e) => mgl_log!(log,
                 error,
-                "scrub: failed to list IPv6 switch table routes: {e}";
+                "reconcile: failed to list IPv4 routes: {e}";
                 "error" => format!("{e}")
-            );
-            clean = false;
+            ),
         }
-    }
-
-    // Only dpd's word that the table is empty counts as clean.
-    if clean {
-        clean = match rt.block_on(async {
-            Ok::<_, crate::error::Error>((
-                dpd.route_ipv4_list_full(router).await?,
-                dpd.route_ipv6_list_full(router).await?,
-            ))
-        }) {
-            Ok((v4, v6)) => v4.is_empty() && v6.is_empty(),
-            Err(e) => {
-                mgl_log!(log,
-                    error,
-                    "scrub: failed to verify switch table is empty: {e}";
-                    "error" => format!("{e}")
-                );
-                false
+        match dpd.route_ipv6_list_full(router).await {
+            Ok(routes) => {
+                for r in routes {
+                    if rib.contains_key(&r.cidr.into()) {
+                        continue;
+                    }
+                    if let Err(e) =
+                        dpd.route_ipv6_delete_prefix(router, &r.cidr).await
+                    {
+                        mgl_log!(log,
+                            error,
+                            "reconcile: failed to remove {}: {e}", r.cidr;
+                            "error" => format!("{e}")
+                        );
+                    }
+                }
             }
-        };
-    }
-
-    clean
+            Err(e) => mgl_log!(log,
+                error,
+                "reconcile: failed to list IPv6 routes: {e}";
+                "error" => format!("{e}")
+            ),
+        }
+        match dpd.loopback_ipv6_list(router).await {
+            Ok(entries) => {
+                for addr in entries.into_inner().into_iter().map(|e| e.addr) {
+                    if Some(addr) == tep {
+                        continue;
+                    }
+                    if let Err(e) =
+                        dpd.loopback_ipv6_delete(router, &addr).await
+                    {
+                        mgl_log!(log,
+                            error,
+                            "reconcile: failed to remove loopback {addr}: {e}";
+                            "error" => format!("{e}")
+                        );
+                    }
+                }
+            }
+            Err(e) => mgl_log!(log,
+                error,
+                "reconcile: failed to list loopbacks: {e}";
+                "error" => format!("{e}")
+            ),
+        }
+    });
 }
 
 /// Synchronize a change set from the RIB to the underlying platform.
@@ -424,7 +455,7 @@ fn handle_change(
 
     for prefix in notification.changed.iter() {
         sync_prefix(
-            db.id(),
+            db.switch_index(),
             tunnel_origin_id(db),
             tep,
             &rib_loc,
@@ -442,7 +473,7 @@ fn handle_change(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_prefix(
-    router: RouterId,
+    router: u8,
     origin_id: Option<uuid::Uuid>,
     tep: Ipv6Addr,
     rib_loc: &Rib,

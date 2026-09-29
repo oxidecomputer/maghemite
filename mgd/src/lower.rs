@@ -12,7 +12,7 @@
 //!
 //! Unit tests substitute a [`TestLower`] hook so router lifecycle code can be
 //! exercised without a switch: no platform threads are started and the
-//! clean/dirty teardown and scrub outcomes come from the hook.
+//! hook records which routers were started and stopped.
 
 use mg_common::lock;
 use mg_common::stats::MgLowerStats;
@@ -40,21 +40,13 @@ impl Default for LowerContext {
 
 struct LowerHandle {
     shutdown: Arc<AtomicBool>,
-    /// Resolves to mg-lower's report of whether dpd confirmed the router's
-    /// switch table was left clean on shutdown.
-    join: std::thread::JoinHandle<bool>,
+    join: std::thread::JoinHandle<()>,
 }
 
 /// Recorded platform lifecycle for tests: which routers were started and
-/// stopped, and what dpd "reported" for teardown and scrub.
+/// stopped.
 #[cfg(test)]
 pub(crate) struct TestLower {
-    /// Routers whose `stop` reports a dirty switch table (tombstoning its
-    /// index), as when dpd is unreachable during teardown.
-    pub(crate) dirty_on_stop: Mutex<std::collections::BTreeSet<String>>,
-    /// Whether scrubbing a tombstoned table succeeds (dpd confirms it clean)
-    /// and releases the index. Defaults to true.
-    pub(crate) scrub_clean: Mutex<bool>,
     pub(crate) ensured: Mutex<Vec<String>>,
     pub(crate) stopped: Mutex<Vec<String>>,
 }
@@ -63,8 +55,6 @@ pub(crate) struct TestLower {
 impl Default for TestLower {
     fn default() -> Self {
         Self {
-            dirty_on_stop: Mutex::new(std::collections::BTreeSet::new()),
-            scrub_clean: Mutex::new(true),
             ensured: Mutex::new(Vec::new()),
             stopped: Mutex::new(Vec::new()),
         }
@@ -72,8 +62,8 @@ impl Default for TestLower {
 }
 
 impl LowerContext {
-    /// A context that never touches a platform; lifecycle outcomes come from
-    /// `hook`.
+    /// A context that never touches a platform; lifecycle calls are recorded
+    /// in `hook`.
     #[cfg(test)]
     pub(crate) fn for_test(hook: Arc<TestLower>) -> Self {
         Self {
@@ -91,6 +81,7 @@ impl LowerContext {
     /// running. Must be called from within a tokio runtime.
     pub fn ensure(
         &self,
+        db: &rdb::Db,
         rdb: &rdb::RouterDb,
         log: &Logger,
         stats: &Arc<MgLowerStats>,
@@ -100,12 +91,13 @@ impl LowerContext {
             lock!(hook.ensured).push(rdb.name().to_string());
             return;
         }
-        self.ensure_production(rdb, log, stats);
+        self.ensure_production(db, rdb, log, stats);
     }
 
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     fn ensure_production(
         &self,
+        db: &rdb::Db,
         rdb: &rdb::RouterDb,
         log: &Logger,
         stats: &Arc<MgLowerStats>,
@@ -114,6 +106,7 @@ impl LowerContext {
         if handles.contains_key(&rdb.id()) {
             return;
         }
+        let db = db.clone();
         let rdb = rdb.clone();
         let id = rdb.id();
         let name = rdb.name().to_string();
@@ -127,7 +120,6 @@ impl LowerContext {
             .spawn(move || {
                 let dpd = mg_lower::ProductionDpd {
                     client: mg_lower::new_dpd_client(&log),
-                    rid: rdb.switch_index(),
                 };
                 let ddm = mg_lower::ProductionDdm {
                     client: mg_lower::new_ddm_client(&log),
@@ -136,6 +128,7 @@ impl LowerContext {
                 mg_lower::run(
                     rdb.tep(),
                     rdb,
+                    db,
                     log,
                     stats,
                     rt,
@@ -152,6 +145,7 @@ impl LowerContext {
     #[cfg(not(all(feature = "mg-lower", target_os = "illumos")))]
     fn ensure_production(
         &self,
+        _db: &rdb::Db,
         _rdb: &rdb::RouterDb,
         _log: &Logger,
         _stats: &Arc<MgLowerStats>,
@@ -160,113 +154,19 @@ impl LowerContext {
 
     /// Stop the router's mg-lower thread, waiting for it to withdraw the
     /// router's routes from the ASIC and its tunnel advertisements from ddm.
-    ///
-    /// Returns true when dpd confirmed the router's switch table was left
-    /// clean (or when there was no thread, i.e. nothing was ever
-    /// programmed). On false, the router's switch table index must not be
-    /// reused: keep it tombstoned and retry the cleanup later.
-    pub async fn stop(&self, rdb: &rdb::RouterDb) -> bool {
+    pub async fn stop(&self, rdb: &rdb::RouterDb) {
         #[cfg(test)]
         if let Some(hook) = &self.test {
             lock!(hook.stopped).push(rdb.name().to_string());
-            return !lock!(hook.dirty_on_stop).contains(rdb.name());
+            return;
         }
         let handle = lock!(self.handles).remove(&rdb.id());
         let Some(handle) = handle else {
-            return true;
+            return;
         };
         handle.shutdown.store(true, Ordering::Relaxed);
         // The thread polls the shutdown flag with a one second period
         // and then withdraws platform state, so join off the runtime.
-        tokio::task::spawn_blocking(move || handle.join.join())
-            .await
-            .map(|joined| joined.unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    /// Retry cleanup for tombstoned switch table indexes: scrub each
-    /// departed router's table and release the index once dpd confirms the
-    /// table is clean. Failures are logged; the tombstone stays for the
-    /// next attempt.
-    pub async fn scrub_orphaned_switch_indexes(
-        &self,
-        db: &rdb::Db,
-        log: &Logger,
-    ) {
-        let orphans = match db.orphaned_switch_indexes() {
-            Ok(orphans) => orphans,
-            Err(e) => {
-                slog::warn!(log, "failed to list switch index tombstones: {e}");
-                return;
-            }
-        };
-        for (id, index) in orphans {
-            let clean = self.scrub_switch_table(id, index, log).await;
-            if clean {
-                match db.release_switch_index(&id) {
-                    Ok(()) => slog::info!(
-                        log,
-                        "switch table {index} of departed router {id} \
-                         confirmed clean; index released"
-                    ),
-                    Err(e) => slog::warn!(
-                        log,
-                        "failed to release switch index {index} of departed \
-                         router {id}: {e}"
-                    ),
-                }
-            } else {
-                slog::warn!(
-                    log,
-                    "switch table {index} of departed router {id} is not \
-                     confirmed clean; keeping its index tombstoned"
-                );
-            }
-        }
-    }
-
-    /// Scrub one tombstoned table; true when dpd confirmed it clean.
-    async fn scrub_switch_table(
-        &self,
-        id: rdb::types::RouterId,
-        index: u8,
-        log: &Logger,
-    ) -> bool {
-        #[cfg(test)]
-        if let Some(hook) = &self.test {
-            let _ = (id, index, log);
-            return *lock!(hook.scrub_clean);
-        }
-        Self::scrub_switch_table_production(id, index, log).await
-    }
-
-    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-    async fn scrub_switch_table_production(
-        id: rdb::types::RouterId,
-        index: u8,
-        log: &Logger,
-    ) -> bool {
-        let rt = Arc::new(tokio::runtime::Handle::current());
-        let scrub_log = log.clone();
-        tokio::task::spawn_blocking(move || {
-            let dpd = mg_lower::ProductionDpd {
-                client: mg_lower::new_dpd_client(&scrub_log),
-                rid: index,
-            };
-            mg_lower::scrub_switch_table(id, &dpd, &rt, &scrub_log)
-        })
-        .await
-        .unwrap_or(false)
-    }
-
-    /// Without a lower half nothing is ever programmed into a switch, so
-    /// tombstoned indexes can be released directly.
-    #[cfg(not(all(feature = "mg-lower", target_os = "illumos")))]
-    async fn scrub_switch_table_production(
-        _id: rdb::types::RouterId,
-        _index: u8,
-        _log: &Logger,
-    ) -> bool {
-        true
+        let _ = tokio::task::spawn_blocking(move || handle.join.join()).await;
     }
 }

@@ -15,7 +15,6 @@ use dpd_client::types::{Error as DpdError, *};
 // dendrite's git dep), while ddm_admin_client uses progenitor-client 0.12.
 use dpd_client::Error as DpdClientError;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use rdb::types::RouterId;
 #[cfg(target_os = "illumos")]
 use {
     ddm_admin_client::Client as DdmClient, dpd_client::Client as DpdClient,
@@ -97,20 +96,18 @@ impl From<libnet::route::Route> for SysRoute {
 
 /// This trait wraps the dpd methods mg-lower uses.
 ///
-/// Route and loopback methods carry the uuid of the logical router they
-/// belong to. The production implementation programs dendrite's per-router
-/// tables (dpd API v13) using a switch-local u8 table index bound at
-/// construction time — one `Dpd` instance serves exactly one router.
+/// Route and loopback methods take the switch table they act on: dpd's
+/// router id, a switch-local index (0 = the default table).
 #[allow(async_fn_in_trait)]
 pub trait Dpd {
     async fn route_ipv4_get(
         &self,
-        router: RouterId,
+        router: u8,
         cidr: &Ipv4Net,
     ) -> Result<dpd_client::ResponseValue<Vec<Route>>, DpdClientError<DpdError>>;
     async fn route_ipv6_get(
         &self,
-        router: RouterId,
+        router: u8,
         cidr: &Ipv6Net,
     ) -> Result<
         dpd_client::ResponseValue<Vec<Ipv6Route>>,
@@ -123,15 +120,28 @@ pub trait Dpd {
     ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>>;
     async fn loopback_ipv6_create(
         &self,
-        router: RouterId,
+        router: u8,
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
     async fn loopback_ipv6_delete(
         &self,
-        router: RouterId,
+        router: u8,
         addr: &std::net::Ipv6Addr,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
+
+    /// The switch tables that hold any routes or loopbacks.
+    async fn router_list(
+        &self,
+    ) -> Result<dpd_client::ResponseValue<Vec<u8>>, DpdClientError<DpdError>>;
+
+    async fn loopback_ipv6_list(
+        &self,
+        router: u8,
+    ) -> Result<
+        dpd_client::ResponseValue<Vec<Ipv6Entry>>,
+        DpdClientError<DpdError>,
+    >;
 
     async fn link_list_all<'a>(
         &'a self,
@@ -164,19 +174,19 @@ pub trait Dpd {
 
     async fn route_ipv4_add<'a>(
         &'a self,
-        router: RouterId,
+        router: u8,
         body: &'a Ipv4RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
     async fn route_ipv6_add<'a>(
         &'a self,
-        router: RouterId,
+        router: u8,
         body: &'a Ipv6RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
     async fn route_ipv4_delete_target<'a>(
         &'a self,
-        router: RouterId,
+        router: u8,
         cidr: &'a oxnet::Ipv4Net,
         port_id: &'a PortId,
         link_id: &'a LinkId,
@@ -185,7 +195,7 @@ pub trait Dpd {
 
     async fn route_ipv6_delete_target<'a>(
         &'a self,
-        router: RouterId,
+        router: u8,
         cidr: &'a oxnet::Ipv6Net,
         port_id: &'a PortId,
         link_id: &'a LinkId,
@@ -195,26 +205,26 @@ pub trait Dpd {
     /// List every IPv4 route in this router's table (all pages).
     async fn route_ipv4_list_full(
         &self,
-        router: RouterId,
+        router: u8,
     ) -> Result<Vec<Ipv4Routes>, DpdClientError<DpdError>>;
 
     /// List every IPv6 route in this router's table (all pages).
     async fn route_ipv6_list_full(
         &self,
-        router: RouterId,
+        router: u8,
     ) -> Result<Vec<Ipv6Routes>, DpdClientError<DpdError>>;
 
     /// Remove all targets for a prefix in this router's table.
     async fn route_ipv4_delete_prefix<'a>(
         &'a self,
-        router: RouterId,
+        router: u8,
         cidr: &'a Ipv4Net,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
     /// Remove all targets for a prefix in this router's table.
     async fn route_ipv6_delete_prefix<'a>(
         &'a self,
-        router: RouterId,
+        router: u8,
         cidr: &'a Ipv6Net,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 }
@@ -283,36 +293,32 @@ pub trait SwitchZone {
     ) -> Result<SysRoute, SysRouteError>;
 }
 
-/// Production dpd trait that passes calls through to a dpd client, scoping
-/// route and loopback operations to one router's switch-local table index.
+/// Production dpd trait that simply passes through calls to a dpd client.
 #[cfg(target_os = "illumos")]
 pub struct ProductionDpd {
     pub client: DpdClient,
-    /// Switch-local table index of the router this instance serves
-    /// (0 = default). Allocated and persisted by rdb.
-    pub rid: u8,
 }
 
 #[cfg(target_os = "illumos")]
 impl Dpd for ProductionDpd {
     async fn route_ipv4_get(
         &self,
-        _router: RouterId,
+        router: u8,
         cidr: &Ipv4Net,
     ) -> Result<dpd_client::ResponseValue<Vec<Route>>, DpdClientError<DpdError>>
     {
-        self.client.router_route_ipv4_get(self.rid, cidr).await
+        self.client.router_route_ipv4_get(router, cidr).await
     }
 
     async fn route_ipv6_get(
         &self,
-        _router: RouterId,
+        router: u8,
         cidr: &Ipv6Net,
     ) -> Result<
         dpd_client::ResponseValue<Vec<Ipv6Route>>,
         DpdClientError<DpdError>,
     > {
-        self.client.router_route_ipv6_get(self.rid, cidr).await
+        self.client.router_route_ipv6_get(router, cidr).await
     }
 
     async fn link_get(
@@ -325,22 +331,35 @@ impl Dpd for ProductionDpd {
 
     async fn loopback_ipv6_create(
         &self,
-        _router: RouterId,
+        router: u8,
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client
-            .router_loopback_ipv6_create(self.rid, addr)
-            .await
+        self.client.router_loopback_ipv6_create(router, addr).await
     }
 
     async fn loopback_ipv6_delete(
         &self,
-        _router: RouterId,
+        router: u8,
         addr: &std::net::Ipv6Addr,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client
-            .router_loopback_ipv6_delete(self.rid, addr)
-            .await
+        self.client.router_loopback_ipv6_delete(router, addr).await
+    }
+
+    async fn loopback_ipv6_list(
+        &self,
+        router: u8,
+    ) -> Result<
+        dpd_client::ResponseValue<Vec<Ipv6Entry>>,
+        DpdClientError<DpdError>,
+    > {
+        self.client.router_loopback_ipv6_list(router).await
+    }
+
+    async fn router_list(
+        &self,
+    ) -> Result<dpd_client::ResponseValue<Vec<u8>>, DpdClientError<DpdError>>
+    {
+        self.client.router_list().await
     }
 
     async fn link_list_all<'a>(
@@ -383,23 +402,23 @@ impl Dpd for ProductionDpd {
 
     async fn route_ipv4_add<'a>(
         &'a self,
-        _router: RouterId,
+        router: u8,
         body: &'a Ipv4RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.router_route_ipv4_add(self.rid, body).await
+        self.client.router_route_ipv4_add(router, body).await
     }
 
     async fn route_ipv6_add<'a>(
         &'a self,
-        _router: RouterId,
+        router: u8,
         body: &'a Ipv6RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.router_route_ipv6_add(self.rid, body).await
+        self.client.router_route_ipv6_add(router, body).await
     }
 
     async fn route_ipv4_delete_target<'a>(
         &'a self,
-        _router: RouterId,
+        router: u8,
         cidr: &'a oxnet::Ipv4Net,
         port_id: &'a PortId,
         link_id: &'a LinkId,
@@ -407,14 +426,14 @@ impl Dpd for ProductionDpd {
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
             .router_route_ipv4_delete_target(
-                self.rid, cidr, port_id, link_id, tgt_ip,
+                router, cidr, port_id, link_id, tgt_ip,
             )
             .await
     }
 
     async fn route_ipv6_delete_target<'a>(
         &'a self,
-        _router: RouterId,
+        router: u8,
         cidr: &'a oxnet::Ipv6Net,
         port_id: &'a PortId,
         link_id: &'a LinkId,
@@ -422,21 +441,21 @@ impl Dpd for ProductionDpd {
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
             .router_route_ipv6_delete_target(
-                self.rid, cidr, port_id, link_id, tgt_ip,
+                router, cidr, port_id, link_id, tgt_ip,
             )
             .await
     }
 
     async fn route_ipv4_list_full(
         &self,
-        _router: RouterId,
+        router: u8,
     ) -> Result<Vec<Ipv4Routes>, DpdClientError<DpdError>> {
         let mut routes = Vec::new();
         let mut page_token: Option<String> = None;
         loop {
             let page = self
                 .client
-                .router_route_ipv4_list(self.rid, None, page_token.as_deref())
+                .router_route_ipv4_list(router, None, page_token.as_deref())
                 .await?
                 .into_inner();
             routes.extend(page.items);
@@ -449,14 +468,14 @@ impl Dpd for ProductionDpd {
 
     async fn route_ipv6_list_full(
         &self,
-        _router: RouterId,
+        router: u8,
     ) -> Result<Vec<Ipv6Routes>, DpdClientError<DpdError>> {
         let mut routes = Vec::new();
         let mut page_token: Option<String> = None;
         loop {
             let page = self
                 .client
-                .router_route_ipv6_list(self.rid, None, page_token.as_deref())
+                .router_route_ipv6_list(router, None, page_token.as_deref())
                 .await?
                 .into_inner();
             routes.extend(page.items);
@@ -469,18 +488,18 @@ impl Dpd for ProductionDpd {
 
     async fn route_ipv4_delete_prefix<'a>(
         &'a self,
-        _router: RouterId,
+        router: u8,
         cidr: &'a Ipv4Net,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.router_route_ipv4_delete(self.rid, cidr).await
+        self.client.router_route_ipv4_delete(router, cidr).await
     }
 
     async fn route_ipv6_delete_prefix<'a>(
         &'a self,
-        _router: RouterId,
+        router: u8,
         cidr: &'a Ipv6Net,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.router_route_ipv6_delete(self.rid, cidr).await
+        self.client.router_route_ipv6_delete(router, cidr).await
     }
 
     fn tag(&self) -> String {
@@ -579,7 +598,10 @@ pub(crate) mod test {
 
     use super::*;
     use std::sync::Mutex;
-    use std::{collections::HashMap, net::IpAddr};
+    use std::{
+        collections::HashMap,
+        net::{IpAddr, Ipv6Addr},
+    };
 
     // helper macros for forming dropshot responses
     macro_rules! dpd_response_ok {
@@ -603,18 +625,17 @@ pub(crate) mod test {
 
     /// A stateful mock dpd implementation. Carries just enough state to be
     /// useful for tests. Routes live in per-router tables, mirroring the
-    /// per-router tables dendrite keeps behind `ProductionDpd`'s rid scoping.
+    /// per-router tables dendrite keeps.
     pub(crate) struct TestDpd {
         pub(crate) links: Mutex<Vec<Link>>,
-        pub(crate) v4_routes:
-            Mutex<HashMap<RouterId, HashMap<Ipv4Net, Vec<Route>>>>,
+        pub(crate) v4_routes: Mutex<HashMap<u8, HashMap<Ipv4Net, Vec<Route>>>>,
         pub(crate) v6_routes:
-            Mutex<HashMap<RouterId, HashMap<Ipv6Net, Vec<Ipv6Route>>>>,
+            Mutex<HashMap<u8, HashMap<Ipv6Net, Vec<Ipv6Route>>>>,
         pub(crate) v4_addrs: HashMap<String, Vec<Ipv4Entry>>,
         pub(crate) v6_addrs: HashMap<String, Vec<Ipv6Entry>>,
-        pub(crate) loopback: Mutex<Vec<Ipv6Entry>>,
+        pub(crate) loopback: Mutex<HashMap<u8, Vec<Ipv6Entry>>>,
         /// Every router id passed to a route method, in call order.
-        pub(crate) route_call_routers: Mutex<Vec<RouterId>>,
+        pub(crate) route_call_routers: Mutex<Vec<u8>>,
     }
 
     impl Default for TestDpd {
@@ -625,7 +646,7 @@ pub(crate) mod test {
                 v6_routes: Mutex::new(HashMap::default()),
                 v4_addrs: HashMap::default(),
                 v6_addrs: HashMap::default(),
-                loopback: Mutex::new(Vec::default()),
+                loopback: Mutex::new(HashMap::default()),
                 route_call_routers: Mutex::new(Vec::default()),
             }
         }
@@ -634,7 +655,7 @@ pub(crate) mod test {
     impl TestDpd {
         pub(crate) fn insert_v4(
             &self,
-            router: RouterId,
+            router: u8,
             cidr: Ipv4Net,
             targets: Vec<Route>,
         ) {
@@ -644,6 +665,28 @@ pub(crate) mod test {
                 .entry(router)
                 .or_default()
                 .insert(cidr, targets);
+        }
+
+        pub(crate) fn insert_loopback(&self, router: u8, addr: Ipv6Addr) {
+            self.loopback
+                .lock()
+                .unwrap()
+                .entry(router)
+                .or_default()
+                .push(Ipv6Entry {
+                    tag: String::from("mg_lower_test"),
+                    addr,
+                });
+        }
+
+        /// Loopback addresses on one router's table.
+        pub(crate) fn loopbacks(&self, router: u8) -> Vec<Ipv6Addr> {
+            self.loopback
+                .lock()
+                .unwrap()
+                .get(&router)
+                .map(|l| l.iter().map(|e| e.addr).collect())
+                .unwrap_or_default()
         }
 
         /// Number of v4 prefixes across all router tables.
@@ -658,7 +701,7 @@ pub(crate) mod test {
 
         pub(crate) fn v4_targets(
             &self,
-            router: RouterId,
+            router: u8,
             cidr: &Ipv4Net,
         ) -> Vec<Route> {
             self.v4_routes
@@ -691,7 +734,7 @@ pub(crate) mod test {
 
         async fn route_ipv4_get(
             &self,
-            router: RouterId,
+            router: u8,
             cidr: &Ipv4Net,
         ) -> Result<
             dpd_client::ResponseValue<Vec<Route>>,
@@ -711,7 +754,7 @@ pub(crate) mod test {
 
         async fn route_ipv6_get(
             &self,
-            router: RouterId,
+            router: u8,
             cidr: &Ipv6Net,
         ) -> Result<
             dpd_client::ResponseValue<Vec<Ipv6Route>>,
@@ -731,11 +774,12 @@ pub(crate) mod test {
 
         async fn loopback_ipv6_create(
             &self,
-            _router: RouterId,
+            router: u8,
             addr: &Ipv6Entry,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            let mut loopback = self.loopback.lock().unwrap();
+            let mut loopbacks = self.loopback.lock().unwrap();
+            let loopback = loopbacks.entry(router).or_default();
             if !loopback.iter().any(|e| e.addr == addr.addr) {
                 loopback.push(addr.clone());
             }
@@ -744,12 +788,52 @@ pub(crate) mod test {
 
         async fn loopback_ipv6_delete(
             &self,
-            _router: RouterId,
+            router: u8,
             addr: &std::net::Ipv6Addr,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
-            self.loopback.lock().unwrap().retain(|e| e.addr != *addr);
+            if let Some(loopback) =
+                self.loopback.lock().unwrap().get_mut(&router)
+            {
+                loopback.retain(|e| e.addr != *addr);
+            }
             Ok(dpd_response_ok!(()))
+        }
+
+        async fn loopback_ipv6_list(
+            &self,
+            router: u8,
+        ) -> Result<
+            dpd_client::ResponseValue<Vec<Ipv6Entry>>,
+            DpdClientError<DpdError>,
+        > {
+            let loopbacks = self.loopback.lock().unwrap();
+            Ok(dpd_response_ok!(
+                loopbacks.get(&router).cloned().unwrap_or_default()
+            ))
+        }
+
+        async fn router_list(
+            &self,
+        ) -> Result<dpd_client::ResponseValue<Vec<u8>>, DpdClientError<DpdError>>
+        {
+            let mut ids = std::collections::BTreeSet::new();
+            for (id, table) in self.v4_routes.lock().unwrap().iter() {
+                if !table.is_empty() {
+                    ids.insert(*id);
+                }
+            }
+            for (id, table) in self.v6_routes.lock().unwrap().iter() {
+                if !table.is_empty() {
+                    ids.insert(*id);
+                }
+            }
+            for (id, addrs) in self.loopback.lock().unwrap().iter() {
+                if !addrs.is_empty() {
+                    ids.insert(*id);
+                }
+            }
+            Ok(dpd_response_ok!(ids.into_iter().collect()))
         }
 
         async fn link_list_all<'a>(
@@ -819,7 +903,7 @@ pub(crate) mod test {
 
         async fn route_ipv4_add<'a>(
             &'a self,
-            router: RouterId,
+            router: u8,
             body: &'a Ipv4RouteUpdate,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
@@ -841,7 +925,7 @@ pub(crate) mod test {
 
         async fn route_ipv6_add<'a>(
             &'a self,
-            router: RouterId,
+            router: u8,
             body: &'a Ipv6RouteUpdate,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
@@ -859,7 +943,7 @@ pub(crate) mod test {
 
         async fn route_ipv4_delete_target<'a>(
             &'a self,
-            router: RouterId,
+            router: u8,
             cidr: &'a oxnet::Ipv4Net,
             port_id: &'a PortId,
             link_id: &'a LinkId,
@@ -891,7 +975,7 @@ pub(crate) mod test {
 
         async fn route_ipv6_delete_target<'a>(
             &'a self,
-            router: RouterId,
+            router: u8,
             cidr: &'a oxnet::Ipv6Net,
             port_id: &'a PortId,
             link_id: &'a LinkId,
@@ -915,7 +999,7 @@ pub(crate) mod test {
 
         async fn route_ipv4_list_full(
             &self,
-            router: RouterId,
+            router: u8,
         ) -> Result<Vec<Ipv4Routes>, DpdClientError<DpdError>> {
             self.route_call_routers.lock().unwrap().push(router);
             Ok(self
@@ -937,7 +1021,7 @@ pub(crate) mod test {
 
         async fn route_ipv6_list_full(
             &self,
-            router: RouterId,
+            router: u8,
         ) -> Result<Vec<Ipv6Routes>, DpdClientError<DpdError>> {
             self.route_call_routers.lock().unwrap().push(router);
             Ok(self
@@ -959,7 +1043,7 @@ pub(crate) mod test {
 
         async fn route_ipv4_delete_prefix<'a>(
             &'a self,
-            router: RouterId,
+            router: u8,
             cidr: &'a Ipv4Net,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {
@@ -973,7 +1057,7 @@ pub(crate) mod test {
 
         async fn route_ipv6_delete_prefix<'a>(
             &'a self,
-            router: RouterId,
+            router: u8,
             cidr: &'a Ipv6Net,
         ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
         {

@@ -58,15 +58,13 @@ fn ensure_tep_underlay_origin(
 }
 
 /// Withdraw the router's TEP underlay origin (`tep/64`, see
-/// [`ensure_tep_underlay_origin`]) from ddm at teardown. Returns true when
-/// ddm confirmed the prefix is gone — withdrawn now or already absent — and
-/// false when the current state could not be read or the withdraw failed.
+/// [`ensure_tep_underlay_origin`]) from ddm at teardown.
 pub(crate) fn withdraw_tep_underlay_origin(
     client: &impl Ddm,
     tep: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> bool {
+) {
     let target = Ipv6Net::new(tep, 64).unwrap();
 
     let current: Vec<Ipv6Net> = match rt
@@ -82,12 +80,12 @@ pub(crate) fn withdraw_tep_underlay_origin(
                 "error" => format!("{e}"),
                 "prefix" => format!("{target}")
             );
-            return false;
+            return;
         }
     };
 
     if !current.contains(&target) {
-        return true;
+        return;
     }
 
     match rt.block_on(async { client.withdraw_prefixes(&vec![target]).await }) {
@@ -97,7 +95,6 @@ pub(crate) fn withdraw_tep_underlay_origin(
                 "withdrew TEP underlay origin";
                 "prefix" => format!("{target}")
             );
-            true
         }
         Err(e) => {
             ddm_log!(log,
@@ -106,7 +103,6 @@ pub(crate) fn withdraw_tep_underlay_origin(
                 "error" => format!("{e}"),
                 "prefix" => format!("{target}")
             );
-            false
         }
     }
 }

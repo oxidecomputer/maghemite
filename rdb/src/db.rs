@@ -74,12 +74,6 @@ const BFD_NEIGHBOR: &str = "bfd_neighbor";
 /// Keys are router names, values are JSON-encoded [`RouterInfo`].
 const ROUTER: &str = "router";
 
-/// The handle used to open a persistent key-value tree mapping router UUIDs
-/// (16-byte keys) to the switch-local table index (single u8 value) used when
-/// programming dendrite. The uuid is the router's fleet-visible identity; the
-/// u8 is confined to this switch.
-const SWITCH_INDEX: &str = "switch_index";
-
 /// Key used in settings tree for the database format version.
 const DB_VERSION_KEY: &str = "db_version";
 
@@ -106,7 +100,6 @@ const ROUTER_SCOPED_TREES: &[&str] = &[
     STATIC6_ROUTES,
     BFD_NEIGHBOR,
     SETTINGS,
-    SWITCH_INDEX,
 ];
 
 use crate::rib::{Rib, Rib4, Rib6};
@@ -145,7 +138,7 @@ pub struct RouterDb {
     info: RouterInfo,
 
     /// Switch-local table index used when programming dendrite (0 = the
-    /// default router). Persisted in the [`SWITCH_INDEX`] tree.
+    /// default router). Allocated in memory; it can change across restarts.
     switch_index: u8,
 
     /// IPv4 Unicast routes learned from BGP update messages or administratively
@@ -297,37 +290,30 @@ impl Db {
             let (_, value) = item?;
             let value = String::from_utf8_lossy(&value);
             let info: RouterInfo = serde_json::from_str(&value)?;
-            let switch_index = self.ensure_switch_index(&info)?;
+            let switch_index = Self::ensure_switch_index(&info, &routers)?;
             routers.insert(info.id, self.router_db(info, switch_index));
         }
         Ok(())
     }
 
-    /// Get or allocate the persistent switch-local table index for a router.
-    /// The default router always maps to index 0, matching dendrite's
-    /// implicit default table; other routers get the smallest free index.
-    fn ensure_switch_index(&self, info: &RouterInfo) -> Result<u8, Error> {
-        let tree = self.persistent.open_tree(SWITCH_INDEX)?;
-        if let Some(v) = tree.get(info.id.as_bytes())? {
-            return Ok(v[0]);
+    /// Allocate the switch-local table index for a router. The default
+    /// router always maps to index 0, matching dendrite's implicit default
+    /// table; other routers get the smallest index not held by a router in
+    /// `routers`.
+    fn ensure_switch_index(
+        info: &RouterInfo,
+        routers: &BTreeMap<RouterId, RouterDb>,
+    ) -> Result<u8, Error> {
+        if info.id == crate::DEFAULT_ROUTER_ID {
+            return Ok(0);
         }
-        let index = if info.id == crate::DEFAULT_ROUTER_ID {
-            0
-        } else {
-            let used = tree
-                .iter()
-                .values()
-                .map(|v| v.map(|v| v[0]))
-                .collect::<Result<std::collections::BTreeSet<u8>, _>>()?;
-            (1..=u8::MAX).find(|i| !used.contains(i)).ok_or_else(|| {
+        (1..=u8::MAX)
+            .find(|i| routers.values().all(|r| r.switch_index != *i))
+            .ok_or_else(|| {
                 Error::Conflict(
                     "switch-local router table indexes exhausted".to_string(),
                 )
-            })?
-        };
-        tree.insert(info.id.as_bytes(), &[index])?;
-        tree.flush()?;
-        Ok(index)
+            })
     }
 
     fn router_db(&self, info: RouterInfo, switch_index: u8) -> RouterDb {
@@ -372,23 +358,7 @@ impl Db {
                 )));
             }
         }
-        // No live router has this id (checked above), so any entry left in
-        // the SWITCH_INDEX tree is a departed router's tombstone: its switch
-        // table has not been confirmed clean (see `delete_router`). Handing
-        // the id — and with it the pinned, possibly dirty table index — to a
-        // new router would silently resurrect it.
-        if self
-            .persistent
-            .open_tree(SWITCH_INDEX)?
-            .contains_key(info.id.as_bytes())?
-        {
-            return Err(Error::Conflict(format!(
-                "router id {} is tombstoned: its switch table index is \
-                 pending a clean scrub",
-                info.id
-            )));
-        }
-        let switch_index = self.ensure_switch_index(&info)?;
+        let switch_index = Self::ensure_switch_index(&info, &routers)?;
         self.persist_router(&info)?;
         let rdb = self.router_db(info, switch_index);
         routers.insert(rdb.info.id, rdb.clone());
@@ -420,26 +390,11 @@ impl Db {
 
     /// Delete a named router, dropping its volatile RIBs and purging all of
     /// its persistent state.
-    ///
-    /// When `release_switch_index` is false the router's entry in the
-    /// [`SWITCH_INDEX`] tree is kept as a tombstone: the switch-local table
-    /// may still hold the router's routes (e.g. dpd was unreachable during
-    /// teardown), so the index must not be handed to a new router until the
-    /// table is confirmed clean. Tombstones are enumerated with
-    /// [`Self::orphaned_switch_indexes`] and freed with
-    /// [`Self::release_switch_index`].
-    pub fn delete_router(
-        &self,
-        id: RouterId,
-        release_switch_index: bool,
-    ) -> Result<(), Error> {
+    pub fn delete_router(&self, id: RouterId) -> Result<(), Error> {
         let Some(rdb) = write_lock!(self.routers).remove(&id) else {
             return Err(Error::NotFound(format!("router {id}")));
         };
         for tree_name in ROUTER_SCOPED_TREES {
-            if *tree_name == SWITCH_INDEX && !release_switch_index {
-                continue;
-            }
             let tree = self.persistent.open_tree(tree_name)?;
             remove_prefix_scoped(&tree, rdb.info.id.as_bytes())?;
             tree.flush()?;
@@ -450,44 +405,19 @@ impl Db {
         Ok(())
     }
 
-    /// Switch-index tombstones: entries in the [`SWITCH_INDEX`] tree whose
-    /// router no longer exists. Each pins a switch-local table index that
-    /// may still hold the departed router's routes.
-    pub fn orphaned_switch_indexes(
-        &self,
-    ) -> Result<Vec<(RouterId, u8)>, Error> {
-        let live = read_lock!(self.routers);
-        let tree = self.persistent.open_tree(SWITCH_INDEX)?;
-        let mut orphans = Vec::new();
-        for item in tree.iter() {
-            let (key, value) = item?;
-            let bytes: [u8; 16] = key.as_ref().try_into().map_err(|_| {
-                Error::DbKey(format!(
-                    "switch index key {key:?} should be a 16-byte uuid"
-                ))
-            })?;
-            let id = RouterId(uuid::Uuid::from_bytes(bytes));
-            if !live.contains_key(&id) {
-                orphans.push((id, value[0]));
-            }
-        }
-        Ok(orphans)
-    }
-
-    /// Free a tombstoned switch-local table index so it can be reused.
-    /// Callers must first confirm with dpd that the table is clean.
-    pub fn release_switch_index(&self, id: &RouterId) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(SWITCH_INDEX)?;
-        tree.remove(id.as_bytes())?;
-        tree.flush()?;
-        Ok(())
-    }
-
     /// List all named routers.
     pub fn list_routers(&self) -> Vec<RouterInfo> {
         read_lock!(self.routers)
             .values()
             .map(|r| r.info.clone())
+            .collect()
+    }
+
+    /// The switch-local table indexes held by routers.
+    pub fn switch_indexes(&self) -> BTreeSet<u8> {
+        read_lock!(self.routers)
+            .values()
+            .map(|r| r.switch_index)
             .collect()
     }
 
@@ -2918,7 +2848,7 @@ mod test {
         // Deleting a router purges its persistent state but leaves other
         // routers untouched.
         let r2_info = r2.info().clone();
-        db.db().delete_router(r2.id(), true).expect("delete r2");
+        db.db().delete_router(r2.id()).expect("delete r2");
         assert!(db.db().router(r2.id()).is_err());
         assert_eq!(r1.get_static(None).unwrap(), vec![route1, route1s]);
         assert_eq!(r1.get_origin4(asn).unwrap(), vec![p1]);
@@ -2931,7 +2861,7 @@ mod test {
     }
 
     #[test]
-    fn test_switch_index_tombstone() {
+    fn test_switch_index_allocation() {
         use crate::types::{RouterId, RouterInfo};
 
         let db = get_test_db();
@@ -2946,67 +2876,10 @@ mod test {
         let r2 = db.db().create_router(mk("r2", 2)).expect("create r2");
         assert_eq!(r1.switch_index(), 1);
         assert_eq!(r2.switch_index(), 2);
-        assert!(db.db().orphaned_switch_indexes().unwrap().is_empty());
 
-        // An unclean delete tombstones r1's index: it shows up as orphaned
-        // and is skipped when the next router is created.
-        let r1_id = r1.id();
-        db.db().delete_router(r1_id, false).expect("delete r1");
-        assert_eq!(
-            db.db().orphaned_switch_indexes().unwrap(),
-            vec![(r1_id, 1)]
-        );
+        // A deleted router's index goes to the next router created.
+        db.db().delete_router(r1.id()).expect("delete r1");
         let r3 = db.db().create_router(mk("r3", 3)).expect("create r3");
-        assert_eq!(r3.switch_index(), 3);
-
-        // A clean delete frees the index immediately.
-        db.db().delete_router(r2.id(), true).expect("delete r2");
-        assert_eq!(
-            db.db().orphaned_switch_indexes().unwrap(),
-            vec![(r1_id, 1)]
-        );
-
-        // While tombstoned, the departed router's uuid cannot come back —
-        // under its old name or a new one — since that would hand the
-        // possibly dirty table index straight to the new router.
-        let resurrect = |name: &str, seg: u16| RouterInfo {
-            id: r1_id,
-            name: name.to_string(),
-            tep: Ipv6Addr::new(0xfd00, 0, 0, seg, 0, 0, 0, 1),
-        };
-        for name in ["r1", "r1b"] {
-            let err = db
-                .db()
-                .create_router(resurrect(name, 9))
-                .err()
-                .expect("tombstoned id must be rejected");
-            assert!(
-                matches!(
-                    err,
-                    crate::error::Error::Conflict(ref m)
-                        if m.contains("tombstoned")
-                ),
-                "{err}"
-            );
-            assert!(db.db().router(r1_id).is_err());
-        }
-        assert_eq!(
-            db.db().orphaned_switch_indexes().unwrap(),
-            vec![(r1_id, 1)]
-        );
-
-        // Releasing the tombstone makes the index reusable.
-        db.db().release_switch_index(&r1_id).unwrap();
-        assert!(db.db().orphaned_switch_indexes().unwrap().is_empty());
-        let r4 = db.db().create_router(mk("r4", 4)).expect("create r4");
-        assert_eq!(r4.switch_index(), 1);
-
-        // ...and the released uuid itself is usable again.
-        let r1b = db
-            .db()
-            .create_router(resurrect("r1b", 9))
-            .expect("create r1b after release");
-        assert_eq!(r1b.id(), r1_id);
-        assert_eq!(r1b.switch_index(), 2);
+        assert_eq!(r3.switch_index(), 1);
     }
 }

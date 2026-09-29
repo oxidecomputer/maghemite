@@ -12,7 +12,6 @@ use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
 use oxnet::IpNet;
-use rdb::types::RouterId;
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -67,7 +66,7 @@ impl RouteHash {
 }
 
 pub(crate) fn ensure_tep_addr(
-    router: RouterId,
+    router: u8,
     tep: Ipv6Addr,
     dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
@@ -94,15 +93,13 @@ pub(crate) fn ensure_tep_addr(
     }
 }
 
-/// Returns true if dpd confirmed the TEP address is gone (deleted or already
-/// absent).
 pub(crate) fn withdraw_tep_addr(
-    router: RouterId,
+    router: u8,
     tep: Ipv6Addr,
     dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> bool {
+) {
     if let Err(e) =
         rt.block_on(async { dpd.loopback_ipv6_delete(router, &tep).await })
         && e.status() != Some(reqwest::StatusCode::NOT_FOUND)
@@ -114,9 +111,7 @@ pub(crate) fn withdraw_tep_addr(
             "error" => format!("{e}"),
             "prefix" => format!("{tep}")
         );
-        return false;
     }
-    true
 }
 
 pub(crate) fn link_is_up(
@@ -167,7 +162,7 @@ fn get_local_addrs(
 
 /// Perform a set of route additions and deletions via the Dendrite API.
 pub(crate) fn update_dendrite<'a, I>(
-    router: RouterId,
+    router: u8,
     to_add: I,
     to_del: I,
     dpd: &impl Dpd,
@@ -484,7 +479,7 @@ fn resolve_port_and_link(
 }
 
 pub(crate) fn get_routes_for_prefix(
-    router: RouterId,
+    router: u8,
     dpd: &impl Dpd,
     prefix: &IpNet,
     rt: Arc<tokio::runtime::Handle>,
