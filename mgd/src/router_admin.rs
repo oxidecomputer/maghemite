@@ -271,8 +271,7 @@ async fn execute_apply(
         } else {
             ctx.db.router(rp.spec.id).map_err(Error::from)?
         };
-        ctx.lower
-            .ensure(&ctx.db, &rdb, &ctx.log, &ctx.mg_lower_stats);
+        ctx.lower.ensure(&rdb, &ctx.log, &ctx.mg_lower_stats);
         apply_router_plan(ctx, &rdb, rp).await?;
     }
 
@@ -407,7 +406,7 @@ async fn teardown_router(
     // Stop the router's mg-lower thread first: on shutdown it withdraws the
     // router's ASIC routes and ddm tunnel advertisements based on the RIB
     // contents, so it must run before the RIB is torn down.
-    ctx.lower.stop(&rdb).await;
+    ctx.lower.stop(id).await;
 
     let asns: Vec<u32> = lock!(ctx.bgp.router)
         .keys()
@@ -923,18 +922,12 @@ mod tests {
         one.name = "uno".into();
         apply(&ctx, vec![one.clone()]).await.expect("rename");
 
-        let hook = ctx.lower.test_hook().expect("test lower");
-        assert!(
-            lock!(hook.stopped).is_empty(),
-            "rename tore the router down"
-        );
         assert_eq!(
             router_names(&ctx),
             vec!["default".to_string(), "uno".to_string()]
         );
         let after = ctx.db.router(one.id).expect("uno");
         assert_eq!(after.tep(), before.tep());
-        assert_eq!(after.switch_index(), before.switch_index());
         assert_eq!(after.get_bgp_neighbors().expect("neighbors").len(), 1);
         assert_eq!(session_owner(&ctx, "203.0.113.1"), Some(one.id));
 
@@ -949,7 +942,6 @@ mod tests {
             .expect("swap names");
         assert_eq!(ctx.db.router(one.id).expect("one").name(), "two");
         assert_eq!(ctx.db.router(two.id).expect("two").name(), "uno");
-        assert!(lock!(hook.stopped).is_empty(), "swap tore a router down");
     }
 
     /// Duplicate router names, ids, or cross-router BGP peer addresses must

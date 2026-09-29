@@ -12,6 +12,7 @@ use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
 use oxnet::IpNet;
+use rdb::types::RouterId;
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -66,7 +67,7 @@ impl RouteHash {
 }
 
 pub(crate) fn ensure_tep_addr(
-    router: u8,
+    router: RouterId,
     tep: Ipv6Addr,
     dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
@@ -94,7 +95,7 @@ pub(crate) fn ensure_tep_addr(
 }
 
 pub(crate) fn withdraw_tep_addr(
-    router: u8,
+    router: RouterId,
     tep: Ipv6Addr,
     dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
@@ -162,7 +163,7 @@ fn get_local_addrs(
 
 /// Perform a set of route additions and deletions via the Dendrite API.
 pub(crate) fn update_dendrite<'a, I>(
-    router: u8,
+    router: RouterId,
     to_add: I,
     to_del: I,
     dpd: &impl Dpd,
@@ -479,7 +480,7 @@ fn resolve_port_and_link(
 }
 
 pub(crate) fn get_routes_for_prefix(
-    router: u8,
+    router: RouterId,
     dpd: &impl Dpd,
     prefix: &IpNet,
     rt: Arc<tokio::runtime::Handle>,

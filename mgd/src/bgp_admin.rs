@@ -2897,9 +2897,7 @@ fn update(message, asn, addr) {
             bfd: BfdContext::new(log.clone()),
             log: log.clone(),
             db: db.db().clone(),
-            // No platform in tests: lifecycle calls are recorded in the
-            // hook (`ctx.lower.test_hook()`).
-            lower: crate::lower::LowerContext::for_test(Default::default()),
+            lower: crate::lower::LowerContext::default(),
             mg_lower_stats: Arc::new(MgLowerStats::default()),
             stats_server_running: Mutex::new(false),
             oximeter_port: 0,

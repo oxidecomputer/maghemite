@@ -692,13 +692,10 @@ impl Stats {
         let mut samples = Vec::new();
 
         // Stats are reported for the default router only (POC).
-        let rdb = match self.db.router(crate::admin::DEFAULT_ROUTER_ID) {
-            Ok(rdb) => rdb,
-            Err(e) => {
-                olog!(self.log, warn, "no default router for stats: {e}");
-                return Ok(samples);
-            }
-        };
+        let rdb = self
+            .db
+            .router(crate::admin::DEFAULT_ROUTER_ID)
+            .expect("default router exists");
 
         match rdb.get_static4_count() {
             Ok(count) => {
@@ -742,13 +739,10 @@ impl Stats {
         let mut samples = Vec::new();
 
         // Stats are reported for the default router only (POC).
-        let rdb = match self.db.router(crate::admin::DEFAULT_ROUTER_ID) {
-            Ok(rdb) => rdb,
-            Err(e) => {
-                olog!(self.log, warn, "no default router for stats: {e}");
-                return Ok(samples);
-            }
-        };
+        let rdb = self
+            .db
+            .router(crate::admin::DEFAULT_ROUTER_ID)
+            .expect("default router exists");
 
         let mut count = 0usize;
         for paths in rdb.full_rib(None).values() {

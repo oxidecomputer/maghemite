@@ -137,10 +137,6 @@ pub struct RouterDb {
     /// Identity of this router (id, name, tep).
     info: RouterInfo,
 
-    /// Switch-local table index used when programming dendrite (0 = the
-    /// default router). Allocated in memory; it can change across restarts.
-    switch_index: u8,
-
     /// IPv4 Unicast routes learned from BGP update messages or administratively
     /// added static routes. These are volatile.
     rib4_in: Arc<Mutex<Rib4>>,
@@ -290,33 +286,12 @@ impl Db {
             let (_, value) = item?;
             let value = String::from_utf8_lossy(&value);
             let info: RouterInfo = serde_json::from_str(&value)?;
-            let switch_index = Self::ensure_switch_index(&info, &routers)?;
-            routers.insert(info.id, self.router_db(info, switch_index));
+            routers.insert(info.id, self.router_db(info));
         }
         Ok(())
     }
 
-    /// Allocate the switch-local table index for a router. The default
-    /// router always maps to index 0, matching dendrite's implicit default
-    /// table; other routers get the smallest index not held by a router in
-    /// `routers`.
-    fn ensure_switch_index(
-        info: &RouterInfo,
-        routers: &BTreeMap<RouterId, RouterDb>,
-    ) -> Result<u8, Error> {
-        if info.id == crate::DEFAULT_ROUTER_ID {
-            return Ok(0);
-        }
-        (1..=u8::MAX)
-            .find(|i| routers.values().all(|r| r.switch_index != *i))
-            .ok_or_else(|| {
-                Error::Conflict(
-                    "switch-local router table indexes exhausted".to_string(),
-                )
-            })
-    }
-
-    fn router_db(&self, info: RouterInfo, switch_index: u8) -> RouterDb {
+    fn router_db(&self, info: RouterInfo) -> RouterDb {
         RouterDb {
             persistent: self.persistent.clone(),
             log: self.log.new(slog::o!(
@@ -324,7 +299,6 @@ impl Db {
                 "router_id" => info.id.to_string(),
             )),
             info,
-            switch_index,
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
@@ -334,8 +308,8 @@ impl Db {
         }
     }
 
-    /// Create a new named router. Fails if the name, id, or tep collides
-    /// with an existing router.
+    /// Create a new named router. Fails if the name or id collides with an
+    /// existing router.
     pub fn create_router(&self, info: RouterInfo) -> Result<RouterDb, Error> {
         let mut routers = write_lock!(self.routers);
         if routers.contains_key(&info.id) {
@@ -351,16 +325,9 @@ impl Db {
                     info.name
                 )));
             }
-            if r.info.tep == info.tep {
-                return Err(Error::Conflict(format!(
-                    "tep {} already in use by router {}",
-                    info.tep, r.info.name
-                )));
-            }
         }
-        let switch_index = Self::ensure_switch_index(&info, &routers)?;
         self.persist_router(&info)?;
-        let rdb = self.router_db(info, switch_index);
+        let rdb = self.router_db(info);
         routers.insert(rdb.info.id, rdb.clone());
         Ok(rdb)
     }
@@ -410,14 +377,6 @@ impl Db {
         read_lock!(self.routers)
             .values()
             .map(|r| r.info.clone())
-            .collect()
-    }
-
-    /// The switch-local table indexes held by routers.
-    pub fn switch_indexes(&self) -> BTreeSet<u8> {
-        read_lock!(self.routers)
-            .values()
-            .map(|r| r.switch_index)
             .collect()
     }
 
@@ -478,11 +437,6 @@ impl RouterDb {
 
     pub fn tep(&self) -> Ipv6Addr {
         self.info.tep
-    }
-
-    /// Switch-local table index used when programming dendrite (0 = default).
-    pub fn switch_index(&self) -> u8 {
-        self.switch_index
     }
 
     fn scoped_key(&self, key: &[u8]) -> Vec<u8> {
@@ -2858,28 +2812,5 @@ mod test {
         assert!(r2b.get_static(None).unwrap().is_empty());
         assert!(r2b.get_origin4(asn).unwrap().is_empty());
         assert_eq!(r2b.get_bestpath_fanout().unwrap().get(), 1);
-    }
-
-    #[test]
-    fn test_switch_index_allocation() {
-        use crate::types::{RouterId, RouterInfo};
-
-        let db = get_test_db();
-        let mk = |name: &str, seg: u16| RouterInfo {
-            id: RouterId::new_random(),
-            name: name.to_string(),
-            tep: Ipv6Addr::new(0xfd00, 0, 0, seg, 0, 0, 0, 1),
-        };
-
-        assert_eq!(db.router().switch_index(), 0);
-        let r1 = db.db().create_router(mk("r1", 1)).expect("create r1");
-        let r2 = db.db().create_router(mk("r2", 2)).expect("create r2");
-        assert_eq!(r1.switch_index(), 1);
-        assert_eq!(r2.switch_index(), 2);
-
-        // A deleted router's index goes to the next router created.
-        db.db().delete_router(r1.id()).expect("delete r1");
-        let r3 = db.db().create_router(mk("r3", 3)).expect("create r3");
-        assert_eq!(r3.switch_index(), 1);
     }
 }

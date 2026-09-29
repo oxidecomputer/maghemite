@@ -165,9 +165,7 @@ async fn run(args: RunArgs) {
         let rdb = db
             .router(info.id)
             .expect("router disappeared during startup");
-        context
-            .lower
-            .ensure(&db, &rdb, &log, &context.mg_lower_stats);
+        context.lower.ensure(&rdb, &log, &context.mg_lower_stats);
     }
 
     start_bgp_routers(context.clone());

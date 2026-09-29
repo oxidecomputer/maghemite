@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     net::Ipv6Addr,
     sync::{
         Arc,
@@ -22,8 +22,8 @@ use rdb::{Rib, StaticRouteKey};
 use crate::dendrite::get_routes_for_prefix;
 use crate::platform::test::{TestDdm, TestDpd, TestSwitchZone};
 
-/// The switch table used by tests that call the sync functions directly.
-const TABLE: u8 = 1;
+/// The router used by tests that call the sync functions directly.
+const TABLE: RouterId = RouterId(uuid::Uuid::from_u128(1));
 
 #[tokio::test]
 async fn sync_prefix_test() {
@@ -32,6 +32,7 @@ async fn sync_prefix_test() {
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
+        dpd.routers.lock().unwrap().insert(TABLE);
         let ddm = TestDdm::default();
         let sw = TestSwitchZone {
             routes: HashMap::default(),
@@ -98,6 +99,7 @@ async fn sync_link_down_test() {
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
+        dpd.routers.lock().unwrap().insert(TABLE);
         let ddm = TestDdm::default();
         let sw = TestSwitchZone {
             routes: vec![(
@@ -348,6 +350,7 @@ async fn sync_v4_over_v6_readback() {
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
+        dpd.routers.lock().unwrap().insert(TABLE);
         v4_over_v6_link_setup(&dpd);
 
         // Pre-populate dpd with a Route::V6 entry for an IPv4 prefix,
@@ -401,6 +404,7 @@ async fn sync_v4_over_v6_idempotent() {
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
+        dpd.routers.lock().unwrap().insert(TABLE);
         let ddm = TestDdm::default();
         let sw = TestSwitchZone {
             routes: HashMap::default(),
@@ -500,6 +504,7 @@ async fn sync_v4_over_v6_removal() {
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
+        dpd.routers.lock().unwrap().insert(TABLE);
         let ddm = TestDdm::default();
         let sw = TestSwitchZone {
             routes: HashMap::default(),
@@ -571,6 +576,7 @@ async fn sync_mixed_v4_and_v4_over_v6() {
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
+        dpd.routers.lock().unwrap().insert(TABLE);
         let ddm = TestDdm::default();
         let sw = TestSwitchZone {
             routes: HashMap::default(),
@@ -727,7 +733,7 @@ async fn two_router_lifecycle() {
 
         let lower = |rdb: &rdb::RouterDb, tep| {
             let (dpd, ddm, rt) = (dpd.clone(), ddm.clone(), rt.clone());
-            start_lower(rdb.clone(), db.db().clone(), tep, dpd, ddm, rt)
+            start_lower(rdb.clone(), tep, dpd, ddm, rt)
         };
         let (shut1, j1) = lower(&r1, tep1);
         let (shut2, j2) = lower(&r2, tep2);
@@ -738,8 +744,8 @@ async fn two_router_lifecycle() {
         });
 
         // Both routers' TEPs are claimed on the ASIC, each on its own table.
-        assert_eq!(dpd.loopbacks(r1.switch_index()), vec![tep1]);
-        assert_eq!(dpd.loopbacks(r2.switch_index()), vec![tep2]);
+        assert_eq!(dpd.loopbacks(r1.id()), vec![tep1]);
+        assert_eq!(dpd.loopbacks(r2.id()), vec![tep2]);
 
         // ...and each TEP's underlay /64 is originated into ddm.
         let tep_net = |tep: Ipv6Addr| oxnet::Ipv6Net::new(tep, 64).unwrap();
@@ -770,7 +776,7 @@ async fn two_router_lifecycle() {
         // routers made calls.
         {
             let seen = dpd.route_call_routers.lock().unwrap();
-            let (t1, t2) = (r1.switch_index(), r2.switch_index());
+            let (t1, t2) = (r1.id(), r2.id());
             assert!(
                 seen.iter().all(|x| *x == t1 || *x == t2),
                 "dpd route call with unknown router id"
@@ -779,25 +785,26 @@ async fn two_router_lifecycle() {
             assert!(seen.contains(&t2));
         }
 
-        // Shut down r1: its ASIC routes, tunnel origins and TEP claim are
-        // withdrawn, r2's are untouched.
+        // Shut down r1: it is deleted from dpd, its tunnel origins are
+        // withdrawn, and r2's state is untouched.
         shut1.store(true, Ordering::Relaxed);
         j1.join().expect("join r1 mg-lower");
         {
+            assert_eq!(
+                *dpd.routers.lock().unwrap(),
+                BTreeSet::from([rdb::DEFAULT_ROUTER_ID, r2.id()])
+            );
             assert_eq!(dpd.v4_count(), 1);
             assert_eq!(
-                dpd.v4_targets(
-                    r2.switch_index(),
-                    &"2.0.0.0/24".parse().unwrap()
-                )
-                .len(),
+                dpd.v4_targets(r2.id(), &"2.0.0.0/24".parse().unwrap())
+                    .len(),
                 1
             );
             let origins = ddm.tunnel_originated.lock().unwrap();
             assert_eq!(origins.len(), 1);
             assert!(origins.iter().all(|x| x.boundary_addr == tep2));
-            assert!(dpd.loopbacks(r1.switch_index()).is_empty());
-            assert_eq!(dpd.loopbacks(r2.switch_index()), vec![tep2]);
+            assert!(dpd.loopbacks(r1.id()).is_empty());
+            assert_eq!(dpd.loopbacks(r2.id()), vec![tep2]);
             // r1's TEP underlay /64 is withdrawn from ddm; r2's stays.
             let originated = ddm.originated.lock().unwrap();
             assert_eq!(*originated, vec![tep_net(tep2)]);
@@ -807,7 +814,7 @@ async fn two_router_lifecycle() {
         j2.join().expect("join r2 mg-lower");
         assert_eq!(dpd.v4_count(), 0);
         assert!(ddm.tunnel_originated.lock().unwrap().is_empty());
-        assert!(dpd.loopbacks(r2.switch_index()).is_empty());
+        assert!(dpd.loopbacks(r2.id()).is_empty());
         assert!(ddm.originated.lock().unwrap().is_empty());
 
         tx.send(()).unwrap();
@@ -853,14 +860,8 @@ async fn tep_underlay_withdraw_failure_is_tolerated() {
         }])
         .expect("add static route");
 
-        let (shut, j) = start_lower(
-            r1.clone(),
-            db.db().clone(),
-            tep,
-            dpd.clone(),
-            ddm.clone(),
-            rt.clone(),
-        );
+        let (shut, j) =
+            start_lower(r1.clone(), tep, dpd.clone(), ddm.clone(), rt.clone());
 
         let tep_net = oxnet::Ipv6Net::new(tep, 64).unwrap();
         wait_until("route and TEP /64 to sync", || {
@@ -876,7 +877,7 @@ async fn tep_underlay_withdraw_failure_is_tolerated() {
         // ASIC state is fully withdrawn; the /64 whose withdraw failed is
         // still originated.
         assert_eq!(dpd.v4_count(), 0);
-        assert!(dpd.loopbacks(r1.switch_index()).is_empty());
+        assert!(dpd.loopbacks(r1.id()).is_empty());
         assert!(ddm.tunnel_originated.lock().unwrap().is_empty());
         assert_eq!(*ddm.originated.lock().unwrap(), vec![tep_net]);
         assert_eq!(*ddm.fail_withdraw_prefixes.lock().unwrap(), 0);
@@ -887,22 +888,10 @@ async fn tep_underlay_withdraw_failure_is_tolerated() {
     done.recv().unwrap();
 }
 
-/// A single target as mg-lower programs it.
-fn v4_target(tgt_ip: &str) -> Vec<Route> {
-    vec![Route::V4(Ipv4Route {
-        link_id: LinkId(0),
-        port_id: PortId::Qsfp("qsfp0".parse().unwrap()),
-        tag: String::from(crate::MG_LOWER_TAG),
-        tgt_ip: tgt_ip.parse().unwrap(),
-        vlan_id: None,
-    })]
-}
-
 /// Start `crate::run` for one router on its own thread. Returns the
 /// shutdown flag and the thread's join handle.
 fn start_lower(
     rdb: rdb::RouterDb,
-    routers: rdb::Db,
     tep: Ipv6Addr,
     dpd: Arc<TestDpd>,
     ddm: Arc<TestDdm>,
@@ -919,7 +908,6 @@ fn start_lower(
         crate::run(
             tep,
             rdb,
-            routers,
             util::test::logger(),
             Arc::new(MgLowerStats::default()),
             rt,
@@ -932,11 +920,10 @@ fn start_lower(
     (shut, j)
 }
 
-/// A non-default router starting on a table index that already holds state
-/// (as after an mgd restart) removes the routes its RIB does not have and
-/// the loopbacks that are not its TEP. The default table is not touched.
+/// Shutting down the default router withdraws its routes one by one and
+/// leaves the router itself in dpd.
 #[tokio::test]
-async fn inherited_dirty_table_is_reconciled_on_start() {
+async fn default_router_is_never_deleted_from_dpd() {
     let rt = Arc::new(tokio::runtime::Handle::current());
     let (tx, done) = std::sync::mpsc::channel::<()>();
 
@@ -946,114 +933,33 @@ async fn inherited_dirty_table_is_reconciled_on_start() {
         v4_over_v6_link_setup(&dpd);
         let ddm = Arc::new(TestDdm::default());
 
-        let db = rdb::test::get_test_db("mg_lower_inherited_table", log)
-            .expect("create test db");
-        let tep: Ipv6Addr = "fd00::1".parse().unwrap();
-        let r1 = db
-            .db()
-            .create_router(RouterInfo {
-                id: RouterId::new_random(),
-                name: "r1".to_string(),
-                tep,
-            })
-            .expect("create router");
-        assert_ne!(r1.switch_index(), 0);
-        r1.add_static_routes(&[StaticRouteKey {
-            prefix: "2.0.0.0/24".parse().unwrap(),
-            nexthop: "2.0.0.1".parse().unwrap(),
-            vlan_id: None,
-            rib_priority: 10,
-        }])
-        .expect("add static route");
-
-        // Leftovers in r1's table: A is not in the RIB, B is but with a
-        // stale target, and a loopback that is not r1's TEP.
-        let (a, b) =
-            ("1.0.0.0/24".parse().unwrap(), "2.0.0.0/24".parse().unwrap());
-        let foreign: Ipv6Addr = "fd00::99".parse().unwrap();
-        dpd.insert_v4(r1.switch_index(), a, v4_target("1.0.0.1"));
-        dpd.insert_v4(r1.switch_index(), b, v4_target("2.0.0.99"));
-        dpd.insert_loopback(r1.switch_index(), foreign);
-        // Table 0 belongs to dendrite and other components.
-        let default = 0;
-        dpd.insert_v4(default, a, v4_target("1.0.0.1"));
-        dpd.insert_loopback(default, foreign);
-
-        let (shut, j) = start_lower(
-            r1.clone(),
-            db.db().clone(),
-            tep,
-            dpd.clone(),
-            ddm.clone(),
-            rt.clone(),
-        );
-        wait_until("r1's table to be reconciled", || {
-            dpd.v4_targets(r1.switch_index(), &a).is_empty()
-                && dpd.v4_targets(r1.switch_index(), &b) == v4_target("2.0.0.1")
-                && dpd.loopbacks(r1.switch_index()) == vec![tep]
-        });
-        assert_eq!(dpd.v4_targets(default, &a), v4_target("1.0.0.1"));
-        assert_eq!(dpd.loopbacks(default), vec![foreign]);
-
-        shut.store(true, Ordering::Relaxed);
-        j.join().expect("join mg-lower");
-        assert_eq!(dpd.v4_targets(default, &a), v4_target("1.0.0.1"));
-        assert_eq!(dpd.loopbacks(default), vec![foreign]);
-
-        tx.send(()).unwrap();
-    });
-
-    done.recv().unwrap();
-}
-
-/// The default router empties switch tables that no router holds, and never
-/// deletes what it did not program from table 0: a foreign route and
-/// loopback there survive its start and shutdown.
-#[tokio::test]
-async fn dead_tables_are_emptied_and_table_0_is_not() {
-    let rt = Arc::new(tokio::runtime::Handle::current());
-    let (tx, done) = std::sync::mpsc::channel::<()>();
-
-    std::thread::spawn(move || {
-        let log = util::test::logger();
-        let dpd = Arc::new(TestDpd::default());
-        v4_over_v6_link_setup(&dpd);
-        let ddm = Arc::new(TestDdm::default());
-
-        let db = rdb::test::get_test_db("mg_lower_dead_tables", log)
+        let db = rdb::test::get_test_db("mg_lower_default_router", log)
             .expect("create test db");
         let default = db.router().clone();
-        assert_eq!(default.switch_index(), 0);
-        let tep: Ipv6Addr = "fd00::1".parse().unwrap();
-        let prefix = "1.0.0.0/24".parse().unwrap();
-        let foreign: Ipv6Addr = "fd00::99".parse().unwrap();
-        // Table 7 is held by no router.
-        for table in [0, 7] {
-            dpd.insert_v4(table, prefix, v4_target("1.0.0.1"));
-            dpd.insert_loopback(table, foreign);
-        }
+        default
+            .add_static_routes(&[StaticRouteKey {
+                prefix: "1.0.0.0/24".parse().unwrap(),
+                nexthop: "1.0.0.1".parse().unwrap(),
+                vlan_id: None,
+                rib_priority: 10,
+            }])
+            .expect("add static route");
 
-        let (shut, j) = start_lower(
-            default.clone(),
-            db.db().clone(),
-            tep,
-            dpd.clone(),
-            ddm.clone(),
-            rt.clone(),
-        );
-        // Once the TEP is claimed, the first full sync has run.
-        wait_until("the default router's TEP", || {
-            dpd.loopbacks(0).contains(&tep)
-        });
-        assert!(dpd.v4_targets(7, &prefix).is_empty());
-        assert!(dpd.loopbacks(7).is_empty());
-        assert_eq!(dpd.v4_targets(0, &prefix), v4_target("1.0.0.1"));
-        assert_eq!(dpd.loopbacks(0), vec![foreign, tep]);
+        let tep: Ipv6Addr = "fd00::1".parse().unwrap();
+        let (shut, j) =
+            start_lower(default, tep, dpd.clone(), ddm.clone(), rt.clone());
+        wait_until("the default router's route", || dpd.v4_count() == 1);
 
         shut.store(true, Ordering::Relaxed);
         j.join().expect("join mg-lower");
-        assert_eq!(dpd.v4_targets(0, &prefix), v4_target("1.0.0.1"));
-        assert_eq!(dpd.loopbacks(0), vec![foreign]);
+        assert_eq!(dpd.v4_count(), 0);
+        assert!(dpd.loopbacks(rdb::DEFAULT_ROUTER_ID).is_empty());
+        assert!(
+            dpd.routers
+                .lock()
+                .unwrap()
+                .contains(&rdb::DEFAULT_ROUTER_ID)
+        );
 
         tx.send(()).unwrap();
     });
