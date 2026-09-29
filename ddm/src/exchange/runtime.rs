@@ -635,7 +635,7 @@ fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
 
     ctx.ctx
         .stats
-        .imported_underlay_prefixes
+        .imported_tunnel_endpoints
         .store(ctx.ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
