@@ -4,7 +4,7 @@
 
 //! Test utilities for rdb tests.
 
-use crate::types::{RouterId, RouterInfo};
+use crate::types::RouterInfo;
 use crate::{Db, RouterDb, error::Error};
 use client_common::eprintln_nopipe;
 use slog::Logger;
@@ -144,8 +144,8 @@ pub fn get_test_db(test_name: &str, log: Logger) -> Result<TestDb, Error> {
 
     let db = Db::new(&db_path, log)?;
     let router = db.create_router(RouterInfo {
-        id: RouterId::new_random(),
-        name: "default".to_string(),
+        id: crate::DEFAULT_ROUTER_ID,
+        name: crate::DEFAULT_ROUTER.to_string(),
         tep: std::net::Ipv6Addr::UNSPECIFIED,
     })?;
     Ok(TestDb {

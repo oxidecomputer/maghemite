@@ -1493,7 +1493,7 @@
           {
             "in": "path",
             "name": "router",
-            "description": "Name of the router.",
+            "description": "Id of the router, or its name if the value does not parse as an id.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1532,7 +1532,7 @@
           {
             "in": "path",
             "name": "router",
-            "description": "Name of the router.",
+            "description": "Id of the router, or its name if the value does not parse as an id.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1583,7 +1583,7 @@
           {
             "in": "path",
             "name": "router",
-            "description": "Name of the router.",
+            "description": "Id of the router, or its name if the value does not parse as an id.",
             "required": true,
             "schema": {
               "type": "string"

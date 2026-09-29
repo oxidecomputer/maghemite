@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct LowerContext {
-    handles: Mutex<BTreeMap<String, LowerHandle>>,
+    handles: Mutex<BTreeMap<rdb::types::RouterId, LowerHandle>>,
     /// Test hook; `None` in production.
     #[cfg(test)]
     test: Option<Arc<TestLower>>,
@@ -111,10 +111,11 @@ impl LowerContext {
         stats: &Arc<MgLowerStats>,
     ) {
         let mut handles = lock!(self.handles);
-        if handles.contains_key(rdb.name()) {
+        if handles.contains_key(&rdb.id()) {
             return;
         }
         let rdb = rdb.clone();
+        let id = rdb.id();
         let name = rdb.name().to_string();
         let log = log.clone();
         let stats = stats.clone();
@@ -145,7 +146,7 @@ impl LowerContext {
                 )
             })
             .expect("failed to start mg-lower");
-        handles.insert(name, LowerHandle { shutdown, join });
+        handles.insert(id, LowerHandle { shutdown, join });
     }
 
     #[cfg(not(all(feature = "mg-lower", target_os = "illumos")))]
@@ -164,13 +165,13 @@ impl LowerContext {
     /// clean (or when there was no thread, i.e. nothing was ever
     /// programmed). On false, the router's switch table index must not be
     /// reused: keep it tombstoned and retry the cleanup later.
-    pub async fn stop(&self, name: &str) -> bool {
+    pub async fn stop(&self, rdb: &rdb::RouterDb) -> bool {
         #[cfg(test)]
         if let Some(hook) = &self.test {
-            lock!(hook.stopped).push(name.to_string());
-            return !lock!(hook.dirty_on_stop).contains(name);
+            lock!(hook.stopped).push(rdb.name().to_string());
+            return !lock!(hook.dirty_on_stop).contains(rdb.name());
         }
-        let handle = lock!(self.handles).remove(name);
+        let handle = lock!(self.handles).remove(&rdb.id());
         let Some(handle) = handle else {
             return true;
         };

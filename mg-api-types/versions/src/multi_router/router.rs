@@ -125,9 +125,9 @@ pub struct MultiRouterApplyRequest {
     pub routers: Vec<RouterSpec>,
 }
 
-/// Selects a named router in path parameters.
+/// Selects a router in path parameters.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RouterSelector {
-    /// Name of the router.
+    /// Id of the router, or its name if the value does not parse as an id.
     pub router: String,
 }

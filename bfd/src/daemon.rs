@@ -19,9 +19,7 @@ use std::sync::Arc;
 
 pub struct Daemon {
     dispatcher: Dispatcher,
-    /// Sessions indexed by peer address, tagged with the name of the router
-    /// whose RIB the session's liveness state feeds.
-    sessions: HashMap<IpAddr, (String, Session)>,
+    sessions: HashMap<IpAddr, Session>,
     egress_src_port: Arc<EgressSrcPortIter>,
     log: Logger,
 }
@@ -44,24 +42,8 @@ impl Daemon {
         }
     }
 
-    pub fn sessions_iter(&self) -> impl Iterator<Item = (&IpAddr, &Session)> {
-        self.sessions.iter().map(|(ip, (_, s))| (ip, s))
-    }
-
-    /// Iterate the sessions belonging to the named router.
-    pub fn router_sessions_iter(
-        &self,
-        router: &str,
-    ) -> impl Iterator<Item = (&IpAddr, &Session)> {
-        self.sessions
-            .iter()
-            .filter(move |(_, (r, _))| r == router)
-            .map(|(ip, (_, s))| (ip, s))
-    }
-
-    /// The name of the router a peer's session belongs to, if the peer exists.
-    pub fn router_for_peer(&self, peer: &IpAddr) -> Option<&str> {
-        self.sessions.get(peer).map(|(r, _)| r.as_str())
+    pub fn sessions_iter(&self) -> hash_map::Iter<'_, IpAddr, Session> {
+        self.sessions.iter()
     }
 
     pub fn listen_addr_for_peer(&self, peer: &IpAddr) -> Option<SocketAddr> {
@@ -75,23 +57,7 @@ impl Daemon {
     ) -> Result<(), AddPeerError> {
         let peer = rq.remote_addr.ip();
         match self.sessions.entry(peer) {
-            hash_map::Entry::Occupied(entry) => {
-                let (owner, _) = entry.get();
-                if owner != db.name() {
-                    warn!(
-                        self.log, "attempt to add a peer owned by another router";
-                        "component" => crate::COMPONENT_BFD,
-                        "module" => crate::MOD_DAEMON,
-                        "unit" => crate::UNIT_PEER,
-                        "peer" => %peer,
-                        "owner" => %owner,
-                        "requester" => %db.name(),
-                    );
-                    return Err(AddPeerError::PeerOwnedByOtherRouter {
-                        peer,
-                        owner: owner.clone(),
-                    });
-                }
+            hash_map::Entry::Occupied(_) => {
                 // TODO-correctness Currently clients have no way to update an
                 // existing peer: they have to remove it and recreate it. This
                 // needs work both here and in omicron to fix.
@@ -121,7 +87,6 @@ impl Daemon {
                     &self.log,
                 )?;
 
-                let router = db.name().to_string();
                 let session = Session::new(
                     db,
                     rq,
@@ -131,7 +96,7 @@ impl Daemon {
                     &self.log,
                 );
 
-                entry.insert((router, session));
+                entry.insert(session);
                 Ok(())
             }
         }

@@ -37,7 +37,7 @@ use mg_api_types::router::{
 };
 use mg_common::lock;
 use oxnet::IpNet;
-use rdb::{RibExt, StaticRouteKey};
+use rdb::{DEFAULT_ROUTER_ID, RibExt, RouterId, StaticRouteKey};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU8;
@@ -77,10 +77,9 @@ pub(crate) async fn get_router_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     path: Path<RouterSelector>,
 ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
-    let name = path.into_inner().router;
     let ctx = ctx.context();
     // 404 for an unknown router; a router with no BGP sessions returns {}.
-    let rdb = router_db(ctx, &name)?;
+    let rdb = router_db(ctx, &path.into_inner().router)?;
     let sessions = bgp_admin::rdb_attributed_sessions(ctx, &rdb, None)?;
     Ok(HttpResponseOk(
         sessions
@@ -90,11 +89,17 @@ pub(crate) async fn get_router_neighbors(
     ))
 }
 
+/// Resolve a [`RouterSelector`]: a router id if it parses as one, otherwise
+/// a router name.
 fn router_db(
     ctx: &Arc<HandlerContext>,
-    name: &str,
+    selector: &str,
 ) -> Result<rdb::RouterDb, HttpError> {
-    ctx.db.router(name).map_err(|e| Error::from(e).into())
+    match selector.parse() {
+        Ok(id) => ctx.db.router(rdb::RouterId(id)),
+        Err(_) => ctx.db.router_by_name(selector),
+    }
+    .map_err(|e| Error::from(e).into())
 }
 
 /// Generate a random ULA fdxx:xxxx:xxxx:xxxx::1 to serve as a router's TEP.
@@ -142,15 +147,11 @@ pub(crate) async fn do_multi_router_apply(
 
 /// A validated, fully resolved apply. Building one touches no daemon state.
 struct ApplyPlan {
-    /// Live routers to tear down before anything is created: absent from
-    /// the request, or present under a different id (a change of identity
-    /// is teardown followed by re-creation, since the uuid scopes all
-    /// persistent state and platform programming).
-    teardown: Vec<String>,
-    /// The daemon-owned default router is absent from the request and must
-    /// have its configuration emptied in place.
-    empty_default: bool,
-    /// Desired routers in application order: the default router first.
+    /// Live routers whose id is absent from the request, to tear down before
+    /// anything is created.
+    teardown: Vec<RouterId>,
+    /// Desired routers in application order: the default router first. An
+    /// absent default router is included with an empty spec.
     routers: Vec<RouterPlan>,
 }
 
@@ -198,10 +199,6 @@ fn plan_apply(
     validate_apply_request(&rq)?;
 
     let live = ctx.db.list_routers();
-    let default_id = live
-        .iter()
-        .find(|r| r.name == rdb::DEFAULT_ROUTER)
-        .map(|r| r.id);
     let tombstones = ctx
         .db
         .orphaned_switch_indexes()
@@ -209,18 +206,14 @@ fn plan_apply(
 
     for spec in &rq.routers {
         validate_router_spec(spec)?;
-        if spec.name == rdb::DEFAULT_ROUTER {
-            // The default spec's id is ignored: that router's identity is
-            // the daemon's.
-            continue;
-        }
-        if Some(spec.id) == default_id {
+        if (spec.name == rdb::DEFAULT_ROUTER) != (spec.id == DEFAULT_ROUTER_ID)
+        {
             return Err(HttpError::for_bad_request(
                 None,
                 format!(
-                    "router {:?}: id {} is the daemon-owned default \
-                     router's id",
-                    spec.name, spec.id
+                    "router {:?}: the {:?} router's id is {DEFAULT_ROUTER_ID}",
+                    spec.name,
+                    rdb::DEFAULT_ROUTER,
                 ),
             ));
         }
@@ -233,41 +226,22 @@ fn plan_apply(
                 spec.name, spec.id
             )));
         }
-        if let Some(other) =
-            live.iter().find(|r| r.id == spec.id && r.name != spec.name)
-        {
-            return Err(conflict(format!(
-                "router {:?}: id {} belongs to live router {:?}",
-                spec.name, spec.id, other.name
-            )));
-        }
-    }
-
-    let desired: BTreeMap<&str, &RouterSpec> =
-        rq.routers.iter().map(|s| (s.name.as_str(), s)).collect();
-    let mut teardown = Vec::new();
-    let mut empty_default = false;
-    for info in &live {
-        if info.name == rdb::DEFAULT_ROUTER {
-            empty_default = !desired.contains_key(rdb::DEFAULT_ROUTER);
-            continue;
-        }
-        match desired.get(info.name.as_str()) {
-            Some(spec) if spec.id == info.id => {}
-            _ => teardown.push(info.name.clone()),
-        }
     }
 
     // The default router is applied first: it may drop live peer claims
     // that another router in the same request is picking up.
+    let mut routers = Vec::with_capacity(rq.routers.len() + 1);
+    if !rq.routers.iter().any(|s| s.id == DEFAULT_ROUTER_ID)
+        && let Some(info) = live.iter().find(|r| r.id == DEFAULT_ROUTER_ID)
+    {
+        routers.push(RouterPlan::empty(info));
+    }
     let mut specs = rq.routers;
-    specs.sort_by_key(|s| s.name != rdb::DEFAULT_ROUTER);
-    let mut routers = Vec::with_capacity(specs.len());
+    specs.sort_by_key(|s| s.id != DEFAULT_ROUTER_ID);
     for spec in specs {
         let statics = static_keys(&spec)?;
         let bfd = spec.bfd_peers.iter().map(|p| (p.peer, *p)).collect();
-        let create = spec.name != rdb::DEFAULT_ROUTER
-            && !live.iter().any(|r| r.name == spec.name && r.id == spec.id);
+        let create = !live.iter().any(|r| r.id == spec.id);
         routers.push(RouterPlan {
             spec,
             statics,
@@ -276,11 +250,13 @@ fn plan_apply(
         });
     }
 
-    Ok(ApplyPlan {
-        teardown,
-        empty_default,
-        routers,
-    })
+    let teardown = live
+        .iter()
+        .map(|r| r.id)
+        .filter(|id| !routers.iter().any(|rp| rp.spec.id == *id))
+        .collect();
+
+    Ok(ApplyPlan { teardown, routers })
 }
 
 /// Carry out a plan in fixed phases.
@@ -288,28 +264,25 @@ async fn execute_apply(
     ctx: &Arc<HandlerContext>,
     plan: ApplyPlan,
 ) -> Result<(), HttpError> {
-    // 1. Tear down routers that are absent, or present under a new id.
-    for name in &plan.teardown {
-        teardown_router(ctx, name).await?;
+    // 1. Tear down routers whose id is absent from the request.
+    for id in &plan.teardown {
+        teardown_router(ctx, *id).await?;
     }
 
     // 2. Release: every surviving router first drops the BGP and BFD peers
     //    it no longer wants (an absent default router drops everything), so
     //    a peer moving between routers is free before anyone claims it —
-    //    whatever order the specs were listed in.
-    if plan.empty_default {
-        let rdb = router_db(ctx, rdb::DEFAULT_ROUTER)?;
-        let info = RouterInfo {
-            id: rdb.id(),
-            name: rdb.name().to_string(),
-            tep: rdb.tep(),
-        };
-        apply_router_plan(ctx, &rdb, RouterPlan::empty(&info)).await?;
-    }
+    //    whatever order the specs were listed in. Renames happen here too,
+    //    so no surviving router holds a name a new router is created with.
     for rp in plan.routers.iter().filter(|rp| !rp.create) {
-        let rdb = router_db(ctx, &rp.spec.name)?;
+        let rdb = ctx.db.router(rp.spec.id).map_err(Error::from)?;
+        if rdb.name() != rp.spec.name {
+            ctx.db
+                .rename_router(rp.spec.id, &rp.spec.name)
+                .map_err(Error::from)?;
+        }
         release_bgp(ctx, &rdb, &rp.spec).await?;
-        release_bfd(ctx, rp).await;
+        release_bfd(ctx, &rdb, rp).await?;
     }
 
     // 3. Claim: create missing routers, then converge each onto its spec.
@@ -323,7 +296,7 @@ async fn execute_apply(
                 })
                 .map_err(|e| HttpError::from(Error::from(e)))?
         } else {
-            router_db(ctx, &rp.spec.name)?
+            ctx.db.router(rp.spec.id).map_err(Error::from)?
         };
         ctx.lower.ensure(&rdb, &ctx.log, &ctx.mg_lower_stats);
         apply_router_plan(ctx, &rdb, rp).await?;
@@ -424,9 +397,7 @@ fn validate_apply_request(
         if !names.insert(&spec.name) {
             return dup("router name", &spec.name);
         }
-        // The default spec's id is ignored on apply (the daemon owns that
-        // router's identity), so it takes no part in duplicate accounting.
-        if spec.name != rdb::DEFAULT_ROUTER && !ids.insert(spec.id) {
+        if !ids.insert(spec.id) {
             return dup("router id", &spec.id);
         }
         if let Some(bgp) = &spec.bgp {
@@ -455,15 +426,16 @@ fn validate_apply_request(
 /// drop its volatile RIBs and purge its persistent state.
 async fn teardown_router(
     ctx: &Arc<HandlerContext>,
-    name: &str,
+    id: RouterId,
 ) -> Result<(), HttpError> {
-    let rdb = router_db(ctx, name)?;
+    let rdb = ctx.db.router(id).map_err(Error::from)?;
+    let name = rdb.name();
 
     // Stop the router's mg-lower thread first: on shutdown it withdraws the
     // router's ASIC routes and ddm tunnel advertisements based on the RIB
     // contents, so it must run before the RIB is torn down. `clean` records
     // whether dpd confirmed the router's switch table was emptied.
-    let clean = ctx.lower.stop(name).await;
+    let clean = ctx.lower.stop(&rdb).await;
     if !clean {
         slog::warn!(
             ctx.log,
@@ -474,62 +446,49 @@ async fn teardown_router(
 
     let asns: Vec<u32> = lock!(ctx.bgp.router)
         .keys()
-        .filter(|(n, _)| n == name)
+        .filter(|(r, _)| *r == id)
         .map(|(_, asn)| *asn)
         .collect();
     for asn in asns {
         bgp_admin::do_delete_router(ctx, &rdb, asn).await?;
     }
 
-    remove_bfd_peers(ctx, name, |_, _| true).await;
+    let peers: Vec<IpAddr> = rdb
+        .get_bfd_neighbors()
+        .map_err(Error::from)?
+        .into_iter()
+        .map(|p| p.peer)
+        .collect();
+    remove_bfd_peers(ctx, &rdb, &peers).await?;
 
     ctx.db
-        .delete_router(name, clean)
+        .delete_router(id, clean)
         .map_err(|e| HttpError::from(Error::from(e)))?;
     Ok(())
 }
 
-/// Remove this router's BFD sessions matching `unwanted`, waiting for any
-/// freed-up listeners to fully shut down so the addresses are reusable.
+/// Remove these BFD peers from the daemon and from the router's config,
+/// waiting for any freed-up listeners to fully shut down so the addresses
+/// are reusable.
 async fn remove_bfd_peers(
     ctx: &Arc<HandlerContext>,
-    router: &str,
-    unwanted: impl Fn(&IpAddr, BfdPeerConfig) -> bool,
-) {
-    let mut handles = Vec::new();
-    {
+    rdb: &rdb::RouterDb,
+    peers: &[IpAddr],
+) -> Result<(), HttpError> {
+    let handles: Vec<_> = {
         let mut daemon = lock!(ctx.bfd.daemon);
-        let peers: Vec<IpAddr> = daemon
-            .router_sessions_iter(router)
-            .filter(|(addr, session)| {
-                let listen = match daemon.listen_addr_for_peer(addr) {
-                    Some(l) => l.ip(),
-                    // No listener means the session is in a broken state;
-                    // treat as removable.
-                    None => return true,
-                };
-                unwanted(
-                    addr,
-                    BfdPeerConfig {
-                        peer: **addr,
-                        listen,
-                        required_rx: session.required_rx_micros(),
-                        detection_threshold: session.detection_threshold(),
-                        mode: session.mode(),
-                    },
-                )
-            })
-            .map(|(addr, _)| *addr)
-            .collect();
-        for peer in peers {
-            if let Some(handle) = daemon.remove_peer(peer) {
-                handles.push(handle);
-            }
-        }
-    }
+        peers
+            .iter()
+            .filter_map(|peer| daemon.remove_peer(*peer))
+            .collect()
+    };
     for handle in handles {
         handle.shutdown().await;
     }
+    for peer in peers {
+        rdb.remove_bfd_neighbor(*peer).map_err(Error::from)?;
+    }
+    Ok(())
 }
 
 /// Release phase for an existing router: drop the BGP routers and peers its
@@ -586,14 +545,22 @@ async fn release_bgp(
     Ok(())
 }
 
-/// Release phase for BFD: drop this router's sessions that are unwanted or
+/// Release phase for BFD: drop this router's peers that are unwanted or
 /// whose config changed (a changed config is remove + re-add: BFD sessions
 /// are cheap to restart).
-async fn release_bfd(ctx: &Arc<HandlerContext>, rp: &RouterPlan) {
-    remove_bfd_peers(ctx, &rp.spec.name, |addr, current| {
-        rp.bfd.get(addr) != Some(&current)
-    })
-    .await;
+async fn release_bfd(
+    ctx: &Arc<HandlerContext>,
+    rdb: &rdb::RouterDb,
+    rp: &RouterPlan,
+) -> Result<(), HttpError> {
+    let stale: Vec<IpAddr> = rdb
+        .get_bfd_neighbors()
+        .map_err(Error::from)?
+        .into_iter()
+        .filter(|current| rp.bfd.get(&current.peer) != Some(current))
+        .map(|current| current.peer)
+        .collect();
+    remove_bfd_peers(ctx, rdb, &stale).await
 }
 
 /// Drop any BGP router under this logical router whose ASN is no longer the
@@ -606,7 +573,7 @@ async fn delete_stale_bgp_routers(
     let desired_asn = spec.bgp.as_ref().map(|b| b.asn);
     let stale: Vec<u32> = lock!(ctx.bgp.router)
         .keys()
-        .filter(|(n, asn)| n == &spec.name && Some(*asn) != desired_asn)
+        .filter(|(id, asn)| *id == rdb.id() && Some(*asn) != desired_asn)
         .map(|(_, asn)| *asn)
         .collect();
     for asn in stale {
@@ -712,17 +679,16 @@ async fn apply_bfd(
     rdb: &rdb::RouterDb,
     rp: RouterPlan,
 ) -> Result<(), HttpError> {
-    // Unwanted or changed sessions were dropped in the release phase for
-    // existing routers; for a freshly created router this is a no-op.
-    release_bfd(ctx, &rp).await;
-
-    let existing: HashSet<IpAddr> = lock!(ctx.bfd.daemon)
-        .router_sessions_iter(&rp.spec.name)
-        .map(|(addr, _)| *addr)
+    let existing: HashSet<IpAddr> = rdb
+        .get_bfd_neighbors()
+        .map_err(Error::from)?
+        .into_iter()
+        .map(|p| p.peer)
         .collect();
     for (addr, config) in rp.bfd {
         if !existing.contains(&addr) {
             bfd_admin::add_peer(ctx.clone(), rdb.clone(), config)?;
+            rdb.add_bfd_neighbor(config).map_err(Error::from)?;
         }
     }
 
@@ -746,6 +712,7 @@ mod tests {
     };
     use mg_api_types::static_routes::StaticRoute4;
     use mg_common::lock;
+    use rdb::DEFAULT_ROUTER_ID;
     use std::collections::HashMap;
     use std::net::IpAddr;
     use std::num::NonZeroU8;
@@ -798,18 +765,20 @@ mod tests {
     /// instances, and each router's neighbors and static route count.
     type Snapshot = (
         Vec<String>,
-        Vec<(String, u32)>,
+        Vec<(RouterId, u32)>,
         Vec<(String, Vec<IpAddr>, usize)>,
     );
 
     fn snapshot(ctx: &Arc<HandlerContext>) -> Snapshot {
         let names = router_names(ctx);
-        let bgp: Vec<(String, u32)> =
+        let bgp: Vec<(RouterId, u32)> =
             lock!(ctx.bgp.router).keys().cloned().collect();
-        let per_router = names
+        let per_router = ctx
+            .db
+            .list_routers()
             .iter()
-            .map(|n| {
-                let rdb = ctx.db.router(n).expect("router db");
+            .map(|info| {
+                let rdb = ctx.db.router(info.id).expect("router db");
                 let mut nbrs: Vec<IpAddr> = rdb
                     .get_bgp_neighbors()
                     .expect("neighbors")
@@ -818,7 +787,7 @@ mod tests {
                     .collect();
                 nbrs.sort();
                 (
-                    n.clone(),
+                    info.name.clone(),
                     nbrs,
                     rdb.get_static(None).expect("statics").len(),
                 )
@@ -827,14 +796,14 @@ mod tests {
         (names, bgp, per_router)
     }
 
-    /// Name of the router whose BGP instance owns the live session for `ip`.
-    fn session_owner(ctx: &Arc<HandlerContext>, ip: &str) -> Option<String> {
+    /// Id of the router whose BGP instance owns the live session for `ip`.
+    fn session_owner(ctx: &Arc<HandlerContext>, ip: &str) -> Option<RouterId> {
         let peer = PeerId::Ip(ip.parse().unwrap());
         let session = lock!(ctx.bgp.sessions).get(&peer).cloned()?;
         lock!(ctx.bgp.router)
             .iter()
             .find(|(_, r)| session.belongs_to(r))
-            .map(|((name, _), _)| name.clone())
+            .map(|((id, _), _)| *id)
     }
 
     /// Apply a two-router spec (same ASN, distinct peers), then re-apply
@@ -864,10 +833,8 @@ mod tests {
         // Same ASN on both routers is allowed; each has its own BGP router
         // instance and its own neighbor/static state.
         for spec in [&r1, &r2] {
-            assert!(
-                lock!(ctx.bgp.router).contains_key(&(spec.name.clone(), 65001))
-            );
-            let rdb = ctx.db.router(&spec.name).expect("router db");
+            assert!(lock!(ctx.bgp.router).contains_key(&(spec.id, 65001)));
+            let rdb = ctx.db.router(spec.id).expect("router db");
             assert_eq!(rdb.id(), spec.id);
             // The TEP is daemon-generated, not caller-supplied: a ULA.
             assert_eq!(rdb.tep().octets()[0], 0xfd);
@@ -885,7 +852,7 @@ mod tests {
             );
         }
 
-        let tep_one = ctx.db.router("one").expect("router db").tep();
+        let tep_one = ctx.db.router(r1.id).expect("router db").tep();
 
         // Re-apply with router "two" removed.
         apply(&ctx, vec![r1.clone()])
@@ -896,15 +863,13 @@ mod tests {
             router_names(&ctx),
             vec!["default".to_string(), "one".to_string()]
         );
-        assert!(ctx.db.router("two").is_err());
-        assert!(
-            !lock!(ctx.bgp.router).contains_key(&("two".to_string(), 65001))
-        );
+        assert!(ctx.db.router(r2.id).is_err());
+        assert!(!lock!(ctx.bgp.router).contains_key(&(r2.id, 65001)));
         // The teardown was clean (test platform), so nothing is tombstoned.
         assert!(ctx.db.orphaned_switch_indexes().unwrap().is_empty());
 
         // The survivor is untouched, including its generated TEP.
-        let rdb = ctx.db.router("one").expect("router db");
+        let rdb = ctx.db.router(r1.id).expect("router db");
         assert_eq!(rdb.get_bgp_neighbors().expect("neighbors").len(), 1);
         assert_eq!(rdb.get_static(None).expect("static routes").len(), 1);
         assert_eq!(rdb.tep(), tep_one);
@@ -914,35 +879,47 @@ mod tests {
         do_multi_router_apply(&ctx, rq)
             .await
             .expect("re-apply both routers");
-        let rdb = ctx.db.router("two").expect("router db");
+        let rdb = ctx.db.router(r2.id).expect("router db");
         assert_eq!(rdb.get_bgp_neighbors().expect("neighbors").len(), 1);
         assert_eq!(rdb.get_static(None).expect("static routes").len(), 1);
     }
 
     /// A "default" spec configures the daemon-owned default router in
-    /// place: its id and TEP stay the daemon's (the spec's id is ignored),
-    /// its BGP/static state reconciles like any other router's, and
-    /// absence from a later apply empties its configuration while the
-    /// router itself (id, TEP) stays in place. Re-applying a peer the
-    /// default router already has live is an update, not a claim conflict.
+    /// place: its TEP stays the daemon's, its BGP/static state reconciles
+    /// like any other router's, and absence from a later apply empties its
+    /// configuration while the router itself (id, TEP) stays in place.
+    /// Re-applying a peer the default router already has live is an update,
+    /// not a claim conflict. The default name and the default id go
+    /// together: a spec with only one of them is rejected.
     #[tokio::test]
     async fn default_router_spec_applies_in_place() {
         let ctx = test_ctx("default_router_spec_applies_in_place");
 
-        let before = ctx.db.router("default").expect("default rdb");
-        let daemon_id = before.id();
-        let daemon_tep = before.tep();
+        let daemon_tep = ctx.rdb().expect("default rdb").tep();
 
-        let s = spec("default", 65000, "203.0.113.7");
+        for (name, id) in [
+            ("default", RouterId::new_random()),
+            ("one", DEFAULT_ROUTER_ID),
+        ] {
+            let mut s = spec(name, 65000, "203.0.113.7");
+            s.id = id;
+            let err = apply(&ctx, vec![s])
+                .await
+                .expect_err("default name/id mismatch must be rejected");
+            assert_eq!(err.status_code.as_u16(), 400, "{name} {id}");
+        }
+        assert_eq!(router_names(&ctx), vec!["default".to_string()]);
+
+        let mut s = spec("default", 65000, "203.0.113.7");
+        s.id = DEFAULT_ROUTER_ID;
         apply(&ctx, vec![s.clone()])
             .await
             .expect("apply default spec");
 
-        let rdb = ctx.db.router("default").expect("default rdb");
-        assert_eq!(rdb.id(), daemon_id, "daemon id kept, spec id ignored");
+        let rdb = ctx.rdb().expect("default rdb");
         assert_eq!(rdb.tep(), daemon_tep, "daemon TEP kept");
         assert!(
-            lock!(ctx.bgp.router).contains_key(&("default".to_string(), 65000))
+            lock!(ctx.bgp.router).contains_key(&(DEFAULT_ROUTER_ID, 65000))
         );
         let neighbors = rdb.get_bgp_neighbors().expect("neighbors");
         assert_eq!(neighbors.len(), 1);
@@ -961,15 +938,55 @@ mod tests {
         apply(&ctx, vec![spec("one", 65001, "203.0.113.8")])
             .await
             .expect("apply without default");
-        let rdb = ctx.db.router("default").expect("default rdb");
-        assert_eq!(rdb.id(), daemon_id, "id survives the emptying");
+        let rdb = ctx.rdb().expect("default rdb");
         assert_eq!(rdb.tep(), daemon_tep, "TEP survives the emptying");
         assert!(rdb.get_bgp_neighbors().expect("neighbors").is_empty());
         assert!(rdb.get_static(None).expect("statics").is_empty());
         assert!(
-            !lock!(ctx.bgp.router)
-                .contains_key(&("default".to_string(), 65000))
+            !lock!(ctx.bgp.router).contains_key(&(DEFAULT_ROUTER_ID, 65000))
         );
+    }
+
+    /// A live router re-applied under a new name keeps its id and all of
+    /// its state: it is renamed in place, not torn down and re-created.
+    #[tokio::test]
+    async fn rename_keeps_router_state() {
+        let ctx = test_ctx("rename_keeps_router_state");
+
+        let mut one = spec("one", 65001, "203.0.113.1");
+        apply(&ctx, vec![one.clone()]).await.expect("apply one");
+        let before = ctx.db.router(one.id).expect("one");
+
+        one.name = "uno".into();
+        apply(&ctx, vec![one.clone()]).await.expect("rename");
+
+        let hook = ctx.lower.test_hook().expect("test lower");
+        assert!(
+            lock!(hook.stopped).is_empty(),
+            "rename tore the router down"
+        );
+        assert_eq!(
+            router_names(&ctx),
+            vec!["default".to_string(), "uno".to_string()]
+        );
+        let after = ctx.db.router(one.id).expect("uno");
+        assert_eq!(after.tep(), before.tep());
+        assert_eq!(after.switch_index(), before.switch_index());
+        assert_eq!(after.get_bgp_neighbors().expect("neighbors").len(), 1);
+        assert_eq!(session_owner(&ctx, "203.0.113.1"), Some(one.id));
+
+        // Two routers may swap names in one apply.
+        let mut two = spec("two", 65002, "203.0.113.2");
+        apply(&ctx, vec![one.clone(), two.clone()])
+            .await
+            .expect("apply two");
+        (one.name, two.name) = (two.name, one.name);
+        apply(&ctx, vec![one.clone(), two.clone()])
+            .await
+            .expect("swap names");
+        assert_eq!(ctx.db.router(one.id).expect("one").name(), "two");
+        assert_eq!(ctx.db.router(two.id).expect("two").name(), "uno");
+        assert!(lock!(hook.stopped).is_empty(), "swap tore a router down");
     }
 
     /// Duplicate router names, ids, or cross-router BGP peer addresses must
@@ -1035,6 +1052,7 @@ mod tests {
             )]);
             s
         };
+        let claim_id = claim.id;
         apply(&ctx, vec![claim])
             .await
             .expect("claim the default router's freed peers");
@@ -1049,10 +1067,9 @@ mod tests {
                 .is_empty()
         );
         assert!(
-            !lock!(ctx.bgp.router)
-                .contains_key(&("default".to_string(), 65000))
+            !lock!(ctx.bgp.router).contains_key(&(DEFAULT_ROUTER_ID, 65000))
         );
-        let rdb = ctx.db.router("one").expect("router db");
+        let rdb = ctx.db.router(claim_id).expect("router db");
         assert_eq!(rdb.get_bgp_neighbors().expect("nbrs").len(), 1);
         assert_eq!(
             rdb.get_unnumbered_bgp_neighbors()
@@ -1060,7 +1077,7 @@ mod tests {
                 .len(),
             1
         );
-        assert_eq!(session_owner(&ctx, "203.0.113.1").as_deref(), Some("one"));
+        assert_eq!(session_owner(&ctx, "203.0.113.1"), Some(claim_id));
     }
 
     /// max_paths in the spec sets the router's bestpath fanout; omitting it
@@ -1074,7 +1091,7 @@ mod tests {
         apply(&ctx, vec![s.clone()])
             .await
             .expect("apply with max_paths");
-        let rdb = ctx.db.router("one").expect("router db");
+        let rdb = ctx.db.router(s.id).expect("router db");
         assert_eq!(
             rdb.get_bestpath_fanout().expect("fanout"),
             NonZeroU8::new(4).unwrap()
@@ -1110,9 +1127,7 @@ mod tests {
             .expect("apply with policy");
         {
             let routers = lock!(ctx.bgp.router);
-            let rtr = routers
-                .get(&("one".to_string(), 65001))
-                .expect("bgp router");
+            let rtr = routers.get(&(s.id, 65001)).expect("bgp router");
             assert_eq!(
                 rtr.policy.checker_source(),
                 Some(POLICY_SOURCE.to_string())
@@ -1125,12 +1140,12 @@ mod tests {
 
         s.bgp.as_mut().unwrap().checker = None;
         s.bgp.as_mut().unwrap().shaper = None;
-        apply(&ctx, vec![s]).await.expect("re-apply without policy");
+        apply(&ctx, vec![s.clone()])
+            .await
+            .expect("re-apply without policy");
         {
             let routers = lock!(ctx.bgp.router);
-            let rtr = routers
-                .get(&("one".to_string(), 65001))
-                .expect("bgp router");
+            let rtr = routers.get(&(s.id, 65001)).expect("bgp router");
             assert!(rtr.policy.checker_source().is_none());
             assert!(rtr.policy.shaper_source().is_none());
         }
@@ -1179,6 +1194,7 @@ mod tests {
             }),
         ];
         for (what, two) in cases {
+            let two_id = two.id;
             // "one" is listed first and unchanged; the invalid spec is last.
             let err =
                 apply(&ctx, vec![one.clone(), two]).await.expect_err(what);
@@ -1189,52 +1205,8 @@ mod tests {
                 err.external_message
             );
             assert_eq!(snapshot(&ctx), before, "{what} mutated state");
-            assert!(ctx.db.router("two").is_err(), "{what} created a router");
+            assert!(ctx.db.router(two_id).is_err(), "{what} created a router");
         }
-    }
-
-    /// A-09: a named router may not claim the daemon-owned default router's
-    /// uuid — rejected at preflight (400), not by a conflict after the
-    /// teardown phase has already run.
-    #[tokio::test]
-    async fn named_router_cannot_use_the_default_router_id() {
-        let ctx = test_ctx("named_router_cannot_use_the_default_router_id");
-        let default_id = ctx.rdb().expect("default rdb").id();
-
-        let one = spec("one", 65001, "203.0.113.1");
-        apply(&ctx, vec![one.clone()]).await.expect("apply one");
-        let before = snapshot(&ctx);
-
-        // Listed after "one", which would otherwise have been torn down
-        // (absent from the request) before the conflict surfaced.
-        let mut thief = spec("two", 65002, "203.0.113.2");
-        thief.id = default_id;
-        let err = apply(&ctx, vec![thief])
-            .await
-            .expect_err("default id must be rejected");
-        assert_eq!(err.status_code.as_u16(), 400, "{}", err.external_message);
-        assert_eq!(snapshot(&ctx), before);
-        assert_eq!(ctx.rdb().expect("default rdb").id(), default_id);
-    }
-
-    /// A-09: the default spec's id is ignored, so it does not count in
-    /// duplicate-id accounting: a named router may carry the same id the
-    /// caller happened to put on the default spec.
-    #[tokio::test]
-    async fn default_spec_id_is_ignored_for_duplicate_accounting() {
-        let ctx =
-            test_ctx("default_spec_id_is_ignored_for_duplicate_accounting");
-        let daemon_id = ctx.rdb().expect("default rdb").id();
-
-        let one = spec("one", 65001, "203.0.113.1");
-        let mut default = spec("default", 65000, "203.0.113.7");
-        default.id = one.id;
-        apply(&ctx, vec![default, one.clone()])
-            .await
-            .expect("default's ignored id may repeat a named router's id");
-
-        assert_eq!(ctx.db.router("one").expect("one").id(), one.id);
-        assert_eq!(ctx.rdb().expect("default rdb").id(), daemon_id);
     }
 
     /// A-03: a router torn down while dpd could not confirm its switch table
@@ -1251,7 +1223,7 @@ mod tests {
         apply(&ctx, vec![one.clone(), two.clone()])
             .await
             .expect("apply both");
-        let two_index = ctx.db.router("two").expect("two").switch_index();
+        let two_index = ctx.db.router(two.id).expect("two").switch_index();
 
         // dpd is "unreachable" for two's teardown: the table index stays
         // tombstoned and the scrub cannot confirm it clean yet.
@@ -1279,7 +1251,7 @@ mod tests {
             );
             assert!(err.external_message.contains("tombstoned"));
             assert_eq!(snapshot(&ctx), before);
-            assert!(ctx.db.router(name).is_err());
+            assert!(ctx.db.router(two.id).is_err());
         }
 
         // A router with a fresh uuid is fine and gets a different index.
@@ -1288,7 +1260,7 @@ mod tests {
             .await
             .expect("fresh uuid");
         assert_ne!(
-            ctx.db.router("two").expect("two").switch_index(),
+            ctx.db.router(fresh.id).expect("two").switch_index(),
             two_index
         );
         assert_eq!(
@@ -1305,7 +1277,7 @@ mod tests {
             .await
             .expect("re-create after scrub");
         assert!(ctx.db.orphaned_switch_indexes().unwrap().is_empty());
-        assert_eq!(ctx.db.router("three").expect("three").id(), two.id);
+        assert_eq!(ctx.db.router(two.id).expect("three").name(), "three");
     }
 
     /// A-01: two applies racing each other serialize; the final state is
@@ -1315,21 +1287,24 @@ mod tests {
         let ctx =
             test_ctx("concurrent_applies_serialize_to_one_consistent_state");
 
-        let a = vec![spec("one", 65001, "203.0.113.1")];
-        let b = vec![spec("two", 65002, "203.0.113.2")];
-        let (ra, rb) = tokio::join!(apply(&ctx, a), apply(&ctx, b));
+        let a = spec("one", 65001, "203.0.113.1");
+        let b = spec("two", 65002, "203.0.113.2");
+        let (ra, rb) = tokio::join!(
+            apply(&ctx, vec![a.clone()]),
+            apply(&ctx, vec![b.clone()])
+        );
         ra.expect("apply a");
         rb.expect("apply b");
 
         let names = router_names(&ctx);
-        let bgp: Vec<(String, u32)> =
+        let bgp: Vec<(RouterId, u32)> =
             lock!(ctx.bgp.router).keys().cloned().collect();
-        let is = |name: &str, asn: u32| {
-            names == vec!["default".to_string(), name.to_string()]
-                && bgp == vec![(name.to_string(), asn)]
+        let is = |s: &RouterSpec, asn: u32| {
+            names == vec!["default".to_string(), s.name.clone()]
+                && bgp == vec![(s.id, asn)]
         };
         assert!(
-            is("one", 65001) || is("two", 65002),
+            is(&a, 65001) || is(&b, 65002),
             "mixed final state: routers {names:?}, bgp {bgp:?}"
         );
     }
@@ -1349,14 +1324,8 @@ mod tests {
             apply(&ctx, vec![one.clone(), two.clone()])
                 .await
                 .expect("initial apply");
-            assert_eq!(
-                session_owner(&ctx, "203.0.113.1").as_deref(),
-                Some("one")
-            );
-            assert_eq!(
-                session_owner(&ctx, "203.0.113.2").as_deref(),
-                Some("two")
-            );
+            assert_eq!(session_owner(&ctx, "203.0.113.1"), Some(one.id));
+            assert_eq!(session_owner(&ctx, "203.0.113.2"), Some(two.id));
 
             // Swap the two routers' peers (and statics).
             let mut one2 = one.clone();
@@ -1374,22 +1343,15 @@ mod tests {
             };
             apply(&ctx, rq).await.expect("swap converges");
 
-            let nbr = |name: &str| {
-                let n =
-                    ctx.db.router(name).unwrap().get_bgp_neighbors().unwrap();
-                assert_eq!(n.len(), 1, "{name} neighbors: {n:?}");
+            let nbr = |id: RouterId| {
+                let n = ctx.db.router(id).unwrap().get_bgp_neighbors().unwrap();
+                assert_eq!(n.len(), 1, "{id} neighbors: {n:?}");
                 n[0].host.ip().to_string()
             };
-            assert_eq!(nbr("one"), "203.0.113.2");
-            assert_eq!(nbr("two"), "203.0.113.1");
-            assert_eq!(
-                session_owner(&ctx, "203.0.113.2").as_deref(),
-                Some("one")
-            );
-            assert_eq!(
-                session_owner(&ctx, "203.0.113.1").as_deref(),
-                Some("two")
-            );
+            assert_eq!(nbr(one.id), "203.0.113.2");
+            assert_eq!(nbr(two.id), "203.0.113.1");
+            assert_eq!(session_owner(&ctx, "203.0.113.2"), Some(one.id));
+            assert_eq!(session_owner(&ctx, "203.0.113.1"), Some(two.id));
         }
     }
 }

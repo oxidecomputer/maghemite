@@ -163,7 +163,7 @@ async fn run(args: RunArgs) {
 
     for info in db.list_routers() {
         let rdb = db
-            .router(&info.name)
+            .router(info.id)
             .expect("router disappeared during startup");
         context.lower.ensure(&rdb, &log, &context.mg_lower_stats);
     }
@@ -173,7 +173,7 @@ async fn run(args: RunArgs) {
 
     for info in db.list_routers() {
         let rdb = db
-            .router(&info.name)
+            .router(info.id)
             .expect("router disappeared during startup");
         initialize_static_routes(&rdb, &context.log);
     }
@@ -284,7 +284,7 @@ fn start_bgp_routers(context: Arc<HandlerContext>) {
     for rinfo in context.db.list_routers() {
         let rdb = context
             .db
-            .router(&rinfo.name)
+            .router(rinfo.id)
             .expect("router disappeared during startup");
         start_router_bgp(&context, &rdb);
     }
@@ -476,7 +476,7 @@ fn start_bfd_sessions(context: Arc<HandlerContext>) {
     for rinfo in context.db.list_routers() {
         let rdb = context
             .db
-            .router(&rinfo.name)
+            .router(rinfo.id)
             .expect("router disappeared during startup");
         let configs = rdb
             .get_bfd_neighbors()
@@ -557,12 +557,12 @@ fn initialize_static_routes(db: &rdb::RouterDb, log: &Logger) {
 /// Seed the "default" router if the router table is empty of it, so
 /// single-router setups and the pre-multi-router API surface keep working.
 fn ensure_default_router(db: &rdb::Db) {
-    if db.router(admin::DEFAULT_ROUTER).is_ok() {
+    if db.router(admin::DEFAULT_ROUTER_ID).is_ok() {
         return;
     }
 
     db.create_router(rdb::types::RouterInfo {
-        id: rdb::types::RouterId::new_random(),
+        id: admin::DEFAULT_ROUTER_ID,
         name: admin::DEFAULT_ROUTER.to_string(),
         tep: router_admin::random_tep_ula(),
     })
@@ -584,7 +584,7 @@ mod tests {
             .unwrap();
         let db = db
             .create_router(rdb::types::RouterInfo {
-                id: rdb::types::RouterId::new_random(),
+                id: admin::DEFAULT_ROUTER_ID,
                 name: admin::DEFAULT_ROUTER.to_string(),
                 tep: Ipv6Addr::UNSPECIFIED,
             })

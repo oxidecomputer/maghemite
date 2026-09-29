@@ -86,7 +86,7 @@ const DB_VERSION_KEY: &str = "db_version";
 /// Current database format version. When the on-disk version does not match,
 /// all known trees are dropped and the database is rebuilt from scratch:
 /// routes are ephemeral and the control plane replays configuration.
-const DB_VERSION: u8 = 2;
+const DB_VERSION: u8 = 3;
 
 /// Key used in settings tree for bestpath fanout setting
 const BESTPATH_FANOUT: &str = "bestpath_fanout";
@@ -120,8 +120,8 @@ pub struct Db {
     /// A sled database handle where persistent routing information is stored.
     persistent: sled::Db,
 
-    /// The named routers, keyed by router name.
-    routers: Arc<RwLock<BTreeMap<String, RouterDb>>>,
+    /// The named routers, keyed by router id.
+    routers: Arc<RwLock<BTreeMap<RouterId, RouterDb>>>,
 
     /// Reaps expired routes from the local RIB.
     reaper: Arc<Reaper>,
@@ -298,8 +298,7 @@ impl Db {
             let value = String::from_utf8_lossy(&value);
             let info: RouterInfo = serde_json::from_str(&value)?;
             let switch_index = self.ensure_switch_index(&info)?;
-            routers
-                .insert(info.name.clone(), self.router_db(info, switch_index));
+            routers.insert(info.id, self.router_db(info, switch_index));
         }
         Ok(())
     }
@@ -312,7 +311,7 @@ impl Db {
         if let Some(v) = tree.get(info.id.as_bytes())? {
             return Ok(v[0]);
         }
-        let index = if info.name == crate::DEFAULT_ROUTER {
+        let index = if info.id == crate::DEFAULT_ROUTER_ID {
             0
         } else {
             let used = tree
@@ -334,7 +333,10 @@ impl Db {
     fn router_db(&self, info: RouterInfo, switch_index: u8) -> RouterDb {
         RouterDb {
             persistent: self.persistent.clone(),
-            log: self.log.new(slog::o!("router" => info.name.clone())),
+            log: self.log.new(slog::o!(
+                "router" => info.name.clone(),
+                "router_id" => info.id.to_string(),
+            )),
             info,
             switch_index,
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
@@ -350,17 +352,17 @@ impl Db {
     /// with an existing router.
     pub fn create_router(&self, info: RouterInfo) -> Result<RouterDb, Error> {
         let mut routers = write_lock!(self.routers);
-        if routers.contains_key(&info.name) {
+        if routers.contains_key(&info.id) {
             return Err(Error::Conflict(format!(
-                "router {} already exists",
-                info.name
+                "router id {} already exists",
+                info.id
             )));
         }
         for r in routers.values() {
-            if r.info.id == info.id {
+            if r.info.name == info.name {
                 return Err(Error::Conflict(format!(
-                    "router id {} already in use by {}",
-                    info.id, r.info.name
+                    "router {} already exists",
+                    info.name
                 )));
             }
             if r.info.tep == info.tep {
@@ -387,15 +389,33 @@ impl Db {
             )));
         }
         let switch_index = self.ensure_switch_index(&info)?;
-        let tree = self.persistent.open_tree(ROUTER)?;
-        tree.insert(
-            info.name.as_str(),
-            serde_json::to_string(&info)?.as_str(),
-        )?;
-        tree.flush()?;
+        self.persist_router(&info)?;
         let rdb = self.router_db(info, switch_index);
-        routers.insert(rdb.info.name.clone(), rdb.clone());
+        routers.insert(rdb.info.id, rdb.clone());
         Ok(rdb)
+    }
+
+    /// Rename a router in place. Its id, and with it all of its state, is
+    /// unchanged. The name is not checked for uniqueness: the caller renames
+    /// a set of routers whose final names it has already checked, and two
+    /// routers swapping names briefly share one.
+    pub fn rename_router(&self, id: RouterId, name: &str) -> Result<(), Error> {
+        let mut routers = write_lock!(self.routers);
+        let Some(rdb) = routers.get_mut(&id) else {
+            return Err(Error::NotFound(format!("router {id}")));
+        };
+        let mut info = rdb.info.clone();
+        info.name = name.to_string();
+        self.persist_router(&info)?;
+        rdb.info = info;
+        Ok(())
+    }
+
+    fn persist_router(&self, info: &RouterInfo) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(ROUTER)?;
+        tree.insert(info.id.as_bytes(), serde_json::to_string(info)?.as_str())?;
+        tree.flush()?;
+        Ok(())
     }
 
     /// Delete a named router, dropping its volatile RIBs and purging all of
@@ -410,11 +430,11 @@ impl Db {
     /// [`Self::release_switch_index`].
     pub fn delete_router(
         &self,
-        name: &str,
+        id: RouterId,
         release_switch_index: bool,
     ) -> Result<(), Error> {
-        let Some(rdb) = write_lock!(self.routers).remove(name) else {
-            return Err(Error::NotFound(format!("router {name}")));
+        let Some(rdb) = write_lock!(self.routers).remove(&id) else {
+            return Err(Error::NotFound(format!("router {id}")));
         };
         for tree_name in ROUTER_SCOPED_TREES {
             if *tree_name == SWITCH_INDEX && !release_switch_index {
@@ -425,7 +445,7 @@ impl Db {
             tree.flush()?;
         }
         let tree = self.persistent.open_tree(ROUTER)?;
-        tree.remove(name)?;
+        tree.remove(id.as_bytes())?;
         tree.flush()?;
         Ok(())
     }
@@ -436,11 +456,7 @@ impl Db {
     pub fn orphaned_switch_indexes(
         &self,
     ) -> Result<Vec<(RouterId, u8)>, Error> {
-        let live: std::collections::HashSet<RouterId> =
-            read_lock!(self.routers)
-                .values()
-                .map(|r| r.info.id)
-                .collect();
+        let live = read_lock!(self.routers);
         let tree = self.persistent.open_tree(SWITCH_INDEX)?;
         let mut orphans = Vec::new();
         for item in tree.iter() {
@@ -451,7 +467,7 @@ impl Db {
                 ))
             })?;
             let id = RouterId(uuid::Uuid::from_bytes(bytes));
-            if !live.contains(&id) {
+            if !live.contains_key(&id) {
                 orphans.push((id, value[0]));
             }
         }
@@ -475,10 +491,20 @@ impl Db {
             .collect()
     }
 
-    /// Get a handle to the named router's slice of the database.
-    pub fn router(&self, name: &str) -> Result<RouterDb, Error> {
+    /// Get a handle to a router's slice of the database.
+    pub fn router(&self, id: RouterId) -> Result<RouterDb, Error> {
         read_lock!(self.routers)
-            .get(name)
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("router {id}")))
+    }
+
+    /// Look a router up by name. Only for resolving API path parameters;
+    /// everything else uses [`Self::router`].
+    pub fn router_by_name(&self, name: &str) -> Result<RouterDb, Error> {
+        read_lock!(self.routers)
+            .values()
+            .find(|r| r.info.name == name)
             .cloned()
             .ok_or_else(|| Error::NotFound(format!("router {name}")))
     }
@@ -2892,8 +2918,8 @@ mod test {
         // Deleting a router purges its persistent state but leaves other
         // routers untouched.
         let r2_info = r2.info().clone();
-        db.db().delete_router("r2", true).expect("delete r2");
-        assert!(db.db().router("r2").is_err());
+        db.db().delete_router(r2.id(), true).expect("delete r2");
+        assert!(db.db().router(r2.id()).is_err());
         assert_eq!(r1.get_static(None).unwrap(), vec![route1, route1s]);
         assert_eq!(r1.get_origin4(asn).unwrap(), vec![p1]);
 
@@ -2925,7 +2951,7 @@ mod test {
         // An unclean delete tombstones r1's index: it shows up as orphaned
         // and is skipped when the next router is created.
         let r1_id = r1.id();
-        db.db().delete_router("r1", false).expect("delete r1");
+        db.db().delete_router(r1_id, false).expect("delete r1");
         assert_eq!(
             db.db().orphaned_switch_indexes().unwrap(),
             vec![(r1_id, 1)]
@@ -2934,7 +2960,7 @@ mod test {
         assert_eq!(r3.switch_index(), 3);
 
         // A clean delete frees the index immediately.
-        db.db().delete_router("r2", true).expect("delete r2");
+        db.db().delete_router(r2.id(), true).expect("delete r2");
         assert_eq!(
             db.db().orphaned_switch_indexes().unwrap(),
             vec![(r1_id, 1)]
@@ -2962,7 +2988,7 @@ mod test {
                 ),
                 "{err}"
             );
-            assert!(db.db().router(name).is_err());
+            assert!(db.db().router(r1_id).is_err());
         }
         assert_eq!(
             db.db().orphaned_switch_indexes().unwrap(),

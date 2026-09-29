@@ -60,7 +60,7 @@ const MG_LOWER_TAG: &str = "mg-lower";
 /// to pre-v4 peers. Non-default routers' origins carry the router's uuid and
 /// are invisible to old peers.
 fn tunnel_origin_id(db: &RouterDb) -> Option<uuid::Uuid> {
-    (db.name() != rdb::DEFAULT_ROUTER).then(|| db.id().0)
+    (db.id() != rdb::DEFAULT_ROUTER_ID).then(|| db.id().0)
 }
 const COMPONENT_MG_LOWER: &str = MG_LOWER_TAG;
 const MOD_SYNC: &str = "sync";

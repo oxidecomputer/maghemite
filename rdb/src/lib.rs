@@ -24,6 +24,9 @@ pub const DEFAULT_ROUTE_PRIORITY: u64 = u64::MAX;
 /// so pre-multi-router ddm peers and consumers keep seeing the legacy shape.
 pub const DEFAULT_ROUTER: &str = "default";
 
+/// Id of the default router.
+pub const DEFAULT_ROUTER_ID: RouterId = RouterId(uuid::Uuid::nil());
+
 pub const COMPONENT_RDB: &str = "rdb";
 pub const MOD_DB: &str = "database";
 
