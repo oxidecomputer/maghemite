@@ -2,9 +2,9 @@
 
 `falcon-lab` runs Maghemite integration topologies under Falcon. A topology
 defines the VM graph, while a scenario configures and tests that topology. The
-topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS, and
-Junos/cRPD nodes, plus a per-run `cargo-bay/` 9p share for binaries and runtime
-configuration.
+topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS,
+Junos/cRPD, and BIRD 2 nodes, plus a per-run `cargo-bay/` 9p share for binaries
+and runtime configuration.
 
 ## Topologies and scenarios
 
@@ -16,10 +16,18 @@ mgd-duo  bgp-unnumbered
 interop  bare
 interop  bgp-unnumbered
 interop  bfd-static-routing
+interop-3-link  bare
+interop-3-link  bgp-md5
 ```
 
 `mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
-FRR, Arista EOS, Juniper cRPD, and a second Maghemite node.
+FRR, Arista EOS, Juniper cRPD, BIRD 2, and a second Maghemite node.
+`interop-3-link` uses the same peers with three links per peer.
+
+- `bgp-unnumbered` checks dual-stack route exchange and interop ECMP.
+- `bgp-md5` checks authenticated numbered and unnumbered sessions, stability,
+  and multipath route exchange.
+- `bfd-static-routing` checks dual-stack BFD and static-route failover/recovery.
 
 Run and cleanup commands both take a topology and scenario:
 
@@ -91,12 +99,7 @@ chmod 0600 cargo-bay/falcon-juniper-license.key
 
 The Falcon image named `junos-23.2` is expected to be built by the experimental
 `voxel-image` tooling from the
-[`oxidecomputer/voxel`](https://github.com/oxidecomputer/voxel) repository. The
-portable artifact is uploaded alongside other Falcon assets as:
-
-```text
-https://oxide-falcon-assets.s3.us-west-2.amazonaws.com/junos-23.2_0.raw.xz
-```
+[`oxidecomputer/voxel`](https://github.com/oxidecomputer/voxel) repository.
 
 The image must already contain Docker and the Juniper cRPD image. It must not
 contain a license or topology-specific routing config.
@@ -154,9 +157,9 @@ base-image dataset destroyed/replaced so the new image is used.
 ## Running with diagnostics disabled
 
 Failure diagnostics are enabled by default. Before collecting them, falcon-lab
-attempts to start FRR and unpause cEOS and cRPD so their normal CLI and API
-paths are available. `--no-cleanup` preserves the topology after the run, but
-does not prevent this diagnostic recovery.
+attempts to start FRR and BIRD and unpause cEOS and cRPD so their normal CLI
+and API paths are available. `--no-cleanup` preserves the topology after the
+run, but does not prevent this diagnostic recovery.
 
 To preserve the exact failure state for manual inspection, including peers
 that the scenario left paused or stopped, disable diagnostics as well as
