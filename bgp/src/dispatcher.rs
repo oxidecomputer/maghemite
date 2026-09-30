@@ -5,19 +5,19 @@
 use crate::{
     IO_TIMEOUT,
     connection::{BgpConnection, BgpListener},
+    error::Error,
     router::SessionMap,
-    session::{FsmEvent, PeerId, SessionEvent},
-    unnumbered::UnnumberedManager,
+    session::{FsmEvent, SessionEvent},
 };
 use mg_common::lock;
 use slog::{Logger, debug, error, info, warn};
 use std::{
-    net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
 };
+use unnumbered::BgpUnnumbered;
 
 const UNIT_DISPATCHER: &str = "dispatcher";
 
@@ -28,7 +28,7 @@ pub struct Dispatcher<Cnx: BgpConnection + 'static> {
     /// Optional unnumbered neighbor manager for link-local connection routing.
     /// When present, enables routing of IPv6 link-local connections to
     /// unnumbered sessions based on interface scope_id
-    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
 
     shutdown: AtomicBool,
     listen: String,
@@ -40,7 +40,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
         listen: String,
         log: Logger,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Self {
         let log = log.new(slog::o!(
             "component" => crate::COMPONENT_BGP,
@@ -55,36 +55,6 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             log: Mutex::new(log),
             shutdown: AtomicBool::new(false),
         }
-    }
-
-    /// Try to resolve peer address to an unnumbered interface.
-    ///
-    /// Returns `Some(PeerId::Interface)` if:
-    /// - We have an unnumbered manager
-    /// - The peer address is IPv6 link-local
-    /// - We have an interface configured for this scope_id
-    /// - The interface is active on the system
-    fn try_resolve_unnumbered(&self, peer_addr: SocketAddr) -> Option<PeerId> {
-        let mgr = self.unnumbered_manager.as_ref()?;
-        let v6_addr = match peer_addr {
-            SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => v6,
-            _ => return None,
-        };
-        let interface = mgr.get_interface_by_scope(v6_addr.scope_id())?;
-        if mgr.interface_is_active(&interface) {
-            Some(PeerId::Interface(interface))
-        } else {
-            None
-        }
-    }
-
-    /// Resolve incoming peer address to appropriate PeerId.
-    ///
-    /// For IPv6 link-local addresses, attempts interface-based routing via
-    /// unnumbered manager. Falls back to IP-based routing otherwise.
-    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
-        self.try_resolve_unnumbered(peer_addr)
-            .unwrap_or_else(|| PeerId::Ip(peer_addr.ip()))
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
@@ -147,14 +117,21 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     self.sessions.clone(),
                     IO_TIMEOUT,
                 ) {
-                    Ok(c) => {
+                    Ok(accepted) => {
                         debug!(log,
-                            "accepted inbound connection from: {}", c.peer();
-                            "peer" => c.peer(),
+                            "accepted inbound connection from: {}", accepted.connection.peer();
+                            "peer" => accepted.connection.peer(),
                         );
-                        c
+                        accepted
                     }
-                    Err(crate::error::Error::Timeout) => {
+                    Err(Error::Timeout) => {
+                        continue 'accept;
+                    }
+                    Err(Error::UnknownPeer(peer)) => {
+                        debug!(log,
+                            "no session found for peer, dropping connection";
+                            "peer" => peer.to_string(),
+                        );
                         continue 'accept;
                     }
                     Err(e) => {
@@ -163,42 +140,28 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     }
                 };
 
-                let peer_addr = accepted.peer();
-                let key = self.resolve_session_key(peer_addr);
+                let peer_addr = accepted.connection.peer();
                 let session_log = log.new(slog::o!(
                     "peer" => peer_addr,
-                    "session_key" => format!("{key:?}"),
+                    "session_key" => format!("{:?}", accepted.session_key),
                 ));
 
-                let (runner, min_ttl, md5_key) = {
-                    let sessions = lock!(self.sessions);
-                    let Some(runner) = sessions.get(&key).cloned() else {
-                        debug!(
-                            session_log,
-                            "no session found for peer, dropping connection"
-                        );
-                        continue 'accept;
-                    };
-                    let config = lock!(runner.session);
-                    (
-                        runner.clone(),
-                        config.min_ttl,
-                        config.md5_auth_key.clone(),
-                    )
-                };
-
-                if let Err(e) =
-                    Listener::apply_policy(&accepted, min_ttl, md5_key)
-                {
+                if let Err(e) = Listener::apply_policy(
+                    &accepted.connection,
+                    accepted.min_ttl,
+                    accepted.md5_key,
+                ) {
                     warn!(session_log,
                         "failed to apply policy for connection";
                         "error" => format!("{e}")
                     );
                 }
 
-                if let Err(e) = runner.event_tx.send(FsmEvent::Session(
-                    SessionEvent::TcpConnectionAcked(accepted),
-                )) {
+                if let Err(e) =
+                    accepted.runner.event_tx.send(FsmEvent::Session(
+                        SessionEvent::TcpConnectionAcked(accepted.connection),
+                    ))
+                {
                     error!(session_log,
                         "failed to send connected event to session";
                         "error" => format!("{e}")
@@ -226,5 +189,127 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 impl<Cnx: BgpConnection + 'static> Drop for Dispatcher<Cnx> {
     fn drop(&mut self) {
         debug!(lock!(self.log), "dropping dispatcher");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{connection::resolve_session_key, session::PeerId};
+    use slog::Logger;
+    use std::{net::Ipv6Addr, sync::Arc};
+    use unnumbered::{BgpUnnumbered, BgpUnnumberedInterface, UnnumberedError};
+
+    struct TestUnnumbered {
+        interface_result:
+            Result<Option<BgpUnnumberedInterface>, UnnumberedError>,
+    }
+
+    impl BgpUnnumbered for TestUnnumbered {
+        fn get_active_interface_by_scope(
+            &self,
+            _scope_id: u32,
+        ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+            self.interface_result.clone()
+        }
+
+        fn get_active_interface(
+            &self,
+            _interface: &str,
+        ) -> Result<Option<BgpUnnumberedInterface>, UnnumberedError> {
+            Ok(None)
+        }
+    }
+
+    fn log() -> Logger {
+        Logger::root(slog::Discard, slog::o!())
+    }
+
+    fn unnumbered_manager(
+        interface_result: Result<
+            Option<BgpUnnumberedInterface>,
+            UnnumberedError,
+        >,
+    ) -> Arc<dyn BgpUnnumbered> {
+        Arc::new(TestUnnumbered { interface_result })
+    }
+
+    fn active_interface(
+        discovered_neighbor: Option<Ipv6Addr>,
+    ) -> BgpUnnumberedInterface {
+        BgpUnnumberedInterface {
+            interface: "eth0".into(),
+            scope_id: 7,
+            discovered_neighbor,
+        }
+    }
+
+    #[test]
+    fn discovered_link_local_uses_interface_key() {
+        let manager = unnumbered_manager(Ok(Some(active_interface(Some(
+            "fe80::1".parse().unwrap(),
+        )))));
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Interface("eth0".into()));
+    }
+
+    #[test]
+    fn undiscovered_link_local_uses_ip_key() {
+        let manager = unnumbered_manager(Ok(Some(active_interface(None))));
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
+    }
+
+    #[test]
+    fn mismatched_link_local_uses_ip_key() {
+        let manager = unnumbered_manager(Ok(Some(active_interface(Some(
+            "fe80::2".parse().unwrap(),
+        )))));
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
+    }
+
+    #[test]
+    fn inactive_link_local_scope_uses_ip_key() {
+        let manager = unnumbered_manager(Ok(None));
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
+    }
+
+    #[test]
+    fn link_local_lookup_error_uses_ip_key() {
+        let manager =
+            unnumbered_manager(Err(UnnumberedError::ResolutionFailed {
+                interface: "eth0".into(),
+                reason: "boom".into(),
+            }));
+        let peer = "[fe80::1%7]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
+    }
+
+    #[test]
+    fn non_link_local_address_uses_ip_session_key() {
+        let manager = unnumbered_manager(Ok(Some(active_interface(Some(
+            "fe80::1".parse().unwrap(),
+        )))));
+        let peer = "[2001:db8::1]:179".parse().unwrap();
+
+        let key = resolve_session_key(peer, Some(&manager), &log());
+
+        assert_eq!(key, PeerId::Ip(peer.ip()));
     }
 }

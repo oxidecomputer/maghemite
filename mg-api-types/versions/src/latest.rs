@@ -176,13 +176,13 @@ pub mod rdb {
     pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_STATIC;
 }
 
-pub mod ndp {
-    pub use crate::v5::ndp::NdpInterface;
-    pub use crate::v5::ndp::NdpInterfaceSelector;
-    pub use crate::v5::ndp::NdpManagerState;
-    pub use crate::v5::ndp::NdpPeer;
-    pub use crate::v5::ndp::NdpPendingInterface;
-    pub use crate::v5::ndp::NdpThreadState;
+pub mod unnumbered {
+    pub use crate::v13::unnumbered::DiscoveredRouter;
+    pub use crate::v13::unnumbered::RouterDiscoveryRuntimeState;
+    pub use crate::v13::unnumbered::UnnumberedInterface;
+    pub use crate::v13::unnumbered::UnnumberedInterfaceSelector;
+    pub use crate::v13::unnumbered::UnnumberedInterfaceStatus;
+    pub use crate::v13::unnumbered::UnnumberedManagerState;
 }
 
 pub mod rib {

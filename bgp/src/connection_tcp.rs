@@ -6,8 +6,8 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        AcceptedConnection, BgpConnection, BgpConnector, BgpListener,
+        ConnectionDirection, ConnectionId, ThreadState, resolve_session_key,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -21,8 +21,7 @@ use crate::{
         open_message_from_wire, route_refresh_message_from_wire,
     },
     router::SessionMap,
-    session::{ConnectionEvent, FsmEvent, PeerId, SessionEvent, SessionInfo},
-    unnumbered::UnnumberedManager,
+    session::{ConnectionEvent, FsmEvent, SessionEvent, SessionInfo},
 };
 use mg_common::lock;
 use slog::{Logger, info};
@@ -36,6 +35,7 @@ use std::{
     thread::{JoinHandle, sleep},
     time::{Duration, Instant},
 };
+use unnumbered::BgpUnnumbered;
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {
@@ -77,34 +77,15 @@ enum RecvError {
 
 pub struct BgpListenerTcp {
     listener: TcpListener,
-    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     bind_addr: SocketAddr,
-}
-
-impl BgpListenerTcp {
-    /// Resolve incoming peer address to appropriate PeerId.
-    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
-        // Try interface-based routing for IPv6 link-local addresses
-        if let Some(ref mgr) = self.unnumbered_manager
-            && let SocketAddr::V6(v6_addr) = peer_addr
-            && v6_addr.ip().is_unicast_link_local()
-        {
-            let scope_id = v6_addr.scope_id();
-            if let Some(interface) = mgr.get_interface_by_scope(scope_id) {
-                return PeerId::Interface(interface);
-            }
-        }
-
-        // Default to IP-based routing
-        PeerId::Ip(peer_addr.ip())
-    }
 }
 
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn bind<A: ToSocketAddrs>(
         addr: A,
         log: Logger,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> Result<Self, Error>
     where
         Self: Sized,
@@ -138,7 +119,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         log: Logger,
         sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
         timeout: Duration,
-    ) -> Result<BgpConnectionTcp, Error> {
+    ) -> Result<AcceptedConnection<BgpConnectionTcp>, Error> {
         let start = Instant::now();
         let retry_interval = Duration::from_millis(10);
 
@@ -165,8 +146,11 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     let mut local = conn.local_addr()?;
                     local.set_ip(local.ip().to_canonical());
 
-                    // Resolve peer address to appropriate PeerId (IP or Interface)
-                    let key = self.resolve_session_key(peer);
+                    let key = resolve_session_key(
+                        peer,
+                        self.unnumbered_manager.as_ref(),
+                        &log,
+                    );
 
                     // Look up the session runner, clone the Arc, then release
                     // the sessions lock before accessing session config.
@@ -175,17 +159,32 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                         .cloned()
                         .ok_or_else(|| Error::UnknownPeer(key.clone()))?;
 
-                    let config = lock!(runner.session);
-                    return BgpConnectionTcp::with_conn(
-                        local,
-                        peer,
-                        conn,
-                        IO_TIMEOUT,
-                        runner.event_tx.clone(),
-                        log,
-                        ConnectionDirection::Inbound,
-                        &config,
-                    );
+                    let (connection, min_ttl, md5_key) = {
+                        let config = lock!(runner.session);
+                        let connection = BgpConnectionTcp::with_conn(
+                            local,
+                            peer,
+                            conn,
+                            IO_TIMEOUT,
+                            runner.event_tx.clone(),
+                            log,
+                            ConnectionDirection::Inbound,
+                            &config,
+                        )?;
+                        (
+                            connection,
+                            config.min_ttl,
+                            config.md5_auth_key.clone(),
+                        )
+                    };
+
+                    return Ok(AcceptedConnection {
+                        connection,
+                        session_key: key,
+                        runner,
+                        min_ttl,
+                        md5_key,
+                    });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // Check if we've exceeded the timeout

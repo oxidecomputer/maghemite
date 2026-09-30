@@ -14,7 +14,6 @@ pub mod messages;
 pub mod policy;
 pub mod router;
 pub mod session;
-pub mod unnumbered;
 
 use std::num::NonZeroU16;
 
@@ -32,9 +31,6 @@ mod test;
 
 #[cfg(test)]
 pub mod connection_channel;
-
-#[cfg(test)]
-pub mod unnumbered_mock;
 
 pub const BGP_PORT: NonZeroU16 = NonZeroU16::new(179).unwrap();
 pub const BGP_VERSION: u8 = 4;

@@ -23,7 +23,6 @@ use crate::{
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
     router::{Router, RouterInstanceId},
-    unnumbered::{UnnumberedError, UnnumberedManager},
 };
 use mg_api_types::bgp::config::{
     BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
@@ -49,7 +48,7 @@ use slog::Logger;
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     num::NonZeroU16,
     sync::{
         Arc, Mutex, RwLock,
@@ -58,6 +57,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use unnumbered::{BgpUnnumbered, UnnumberedError};
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
@@ -281,6 +281,8 @@ fn derive_nexthop_interface(
 enum ResolveTargetError {
     #[error("no unnumbered manager configured")]
     NoUnnumberedManager,
+    #[error("interface is not active")]
+    InterfaceInactive,
     #[error("no NDP neighbor discovered yet")]
     NoNeighbor,
     #[error(transparent)]
@@ -1709,7 +1711,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     pub neighbor: NeighborInfo,
 
     /// Unnumbered neighbor manager for actively querying NDP state.
-    pub unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    pub unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
 
     /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
     /// included in message history.
@@ -1838,7 +1840,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
         router: Arc<Router<Cnx>>,
-        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+        unnumbered_manager: Option<Arc<dyn BgpUnnumbered>>,
     ) -> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
@@ -1886,18 +1888,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     pub fn get_peer_socket_addr(&self) -> Option<SocketAddr> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {
-                // Unnumbered: query UnnumberedManager for NDP neighbor
+                // Unnumbered: query BgpUnnumbered for NDP neighbor
                 let mgr = self.unnumbered_manager.as_ref()?;
-                match mgr.get_neighbor_by_interface(iface) {
-                    Ok(Some(neighbor)) => {
-                        Some(neighbor.to_socket_addr(self.neighbor.port.get()))
+                match mgr.get_active_interface(iface) {
+                    Ok(Some(interface)) => {
+                        interface.discovered_neighbor.map(|addr| {
+                            SocketAddr::V6(SocketAddrV6::new(
+                                addr,
+                                self.neighbor.port.get(),
+                                0,
+                                interface.scope_id,
+                            ))
+                        })
                     }
-                    Ok(None) => None, // No neighbor discovered yet - expected
+                    Ok(None) => None, // Interface inactive - expected
                     Err(e) => {
                         session_log_lite!(
                             self,
                             debug,
-                            "failed to query neighbor for interface";
+                            "failed to query active unnumbered interface";
                             "interface" => iface,
                             "error" => e.to_string()
                         );
@@ -1925,10 +1934,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .unnumbered_manager
                     .as_ref()
                     .ok_or(ResolveTargetError::NoUnnumberedManager)?;
-                let neighbor = mgr
-                    .get_neighbor_by_interface(iface)?
+                let interface = mgr
+                    .get_active_interface(iface)?
+                    .ok_or(ResolveTargetError::InterfaceInactive)?;
+                let addr = interface
+                    .discovered_neighbor
                     .ok_or(ResolveTargetError::NoNeighbor)?;
-                Ok(neighbor.to_socket_addr(self.neighbor.port.get()))
+                Ok(SocketAddr::V6(SocketAddrV6::new(
+                    addr,
+                    self.neighbor.port.get(),
+                    0,
+                    interface.scope_id,
+                )))
             }
             PeerId::Ip(ip) => {
                 Ok(SocketAddr::new(*ip, self.neighbor.port.get()))

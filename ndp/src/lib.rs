@@ -6,8 +6,9 @@
 //
 // Copyright 2026 Oxide Computer Company
 
-mod manager;
 mod packet;
+mod router_discovery;
 mod util;
 
-pub use manager::*;
+pub use packet::Icmp6RouterAdvertisement;
+pub use router_discovery::*;

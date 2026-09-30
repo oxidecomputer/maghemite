@@ -7,3 +7,4 @@
 pub(crate) mod bfd;
 pub(crate) mod bgp;
 pub(crate) mod rdb;
+pub(crate) mod unnumbered;

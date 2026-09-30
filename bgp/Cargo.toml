@@ -26,6 +26,7 @@ uuid.workspace = true
 rand.workspace = true
 iddqd.workspace = true
 clap = { workspace = true, optional = true }
+unnumbered.workspace = true
 
 [target.'cfg(target_os = "illumos")'.dependencies]
 libnet = { workspace = true, optional = true }

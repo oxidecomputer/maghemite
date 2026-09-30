@@ -19,8 +19,8 @@
 
 pub mod bfd;
 pub mod bgp;
-pub mod ndp;
 pub mod rdb;
 pub mod rib;
 pub mod static_routes;
 pub mod switch;
+pub mod unnumbered;
