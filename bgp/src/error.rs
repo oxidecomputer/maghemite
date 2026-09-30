@@ -170,6 +170,9 @@ pub enum Error {
     #[error("Unexpected ASN: {0}")]
     UnexpectedAsn(ExpectationMismatch<u32>),
 
+    #[error("Peer used reserved AS 0 (RFC 7607)")]
+    ReservedPeerAsn,
+
     #[error("Hold time too small")]
     HoldTimeTooSmall,
 
