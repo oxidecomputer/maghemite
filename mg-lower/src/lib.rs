@@ -9,7 +9,6 @@
 #![allow(clippy::result_large_err)]
 use crate::dendrite::{
     RouteHash, ensure_tep_addr, get_routes_for_prefix, update_dendrite,
-    withdraw_tep_addr,
 };
 use crate::error::Error;
 use ddm::{
@@ -216,12 +215,10 @@ fn full_sync(
 }
 
 /// Withdraw all of this router's state from the underlying platforms: its
-/// routes and TEP address from the ASIC, and its tunnel advertisements and
-/// TEP underlay origin from ddm. Called when the router is being torn down.
-/// A non-default router is deleted from dpd, which removes its routes and
-/// TEP address. The default router can't be deleted, so its routes are
-/// removed one by one. Failures are logged and skipped — teardown should
-/// always run to completion.
+/// tunnel advertisements and TEP underlay origin from ddm, and the router
+/// itself from dpd, which removes its routes and TEP address. Called when the
+/// router is being torn down. Failures are logged and skipped — teardown
+/// should always run to completion.
 fn withdraw_all(
     tep: Ipv6Addr,
     db: &RouterDb,
@@ -232,49 +229,9 @@ fn withdraw_all(
 ) {
     mgl_log!(log, info, "shutting down: withdrawing all platform state";);
 
-    if db.id() == rdb::DEFAULT_ROUTER_ID {
-        let nothing = HashSet::new();
-        for prefix in db.full_rib(None).keys() {
-            let current = match get_routes_for_prefix(
-                db.id(),
-                dpd,
-                prefix,
-                rt.clone(),
-                log.clone(),
-            ) {
-                Ok(current) => current,
-                Err(e) => {
-                    mgl_log!(log,
-                        error,
-                        "withdraw: failed to get ASIC routes for {prefix}: {e}";
-                        "error" => format!("{e}"),
-                        "prefix" => format!("{prefix}")
-                    );
-                    continue;
-                }
-            };
-            if let Err(e) = update_dendrite(
-                db.id(),
-                nothing.iter(),
-                current.iter(),
-                dpd,
-                rt.clone(),
-                log,
-            ) {
-                mgl_log!(log,
-                    error,
-                    "withdraw: failed to remove ASIC routes for {prefix}: {e}";
-                    "error" => format!("{e}"),
-                    "prefix" => format!("{prefix}")
-                );
-            }
-        }
-        withdraw_tep_addr(db.id(), tep, dpd, rt.clone(), log);
-    }
+    // The default router is never stopped, so this only runs for others.
 
-    // Tunnel origins are scoped to this router by its origin id. For the
-    // default router (None) this also adopts unscoped origins left behind by
-    // pre-multi-router daemons.
+    // Tunnel origins are scoped to this router by its origin id.
     match rt.block_on(async { ddm.get_originated_tunnel_endpoints().await }) {
         Ok(origins) => {
             let ours: Vec<TunnelOrigin> = origins
@@ -298,9 +255,7 @@ fn withdraw_all(
     // departed TEP stops being advertised over the underlay.
     withdraw_tep_underlay_origin(ddm, tep, rt, log);
 
-    if db.id() != rdb::DEFAULT_ROUTER_ID
-        && let Err(e) = rt.block_on(async { dpd.router_delete(db.id()).await })
-    {
+    if let Err(e) = rt.block_on(async { dpd.router_delete(db.id()).await }) {
         mgl_log!(log,
             error,
             "withdraw: failed to delete router from dpd: {e}";

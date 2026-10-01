@@ -64,12 +64,9 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 const UNIT_BGP: &str = "bgp";
-const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
-    Ipv6Addr::UNSPECIFIED,
-    BGP_PORT.get(),
-    0,
-    0,
-));
+pub(crate) const DEFAULT_BGP_LISTEN: SocketAddr = SocketAddr::V6(
+    SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT.get(), 0, 0),
+);
 
 #[derive(Clone)]
 pub struct BgpContext {
@@ -1410,17 +1407,6 @@ pub(crate) async fn do_bgp_apply(
             listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
             graceful_shutdown: false,               // TODO as parameter
         },
-    )
-    .await?;
-
-    // The request's checker/shaper carry their own asn field; the apply is
-    // scoped to rq.asn, so that field is ignored here.
-    helpers::apply_policy(
-        ctx,
-        rdb.id(),
-        rq.asn,
-        rq.checker.as_ref().map(|c| c.code.clone()),
-        rq.shaper.as_ref().map(|s| s.code.clone()),
     )
     .await?;
 

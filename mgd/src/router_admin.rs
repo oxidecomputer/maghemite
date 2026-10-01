@@ -38,7 +38,7 @@ use mg_common::lock;
 use oxnet::IpNet;
 use rdb::{DEFAULT_ROUTER_ID, RibExt, RouterId, StaticRouteKey};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::num::NonZeroU8;
 use std::sync::Arc;
 
@@ -200,9 +200,6 @@ fn validate_router_spec(spec: &RouterSpec) -> Result<(), HttpError> {
         )
     };
     if let Some(bgp) = &spec.bgp {
-        bgp.listen.parse::<SocketAddr>().map_err(|e| {
-            bad(format!("invalid bgp listen address {:?}: {e}", bgp.listen))
-        })?;
         validate_prefixes(&bgp.originate)?;
         for (group, peers) in &bgp.peers {
             for p in peers {
@@ -472,15 +469,15 @@ async fn apply_bgp(
         })?;
     }
 
-    // do_bgp_apply creates a missing BGP router with a default id and listen
-    // address; creating it here first makes the spec's win.
+    // do_bgp_apply creates a missing BGP router with a default id; creating
+    // it here first makes the spec's win.
     bgp_admin::helpers::ensure_router(
         ctx.clone(),
         rdb,
         mg_api_types::bgp::config::Router {
             asn: bgp.asn,
             id: bgp.id,
-            listen: bgp.listen.clone(),
+            listen: bgp_admin::DEFAULT_BGP_LISTEN.to_string(),
             graceful_shutdown: false,
         },
     )
@@ -498,6 +495,15 @@ async fn apply_bgp(
             peers: bgp.peers.clone(),
             unnumbered_peers: bgp.unnumbered_peers.clone(),
         },
+    )
+    .await?;
+
+    bgp_admin::helpers::apply_policy(
+        ctx,
+        rdb.id(),
+        bgp.asn,
+        bgp.checker.as_ref().map(|c| c.code.clone()),
+        bgp.shaper.as_ref().map(|s| s.code.clone()),
     )
     .await?;
 
@@ -584,7 +590,6 @@ mod tests {
             bgp: Some(BgpSpec {
                 asn,
                 id: asn,
-                listen: "[::]:179".into(),
                 originate: Vec::default(),
                 checker: None,
                 shaper: None,
@@ -1018,11 +1023,6 @@ mod tests {
             ("invalid static prefix", {
                 let mut s = two();
                 s.static4[0].prefix = "224.0.0.0/24".parse().unwrap();
-                s
-            }),
-            ("invalid bgp listen address", {
-                let mut s = two();
-                s.bgp.as_mut().unwrap().listen = "not-a-socket-addr".into();
                 s
             }),
             ("invalid originate prefix", {

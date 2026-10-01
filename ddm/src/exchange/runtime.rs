@@ -13,7 +13,7 @@ use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
-use ddm_protocol::{v2, v3, v4};
+use ddm_protocol::{v2, v4};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -112,19 +112,6 @@ pub(crate) fn do_pull(
     Ok(serde_json::from_slice(&body)?)
 }
 
-pub(crate) fn do_pull_v3(
-    ctx: &SmContext,
-    addr: &Ipv6Addr,
-    rt: &Arc<tokio::runtime::Handle>,
-) -> Result<v3::PullResponse, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/pull",
-        addr, ctx.config.if_index, ctx.config.exchange_port,
-    );
-    let body = do_pull_common(uri, rt)?;
-    Ok(serde_json::from_slice(&body)?)
-}
-
 pub(crate) fn do_pull_v2(
     ctx: &SmContext,
     addr: &Ipv6Addr,
@@ -172,7 +159,6 @@ pub(crate) fn pull(
 ) -> Result<(), ExchangeError> {
     let pr: v4::PullResponse = match version {
         Version::V2 => do_pull_v2(&ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull_v3(&ctx, &addr, &rt)?.into(),
         Version::V4 => do_pull(&ctx, &addr, &rt)?,
     };
 
@@ -202,9 +188,6 @@ fn send_update(
         Version::V2 => {
             send_update_v2(ctx, config, update.into(), addr, rt, log)
         }
-        Version::V3 => {
-            send_update_v3(ctx, config, update.into(), addr, rt, log)
-        }
         Version::V4 => send_update_v4(ctx, config, update, addr, rt, log),
     }
 }
@@ -220,22 +203,6 @@ fn send_update_v2(
     let payload = serde_json::to_string(&update)?;
     let uri = format!(
         "http://[{}%{}]:{}/v2/push",
-        addr, config.if_index, config.exchange_port,
-    );
-    send_update_common(ctx, uri, payload, config, rt, log)
-}
-
-fn send_update_v3(
-    ctx: &SmContext,
-    config: Config,
-    update: v3::Update,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/push",
         addr, config.if_index, config.exchange_port,
     );
     send_update_common(ctx, uri, payload, config, rt, log)
@@ -363,10 +330,8 @@ pub fn api_description() -> Result<
 > {
     let mut api = ApiDescription::new();
     api.register(push_handler_v2)?;
-    api.register(push_handler_v3)?;
     api.register(push_handler)?;
     api.register(pull_handler_v2)?;
-    api.register(pull_handler_v3)?;
     api.register(pull_handler)?;
     Ok(api)
 }
@@ -381,19 +346,6 @@ async fn push_handler_v2(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update_v2 = request.into_inner();
     let update = v4::Update::from(update_v2);
-    push_handler_common(ctx, update).await
-}
-
-#[endpoint {
-    method = PUT,
-    path = "/v3/push",
-}]
-async fn push_handler_v3(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    request: TypedBody<v3::Update>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let update_v3 = request.into_inner();
-    let update = v4::Update::from(update_v3);
     push_handler_common(ctx, update).await
 }
 
@@ -437,35 +389,12 @@ async fn pull_handler_v2(
         underlay: pr
             .underlay
             .map(|x| x.into_iter().map(v2::PathVector::from).collect()),
-        // Router-scoped origins are invisible to pre-v4 peers; see
-        // From<v4::TunnelUpdate> for v3::TunnelUpdate.
+        // Router-scoped origins are invisible to v2 peers; see
+        // From<v4::TunnelUpdate> for v2::TunnelUpdate.
         tunnel: pr.tunnel.map(|x| {
             x.into_iter()
                 .filter(|o| o.router_id.is_none())
                 .map(v2::TunnelOrigin::from)
-                .collect()
-        }),
-    }))
-}
-
-#[endpoint {
-    method = GET,
-    path = "/v3/pull",
-}]
-async fn pull_handler_v3(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
-    let pr = pull_handler_common(ctx).await?;
-    Ok(HttpResponseOk(v3::PullResponse {
-        underlay: pr
-            .underlay
-            .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
-        // Router-scoped origins are invisible to pre-v4 peers; see
-        // From<v4::TunnelUpdate> for v3::TunnelUpdate.
-        tunnel: pr.tunnel.map(|x| {
-            x.into_iter()
-                .filter(|o| o.router_id.is_none())
-                .map(v3::TunnelOrigin::from)
                 .collect()
         }),
     }))

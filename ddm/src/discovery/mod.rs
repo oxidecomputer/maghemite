@@ -108,7 +108,6 @@ pub(crate) use runtime::handler;
 #[repr(u8)]
 pub enum Version {
     V2 = 2,
-    V3 = 3,
     /// Adds `TunnelOrigin::router_id` (multi-router attribution).
     V4 = 4,
 }

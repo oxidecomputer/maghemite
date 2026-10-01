@@ -9,7 +9,7 @@
 //! DDMv4 adds `TunnelOrigin::router_id`: the identity of the (multi-RIB)
 //! router instance that originated a tunnel endpoint, so that receivers can
 //! associate tunnel routes with a specific router/RIB. `None` means the
-//! origin predates multi-router support (or came from a v2/v3 peer).
+//! origin predates multi-router support (or came from a v2 peer).
 
 use std::{collections::HashSet, net::Ipv6Addr};
 

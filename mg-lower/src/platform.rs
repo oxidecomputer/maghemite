@@ -125,12 +125,6 @@ pub trait Dpd {
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
 
-    async fn loopback_ipv6_delete(
-        &self,
-        router: RouterId,
-        addr: &std::net::Ipv6Addr,
-    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>;
-
     /// Create a router. Creating a router that already exists succeeds.
     async fn router_create(
         &self,
@@ -311,16 +305,6 @@ impl Dpd for ProductionDpd {
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
             .router_loopback_ipv6_create(&router.0, addr)
-            .await
-    }
-
-    async fn loopback_ipv6_delete(
-        &self,
-        router: RouterId,
-        addr: &std::net::Ipv6Addr,
-    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client
-            .router_loopback_ipv6_delete(&router.0, addr)
             .await
     }
 
@@ -713,21 +697,6 @@ pub(crate) mod test {
             let loopback = loopbacks.entry(router).or_default();
             if !loopback.iter().any(|e| e.addr == addr.addr) {
                 loopback.push(addr.clone());
-            }
-            Ok(dpd_response_ok!(()))
-        }
-
-        async fn loopback_ipv6_delete(
-            &self,
-            router: RouterId,
-            addr: &std::net::Ipv6Addr,
-        ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
-        {
-            self.check_router(router)?;
-            if let Some(loopback) =
-                self.loopback.lock().unwrap().get_mut(&router)
-            {
-                loopback.retain(|e| e.addr != *addr);
             }
             Ok(dpd_response_ok!(()))
         }

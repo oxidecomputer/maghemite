@@ -7,20 +7,19 @@
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
 pub mod v2;
-pub mod v3;
 pub mod v4;
 
-impl From<v2::Update> for v3::Update {
+impl From<v2::Update> for v4::Update {
     fn from(value: v2::Update) -> Self {
         Self {
-            tunnel: value.tunnel.map(v3::TunnelUpdate::from),
-            underlay: value.underlay.map(v3::UnderlayUpdate::from),
+            tunnel: value.tunnel.map(v4::TunnelUpdate::from),
+            underlay: value.underlay.map(v4::UnderlayUpdate::from),
         }
     }
 }
 
-impl From<v3::Update> for v2::Update {
-    fn from(value: v3::Update) -> Self {
+impl From<v4::Update> for v2::Update {
+    fn from(value: v4::Update) -> Self {
         Self {
             tunnel: value.tunnel.map(v2::TunnelUpdate::from),
             underlay: value.underlay.map(v2::UnderlayUpdate::from),
@@ -28,112 +27,114 @@ impl From<v3::Update> for v2::Update {
     }
 }
 
-impl From<v2::PullResponse> for v3::PullResponse {
+impl From<v2::PullResponse> for v4::PullResponse {
     fn from(value: v2::PullResponse) -> Self {
         Self {
             underlay: value
                 .underlay
-                .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
+                .map(|x| x.into_iter().map(v4::PathVector::from).collect()),
             tunnel: value
                 .tunnel
-                .map(|x| x.into_iter().map(v3::TunnelOrigin::from).collect()),
+                .map(|x| x.into_iter().map(v4::TunnelOrigin::from).collect()),
         }
     }
 }
 
-impl From<v3::UnderlayUpdate> for v2::UnderlayUpdate {
-    fn from(value: v3::UnderlayUpdate) -> Self {
-        Self {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v2::PathVector::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v2::PathVector::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<v2::UnderlayUpdate> for v3::UnderlayUpdate {
+impl From<v2::UnderlayUpdate> for v4::UnderlayUpdate {
     fn from(value: v2::UnderlayUpdate) -> Self {
         Self {
             announce: value
                 .announce
                 .into_iter()
-                .map(v3::PathVector::from)
+                .map(v4::PathVector::from)
                 .collect(),
             withdraw: value
                 .withdraw
                 .into_iter()
-                .map(v3::PathVector::from)
+                .map(v4::PathVector::from)
                 .collect(),
         }
     }
 }
 
-impl From<v2::TunnelUpdate> for v3::TunnelUpdate {
-    fn from(value: v2::TunnelUpdate) -> Self {
-        v3::TunnelUpdate {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v3::TunnelOrigin::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v3::TunnelOrigin::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<v3::TunnelUpdate> for v2::TunnelUpdate {
-    fn from(value: v3::TunnelUpdate) -> Self {
+impl From<v4::UnderlayUpdate> for v2::UnderlayUpdate {
+    fn from(value: v4::UnderlayUpdate) -> Self {
         Self {
             announce: value
                 .announce
                 .into_iter()
+                .map(v2::PathVector::from)
+                .collect(),
+            withdraw: value
+                .withdraw
+                .into_iter()
+                .map(v2::PathVector::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<v2::TunnelUpdate> for v4::TunnelUpdate {
+    fn from(value: v2::TunnelUpdate) -> Self {
+        Self {
+            announce: value
+                .announce
+                .into_iter()
+                .map(v4::TunnelOrigin::from)
+                .collect(),
+            withdraw: value
+                .withdraw
+                .into_iter()
+                .map(v4::TunnelOrigin::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<v4::TunnelUpdate> for v2::TunnelUpdate {
+    fn from(value: v4::TunnelUpdate) -> Self {
+        // Router-scoped origins (router_id = Some) are dropped, not
+        // stripped: distinct routers may originate the same overlay prefix,
+        // and collapsing them into a v2 peer's single unscoped namespace
+        // would let one router's origin overwrite or withdraw another's.
+        // Only unscoped origins — the default router's and legacy ones —
+        // are visible to v2 peers.
+        Self {
+            announce: value
+                .announce
+                .into_iter()
+                .filter(|o| o.router_id.is_none())
                 .map(v2::TunnelOrigin::from)
                 .collect(),
             withdraw: value
                 .withdraw
                 .into_iter()
+                .filter(|o| o.router_id.is_none())
                 .map(v2::TunnelOrigin::from)
                 .collect(),
         }
     }
 }
 
-impl From<v2::PathVector> for v3::PathVector {
+impl From<v2::PathVector> for v4::PathVector {
     fn from(value: v2::PathVector) -> Self {
         Self {
-            destination: Ipv6Net::new_unchecked(
-                value.destination.addr,
-                value.destination.len,
-            ),
+            destination: value.destination.into(),
             path: value.path,
         }
     }
 }
 
-impl From<v3::PathVector> for v2::PathVector {
-    fn from(value: v3::PathVector) -> Self {
+impl From<v4::PathVector> for v2::PathVector {
+    fn from(value: v4::PathVector) -> Self {
         Self {
-            destination: v2::Ipv6Prefix {
-                addr: value.destination.addr(),
-                len: value.destination.width(),
-            },
+            destination: value.destination.into(),
             path: value.path,
         }
     }
 }
 
-impl From<v2::TunnelOrigin> for v3::TunnelOrigin {
+impl From<v2::TunnelOrigin> for v4::TunnelOrigin {
     fn from(value: v2::TunnelOrigin) -> Self {
         // TunnelOriginV2 is the DDMv2 wire shape, frozen by protocol
         // contract. If this destructure stops compiling, the V2
@@ -150,185 +151,18 @@ impl From<v2::TunnelOrigin> for v3::TunnelOrigin {
             boundary_addr,
             vni,
             metric,
-        }
-    }
-}
-
-impl From<v3::TunnelOrigin> for v2::TunnelOrigin {
-    fn from(value: v3::TunnelOrigin) -> Self {
-        // Compile barrier: adding a TunnelOrigin (latest API) field
-        // fails to bind here, forcing a decision about whether the new
-        // field is representable in the V2 wire form.
-        let v3::TunnelOrigin {
-            overlay_prefix,
-            boundary_addr,
-            vni,
-            metric,
-        } = value;
-        Self {
-            overlay_prefix: overlay_prefix.into(),
-            boundary_addr,
-            vni,
-            metric,
-        }
-    }
-}
-
-// v3 <-> v4 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-impl From<v3::Update> for v4::Update {
-    fn from(value: v3::Update) -> Self {
-        Self {
-            tunnel: value.tunnel.map(v4::TunnelUpdate::from),
-            underlay: value.underlay.map(v4::UnderlayUpdate::from),
-        }
-    }
-}
-
-impl From<v4::Update> for v3::Update {
-    fn from(value: v4::Update) -> Self {
-        Self {
-            tunnel: value.tunnel.map(v3::TunnelUpdate::from),
-            underlay: value.underlay.map(v3::UnderlayUpdate::from),
-        }
-    }
-}
-
-impl From<v3::PullResponse> for v4::PullResponse {
-    fn from(value: v3::PullResponse) -> Self {
-        Self {
-            underlay: value
-                .underlay
-                .map(|x| x.into_iter().map(v4::PathVector::from).collect()),
-            tunnel: value
-                .tunnel
-                .map(|x| x.into_iter().map(v4::TunnelOrigin::from).collect()),
-        }
-    }
-}
-
-impl From<v3::UnderlayUpdate> for v4::UnderlayUpdate {
-    fn from(value: v3::UnderlayUpdate) -> Self {
-        Self {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v4::PathVector::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v4::PathVector::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<v4::UnderlayUpdate> for v3::UnderlayUpdate {
-    fn from(value: v4::UnderlayUpdate) -> Self {
-        Self {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v3::PathVector::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v3::PathVector::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<v3::TunnelUpdate> for v4::TunnelUpdate {
-    fn from(value: v3::TunnelUpdate) -> Self {
-        Self {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v4::TunnelOrigin::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v4::TunnelOrigin::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<v4::TunnelUpdate> for v3::TunnelUpdate {
-    fn from(value: v4::TunnelUpdate) -> Self {
-        // Router-scoped origins (router_id = Some) are dropped, not
-        // stripped: distinct routers may originate the same overlay prefix,
-        // and collapsing them into a v3 peer's single unscoped namespace
-        // would let one router's origin overwrite or withdraw another's.
-        // Only unscoped origins — the default router's and legacy ones —
-        // are visible to pre-v4 peers, in the byte-identical legacy shape.
-        Self {
-            announce: value
-                .announce
-                .into_iter()
-                .filter(|o| o.router_id.is_none())
-                .map(v3::TunnelOrigin::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .filter(|o| o.router_id.is_none())
-                .map(v3::TunnelOrigin::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<v3::PathVector> for v4::PathVector {
-    fn from(value: v3::PathVector) -> Self {
-        Self {
-            destination: value.destination,
-            path: value.path,
-        }
-    }
-}
-
-impl From<v4::PathVector> for v3::PathVector {
-    fn from(value: v4::PathVector) -> Self {
-        Self {
-            destination: value.destination,
-            path: value.path,
-        }
-    }
-}
-
-impl From<v3::TunnelOrigin> for v4::TunnelOrigin {
-    fn from(value: v3::TunnelOrigin) -> Self {
-        // TunnelOrigin V3 is the DDMv3 wire shape, frozen by protocol
-        // contract. If this destructure stops compiling, the V3 contract
-        // has been violated upstream.
-        let v3::TunnelOrigin {
-            overlay_prefix,
-            boundary_addr,
-            vni,
-            metric,
-        } = value;
-        Self {
-            overlay_prefix,
-            boundary_addr,
-            vni,
-            metric,
-            // v3 peers have no notion of router identity.
+            // v2 peers have no notion of router identity.
             router_id: None,
         }
     }
 }
 
-impl From<v4::TunnelOrigin> for v3::TunnelOrigin {
+impl From<v4::TunnelOrigin> for v2::TunnelOrigin {
     fn from(value: v4::TunnelOrigin) -> Self {
-        // Compile barrier: adding a TunnelOrigin (latest API) field fails
-        // to bind here, forcing a decision about whether the new field is
-        // representable in the V3 wire form. router_id is deliberately
-        // dropped: v3 peers cannot represent it.
+        // Compile barrier: adding a TunnelOrigin (latest API) field
+        // fails to bind here, forcing a decision about whether the new
+        // field is representable in the V2 wire form. router_id is
+        // deliberately dropped: v2 peers cannot represent it.
         let v4::TunnelOrigin {
             overlay_prefix,
             boundary_addr,
@@ -337,55 +171,11 @@ impl From<v4::TunnelOrigin> for v3::TunnelOrigin {
             router_id: _,
         } = value;
         Self {
-            overlay_prefix,
+            overlay_prefix: overlay_prefix.into(),
             boundary_addr,
             vni,
             metric,
         }
-    }
-}
-
-// v2 <-> v4, composed through v3 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-impl From<v2::Update> for v4::Update {
-    fn from(value: v2::Update) -> Self {
-        v3::Update::from(value).into()
-    }
-}
-
-impl From<v4::Update> for v2::Update {
-    fn from(value: v4::Update) -> Self {
-        v3::Update::from(value).into()
-    }
-}
-
-impl From<v2::PullResponse> for v4::PullResponse {
-    fn from(value: v2::PullResponse) -> Self {
-        v3::PullResponse::from(value).into()
-    }
-}
-
-impl From<v2::TunnelOrigin> for v4::TunnelOrigin {
-    fn from(value: v2::TunnelOrigin) -> Self {
-        v3::TunnelOrigin::from(value).into()
-    }
-}
-
-impl From<v4::TunnelOrigin> for v2::TunnelOrigin {
-    fn from(value: v4::TunnelOrigin) -> Self {
-        v3::TunnelOrigin::from(value).into()
-    }
-}
-
-impl From<v2::PathVector> for v4::PathVector {
-    fn from(value: v2::PathVector) -> Self {
-        v3::PathVector::from(value).into()
-    }
-}
-
-impl From<v4::PathVector> for v2::PathVector {
-    fn from(value: v4::PathVector) -> Self {
-        v3::PathVector::from(value).into()
     }
 }
 
@@ -444,7 +234,7 @@ mod test {
     /// downconverting updates for pre-v4 peers; unscoped (default/legacy)
     /// origins pass through in the legacy shape.
     #[test]
-    fn v4_to_v3_tunnel_update_drops_scoped_origins() {
+    fn v4_to_v2_tunnel_update_drops_scoped_origins() {
         let unscoped = v4::TunnelOrigin {
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00::1".parse().unwrap(),
@@ -465,12 +255,12 @@ mod test {
             withdraw: [scoped].into_iter().collect(),
         };
 
-        let v3: v3::TunnelUpdate = update.into();
-        assert_eq!(v3.announce.len(), 1);
+        let v2: v2::TunnelUpdate = update.into();
+        assert_eq!(v2.announce.len(), 1);
         assert_eq!(
-            v3.announce.iter().next().unwrap().boundary_addr,
+            v2.announce.iter().next().unwrap().boundary_addr,
             unscoped.boundary_addr
         );
-        assert!(v3.withdraw.is_empty());
+        assert!(v2.withdraw.is_empty());
     }
 }

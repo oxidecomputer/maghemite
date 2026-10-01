@@ -3,7 +3,6 @@
 #: name = "falcon"
 #: variety = "basic"
 #: target = "lab-3.0-gimlet"
-#: skip_clone = true
 #: output_rules = [
 #:   "/work/*",
 #: ]
@@ -18,6 +17,11 @@
 set -x
 set -e
 set -o pipefail
+
+# Pin the npuvm's dendrite to the one mgd is built against, and sidecar-lite
+# to the one the ddm tests pair with it.
+DENDRITE_VERSION=$(grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p')
+SIDECAR_LITE_VERSION=$(sed -n 's/^export SIDECAR_LITE_VERSION=//p' .github/buildomat/test-ddm-common.sh)
 
 banner 'zpool'
 
@@ -104,7 +108,10 @@ run_test() {
 	local status=0
 
 	clear_falcon_workspace_files
-	RUST_LOG=debug pfexec ./falcon-lab run --no-cleanup "${test_name}" || status=$?
+	RUST_LOG=debug pfexec ./falcon-lab run --no-cleanup \
+		--dendrite-commit "${DENDRITE_VERSION}" \
+		--sidecar-lite-commit "${SIDECAR_LITE_VERSION}" \
+		"${test_name}" || status=$?
 	if (( status != 0 )); then
 		collect_falcon_artifacts "${test_name}"
 	fi

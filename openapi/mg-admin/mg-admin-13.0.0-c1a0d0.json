@@ -1655,7 +1655,7 @@
       },
       "put": {
         "summary": "Apply the full desired set of routers.",
-        "description": "Routers absent from the request are torn down (BGP sessions closed, routes withdrawn, persistent state purged); routers present are created or updated in place. The router named \"default\" is special: a spec for it configures the daemon-owned default router in place (its id and TEP stay daemon-generated; the spec's id is ignored), and its absence empties its configuration while the router itself — id, TEP, RIB — stays in place.",
+        "description": "Routers absent from the request are torn down (BGP sessions closed, routes withdrawn, persistent state purged); routers present are created or updated in place. The router named \"default\" is special: a spec for it configures the daemon-owned default router in place (its TEP stays daemon-generated; the spec's id must be the nil uuid; a different id is a 400), and its absence empties its configuration while the router itself — id, TEP, RIB — stays in place.",
         "operationId": "multi_router_apply",
         "requestBody": {
           "content": {
@@ -2542,7 +2542,7 @@
         ]
       },
       "BgpSpec": {
-        "description": "BGP configuration for one router in a [`RouterSpec`]. Combines the router-level settings (ASN, BGP id, listen address) with the declarative peer/origination set from `ApplyRequest`.",
+        "description": "BGP configuration for one router in a [`RouterSpec`]. Combines the router-level settings (ASN, BGP id) with the declarative peer/origination set from `ApplyRequest`.",
         "type": "object",
         "properties": {
           "asn": {
@@ -2565,10 +2565,6 @@
             "type": "integer",
             "format": "uint32",
             "minimum": 0
-          },
-          "listen": {
-            "description": "Listening address `<addr>:<port>`.",
-            "type": "string"
           },
           "max_paths": {
             "nullable": true,
@@ -2620,7 +2616,6 @@
         "required": [
           "asn",
           "id",
-          "listen",
           "originate"
         ]
       },

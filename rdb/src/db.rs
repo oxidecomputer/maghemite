@@ -80,7 +80,7 @@ const DB_VERSION_KEY: &str = "db_version";
 /// Current database format version. When the on-disk version does not match,
 /// all known trees are dropped and the database is rebuilt from scratch:
 /// routes are ephemeral and the control plane replays configuration.
-const DB_VERSION: u8 = 3;
+const DB_VERSION: u8 = 2;
 
 /// Key used in settings tree for bestpath fanout setting
 const BESTPATH_FANOUT: &str = "bestpath_fanout";

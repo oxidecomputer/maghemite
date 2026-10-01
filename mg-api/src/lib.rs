@@ -144,7 +144,8 @@ pub trait MgAdminApi {
     /// routes withdrawn, persistent state purged); routers present are
     /// created or updated in place. The router named "default" is special:
     /// a spec for it configures the daemon-owned default router in place
-    /// (its id and TEP stay daemon-generated; the spec's id is ignored),
+    /// (its TEP stays daemon-generated; the spec's id must be the nil uuid; a
+    /// different id is a 400),
     /// and its absence empties its configuration while the router itself —
     /// id, TEP, RIB — stays in place.
     #[endpoint {

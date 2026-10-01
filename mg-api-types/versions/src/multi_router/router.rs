@@ -64,7 +64,7 @@ pub struct RouterInfo {
 }
 
 /// BGP configuration for one router in a [`RouterSpec`]. Combines the
-/// router-level settings (ASN, BGP id, listen address) with the declarative
+/// router-level settings (ASN, BGP id) with the declarative
 /// peer/origination set from `ApplyRequest`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BgpSpec {
@@ -72,8 +72,6 @@ pub struct BgpSpec {
     pub asn: u32,
     /// BGP id for this router.
     pub id: u32,
-    /// Listening address `<addr>:<port>`.
-    pub listen: String,
     /// Complete set of prefixes to originate.
     pub originate: Vec<IpNet>,
     /// Checker rhai code to apply to ingress open and update messages.

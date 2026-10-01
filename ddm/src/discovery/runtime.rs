@@ -366,7 +366,6 @@ fn handle_advertisement(
     // update before higher versions are spoken.
     let version = match version {
         2 => Version::V2,
-        3 => Version::V3,
         x if x >= 4 => Version::MAX,
         x => {
             err!(
