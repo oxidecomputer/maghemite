@@ -26,9 +26,11 @@ use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot::{ApiDescriptionRegisterError, endpoint};
 use http_body_util::BodyExt;
+use hyper::StatusCode;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use mg_common::lock;
 use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
@@ -52,7 +54,7 @@ pub(crate) fn announce_underlay(
     config: Config,
     prefixes: HashSet<v4::PathVector>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
@@ -65,7 +67,7 @@ pub(crate) fn announce_tunnel(
     config: Config,
     endpoints: HashSet<v4::TunnelOrigin>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
@@ -78,7 +80,7 @@ pub(crate) fn withdraw_underlay(
     config: Config,
     prefixes: HashSet<v4::PathVector>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
@@ -91,7 +93,7 @@ pub(crate) fn withdraw_tunnel(
     config: Config,
     endpoints: HashSet<v4::TunnelOrigin>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
@@ -140,12 +142,11 @@ fn do_pull_common(
     let resp = client.request(req);
 
     rt.block_on(async move {
-        let body = timeout(Duration::from_millis(250), resp)
-            .await??
-            .into_body()
-            .collect()
-            .await?
-            .to_bytes();
+        let resp = timeout(Duration::from_millis(250), resp).await??;
+        if !resp.status().is_success() {
+            return Err(ExchangeError::Status(resp.status()));
+        }
+        let body = resp.into_body().collect().await?.to_bytes();
         Ok(body)
     })
 }
@@ -179,17 +180,33 @@ fn send_update(
     config: Config,
     update: v4::Update,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
-    match version {
-        Version::V2 => {
-            send_update_v2(ctx, config, update.into(), addr, rt, log)
+    if *lock!(version) == Version::V4 {
+        let result = send_update_v4(
+            ctx,
+            config.clone(),
+            update.clone(),
+            addr,
+            rt.clone(),
+            log.clone(),
+        );
+        match result {
+            Err(e) if super::retry_version(Version::V4, &e) == Version::V2 => {
+                wrn!(
+                    log,
+                    config.if_name,
+                    "peer has no v4 push, resending at v2"
+                );
+                *lock!(version) = Version::V2;
+            }
+            result => return result,
         }
-        Version::V4 => send_update_v4(ctx, config, update, addr, rt, log),
     }
+    send_update_v2(ctx, config, update.into(), addr, rt, log)
 }
 
 fn send_update_v2(
@@ -247,6 +264,9 @@ fn send_update_common(
         match timeout(Duration::from_millis(config.exchange_timeout), resp)
             .await
         {
+            Ok(Ok(resp)) if resp.status() == StatusCode::NOT_FOUND => {
+                Err(ExchangeError::Status(StatusCode::NOT_FOUND))
+            }
             Ok(_) => Ok(()),
             Err(e) => {
                 err!(

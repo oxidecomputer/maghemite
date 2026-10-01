@@ -8,7 +8,7 @@
 //! routes via [`crate::sys`] and reads interface addressing through `libnet`.
 
 use crate::db::Db;
-use crate::discovery::{self, Version};
+use crate::discovery;
 use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use mg_common::lock;
@@ -53,7 +53,7 @@ pub enum PeerEvent {
 
 #[derive(Debug)]
 pub enum NeighborEvent {
-    Advertise((Ipv6Addr, Version)),
+    Advertise(Ipv6Addr),
     SolicitFail,
     Expire,
 }

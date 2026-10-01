@@ -50,7 +50,7 @@ struct DiscoveryPacket {
 impl DiscoveryPacket {
     fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::MAX as u8,
+            version: Version::V2 as u8,
             flags: SOLICIT,
             hostname,
             kind,
@@ -58,7 +58,7 @@ impl DiscoveryPacket {
     }
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::MAX as u8,
+            version: Version::V2 as u8,
             flags: ADVERTISE,
             hostname,
             kind,
@@ -356,27 +356,17 @@ fn handle_advertisement(
         .advertisements_received
         .fetch_add(1, Ordering::Relaxed);
 
-    // Version negotiation: speak the minimum of what both sides advertise.
-    // A peer advertising a version above ours necessarily supports our
-    // version's exchange endpoints, so clamp to [`Version::MAX`].
-    //
-    // NOTE: peers running code that predates this negotiation always
-    // advertise 2 (and reject hellos with versions they do not know), so a
-    // mixed fleet degrades to DDMv2 at best and requires the whole fleet to
-    // update before higher versions are spoken.
-    let version = match version {
-        2 => Version::V2,
-        x if x >= 4 => Version::MAX,
-        x => {
-            err!(
-                ctx.log,
-                ctx.config.if_name,
-                "unsupported protocol version {}, minimum supported is 2",
-                x
-            );
-            return;
-        }
-    };
+    // Hellos always carry version 2. The exchange version is decided by the
+    // exchange layer.
+    if version != Version::V2 as u8 {
+        err!(
+            ctx.log,
+            ctx.config.if_name,
+            "unknown protocol version {}, known versions are: 2",
+            version
+        );
+        return;
+    }
 
     let mut guard = match ctx.nbr.write() {
         Ok(nbr) => nbr,
@@ -434,15 +424,12 @@ fn handle_advertisement(
     if info.as_ref() != Some(&new_peer) {
         *info = Some(new_peer);
         drop(info);
-        emit_nbr_update(ctx, sender, version);
+        emit_nbr_update(ctx, sender);
     }
 }
 
-fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr, version: Version) {
-    if let Err(e) = ctx
-        .event
-        .send(NeighborEvent::Advertise((*addr, version)).into())
-    {
+fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr) {
+    if let Err(e) = ctx.event.send(NeighborEvent::Advertise(*addr).into()) {
         err!(ctx.log, ctx.config.if_name, "send nbr event: {}", e);
     }
 }

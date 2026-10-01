@@ -21,6 +21,8 @@
 //! program forwarding state live in the [`runtime`] submodule and are
 //! illumos-only, since they call into [`crate::sys`] to install routes.
 
+use crate::discovery::Version;
+use hyper::StatusCode;
 use thiserror::Error;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -48,4 +50,37 @@ pub enum ExchangeError {
 
     #[error("json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+
+    #[error("http status: {0}")]
+    Status(StatusCode),
+}
+
+/// The version to retry a failed pull or push at. A 404 means the peer does
+/// not serve this version, so fall back to v2. Any other error is transient and is
+/// retried at the same version, so that a blip does not pin the peer to v2
+/// until restart.
+pub fn retry_version(version: Version, err: &ExchangeError) -> Version {
+    match err {
+        ExchangeError::Status(StatusCode::NOT_FOUND) => Version::V2,
+        _ => version,
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn retry_version_falls_back_to_v2_only_on_404() {
+        let not_found = ExchangeError::Status(StatusCode::NOT_FOUND);
+        assert_eq!(retry_version(Version::V4, &not_found), Version::V2);
+        assert_eq!(retry_version(Version::V2, &not_found), Version::V2);
+
+        let server_error =
+            ExchangeError::Status(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(retry_version(Version::V4, &server_error), Version::V4);
+
+        let json = serde_json::from_str::<u8>("x").unwrap_err().into();
+        assert_eq!(retry_version(Version::V4, &json), Version::V4);
+    }
 }
