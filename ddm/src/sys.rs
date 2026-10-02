@@ -178,23 +178,38 @@ pub fn add_routes_dendrite(
 
         // TODO this is gross, use link type properties rather than futzing
         // around with strings.
-        let Some(egress_port_num) = ifname
-            .strip_prefix("tfportrear")
-            .and_then(|x| x.strip_suffix("_0"))
-            .map(|x| x.trim())
-            .and_then(|x| x.parse::<u8>().ok())
-        else {
-            err!(log, ifname, "expected tfportrear");
-            continue;
-        };
 
-        // TODO this assumes ddm only operates on rear ports, which will not be
-        // true for multi-rack deployments.
-        let port_name = format!("rear{}", egress_port_num);
-        let port_id = match types::Rear::try_from(&port_name) {
-            Ok(rear) => PortId::Rear(rear),
-            Err(e) => {
-                err!(log, ifname, "bad port name ({port_name}): {e}");
+        let port_id = {
+            if let Some(egress_port_num) = ifname
+                .strip_prefix("tfportrear")
+                .and_then(|x| x.strip_suffix("_0"))
+                .map(|x| x.trim())
+                .and_then(|x| x.parse::<u8>().ok())
+            {
+                let port_name = format!("rear{}", egress_port_num);
+                match types::Rear::try_from(&port_name) {
+                    Ok(rear) => PortId::Rear(rear),
+                    Err(e) => {
+                        err!(log, ifname, "bad port name ({port_name}): {e}");
+                        continue;
+                    }
+                }
+            } else if let Some(egress_port_num) = ifname
+                .strip_prefix("tfportqsfp")
+                .and_then(|x| x.strip_suffix("_0"))
+                .map(|x| x.trim())
+                .and_then(|x| x.parse::<u8>().ok())
+            {
+                let port_name = format!("qsfp{}", egress_port_num);
+                match types::Qsfp::try_from(&port_name) {
+                    Ok(qsfp) => PortId::Qsfp(qsfp),
+                    Err(e) => {
+                        err!(log, ifname, "bad port name ({port_name}): {e}");
+                        continue;
+                    }
+                }
+            } else {
+                err!(log, ifname, "expected tfportrear or tfportqsfp");
                 continue;
             }
         };

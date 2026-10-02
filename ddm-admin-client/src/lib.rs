@@ -23,5 +23,6 @@ progenitor::generate_api!(
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
         PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,
         Duration = std::time::Duration,
+        ExternalPeers = ddm_api_types_versions::latest::external_peers::ExternalPeers,
     }
 );

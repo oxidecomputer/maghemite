@@ -117,6 +117,17 @@ impl UnderlayUpdate {
                 .collect(),
         }
     }
+    pub fn break_loops(&self, hostname: &String) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .filter(|x| !x.path.contains(hostname))
+                .cloned()
+                .collect(),
+            withdraw: self.withdraw.clone(),
+        }
+    }
 }
 
 impl From<UnderlayUpdate> for Update {
