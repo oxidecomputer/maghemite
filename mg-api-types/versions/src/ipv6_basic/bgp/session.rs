@@ -81,7 +81,7 @@ pub enum FsmStateKind {
 }
 
 /// Category of FSM event for filtering and display purposes
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum FsmEventCategory {
     Admin,
     Connection,

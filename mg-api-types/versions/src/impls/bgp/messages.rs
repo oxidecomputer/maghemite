@@ -1288,6 +1288,16 @@ impl Display for NotificationMessage {
     }
 }
 
+impl RouteRefreshMessage {
+    /// Create a unicast route-refresh request for the given address family.
+    pub fn new(afi: Afi) -> Self {
+        Self {
+            afi: afi.into(),
+            safi: Safi::Unicast.into(),
+        }
+    }
+}
+
 impl Display for RouteRefreshMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(

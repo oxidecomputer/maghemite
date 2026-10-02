@@ -385,7 +385,31 @@ impl BgpConnectionChannel {
     /// This is a private constructor used by BgpConnectorChannel and BgpListenerChannel.
     /// The receive loop is not started until start_recv_loop() is called.
     #[allow(clippy::too_many_arguments)]
-    fn with_conn(
+    pub(crate) fn with_conn(
+        addr: SocketAddr,
+        peer: SocketAddr,
+        conn: Endpoint<Message>,
+        event_tx: Sender<FsmEvent<Self>>,
+        timeout: Duration,
+        log: Logger,
+        direction: ConnectionDirection,
+        config: &SessionInfo,
+    ) -> Self {
+        let conn = Self::with_conn_without_clock_thread(
+            addr, peer, conn, event_tx, timeout, log, direction, config,
+        );
+        conn.connection_clock.start(
+            conn.event_tx.clone(),
+            conn.dropped.clone(),
+            conn.log.clone(),
+        );
+        conn
+    }
+
+    /// Construct a connection for tests that inject FSM events manually.
+    /// Neither the clock thread nor the receive loop is started.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_conn_without_clock_thread(
         addr: SocketAddr,
         peer: SocketAddr,
         conn: Endpoint<Message>,
@@ -397,15 +421,12 @@ impl BgpConnectionChannel {
     ) -> Self {
         let conn_id = ConnectionId::new(addr, peer);
         let dropped = Arc::new(AtomicBool::new(false));
-        let connection_clock = ConnectionClock::new(
+        let connection_clock = ConnectionClock::new_unstarted(
             config.resolution,
             config.keepalive_time,
             config.hold_time,
             config.delay_open_time,
             conn_id,
-            event_tx.clone(),
-            dropped.clone(),
-            log.clone(),
         );
 
         let channel_id = conn.channel_id;
