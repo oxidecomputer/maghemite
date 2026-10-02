@@ -125,12 +125,7 @@ impl UnderlayUpdate {
                 .filter(|x| !x.path.contains(hostname))
                 .cloned()
                 .collect(),
-            withdraw: self
-                .withdraw
-                .iter()
-                .filter(|x| !x.path.contains(hostname))
-                .cloned()
-                .collect(),
+            withdraw: self.withdraw.clone(),
         }
     }
 }
