@@ -100,18 +100,20 @@ clear_falcon_workspace_files() {
 }
 
 run_test() {
-	local test_name=$1
+	local topology=$1
+	local scenario=$2
+	local test_name="${topology}-${scenario}"
 	local status=0
 
 	clear_falcon_workspace_files
-	RUST_LOG=debug pfexec ./falcon-lab run --no-cleanup "${test_name}" || status=$?
+	RUST_LOG=debug pfexec ./falcon-lab run "${topology}" "${scenario}" --no-cleanup || status=$?
 	if (( status != 0 )); then
 		collect_falcon_artifacts "${test_name}"
 	fi
-	pfexec ./falcon-lab cleanup "${test_name}" || true
+	pfexec ./falcon-lab cleanup "${topology}" "${scenario}" || true
 	return "${status}"
 }
 
-run_test mgd-unnumbered
-run_test quartet-unnumbered
-run_test quartet-bfd-static-routing
+run_test mgd-duo bgp-unnumbered
+run_test interop bgp-unnumbered
+run_test interop bfd-static-routing

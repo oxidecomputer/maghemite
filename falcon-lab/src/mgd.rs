@@ -30,6 +30,11 @@ impl MgdNode {
         Ok(())
     }
 
+    pub async fn stop_mgd(&self, d: &Runner) -> Result<()> {
+        d.exec(self.0, "pkill -x mgd").await?;
+        Ok(())
+    }
+
     pub async fn client(&self, d: &Runner, addr: IpAddr) -> Result<Client> {
         Ok(Client::new(&format!("http://{addr}:4676"), d.log.clone()))
     }
