@@ -7,6 +7,14 @@
 #: output_rules = [
 #:   "/work/debug/*",
 #:   "/work/release/*",
+#:   "=/work/release/mgd",
+#:   "=/work/release/mgd.sha256.txt",
+#:   "=/work/release/mgadm",
+#:   "=/work/release/mgadm.sha256.txt",
+#:   "=/work/release/ddmd",
+#:   "=/work/release/ddmd.sha256.txt",
+#:   "=/work/release/ddmadm",
+#:   "=/work/release/ddmadm.sha256.txt",
 #: ]
 #:
 #: [[publish]]
@@ -22,7 +30,7 @@
 #: [[publish]]
 #: series = "linux"
 #: name = "mgadm"
-#: from_output = "/work/release/mgdadm"
+#: from_output = "/work/release/mgadm"
 #:
 #: [[publish]]
 #: series = "linux"
