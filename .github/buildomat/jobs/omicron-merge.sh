@@ -10,9 +10,12 @@
 #:
 #: [dependencies.image]
 #: job = "image"
+#:
+#: [dependencies.macos]
+#: job = "macos"
 
-# This doesn't actually test anything; it merely waits for the "linux" and
-# "image" jobs to complete. Automation in the omicron repo keys off of this job
-# to update a maghemite merge staging branch.
+# This doesn't actually test anything; it merely waits for the "linux",
+# "image" and "macos" jobs to complete. Automation in the omicron repo keys off
+# of this job to update a maghemite merge staging branch.
 
 exit 0
