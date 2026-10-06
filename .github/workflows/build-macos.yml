@@ -1,0 +1,95 @@
+name: build-macos
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # TODO: An optimization we can do here is to skip duplicate
+    # push/pull_request runs on branches created in this repo, e.g.:
+    #
+    # if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    #
+    # But the fetch-gh-artifacts.sh script (which is copied verbatim from
+    # github.com/oxidecomputer/cockroach) doesn't handle skipped jobs at the
+    # moment. We should consider fixing both copies of the script.
+    #
+    # ---
+    #
+    # Use the oldest supported arm64 image to do this build. Building on a newer
+    # image risks binaries that fail on older versions of macOS.
+    runs-on: macos-15
+    # This must stay below the 40 minutes the macos buildomat job waits for this
+    # run. See the XXX in .github/buildomat/jobs/macos.sh.
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      # Omicron downloads these binaries onto machines that may lack Homebrew's
+      # OpenSSL dylibs, so link it statically.
+      OPENSSL_STATIC: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build the tip of the PR, not the merge commit GitHub synthesizes, so
+          # that the artifact matches the buildomat commit.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Report toolchain versions
+        run: |
+          cargo --version
+          rustc --version
+      - name: Find or install Homebrew OpenSSL
+        run: |
+          openssl_dir="$(brew --prefix openssl@3)"
+          if [[ ! -f "${openssl_dir}/lib/libssl.a" ]]; then
+            brew install openssl@3
+          fi
+          echo "OPENSSL_DIR=${openssl_dir}" >> "${GITHUB_ENV}"
+      - name: Build mgd
+        run: cargo build --release --locked --package mgd --bin mgd --no-default-features
+      - name: Build mgadm
+        run: cargo build --release --locked --package mgadm --bin mgadm
+      - name: Build ddmd
+        run: cargo build --release --locked --package ddmd --bin ddmd --no-default-features
+      - name: Build ddmadm
+        run: cargo build --release --locked --package ddmadm --bin ddmadm
+      - name: Check binaries
+        run: |
+          set -o nounset
+          for bin in mgd mgadm ddmd ddmadm; do
+            bin_path="target/release/${bin}"
+
+            archs="$(lipo -archs "${bin_path}")"
+            if [[ "${archs}" != "arm64" ]]; then
+              echo "::error::${bin} was built for '${archs}', expected 'arm64'"
+              exit 1
+            fi
+
+            linked="$(otool -L "${bin_path}")"
+            echo "${linked}"
+            non_system="$(awk 'NR > 1 && $1 !~ /^(\/usr\/lib\/|\/System\/Library\/)/ { print $1 }' <<<"${linked}")"
+            if [[ -n "${non_system}" ]]; then
+              echo "::error::${bin} links against non-system libraries that machines downloading it may not have: ${non_system//$'\n'/ }"
+              exit 1
+            fi
+
+            "${bin_path}" --help >/dev/null
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-aarch64
+          path: |
+            target/release/mgd
+            target/release/mgadm
+            target/release/ddmd
+            target/release/ddmadm
+          if-no-files-found: error
