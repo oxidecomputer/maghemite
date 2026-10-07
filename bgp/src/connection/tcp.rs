@@ -837,8 +837,14 @@ impl BgpConnectionTcp {
     ) -> Result<Message, RecvError> {
         let hdr = Self::recv_header(stream, dropped.clone())?;
 
-        // RFC 4271 §4.1: length must be between 19 and 4096
-        if usize::from(hdr.length) < Header::WIRE_SIZE {
+        // RFC 4271 §6.1: undersized OPEN and NOTIFICATION messages are
+        // header length errors, not errors in their message bodies.
+        let minimum_length = match hdr.typ {
+            MessageType::Open => Header::WIRE_SIZE + 10,
+            MessageType::Notification => Header::WIRE_SIZE + 2,
+            _ => Header::WIRE_SIZE,
+        };
+        if usize::from(hdr.length) < minimum_length {
             return Err(RecvError::Parse(MessageParseError::Header(
                 HeaderParseError {
                     error_code: ErrorCode::Header,

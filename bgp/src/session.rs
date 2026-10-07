@@ -9409,10 +9409,14 @@ mod tests {
     use crate::connection::channel::{
         BgpConnectionChannel, MessageResult, channel,
     };
-    use crate::messages::{CeaseErrorSubcode, OpenErrorSubcode};
+    use crate::messages::{
+        CeaseErrorSubcode, OpenErrorSubcode, UpdateErrorSubcode,
+        UpdateParseError,
+    };
     use crate::test::{
         RouteExchange, create_test_session, create_test_session_info,
     };
+    use mg_api_types::bgp::parse::UpdateParseErrorReason;
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -9569,14 +9573,23 @@ mod tests {
             if let Err(e) = peer.read_to_end(&mut replies) {
                 assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset);
             }
-            let mut expected_wire = Vec::new();
-            if let Some(codes) = expected {
-                expected_wire.extend_from_slice(&[0xff; 16]);
-                expected_wire.extend_from_slice(&[0, 21, 3]);
-                expected_wire.extend_from_slice(&codes);
+            // Use framing only to count messages. Error-specific Data (and
+            // consequently the expected NOTIFICATION length) is not checked.
+            let mut remaining = replies.as_slice();
+            let mut notifications = Vec::new();
+            while !remaining.is_empty() {
+                assert!(remaining.len() >= 21, "{state}: truncated reply");
+                assert_eq!(&remaining[..16], &[0xff; 16], "{state}");
+                assert_eq!(remaining[18], 3, "{state}: expected NOTIFICATION");
+                let length =
+                    u16::from_be_bytes([remaining[16], remaining[17]]) as usize;
+                assert!((21..=remaining.len()).contains(&length), "{state}");
+                notifications.push([remaining[19], remaining[20]]);
+                remaining = &remaining[length..];
             }
             assert_eq!(
-                replies, expected_wire,
+                notifications,
+                expected.into_iter().collect::<Vec<_>>(),
                 "{state}: notification count/codes"
             );
             assert!(rx.try_recv().is_err(), "{state}: extra receive event");
@@ -9596,7 +9609,8 @@ mod tests {
     fn test_tcp_open_parse_errors_notify_once() {
         // Generic truncation, unsupported version, and bad BGP identifier.
         for (body, codes) in [
-            (vec![], [2, 0]),
+            (vec![], [1, 2]),
+            (vec![4, 0, 1, 0, 30, 192, 0, 2, 1], [1, 2]),
             (vec![3, 0, 1, 0, 30, 192, 0, 2, 1, 0], [2, 1]),
             (vec![4, 0, 1, 0, 30, 0, 0, 0, 0, 0], [2, 3]),
         ] {
@@ -9629,7 +9643,8 @@ mod tests {
         for (typ, body, codes) in [
             (2, vec![], [1, 2]),           // UPDATE too short
             (2, vec![0, 5, 0, 0], [3, 1]), // invalid withdrawn length
-            (3, vec![1], [1, 3]),          // NOTIFICATION too short
+            (3, vec![], [1, 2]),           // NOTIFICATION missing code/subcode
+            (3, vec![1], [1, 2]),          // NOTIFICATION missing subcode
             (4, vec![0], [1, 2]),          // KEEPALIVE must have no body
             (5, vec![0, 1, 0], [1, 3]),    // ROUTE_REFRESH too short
         ] {
@@ -9647,37 +9662,153 @@ mod tests {
         check_tcp_parse_error(&packet, None);
     }
 
-    #[test]
-    fn test_channel_parse_error_notifies_once() {
+    fn bad_bgp_id_parse_error() -> MessageParseError {
         use crate::messages::{OpenParseError, OpenParseErrorReason};
 
+        MessageParseError::Open(OpenParseError {
+            error_code: ErrorCode::Open,
+            error_subcode: ErrorSubcode::Open(
+                OpenErrorSubcode::BadBgpIdentifier,
+            ),
+            reason: OpenParseErrorReason::BadBgpIdentifier {
+                id: Ipv4Addr::UNSPECIFIED,
+            },
+        })
+    }
+
+    fn fatal_update_parse_error() -> MessageParseError {
+        // RFC 7606 §3(b): an oversized Withdrawn Routes Length requires a
+        // session reset, unlike recoverable attribute errors.
+        MessageParseError::Update(UpdateParseError {
+            error_code: ErrorCode::Update,
+            error_subcode: ErrorSubcode::Update(
+                UpdateErrorSubcode::MalformedAttributeList,
+            ),
+            reason: UpdateParseErrorReason::InvalidWithdrawnLength {
+                declared: 5,
+                available: 2,
+            },
+        })
+    }
+
+    #[track_caller]
+    fn assert_channel_messages(
+        rx: &Receiver<MessageResult>,
+        expected: &[Message],
+    ) {
+        assert_eq!(
+            rx.try_iter().map(Result::unwrap).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[track_caller]
+    fn assert_connection_stopped(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        conn: &Arc<BgpConnectionChannel>,
+    ) {
+        assert!(runner.get_conn(conn.id()).is_none());
+        assert!(!conn_timer!(conn, hold).enabled());
+        assert!(!conn_timer!(conn, keepalive).enabled());
+    }
+
+    #[track_caller]
+    fn assert_connection_live(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        conn: &Arc<BgpConnectionChannel>,
+    ) {
+        assert!(runner.get_conn(conn.id()).is_some());
+        assert!(conn_timer!(conn, hold).enabled());
+        assert!(conn_timer!(conn, keepalive).enabled());
+    }
+
+    #[track_caller]
+    fn assert_notification_accounting(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        sent: u64,
+        failed: u64,
+        retries: u64,
+    ) {
+        assert_eq!(
+            runner.counters.notifications_sent.load(Ordering::Relaxed),
+            sent
+        );
+        assert_eq!(
+            runner
+                .counters
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            failed
+        );
+        assert_eq!(
+            runner.counters.connection_retries.load(Ordering::Relaxed),
+            retries
+        );
+        assert_eq!(
+            lock!(runner.message_history)
+                .sent
+                .iter()
+                .filter(|entry| matches!(
+                    entry.message,
+                    Message::Notification(_)
+                ))
+                .count() as u64,
+            sent + failed,
+            "each notification attempt must be recorded exactly once",
+        );
+    }
+
+    #[track_caller]
+    fn assert_connection_state(
+        state: &FsmState<BgpConnectionChannel>,
+        expected: FsmStateKind,
+        conn: &Arc<BgpConnectionChannel>,
+    ) {
+        assert_eq!(state.kind(), expected);
+        let retained = match state {
+            FsmState::OpenSent(conn) => conn,
+            FsmState::OpenConfirm(pc)
+            | FsmState::SessionSetup(pc)
+            | FsmState::Established(pc) => &pc.conn,
+            _ => panic!("expected a connected state, got {state}"),
+        };
+        assert_eq!(retained.id(), conn.id());
+    }
+
+    fn inject_channel_parse_error(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        rx: &Receiver<FsmEvent<BgpConnectionChannel>>,
+        conn: &Arc<BgpConnectionChannel>,
+        remote: &crate::connection::channel::Endpoint<MessageResult>,
+        error: MessageParseError,
+    ) {
+        remote.tx.send(Err(error)).unwrap();
+        conn.start_recv_loop().unwrap();
+        // Bound the wait before entering an FSM handler's event loop.
+        let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            &event,
+            FsmEvent::Connection(ConnectionEvent::ParseError { conn_id, .. })
+                if conn_id == conn.id()
+        ));
+        runner.event_tx.send(event).unwrap();
+    }
+
+    #[test]
+    fn test_channel_parse_error_notifies_once() {
         with_test_session("channel_parse_error", |runner, rx| {
             let (pc, remote) =
                 test_peer_connection(&runner, ConnectionDirection::Outbound);
             lock!(runner.connection_registry)
                 .register(ConnectionKind::Partial(pc.conn.clone()))
                 .unwrap();
-            remote
-                .tx
-                .send(Err(MessageParseError::Open(OpenParseError {
-                    error_code: ErrorCode::Open,
-                    error_subcode: ErrorSubcode::Open(
-                        OpenErrorSubcode::BadBgpIdentifier,
-                    ),
-                    reason: OpenParseErrorReason::BadBgpIdentifier {
-                        id: Ipv4Addr::UNSPECIFIED,
-                    },
-                })))
-                .unwrap();
-            pc.conn.start_recv_loop().unwrap();
-            // Bound the wait so missing propagation fails rather than hanging
-            // inside OpenSent's event loop.
-            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            assert!(matches!(
-                event,
-                FsmEvent::Connection(ConnectionEvent::ParseError { .. })
-            ));
-            runner.event_tx.send(event).unwrap();
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                &pc.conn,
+                &remote,
+                bad_bgp_id_parse_error(),
+            );
             let state = runner.fsm_open_sent(&rx, pc.conn.clone());
             assert_eq!(state.kind(), FsmStateKind::Idle);
             assert_eq!(runner.connection_count(), 0);
@@ -9695,6 +9826,856 @@ mod tests {
                 runner.counters.notifications_sent.load(Ordering::Relaxed),
                 1,
             );
+        });
+    }
+
+    enum CollisionPeer {
+        Existing,
+        Incoming,
+    }
+
+    fn connection_timer_state(
+        conn: &BgpConnectionChannel,
+    ) -> [(Duration, Duration); 2] {
+        let hold = conn_timer!(conn, hold);
+        let keepalive = conn_timer!(conn, keepalive);
+        [
+            (hold.interval, hold.remaining()),
+            (keepalive.interval, keepalive.remaining()),
+        ]
+    }
+
+    #[track_caller]
+    fn assert_peer_details(
+        actual: &PeerConnection<BgpConnectionChannel>,
+        expected: &PeerConnection<BgpConnectionChannel>,
+    ) {
+        assert_eq!(
+            (
+                actual.id,
+                actual.asn,
+                &actual.caps,
+                actual.ipv4_unicast,
+                actual.ipv6_unicast
+            ),
+            (
+                expected.id,
+                expected.asn,
+                &expected.caps,
+                expected.ipv4_unicast,
+                expected.ipv6_unicast
+            ),
+        );
+    }
+
+    fn check_collision_parse_error(
+        existing_state: FsmStateKind,
+        failing_peer: CollisionPeer,
+        expected_survivor_state: FsmStateKind,
+    ) {
+        with_test_session("collision_parse_error", |runner, rx| {
+            let (mut existing, existing_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            existing.id = 201;
+            existing.caps.insert(Capability::RouteRefresh {});
+            existing.ipv6_unicast = AfiSafiState::Advertised;
+            let (incoming, incoming_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            for (pc, hold_time) in [(&existing, 90), (&incoming, 180)] {
+                lock!(runner.connection_registry)
+                    .register(ConnectionKind::Partial(pc.conn.clone()))
+                    .unwrap();
+                conn_timer!(pc.conn, hold).interval =
+                    Duration::from_secs(hold_time);
+                conn_timer!(pc.conn, keepalive).interval =
+                    Duration::from_secs(hold_time / 3);
+                conn_timer!(pc.conn, hold).restart();
+                conn_timer!(pc.conn, keepalive).restart();
+                conn_timer!(pc.conn, hold).tick(Duration::from_secs(7));
+                conn_timer!(pc.conn, keepalive).tick(Duration::from_secs(11));
+            }
+            let pair = match existing_state {
+                FsmStateKind::OpenSent => CollisionPair::OpenSent(
+                    existing.conn.clone(),
+                    incoming.conn.clone(),
+                ),
+                FsmStateKind::OpenConfirm => {
+                    lock!(runner.connection_registry)
+                        .upgrade_to_full(existing.clone());
+                    CollisionPair::OpenConfirm(
+                        existing.clone(),
+                        incoming.conn.clone(),
+                    )
+                }
+                _ => unreachable!(),
+            };
+            let (failed, failed_remote, survivor, survivor_remote) =
+                match failing_peer {
+                    CollisionPeer::Existing => (
+                        &existing.conn,
+                        &existing_remote,
+                        &incoming.conn,
+                        &incoming_remote,
+                    ),
+                    CollisionPeer::Incoming => (
+                        &incoming.conn,
+                        &incoming_remote,
+                        &existing.conn,
+                        &existing_remote,
+                    ),
+                };
+            let survivor_timers = connection_timer_state(survivor);
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                failed,
+                failed_remote,
+                bad_bgp_id_parse_error(),
+            );
+            // A wrongly ignored error must fail, not hang the test.
+            runner
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::ManualStop))
+                .unwrap();
+            let state = runner.fsm_connection_collision(&rx, pair);
+
+            assert_connection_state(&state, expected_survivor_state, survivor);
+            assert_eq!(runner.connection_count(), 1);
+            assert_connection_stopped(&runner, failed);
+            assert_connection_live(&runner, survivor);
+            assert_eq!(connection_timer_state(survivor), survivor_timers);
+            {
+                let registry = lock!(runner.connection_registry);
+                match (&state, registry.primary().unwrap()) {
+                    (FsmState::OpenSent(_), ConnectionKind::Partial(_)) => {}
+                    (
+                        FsmState::OpenConfirm(pc),
+                        ConnectionKind::Full(registered),
+                    ) => {
+                        assert_peer_details(pc, &existing);
+                        assert_peer_details(registered, &existing);
+                    }
+                    _ => panic!(
+                        "survivor registry maturity does not match FSM state"
+                    ),
+                }
+            }
+            assert_channel_messages(
+                &failed_remote.rx,
+                &[NotificationMessage::bad_bgp_id().into()],
+            );
+            assert_channel_messages(&survivor_remote.rx, &[]);
+            assert_notification_accounting(&runner, 1, 0, 1);
+            assert_eq!(lock!(runner.message_history).sent.len(), 1);
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                FsmEvent::Admin(AdminEvent::ManualStop)
+            ));
+
+            // The survivor must still be able to finish its handshake.
+            let (message, expected_next) = match expected_survivor_state {
+                FsmStateKind::OpenSent => (
+                    OpenMessage::new4(64513, 30, 200, false).into(),
+                    FsmStateKind::OpenConfirm,
+                ),
+                FsmStateKind::OpenConfirm => {
+                    (Message::KeepAlive, FsmStateKind::SessionSetup)
+                }
+                _ => unreachable!(),
+            };
+            runner
+                .event_tx
+                .send(FsmEvent::Connection(ConnectionEvent::Message {
+                    conn_id: *survivor.id(),
+                    msg: message,
+                }))
+                .unwrap();
+            let next = match state {
+                FsmState::OpenSent(conn) => runner.fsm_open_sent(&rx, conn),
+                FsmState::OpenConfirm(pc) => runner.fsm_open_confirm(&rx, pc),
+                _ => unreachable!(),
+            };
+            assert_connection_state(&next, expected_next, survivor);
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_existing_open_sent_keeps_incoming() {
+        check_collision_parse_error(
+            FsmStateKind::OpenSent,
+            CollisionPeer::Existing,
+            FsmStateKind::OpenSent,
+        );
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_incoming_keeps_existing_open_sent() {
+        check_collision_parse_error(
+            FsmStateKind::OpenSent,
+            CollisionPeer::Incoming,
+            FsmStateKind::OpenSent,
+        );
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_existing_open_confirm_keeps_incoming() {
+        check_collision_parse_error(
+            FsmStateKind::OpenConfirm,
+            CollisionPeer::Existing,
+            FsmStateKind::OpenSent,
+        );
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_incoming_keeps_existing_open_confirm() {
+        check_collision_parse_error(
+            FsmStateKind::OpenConfirm,
+            CollisionPeer::Incoming,
+            FsmStateKind::OpenConfirm,
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    enum NonActivePeer {
+        Registered,
+        Stale,
+    }
+
+    fn check_non_active_parse_error(peer: NonActivePeer) {
+        for state in [
+            FsmStateKind::OpenSent,
+            FsmStateKind::OpenConfirm,
+            FsmStateKind::Established,
+        ] {
+            with_test_session("non_active_parse_error", |runner, rx| {
+                let (mut active, active_remote) = test_peer_connection(
+                    &runner,
+                    ConnectionDirection::Outbound,
+                );
+                active.ipv6_unicast = AfiSafiState::Negotiated;
+                let (other, other_remote) =
+                    test_peer_connection(&runner, ConnectionDirection::Inbound);
+                lock!(runner.connection_registry)
+                    .register(if state == FsmStateKind::OpenSent {
+                        ConnectionKind::Partial(active.conn.clone())
+                    } else {
+                        ConnectionKind::Full(active.clone())
+                    })
+                    .unwrap();
+                if let NonActivePeer::Registered = peer {
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Partial(other.conn.clone()))
+                        .unwrap();
+                }
+                for pc in [&active, &other] {
+                    conn_timer!(pc.conn, hold).restart();
+                    conn_timer!(pc.conn, keepalive).restart();
+                }
+                let prefix4: Ipv4Net = "203.0.113.0/24".parse().unwrap();
+                let prefix6: Ipv6Net = "2001:db8:42::/48".parse().unwrap();
+                let prefixes = [IpNet::V4(prefix4), IpNet::V6(prefix6)];
+                if state == FsmStateKind::Established {
+                    runner
+                        .router
+                        .add_fanout4(runner.peer_id(), runner.event_tx.clone());
+                    runner
+                        .router
+                        .add_fanout6(runner.peer_id(), runner.event_tx.clone());
+                    runner.update_rib(
+                        &UpdateMessage {
+                            nlri: vec![prefix4],
+                            path_attributes: vec![
+                                PathAttributeValue::NextHop(
+                                    "192.0.2.2".parse().unwrap(),
+                                )
+                                .into(),
+                                PathAttributeValue::MpReachNlri(
+                                    MpReachNlri::ipv6_unicast(
+                                        BgpNexthop::Ipv6Single(
+                                            "2001:db8::2".parse().unwrap(),
+                                        ),
+                                        vec![prefix6],
+                                    ),
+                                )
+                                .into(),
+                            ],
+                            ..Default::default()
+                        },
+                        &active,
+                    );
+                    for prefix in &prefixes {
+                        let paths = runner.db.get_prefix_paths(prefix);
+                        assert_eq!(paths.len(), 1);
+                        assert_eq!(
+                            paths[0].bgp.as_ref().unwrap().peer,
+                            runner.peer_id()
+                        );
+                    }
+                }
+                let paths_before =
+                    prefixes.map(|p| runner.db.get_prefix_paths(&p));
+                inject_channel_parse_error(
+                    &runner,
+                    &rx,
+                    &other.conn,
+                    &other_remote,
+                    bad_bgp_id_parse_error(),
+                );
+                let next = match state {
+                    FsmStateKind::OpenSent => {
+                        // A valid OPEN lets the handler return after ignoring the error.
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::Message {
+                                    conn_id: *active.conn.id(),
+                                    msg: OpenMessage::new4(
+                                        64513, 30, 200, false,
+                                    )
+                                    .into(),
+                                },
+                            ))
+                            .unwrap();
+                        let next =
+                            runner.fsm_open_sent(&rx, active.conn.clone());
+                        assert_channel_messages(
+                            &active_remote.rx,
+                            &[Message::KeepAlive],
+                        );
+                        assert_connection_state(
+                            &next,
+                            FsmStateKind::OpenConfirm,
+                            &active.conn,
+                        );
+                        next
+                    }
+                    FsmStateKind::OpenConfirm => {
+                        runner.fsm_open_confirm(&rx, active.clone())
+                    }
+                    FsmStateKind::Established => {
+                        runner.fsm_established(&rx, active.clone())
+                    }
+                    _ => unreachable!(),
+                };
+                if state != FsmStateKind::OpenSent {
+                    assert_connection_state(&next, state, &active.conn);
+                }
+                assert_channel_messages(&active_remote.rx, &[]);
+                assert_eq!(runner.connection_count(), 1);
+                assert_connection_live(&runner, &active.conn);
+                assert!(runner.get_conn(other.conn.id()).is_none());
+                match peer {
+                    NonActivePeer::Registered => {
+                        assert_connection_stopped(&runner, &other.conn);
+                        assert_channel_messages(
+                            &other_remote.rx,
+                            &[NotificationMessage::fsm_error().into()],
+                        );
+                        assert_notification_accounting(&runner, 1, 0, 1);
+                    }
+                    NonActivePeer::Stale => {
+                        // The FSM must not touch a connection it doesn't own.
+                        assert!(conn_timer!(other.conn, hold).enabled());
+                        assert!(conn_timer!(other.conn, keepalive).enabled());
+                        assert_channel_messages(&other_remote.rx, &[]);
+                        assert_notification_accounting(&runner, 0, 0, 0);
+                    }
+                }
+                if state == FsmStateKind::Established {
+                    for (prefix, before) in prefixes.iter().zip(paths_before) {
+                        assert_eq!(runner.db.get_prefix_paths(prefix), before);
+                    }
+                    read_lock!(runner.fanout4).send_all(vec![prefix4], vec![]);
+                    read_lock!(runner.fanout6).send_all(vec![prefix6], vec![]);
+                    assert!(matches!(
+                        rx.try_recv().unwrap(),
+                        FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V4(
+                            RouteUpdate4::Announce(nlri)
+                        ))) if nlri == vec![prefix4]
+                    ));
+                    assert!(matches!(
+                        rx.try_recv().unwrap(),
+                        FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V6(
+                            RouteUpdate6::Announce(nlri)
+                        ))) if nlri == vec![prefix6]
+                    ));
+                    assert!(rx.try_recv().is_err());
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn test_channel_parse_error_from_stale_connection_is_ignored() {
+        check_non_active_parse_error(NonActivePeer::Stale);
+    }
+
+    #[test]
+    fn test_channel_parse_error_closes_registered_non_active_connection() {
+        check_non_active_parse_error(NonActivePeer::Registered);
+    }
+
+    // Both delivery outcomes must remove only this peer's routes and fanout.
+    fn with_established_parse_error(
+        test: impl FnOnce(
+            &Arc<SessionRunner<BgpConnectionChannel>>,
+            &Receiver<FsmEvent<BgpConnectionChannel>>,
+            &PeerConnection<BgpConnectionChannel>,
+            crate::connection::channel::Endpoint<MessageResult>,
+        ),
+    ) {
+        with_test_session("parse_error_routes", |runner, rx| {
+            let (mut pc, remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            pc.ipv6_unicast = AfiSafiState::Negotiated;
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Full(pc.clone()))
+                .unwrap();
+            conn_timer!(pc.conn, hold).restart();
+            conn_timer!(pc.conn, keepalive).restart();
+            session_timer!(runner, connect_retry).restart();
+            runner
+                .router
+                .add_fanout4(runner.peer_id(), runner.event_tx.clone());
+            runner
+                .router
+                .add_fanout6(runner.peer_id(), runner.event_tx.clone());
+            let prefix4: Ipv4Net = "203.0.113.0/24".parse().unwrap();
+            let prefix6: Ipv6Net = "2001:db8:42::/48".parse().unwrap();
+            runner.update_rib(
+                &UpdateMessage {
+                    nlri: vec![prefix4],
+                    path_attributes: vec![
+                        PathAttributeValue::NextHop(
+                            "192.0.2.2".parse().unwrap(),
+                        )
+                        .into(),
+                        PathAttributeValue::MpReachNlri(
+                            MpReachNlri::ipv6_unicast(
+                                BgpNexthop::Ipv6Single(
+                                    "2001:db8::2".parse().unwrap(),
+                                ),
+                                vec![prefix6],
+                            ),
+                        )
+                        .into(),
+                    ],
+                    ..Default::default()
+                },
+                &pc,
+            );
+            let prefixes = [IpNet::V4(prefix4), IpNet::V6(prefix6)];
+            let other_peer = PeerId::Ip("192.0.2.9".parse().unwrap());
+            for prefix in &prefixes {
+                let paths = runner.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1);
+                assert_eq!(
+                    paths[0].bgp.as_ref().unwrap().peer,
+                    runner.peer_id()
+                );
+                let mut other_path = paths[0].clone();
+                other_path.bgp.as_mut().unwrap().peer = other_peer.clone();
+                runner.db.add_bgp_prefixes(&[*prefix], other_path);
+                assert_eq!(runner.db.get_prefix_paths(prefix).len(), 2);
+            }
+            assert!(!read_lock!(runner.fanout4).is_empty());
+            assert!(!read_lock!(runner.fanout6).is_empty());
+            let (other_tx, other_rx) = std::sync::mpsc::channel();
+            runner
+                .router
+                .add_fanout4(other_peer.clone(), other_tx.clone());
+            runner.router.add_fanout6(other_peer.clone(), other_tx);
+
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                &pc.conn,
+                &remote,
+                fatal_update_parse_error(),
+            );
+            test(&runner, &rx, &pc, remote);
+
+            assert_eq!(runner.connection_count(), 0);
+            assert_connection_stopped(&runner, &pc.conn);
+            assert!(!session_timer!(runner, connect_retry).enabled());
+            read_lock!(runner.fanout4).send_all(vec![prefix4], vec![]);
+            read_lock!(runner.fanout6).send_all(vec![prefix6], vec![]);
+            assert!(matches!(
+                other_rx.try_recv().unwrap(),
+                FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V4(
+                    RouteUpdate4::Announce(nlri)
+                ))) if nlri == vec![prefix4]
+            ));
+            assert!(matches!(
+                other_rx.try_recv().unwrap(),
+                FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V6(
+                    RouteUpdate6::Announce(nlri)
+                ))) if nlri == vec![prefix6]
+            ));
+            assert!(other_rx.try_recv().is_err());
+            assert!(rx.try_recv().is_err(), "failed peer remains in fanout");
+            for prefix in &prefixes {
+                let paths = runner.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0].bgp.as_ref().unwrap().peer, other_peer);
+            }
+            let history = lock!(runner.message_history);
+            assert_eq!(history.sent.len(), 1);
+            assert_eq!(
+                history.sent[0].message,
+                NotificationMessage::new(
+                    ErrorCode::Update,
+                    ErrorSubcode::Update(
+                        UpdateErrorSubcode::MalformedAttributeList
+                    ),
+                )
+                .into()
+            );
+            assert_eq!(history.sent[0].connection_id, *pc.conn.id());
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_cleans_established_routes() {
+        with_established_parse_error(|runner, rx, pc, remote| {
+            assert_eq!(
+                runner.fsm_established(rx, pc.clone()).kind(),
+                FsmStateKind::Idle
+            );
+            assert_channel_messages(
+                &remote.rx,
+                &[NotificationMessage::new(
+                    ErrorCode::Update,
+                    ErrorSubcode::Update(
+                        UpdateErrorSubcode::MalformedAttributeList,
+                    ),
+                )
+                .into()],
+            );
+            assert_notification_accounting(runner, 1, 0, 1);
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_cleans_routes_when_notification_fails() {
+        with_established_parse_error(|runner, rx, pc, remote| {
+            drop(remote.rx);
+            assert_eq!(
+                runner.fsm_established(rx, pc.clone()).kind(),
+                FsmStateKind::Idle
+            );
+            assert_notification_accounting(runner, 0, 1, 1);
+        });
+    }
+
+    fn check_late_events_after_parse_error(
+        replace_connection: impl FnOnce(
+            &Arc<SessionRunner<BgpConnectionChannel>>,
+            &Receiver<FsmEvent<BgpConnectionChannel>>,
+            &PeerConnection<BgpConnectionChannel>,
+            &PeerConnection<BgpConnectionChannel>,
+        ),
+    ) {
+        with_test_session("parse_error_late_events", |runner, rx| {
+            let (old, old_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            let (live, live_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Full(old.clone()))
+                .unwrap();
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                &old.conn,
+                &old_remote,
+                bad_bgp_id_parse_error(),
+            );
+            // Queue old-connection events behind the fatal error.
+            for event in [
+                ConnectionEvent::HoldTimerExpires(*old.conn.id()),
+                ConnectionEvent::KeepaliveTimerExpires(*old.conn.id()),
+                ConnectionEvent::TcpConnectionFails(*old.conn.id()),
+                ConnectionEvent::ParseError {
+                    conn_id: *old.conn.id(),
+                    error: bad_bgp_id_parse_error(),
+                },
+            ] {
+                runner.event_tx.send(FsmEvent::Connection(event)).unwrap();
+            }
+            replace_connection(&runner, &rx, &old, &live);
+            conn_timer!(live.conn, hold).restart();
+            conn_timer!(live.conn, keepalive).restart();
+            runner
+                .event_tx
+                .send(FsmEvent::Connection(ConnectionEvent::Message {
+                    conn_id: *live.conn.id(),
+                    msg: OpenMessage::new4(64513, 30, 200, false).into(),
+                }))
+                .unwrap();
+            let state = runner.fsm_open_sent(&rx, live.conn.clone());
+            assert_connection_state(
+                &state,
+                FsmStateKind::OpenConfirm,
+                &live.conn,
+            );
+            assert_eq!(runner.connection_count(), 1);
+            assert!(runner.get_conn(old.conn.id()).is_none());
+            assert_connection_live(&runner, &live.conn);
+            assert_channel_messages(&live_remote.rx, &[Message::KeepAlive]);
+            assert_channel_messages(
+                &old_remote.rx,
+                &[NotificationMessage::bad_bgp_id().into()],
+            );
+            assert_notification_accounting(&runner, 1, 0, 1);
+            assert_eq!(
+                runner
+                    .counters
+                    .hold_timer_expirations
+                    .load(Ordering::Relaxed),
+                0
+            );
+            assert!(rx.try_recv().is_err());
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_late_events_preserve_collision_survivor() {
+        check_late_events_after_parse_error(|runner, rx, old, live| {
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Partial(live.conn.clone()))
+                .unwrap();
+            let state = runner.fsm_connection_collision(
+                rx,
+                CollisionPair::OpenConfirm(old.clone(), live.conn.clone()),
+            );
+            assert_connection_state(&state, FsmStateKind::OpenSent, &live.conn);
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_late_events_preserve_replacement() {
+        check_late_events_after_parse_error(|runner, rx, old, live| {
+            assert_eq!(
+                runner.fsm_established(rx, old.clone()).kind(),
+                FsmStateKind::Idle
+            );
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Partial(live.conn.clone()))
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_is_ignored_before_open_sent() {
+        for state in [
+            FsmStateKind::Idle,
+            FsmStateKind::Connect,
+            FsmStateKind::Active,
+        ] {
+            with_test_session("early_parse_error", |runner, rx| {
+                lock!(runner.session).passive_tcp_establishment = true;
+                session_timer!(runner, idle_hold).interval =
+                    Duration::from_secs(60);
+                *lock!(runner.state) = state;
+                let (old, old_remote) = test_peer_connection(
+                    &runner,
+                    ConnectionDirection::Outbound,
+                );
+                let (incoming, incoming_remote) =
+                    test_peer_connection(&runner, ConnectionDirection::Inbound);
+                let incoming_id = *incoming.conn.id();
+                inject_channel_parse_error(
+                    &runner,
+                    &rx,
+                    &old.conn,
+                    &old_remote,
+                    bad_bgp_id_parse_error(),
+                );
+                runner
+                    .event_tx
+                    .send(if state == FsmStateKind::Idle {
+                        FsmEvent::Admin(AdminEvent::ManualStart)
+                    } else {
+                        FsmEvent::Session(SessionEvent::TcpConnectionAcked(
+                            Arc::try_unwrap(incoming.conn).ok().unwrap(),
+                        ))
+                    })
+                    .unwrap();
+                let next = match state {
+                    FsmStateKind::Idle => runner.fsm_idle(&rx),
+                    FsmStateKind::Connect => runner.fsm_connect(&rx),
+                    FsmStateKind::Active => runner.fsm_active(&rx),
+                    _ => unreachable!(),
+                };
+                if state == FsmStateKind::Idle {
+                    assert_eq!(next.kind(), FsmStateKind::Active);
+                    assert_eq!(runner.connection_count(), 0);
+                    assert!(incoming_remote.rx.try_recv().is_err());
+                } else {
+                    let FsmState::OpenSent(conn) = next else {
+                        panic!("{state:?}: incoming connection rejected");
+                    };
+                    assert_eq!(*conn.id(), incoming_id);
+                    assert_eq!(runner.connection_count(), 1);
+                    let replies = incoming_remote
+                        .rx
+                        .try_iter()
+                        .map(Result::unwrap)
+                        .collect::<Vec<_>>();
+                    assert!(matches!(replies.as_slice(), [Message::Open(_)]));
+                }
+                assert!(old_remote.rx.try_recv().is_err());
+                assert_notification_accounting(&runner, 0, 0, 0);
+                assert!(rx.try_recv().is_err());
+                let history = lock!(runner.fsm_event_history);
+                assert_eq!(history.all.len(), 2);
+                let parse = history.all.back().unwrap();
+                assert_eq!(parse.event_type, "parse error");
+                assert_eq!(parse.current_state, state);
+                assert_eq!(parse.connection_id, Some(*old.conn.id()));
+            });
+        }
+    }
+
+    fn with_running_fsm(
+        runner: &Arc<SessionRunner<BgpConnectionChannel>>,
+        rx: Receiver<FsmEvent<BgpConnectionChannel>>,
+        test: impl FnOnce(),
+    ) {
+        let driver = FsmDriver::new(runner.clone(), rx);
+        let worker = std::thread::spawn(move || driver.fsm_start());
+        // Always stop the driver, including on assertion or timeout failures.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
+        runner.shutdown();
+        runner
+            .event_tx
+            .send(FsmEvent::Admin(AdminEvent::ManualStart))
+            .unwrap();
+        worker.join().unwrap();
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    #[track_caller]
+    fn recv_channel_message(rx: &Receiver<MessageResult>) -> Message {
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()
+    }
+
+    #[test]
+    fn test_channel_parse_error_run_loop_history() {
+        with_test_session("parse_error_run_loop", |runner, rx| {
+            lock!(runner.session).passive_tcp_establishment = true;
+            let (pc, remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            let (replacement, replacement_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            let conn_id = *pc.conn.id();
+            let replacement_id = *replacement.conn.id();
+            runner
+                .event_tx
+                .send(FsmEvent::Session(SessionEvent::TcpConnectionAcked(
+                    Arc::try_unwrap(pc.conn).ok().unwrap(),
+                )))
+                .unwrap();
+            with_running_fsm(&runner, rx, || {
+                assert!(matches!(
+                    recv_channel_message(&remote.rx),
+                    Message::Open(_)
+                ));
+                remote
+                    .tx
+                    .send(Ok(OpenMessage::new4(64513, 30, 200, false).into()))
+                    .unwrap();
+                assert_eq!(
+                    recv_channel_message(&remote.rx),
+                    Message::KeepAlive
+                );
+
+                // A second OPEN has an invalid ID, unlike the accepted OPEN.
+                let invalid_open = OpenMessage::new4(64513, 30, 0, false);
+                let wire = crate::messages::open_message_to_wire(&invalid_open)
+                    .unwrap();
+                assert!(matches!(
+                    crate::messages::open_message_from_wire(&wire),
+                    Err(Error::BadBgpIdentifier(id))
+                        if id == Ipv4Addr::from(invalid_open.id)
+                ));
+                remote.tx.send(Err(bad_bgp_id_parse_error())).unwrap();
+                assert_eq!(
+                    recv_channel_message(&remote.rx),
+                    NotificationMessage::bad_bgp_id().into()
+                );
+
+                // An accepted replacement proves the parse-error transition completed.
+                runner
+                    .event_tx
+                    .send(FsmEvent::Session(SessionEvent::TcpConnectionAcked(
+                        Arc::try_unwrap(replacement.conn).ok().unwrap(),
+                    )))
+                    .unwrap();
+                assert!(matches!(
+                    recv_channel_message(&replacement_remote.rx),
+                    Message::Open(_)
+                ));
+                assert_channel_messages(&remote.rx, &[]);
+                let history = lock!(runner.fsm_event_history).clone();
+                let errors = history
+                    .all
+                    .iter()
+                    .filter(|event| event.event_type == "parse error")
+                    .collect::<Vec<_>>();
+                assert_eq!(errors.len(), 1);
+                assert_eq!(
+                    errors[0].event_category,
+                    FsmEventCategory::Connection
+                );
+                assert_eq!(errors[0].connection_id, Some(conn_id));
+                assert_eq!(errors[0].current_state, FsmStateKind::OpenConfirm);
+                assert_eq!(errors[0].previous_state, None);
+                let details = errors[0].details.as_ref().unwrap();
+                assert!(details.starts_with("OPEN: "));
+                assert!(details.ends_with("bad bgp identifier: 0.0.0.0"));
+                let transitions = history
+                    .major
+                    .iter()
+                    .rev()
+                    // Check every transition before the replacement's acceptance.
+                    .take_while(|event| {
+                        event.connection_id != Some(replacement_id)
+                    })
+                    .filter(|event| {
+                        event.event_category
+                            == FsmEventCategory::StateTransition
+                    })
+                    .map(|event| {
+                        (event.previous_state.unwrap(), event.current_state)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    transitions,
+                    vec![
+                        (FsmStateKind::Idle, FsmStateKind::Active),
+                        (FsmStateKind::Active, FsmStateKind::OpenSent),
+                        (FsmStateKind::OpenSent, FsmStateKind::OpenConfirm),
+                        (FsmStateKind::OpenConfirm, FsmStateKind::Idle),
+                        (FsmStateKind::Idle, FsmStateKind::Active),
+                    ]
+                );
+                assert_eq!(
+                    runner.counters.transitions_to_idle.load(Ordering::Relaxed),
+                    1
+                );
+                assert_eq!(
+                    runner
+                        .counters
+                        .transitions_to_open_confirm
+                        .load(Ordering::Relaxed),
+                    1
+                );
+            });
         });
     }
 
