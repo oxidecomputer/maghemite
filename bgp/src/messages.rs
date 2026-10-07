@@ -2685,6 +2685,34 @@ mod tests {
     }
 
     #[test]
+    fn notification_constructors_use_expected_codes() {
+        for (notification, wire) in [
+            (NotificationMessage::bad_peer_as(), [2, 2]),
+            (NotificationMessage::bad_bgp_id(), [2, 3]),
+            (NotificationMessage::unacceptable_hold_time(), [2, 6]),
+            (NotificationMessage::hold_timer_expired(), [4, 0]),
+            (NotificationMessage::fsm_error(), [5, 0]),
+            (NotificationMessage::administrative_shutdown(), [6, 2]),
+            (NotificationMessage::administrative_reset(), [6, 4]),
+            (NotificationMessage::connection_rejected(), [6, 5]),
+            (NotificationMessage::collision_resolution(), [6, 7]),
+            (
+                NotificationMessage::new(
+                    ErrorCode::Header,
+                    ErrorSubcode::Header(HeaderErrorSubcode::BadMessageType),
+                ),
+                [1, 3],
+            ),
+        ] {
+            assert!(notification.data.is_empty());
+            assert_eq!(
+                notification_message_to_wire(&notification).unwrap(),
+                wire
+            );
+        }
+    }
+
+    #[test]
     fn notification_round_trip() {
         // Note: NotificationMessage::to_wire() does not yet serialize the data field
         // (see TODO in the impl), so we test with empty data.

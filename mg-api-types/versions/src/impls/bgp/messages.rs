@@ -1278,6 +1278,85 @@ impl Display for OpenMessage {
     }
 }
 
+impl NotificationMessage {
+    /// Create a notification with no additional error data.
+    pub fn new(error_code: ErrorCode, error_subcode: ErrorSubcode) -> Self {
+        Self {
+            error_code,
+            error_subcode,
+            data: Vec::new(),
+        }
+    }
+
+    /// Reject an OPEN with an unexpected peer AS.
+    pub fn bad_peer_as() -> Self {
+        Self::new(
+            ErrorCode::Open,
+            ErrorSubcode::Open(OpenErrorSubcode::BadPeerAS),
+        )
+    }
+
+    /// Reject an OPEN with an unacceptable BGP identifier.
+    pub fn bad_bgp_id() -> Self {
+        Self::new(
+            ErrorCode::Open,
+            ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
+        )
+    }
+
+    /// Reject an OPEN with an unacceptable hold time.
+    pub fn unacceptable_hold_time() -> Self {
+        Self::new(
+            ErrorCode::Open,
+            ErrorSubcode::Open(OpenErrorSubcode::UnacceptableHoldTime),
+        )
+    }
+
+    /// Report expiration of the hold timer.
+    pub fn hold_timer_expired() -> Self {
+        Self::new(ErrorCode::HoldTimerExpired, ErrorSubcode::HoldTime(0))
+    }
+
+    /// Report an unspecified FSM error.
+    pub fn fsm_error() -> Self {
+        Self::new(ErrorCode::Fsm, ErrorSubcode::Fsm(0))
+    }
+
+    /// Stop a session at an administrator's request.
+    pub fn administrative_shutdown() -> Self {
+        Self::new(
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeShutdown),
+        )
+    }
+
+    /// Reset a session at an administrator's request.
+    pub fn administrative_reset() -> Self {
+        Self::new(
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeReset),
+        )
+    }
+
+    /// Reject a connection.
+    pub fn connection_rejected() -> Self {
+        Self::new(
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionRejected),
+        )
+    }
+
+    /// Close the losing connection after collision resolution.
+    pub fn collision_resolution() -> Self {
+        Self::new(
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(
+                CeaseErrorSubcode::ConnectionCollisionResolution,
+            ),
+        )
+    }
+}
+
 impl Display for NotificationMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(

@@ -14,11 +14,10 @@ use crate::{
     fanout::{Egress, Fanout4, Fanout6},
     log::{collision_log, session_log, session_log_lite},
     messages::{
-        AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
-        Community, ErrorCode, ErrorSubcode, Message, MessageKind,
-        MessageParseError, MpReachNlri, MpUnreachNlri, NotificationMessage,
-        OpenErrorSubcode, OpenMessage, PathAttributeValue, RouteRefreshMessage,
-        Safi, UpdateMessage,
+        AddPathElement, Afi, BgpNexthop, Capability, Community, ErrorCode,
+        ErrorSubcode, Message, MessageKind, MessageParseError, MpReachNlri,
+        MpUnreachNlri, NotificationMessage, OpenMessage, PathAttributeValue,
+        RouteRefreshMessage, Safi, UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
@@ -7389,11 +7388,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.counters
                 .open_handle_failures
                 .fetch_add(1, Ordering::Relaxed);
-            self.send_notification(
-                conn,
-                ErrorCode::Open,
-                ErrorSubcode::Open(OpenErrorSubcode::BadPeerAS),
-            );
+            self.send_notification(conn, NotificationMessage::bad_peer_as());
             self.unregister_conn(conn.id());
             return Err(Error::UnexpectedAsn(ExpectationMismatch {
                 expected: expected_remote_asn,
@@ -7414,11 +7409,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.counters
                 .open_handle_failures
                 .fetch_add(1, Ordering::Relaxed);
-            self.send_notification(
-                conn,
-                ErrorCode::Open,
-                ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
-            );
+            self.send_bad_bgp_id_notification(conn);
             self.unregister_conn(conn.id());
             return Err(Error::BadBgpIdentifier(Ipv4Addr::from(om.id)));
         }
@@ -7485,8 +7476,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .fetch_add(1, Ordering::Relaxed);
             self.send_notification(
                 conn,
-                ErrorCode::Open,
-                ErrorSubcode::Open(OpenErrorSubcode::UnacceptableHoldTime),
+                NotificationMessage::unacceptable_hold_time(),
             );
             self.unregister_conn(conn.id());
             return Err(Error::HoldTimeTooSmall);
@@ -7582,67 +7572,43 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn send_hold_timer_expired_notification(&self, conn: &Cnx) {
-        self.send_notification(
-            conn,
-            ErrorCode::HoldTimerExpired,
-            ErrorSubcode::HoldTime(0),
-        )
+        self.send_notification(conn, NotificationMessage::hold_timer_expired())
     }
 
     fn send_collision_resolution_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(
-                CeaseErrorSubcode::ConnectionCollisionResolution,
-            ),
+            NotificationMessage::collision_resolution(),
         )
     }
 
     fn send_rejected_notification(&self, conn: &Cnx) {
-        self.send_notification(
-            conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionRejected),
-        )
+        self.send_notification(conn, NotificationMessage::connection_rejected())
     }
 
     fn send_fsm_notification(&self, conn: &Cnx) {
-        self.send_notification(
-            conn,
-            ErrorCode::Fsm,
-            // Unspecific, FSM doesn't have a defined subcode
-            ErrorSubcode::Fsm(0),
-        )
+        self.send_notification(conn, NotificationMessage::fsm_error())
+    }
+
+    fn send_bad_bgp_id_notification(&self, conn: &Cnx) {
+        self.send_notification(conn, NotificationMessage::bad_bgp_id())
     }
 
     fn send_admin_shutdown_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeShutdown),
+            NotificationMessage::administrative_shutdown(),
         )
     }
 
     fn send_admin_reset_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeReset),
+            NotificationMessage::administrative_reset(),
         )
     }
 
-    fn send_notification(
-        &self,
-        conn: &Cnx,
-        error_code: ErrorCode,
-        error_subcode: ErrorSubcode,
-    ) {
-        let notification = NotificationMessage {
-            error_code,
-            error_subcode,
-            data: Vec::new(),
-        };
+    fn send_notification(&self, conn: &Cnx, notification: NotificationMessage) {
         let _ = self.send_message(conn, Message::Notification(notification));
     }
 
@@ -8266,10 +8232,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 error_subcode,
             } => {
                 if let Some(c1) = conn1 {
-                    self.send_notification(c1, error_code, error_subcode);
+                    self.send_notification(
+                        c1,
+                        NotificationMessage::new(error_code, error_subcode),
+                    );
                 }
                 if let Some(c2) = conn2 {
-                    self.send_notification(c2, error_code, error_subcode);
+                    self.send_notification(
+                        c2,
+                        NotificationMessage::new(error_code, error_subcode),
+                    );
                 }
                 self.counters
                     .connection_retries
@@ -9437,6 +9409,7 @@ mod tests {
     use crate::connection::channel::{
         BgpConnectionChannel, MessageResult, channel,
     };
+    use crate::messages::{CeaseErrorSubcode, OpenErrorSubcode};
     use crate::test::{
         RouteExchange, create_test_session, create_test_session_info,
     };
