@@ -14,9 +14,8 @@ use crate::{
     messages::{
         ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, HeaderParseError,
         MAX_MESSAGE_SIZE, Message, MessageParseError, MessageType,
-        NotificationMessage, NotificationParseError,
-        NotificationParseErrorReason, OpenErrorSubcode, OpenParseError,
-        OpenParseErrorReason, RouteRefreshParseError,
+        NotificationParseError, NotificationParseErrorReason, OpenErrorSubcode,
+        OpenParseError, OpenParseErrorReason, RouteRefreshParseError,
         RouteRefreshParseErrorReason, notification_message_from_wire,
         open_message_from_wire, route_refresh_message_from_wire,
     },
@@ -749,8 +748,7 @@ impl BgpConnectionTcp {
                                         "connection_id" => conn_id.short(),
                                         "error" => format!("{parse_err}")
                                     );
-                                    // Notify FSM about fatal
-                                    // (notification-worthy) parse errors.
+                                    // Notify FSM about fatal parse errors.
                                     if let Err(e) = event_tx.send(FsmEvent::Connection(
                                         ConnectionEvent::ParseError { conn_id, error: parse_err },
                                     )) {
@@ -925,24 +923,6 @@ impl BgpConnectionTcp {
                         ),
                     };
 
-                    // Still send NOTIFICATION for OPEN errors (required by RFC)
-                    if let Err(notify_err) = Self::send_notification(
-                        stream,
-                        log,
-                        direction,
-                        ErrorCode::Open,
-                        ErrorSubcode::Open(subcode),
-                        Vec::new(),
-                    ) {
-                        connection_log_lite!(log,
-                            error,
-                            "error sending notification: {notify_err}";
-                            "direction" => direction,
-                            "connection" => format!("{stream:?}"),
-                            "error" => format!("{notify_err}")
-                        );
-                    }
-
                     return Err(RecvError::Parse(MessageParseError::Open(
                         OpenParseError {
                             error_code: ErrorCode::Open,
@@ -1089,26 +1069,6 @@ impl BgpConnectionTcp {
         );
         stream.write_all(&buf)?;
         Ok(())
-    }
-
-    fn send_notification(
-        stream: &mut TcpStream,
-        log: &Logger,
-        direction: ConnectionDirection,
-        error_code: ErrorCode,
-        error_subcode: ErrorSubcode,
-        data: Vec<u8>,
-    ) -> Result<(), Error> {
-        Self::send_msg(
-            stream,
-            log,
-            direction,
-            Message::Notification(NotificationMessage {
-                error_code,
-                error_subcode,
-                data,
-            }),
-        )
     }
 
     #[cfg(target_os = "illumos")]

@@ -9618,6 +9618,19 @@ mod tests {
 
     #[test]
     #[serial_test::parallel]
+    fn test_tcp_open_parse_errors_notify_once() {
+        // Generic truncation, unsupported version, and bad BGP identifier.
+        for (body, codes) in [
+            (vec![], [2, 0]),
+            (vec![3, 0, 1, 0, 30, 192, 0, 2, 1, 0], [2, 1]),
+            (vec![4, 0, 1, 0, 30, 0, 0, 0, 0, 0], [2, 3]),
+        ] {
+            check_tcp_parse_error(&tcp_test_packet(1, &body), Some(codes));
+        }
+    }
+
+    #[test]
+    #[serial_test::parallel]
     fn test_tcp_header_parse_errors_notify_once() {
         let mut bad_marker = tcp_test_packet(4, &[]);
         bad_marker[7] = 0;
@@ -9632,6 +9645,20 @@ mod tests {
             let mut packet = tcp_test_packet(4, &[]);
             packet[16..18].copy_from_slice(&length.to_be_bytes());
             check_tcp_parse_error(&packet, Some([1, 2]));
+        }
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_other_body_parse_errors_notify_once() {
+        for (typ, body, codes) in [
+            (2, vec![], [1, 2]),           // UPDATE too short
+            (2, vec![0, 5, 0, 0], [3, 1]), // invalid withdrawn length
+            (3, vec![1], [1, 3]),          // NOTIFICATION too short
+            (4, vec![0], [1, 2]),          // KEEPALIVE must have no body
+            (5, vec![0, 1, 0], [1, 3]),    // ROUTE_REFRESH too short
+        ] {
+            check_tcp_parse_error(&tcp_test_packet(typ, &body), Some(codes));
         }
     }
 
