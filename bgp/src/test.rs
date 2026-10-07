@@ -5,9 +5,11 @@
 use crate::{
     BGP_PORT,
     config::{PeerConfig, RouterConfig},
-    connection::{BgpConnection, BgpListener},
-    connection_channel::{BgpConnectionChannel, BgpListenerChannel},
-    connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
+    connection::{
+        BgpConnection, BgpListener,
+        channel::{BgpConnectionChannel, BgpListenerChannel},
+        tcp::{BgpConnectionTcp, BgpListenerTcp},
+    },
     dispatcher::Dispatcher,
     router::{EnsureSessionResult, Router, SessionMap},
     session::{

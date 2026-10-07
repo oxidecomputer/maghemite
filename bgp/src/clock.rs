@@ -613,7 +613,7 @@ impl From<&SessionInfo> for TimerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection_channel::BgpConnectionChannel;
+    use crate::connection::channel::BgpConnectionChannel;
     use std::sync::mpsc::{TryRecvError, channel};
 
     #[test]

@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 /// This file contains code for testing purposes only. Note that it's only
-/// included in `lib.rs` with a `#[cfg(test)]` guard. The purpose of the
+/// included in `connection/mod.rs` with a `#[cfg(test)]` guard. The purpose of the
 /// code in this file is to implement BgpListener and BgpConnection such that
 /// the core functionality of the BGP upper-half in `session.rs` may be tested
 /// rapidly using a simulated network.

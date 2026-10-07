@@ -6,7 +6,7 @@ use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::dlog;
-use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
+use bgp::connection::tcp::{BgpConnectionTcp, BgpListenerTcp};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use mg_api_types::bfd::BfdPeerConfig;

@@ -1761,7 +1761,7 @@ const _: () = {
 ///
 /// In most cases there is a 1:1 relationship of SessionRunner:BgpConnection,
 /// which represents the underlying message passing connection between the local
-/// system and the configured peer IP address (defined in `connection.rs`).
+/// system and the configured peer IP address (defined in `connection/mod.rs`).
 /// However, it is entirely possible (and normal) to encounter a transitory
 /// condition where more than one connection is open (called a Connection
 /// Collision), for example when both BGP peers are non-passive and open a new
@@ -8417,7 +8417,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ///
     /// Structural errors (duplicate attributes, malformed wire format,
     /// unsupported AFI/SAFI values) are caught during parsing in
-    /// `update_message_from_wire()` and `connection_tcp.rs`, which triggers
+    /// `update_message_from_wire()` and `connection/tcp.rs`, which triggers
     /// appropriate error handling per RFC 7606. This function only handles
     /// the negotiation state check.
     fn check_afi_safi_negotiation(
@@ -9434,7 +9434,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 mod tests {
     use super::*;
     use crate::config::RouterConfig;
-    use crate::connection_channel::{BgpConnectionChannel, channel};
+    use crate::connection::channel::{BgpConnectionChannel, channel};
     use crate::test::{
         RouteExchange, create_test_session, create_test_session_info,
     };
@@ -9476,7 +9476,7 @@ mod tests {
         direction: ConnectionDirection,
     ) -> (
         PeerConnection<BgpConnectionChannel>,
-        crate::connection_channel::Endpoint<Message>,
+        crate::connection::channel::Endpoint<Message>,
     ) {
         let (endpoint, remote) = channel();
         let conn =
