@@ -559,6 +559,25 @@ impl Drop for BgpConnectionTcp {
 }
 
 impl BgpConnectionTcp {
+    #[cfg(test)]
+    pub(crate) fn test_with_conn(
+        stream: TcpStream,
+        event_tx: Sender<FsmEvent<Self>>,
+        config: &SessionInfo,
+    ) -> Self {
+        Self::with_conn(
+            stream.local_addr().unwrap(),
+            stream.peer_addr().unwrap(),
+            stream,
+            IO_TIMEOUT,
+            event_tx,
+            Logger::root(slog::Discard, slog::o!()),
+            ConnectionDirection::Inbound,
+            config,
+        )
+        .unwrap()
+    }
+
     /// Create a new BgpConnectionTcp with an established TcpStream.
     /// This is a private constructor used by BgpConnectorTcp and BgpListenerTcp.
     /// The receive loop is not started until start_recv_loop() is called.
@@ -793,10 +812,22 @@ impl BgpConnectionTcp {
             if i < Header::WIRE_SIZE {
                 continue;
             }
-            match Header::from_wire(&buf) {
-                Ok(h) => return Ok(h),
-                Err(_) => continue,
-            };
+            // A complete but invalid header is fatal, not a reason to read
+            // again (the remaining buffer is empty). Let the FSM notify/reset.
+            return Header::from_wire(&buf).map_err(|error| {
+                let subcode = match error {
+                    mg_api_types::bgp::error::WireError::MessageType(_) => {
+                        HeaderErrorSubcode::BadMessageType
+                    }
+                    // With a full header, only marker/type validation can fail.
+                    _ => HeaderErrorSubcode::ConnectionNotSynchronized,
+                };
+                RecvError::Parse(MessageParseError::Header(HeaderParseError {
+                    error_code: ErrorCode::Header,
+                    error_subcode: ErrorSubcode::Header(subcode),
+                    length: u16::from_be_bytes([buf[16], buf[17]]),
+                }))
+            });
         }
     }
 

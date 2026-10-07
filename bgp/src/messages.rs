@@ -2471,7 +2471,7 @@ impl Display for HeaderParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}/{}: bad message length {}",
+            "{}/{} (message length {})",
             self.error_code, self.error_subcode, self.length
         )
     }

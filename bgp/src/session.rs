@@ -9503,6 +9503,148 @@ mod tests {
         )
     }
 
+    // Exercise the real TCP parser and FSM together: counters alone cannot
+    // detect a second NOTIFICATION written directly by the receive loop.
+    fn check_tcp_parse_error(packet: &[u8], expected: Option<[u8; 2]>) {
+        use crate::connection::tcp::BgpConnectionTcp;
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener, TcpStream};
+
+        for state in ["OpenSent", "OpenConfirm", "Established"] {
+            let log = Logger::root(slog::Discard, slog::o!());
+            let db =
+                rdb::test::get_test_db("tcp_parse_error", log.clone()).unwrap();
+            let router = Arc::new(Router::new(
+                RouterConfig {
+                    asn: Asn::FourOctet(64512),
+                    id: 100,
+                },
+                log,
+                db.db().clone(),
+                Arc::new(Mutex::new(crate::router::SessionMap::new())),
+            ));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut peer =
+                TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (stream, peer_addr) = listener.accept().unwrap();
+            let config = create_test_session_info(
+                RouteExchange::Ipv4 { nexthop: None },
+                stream.local_addr().unwrap(),
+                peer_addr,
+                false,
+            );
+            let (runner, rx) =
+                create_test_session(&router, "peer", peer_addr, config.clone());
+            let conn = Arc::new(BgpConnectionTcp::test_with_conn(
+                stream,
+                runner.event_tx.clone(),
+                &config,
+            ));
+            let pc = PeerConnection {
+                conn: conn.clone(),
+                id: 200,
+                asn: 64513,
+                caps: BTreeSet::new(),
+                ipv4_unicast: AfiSafiState::Negotiated,
+                ipv6_unicast: AfiSafiState::Unconfigured,
+            };
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Full(pc.clone()))
+                .unwrap();
+            conn.start_recv_loop().unwrap();
+            peer.write_all(packet).unwrap();
+            peer.shutdown(Shutdown::Write).unwrap();
+
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            match (&event, expected) {
+                (
+                    FsmEvent::Connection(ConnectionEvent::ParseError {
+                        conn_id,
+                        ..
+                    }),
+                    Some(_),
+                )
+                | (
+                    FsmEvent::Connection(ConnectionEvent::TcpConnectionFails(
+                        conn_id,
+                    )),
+                    None,
+                ) => assert_eq!(conn_id, conn.id()),
+                _ => panic!("{state}: unexpected event {}", event.title()),
+            }
+            runner.event_tx.send(event).unwrap();
+            let next = match state {
+                "OpenSent" => runner.fsm_open_sent(&rx, conn.clone()),
+                "OpenConfirm" => runner.fsm_open_confirm(&rx, pc.clone()),
+                "Established" => runner.fsm_established(&rx, pc.clone()),
+                _ => unreachable!(),
+            };
+            assert_eq!(next.kind(), FsmStateKind::Idle, "{state}");
+            assert_eq!(runner.connection_count(), 0, "{state}");
+            assert_eq!(
+                runner.counters.notifications_sent.load(Ordering::Relaxed),
+                u64::from(expected.is_some()),
+                "{state}",
+            );
+            drop(pc);
+            drop(conn);
+            let mut replies = Vec::new();
+            // Closing a socket with unread trailing input may reset TCP.
+            if let Err(e) = peer.read_to_end(&mut replies) {
+                assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            let mut expected_wire = Vec::new();
+            if let Some(codes) = expected {
+                expected_wire.extend_from_slice(&[0xff; 16]);
+                expected_wire.extend_from_slice(&[0, 21, 3]);
+                expected_wire.extend_from_slice(&codes);
+            }
+            assert_eq!(
+                replies, expected_wire,
+                "{state}: notification count/codes"
+            );
+            assert!(rx.try_recv().is_err(), "{state}: extra receive event");
+        }
+    }
+
+    fn tcp_test_packet(typ: u8, body: &[u8]) -> Vec<u8> {
+        let mut packet = vec![0xff; 16];
+        packet.extend_from_slice(&(19 + body.len() as u16).to_be_bytes());
+        packet.push(typ);
+        packet.extend_from_slice(body);
+        packet
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_header_parse_errors_notify_once() {
+        let mut bad_marker = tcp_test_packet(4, &[]);
+        bad_marker[7] = 0;
+        for (mut packet, codes) in
+            [(bad_marker, [1, 1]), (tcp_test_packet(255, &[]), [1, 3])]
+        {
+            // A valid following message must not hide an invalid header.
+            packet.extend_from_slice(&tcp_test_packet(4, &[]));
+            check_tcp_parse_error(&packet, Some(codes));
+        }
+        for length in [18u16, 4097] {
+            let mut packet = tcp_test_packet(4, &[]);
+            packet[16..18].copy_from_slice(&length.to_be_bytes());
+            check_tcp_parse_error(&packet, Some([1, 2]));
+        }
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_eof_does_not_notify() {
+        check_tcp_parse_error(&[], None);
+        check_tcp_parse_error(&[0xff; 18], None);
+        let mut packet = tcp_test_packet(1, &[0; 10]);
+        packet.pop();
+        check_tcp_parse_error(&packet, None);
+    }
+
     #[test]
     fn test_shutdown_cleanup_and_transition_accounting() {
         for previous in [
