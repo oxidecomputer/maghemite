@@ -9434,7 +9434,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 mod tests {
     use super::*;
     use crate::config::RouterConfig;
-    use crate::connection::channel::{BgpConnectionChannel, channel};
+    use crate::connection::channel::{
+        BgpConnectionChannel, MessageResult, channel,
+    };
     use crate::test::{
         RouteExchange, create_test_session, create_test_session_info,
     };
@@ -9476,7 +9478,7 @@ mod tests {
         direction: ConnectionDirection,
     ) -> (
         PeerConnection<BgpConnectionChannel>,
-        crate::connection::channel::Endpoint<Message>,
+        crate::connection::channel::Endpoint<MessageResult>,
     ) {
         let (endpoint, remote) = channel();
         let conn =
@@ -9670,6 +9672,57 @@ mod tests {
         let mut packet = tcp_test_packet(1, &[0; 10]);
         packet.pop();
         check_tcp_parse_error(&packet, None);
+    }
+
+    #[test]
+    fn test_channel_parse_error_notifies_once() {
+        use crate::messages::{OpenParseError, OpenParseErrorReason};
+
+        with_test_session("channel_parse_error", |runner, rx| {
+            let (pc, remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Partial(pc.conn.clone()))
+                .unwrap();
+            remote
+                .tx
+                .send(Err(MessageParseError::Open(OpenParseError {
+                    error_code: ErrorCode::Open,
+                    error_subcode: ErrorSubcode::Open(
+                        OpenErrorSubcode::BadBgpIdentifier,
+                    ),
+                    reason: OpenParseErrorReason::BadBgpIdentifier {
+                        id: Ipv4Addr::UNSPECIFIED,
+                    },
+                })))
+                .unwrap();
+            pc.conn.start_recv_loop().unwrap();
+            // Bound the wait so missing propagation fails rather than hanging
+            // inside OpenSent's event loop.
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(matches!(
+                event,
+                FsmEvent::Connection(ConnectionEvent::ParseError { .. })
+            ));
+            runner.event_tx.send(event).unwrap();
+            let state = runner.fsm_open_sent(&rx, pc.conn.clone());
+            assert_eq!(state.kind(), FsmStateKind::Idle);
+            assert_eq!(runner.connection_count(), 0);
+            assert_eq!(
+                remote.rx.try_iter().map(Result::unwrap).collect::<Vec<_>>(),
+                vec![Message::Notification(NotificationMessage {
+                    error_code: ErrorCode::Open,
+                    error_subcode: ErrorSubcode::Open(
+                        OpenErrorSubcode::BadBgpIdentifier,
+                    ),
+                    data: vec![],
+                })],
+            );
+            assert_eq!(
+                runner.counters.notifications_sent.load(Ordering::Relaxed),
+                1,
+            );
+        });
     }
 
     #[test]
@@ -9911,7 +9964,7 @@ mod tests {
                         remote
                             .rx
                             .try_iter()
-                            .all(|msg| matches!(msg, Message::KeepAlive))
+                            .all(|msg| matches!(msg, Ok(Message::KeepAlive)))
                     );
                 });
             }
@@ -10094,7 +10147,14 @@ mod tests {
             );
 
             if let Some(remote) = &remote {
-                assert_eq!(remote.rx.try_iter().collect::<Vec<_>>(), expected);
+                assert_eq!(
+                    remote
+                        .rx
+                        .try_iter()
+                        .map(Result::unwrap)
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
             }
             assert_eq!(conn_timer!(conn, keepalive).enabled(), connected);
             expected_history.extend(expected.iter().cloned());
@@ -10469,7 +10529,11 @@ mod tests {
                     ),
                     None => runner.fsm_open_sent(&rx, existing.clone()),
                 };
-                let replies = target_peer.rx.try_iter().collect::<Vec<_>>();
+                let replies = target_peer
+                    .rx
+                    .try_iter()
+                    .map(Result::unwrap)
+                    .collect::<Vec<_>>();
                 if let Some((error_code, error_subcode)) = notification {
                     assert_eq!(
                         replies,
@@ -10721,12 +10785,20 @@ mod tests {
             "{case}",
         );
         assert_eq!(
-            winning_peer.rx.try_iter().collect::<Vec<_>>(),
+            winning_peer
+                .rx
+                .try_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>(),
             replies,
             "{case}: winner's messages",
         );
         assert_eq!(
-            rejected_peer.rx.try_iter().collect::<Vec<_>>(),
+            rejected_peer
+                .rx
+                .try_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>(),
             vec![Message::Notification(NotificationMessage {
                 error_code: expected_notification.0,
                 error_subcode: expected_notification.1,
