@@ -182,12 +182,14 @@ impl Display for CollisionResolutionCriteria {
     }
 }
 
-/// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
-/// The procedure initially follows
-/// [RFC 4271 §6.8](https://datatracker.ietf.org/doc/html/rfc4271#section-6.8)
-/// and falls back to
-/// [RFC 6286 §2.3](https://datatracker.ietf.org/doc/html/rfc6286#section-2.3)
-/// if both peers have the same BGP-ID.
+/// Result of collision resolution indicating which connection won per
+/// [RFC 4271 §6.8].
+///
+/// The procedure initially follows [RFC 4271 §6.8] and falls back to
+/// [RFC 6286 §2.3] if both peers have the same BGP-ID.
+///
+/// [RFC 4271 §6.8]: https://datatracker.ietf.org/doc/html/rfc4271#section-6.8
+/// [RFC 6286 §2.3]: https://datatracker.ietf.org/doc/html/rfc6286#section-2.3
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollisionResolution {
     /// The "existing" connection wins
@@ -262,8 +264,8 @@ impl Display for CollisionResolution {
 /// * `exist_direction` - direction of the existing connection ({In,Out}bound)
 /// * `local_bgp_id`  - Our BGP Identifier
 /// * `remote_bgp_id` - Peer's BGP Identifier
-/// * `local_bgp_asn`  - Our ASN
-/// * `remote_bgp_asn` - Peer's ASN
+/// * `local_asn`  - Our ASN
+/// * `remote_asn` - Peer's ASN
 ///
 /// # Returns
 /// `CollisionResolution` indicating whether exist or new connection wins, and
@@ -4362,7 +4364,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "unexpected {} received (conn_id: {}), fsm transition to idle",
                         msg.title(),
                         conn_id.short();
-                        "message" => "notification",
+                        "message" => msg.title(),
                         "message_contents" => format!("{msg}")
                     );
                     self.bump_msg_counter(msg.kind(), true);
@@ -6918,7 +6920,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "colliding connection failed to handle open message ({e}), retaining established connection";
                                         "error" => e.to_string()
                                     );
-                                    self.bump_msg_counter(msg_kind, true);
+                                    self.bump_msg_counter(msg_kind, false);
                                     // handle_open already unregistered the
                                     // colliding connection.
                                     return FsmState::Established(pc);
@@ -9420,6 +9422,27 @@ mod tests {
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
+    // Reset exits every receive loop, including Idle. Queue it after the events
+    // that should make the handler return, and require it to remain unconsumed:
+    // the sentinel must not be what satisfies the test's state assertions.
+    // This catches exhausted input, not deadlocks.
+    fn with_fsm_sentinel<Cnx: BgpConnection, T>(
+        runner: &SessionRunner<Cnx>,
+        rx: &Receiver<FsmEvent<Cnx>>,
+        test: impl FnOnce() -> T,
+    ) -> T {
+        runner
+            .event_tx
+            .send(FsmEvent::Admin(AdminEvent::Reset))
+            .unwrap();
+        let result = test();
+        assert!(
+            matches!(rx.try_recv(), Ok(FsmEvent::Admin(AdminEvent::Reset))),
+            "FSM must return after its expected events, leaving the reset sentinel queued"
+        );
+        result
+    }
+
     fn with_test_session(
         name: &str,
         test: impl FnOnce(
@@ -9553,12 +9576,12 @@ mod tests {
                 _ => panic!("{state}: unexpected event {}", event.title()),
             }
             runner.event_tx.send(event).unwrap();
-            let next = match state {
+            let next = with_fsm_sentinel(&runner, &rx, || match state {
                 "OpenSent" => runner.fsm_open_sent(&rx, conn.clone()),
                 "OpenConfirm" => runner.fsm_open_confirm(&rx, pc.clone()),
                 "Established" => runner.fsm_established(&rx, pc.clone()),
                 _ => unreachable!(),
-            };
+            });
             assert_eq!(next.kind(), FsmStateKind::Idle, "{state}");
             assert_eq!(runner.connection_count(), 0, "{state}");
             assert_eq!(
@@ -9809,7 +9832,9 @@ mod tests {
                 &remote,
                 bad_bgp_id_parse_error(),
             );
-            let state = runner.fsm_open_sent(&rx, pc.conn.clone());
+            let state = with_fsm_sentinel(&runner, &rx, || {
+                runner.fsm_open_sent(&rx, pc.conn.clone())
+            });
             assert_eq!(state.kind(), FsmStateKind::Idle);
             assert_eq!(runner.connection_count(), 0);
             assert_eq!(
@@ -9990,11 +10015,11 @@ mod tests {
                     msg: message,
                 }))
                 .unwrap();
-            let next = match state {
+            let next = with_fsm_sentinel(&runner, &rx, || match state {
                 FsmState::OpenSent(conn) => runner.fsm_open_sent(&rx, conn),
                 FsmState::OpenConfirm(pc) => runner.fsm_open_confirm(&rx, pc),
                 _ => unreachable!(),
-            };
+            });
             assert_connection_state(&next, expected_next, survivor);
         });
     }
@@ -10136,8 +10161,9 @@ mod tests {
                                 },
                             ))
                             .unwrap();
-                        let next =
-                            runner.fsm_open_sent(&rx, active.conn.clone());
+                        let next = with_fsm_sentinel(&runner, &rx, || {
+                            runner.fsm_open_sent(&rx, active.conn.clone())
+                        });
                         assert_channel_messages(
                             &active_remote.rx,
                             &[Message::KeepAlive],
@@ -10391,19 +10417,22 @@ mod tests {
                 &old_remote,
                 bad_bgp_id_parse_error(),
             );
-            // Queue old-connection events behind the fatal error.
-            for event in [
-                ConnectionEvent::HoldTimerExpires(*old.conn.id()),
-                ConnectionEvent::KeepaliveTimerExpires(*old.conn.id()),
-                ConnectionEvent::TcpConnectionFails(*old.conn.id()),
-                ConnectionEvent::ParseError {
-                    conn_id: *old.conn.id(),
-                    error: bad_bgp_id_parse_error(),
-                },
-            ] {
-                runner.event_tx.send(FsmEvent::Connection(event)).unwrap();
-            }
-            replace_connection(&runner, &rx, &old, &live);
+            with_fsm_sentinel(&runner, &rx, || {
+                // Put late events after the sentinel: the first handler must
+                // return on the fatal error, leaving these for its successor.
+                for event in [
+                    ConnectionEvent::HoldTimerExpires(*old.conn.id()),
+                    ConnectionEvent::KeepaliveTimerExpires(*old.conn.id()),
+                    ConnectionEvent::TcpConnectionFails(*old.conn.id()),
+                    ConnectionEvent::ParseError {
+                        conn_id: *old.conn.id(),
+                        error: bad_bgp_id_parse_error(),
+                    },
+                ] {
+                    runner.event_tx.send(FsmEvent::Connection(event)).unwrap();
+                }
+                replace_connection(&runner, &rx, &old, &live);
+            });
             conn_timer!(live.conn, hold).restart();
             conn_timer!(live.conn, keepalive).restart();
             runner
@@ -10413,7 +10442,9 @@ mod tests {
                     msg: OpenMessage::new4(64513, 30, 200, false).into(),
                 }))
                 .unwrap();
-            let state = runner.fsm_open_sent(&rx, live.conn.clone());
+            let state = with_fsm_sentinel(&runner, &rx, || {
+                runner.fsm_open_sent(&rx, live.conn.clone())
+            });
             assert_connection_state(
                 &state,
                 FsmStateKind::OpenConfirm,
@@ -10502,12 +10533,12 @@ mod tests {
                         ))
                     })
                     .unwrap();
-                let next = match state {
+                let next = with_fsm_sentinel(&runner, &rx, || match state {
                     FsmStateKind::Idle => runner.fsm_idle(&rx),
                     FsmStateKind::Connect => runner.fsm_connect(&rx),
                     FsmStateKind::Active => runner.fsm_active(&rx),
                     _ => unreachable!(),
-                };
+                });
                 if state == FsmStateKind::Idle {
                     assert_eq!(next.kind(), FsmStateKind::Active);
                     assert_eq!(runner.connection_count(), 0);
@@ -10816,7 +10847,10 @@ mod tests {
                             ))
                             .unwrap();
                         assert_eq!(
-                            runner.fsm_open_sent(&rx, pc.conn).kind(),
+                            with_fsm_sentinel(&runner, &rx, || {
+                                runner.fsm_open_sent(&rx, pc.conn)
+                            })
+                            .kind(),
                             FsmStateKind::OpenConfirm
                         );
                     }
@@ -10894,7 +10928,10 @@ mod tests {
                             ))
                             .unwrap();
                         assert_eq!(
-                            runner.fsm_open_sent(&rx, pc.conn.clone()).kind(),
+                            with_fsm_sentinel(&runner, &rx, || {
+                                runner.fsm_open_sent(&rx, pc.conn.clone())
+                            })
+                            .kind(),
                             FsmStateKind::OpenConfirm
                         );
                     }
@@ -10980,11 +11017,13 @@ mod tests {
                                     ),
                                 ))
                                 .unwrap();
-                            runner.connection_collision_open_confirm(
-                                &rx,
-                                pc.clone(),
-                                other.conn,
-                            )
+                            with_fsm_sentinel(&runner, &rx, || {
+                                runner.connection_collision_open_confirm(
+                                    &rx,
+                                    pc.clone(),
+                                    other.conn,
+                                )
+                            })
                         }
                         FsmStateKind::SessionSetup => {
                             runner.fsm_session_setup(pc.clone())
@@ -11453,36 +11492,38 @@ mod tests {
                     }))
                     .unwrap();
 
-                let state = match &incoming {
-                    Some((conn, _))
-                        if matches!(
-                            path,
-                            OpenSentPath::CollisionIncomingOpenConfirm
-                        ) =>
-                    {
-                        let pc = PeerConnection {
-                            conn: existing.clone(),
-                            id: 200,
-                            asn: 64513,
-                            caps: BTreeSet::new(),
-                            ipv4_unicast: AfiSafiState::Unconfigured,
-                            ipv6_unicast: AfiSafiState::Unconfigured,
-                        };
-                        lock!(runner.connection_registry)
-                            .upgrade_to_full(pc.clone());
-                        runner.connection_collision_open_confirm(
-                            &rx,
-                            pc,
-                            conn.clone(),
-                        )
-                    }
-                    Some((conn, _)) => runner.connection_collision_open_sent(
-                        &rx,
-                        existing.clone(),
-                        conn.clone(),
-                    ),
-                    None => runner.fsm_open_sent(&rx, existing.clone()),
-                };
+                let state =
+                    with_fsm_sentinel(&runner, &rx, || match &incoming {
+                        Some((conn, _))
+                            if matches!(
+                                path,
+                                OpenSentPath::CollisionIncomingOpenConfirm
+                            ) =>
+                        {
+                            let pc = PeerConnection {
+                                conn: existing.clone(),
+                                id: 200,
+                                asn: 64513,
+                                caps: BTreeSet::new(),
+                                ipv4_unicast: AfiSafiState::Unconfigured,
+                                ipv6_unicast: AfiSafiState::Unconfigured,
+                            };
+                            lock!(runner.connection_registry)
+                                .upgrade_to_full(pc.clone());
+                            runner.connection_collision_open_confirm(
+                                &rx,
+                                pc,
+                                conn.clone(),
+                            )
+                        }
+                        Some((conn, _)) => runner
+                            .connection_collision_open_sent(
+                                &rx,
+                                existing.clone(),
+                                conn.clone(),
+                            ),
+                        None => runner.fsm_open_sent(&rx, existing.clone()),
+                    });
                 let replies = target_peer
                     .rx
                     .try_iter()
@@ -11692,6 +11733,29 @@ mod tests {
 
         let state = runner.fsm_established(&rx, pc);
 
+        let rejected_open = expected_notification.0 == ErrorCode::Open;
+        assert_eq!(
+            runner.counters.opens_received.load(Ordering::Relaxed),
+            1,
+            "{case}: count the OPEN once",
+        );
+        assert_eq!(
+            runner.counters.open_handle_failures.load(Ordering::Relaxed),
+            u64::from(rejected_open),
+            "{case}: count OPEN validation failures separately",
+        );
+        assert_eq!(
+            runner
+                .counters
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            u64::from(
+                !rejected_open
+                    && matches!(expected_winner, ExpectedWinner::Existing)
+            ),
+            "{case}: invalid OPEN on a colliding connection is not unexpected",
+        );
+
         // Check the returned state and the surviving connection separately.
         let retained = match (expected_winner, state) {
             (ExpectedWinner::Existing, FsmState::Established(pc)) => pc,
@@ -11825,18 +11889,16 @@ mod tests {
 
     #[test]
     fn test_established_collision_rejects_matching_ibgp_id() {
-        for deterministic_collision_resolution in [false, true] {
-            check_established_open(
-                ConnectionDirection::Inbound,
-                OpenMessage::new4(64512, 3, 100, false),
-                deterministic_collision_resolution,
-                ExpectedWinner::Existing,
-                (
-                    ErrorCode::Open,
-                    ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
-                ),
-            );
-        }
+        check_established_open(
+            ConnectionDirection::Inbound,
+            OpenMessage::new4(64512, 3, 100, false),
+            false,
+            ExpectedWinner::Existing,
+            (
+                ErrorCode::Open,
+                ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
+            ),
+        );
     }
 
     #[test]
@@ -11884,7 +11946,7 @@ mod tests {
         for (lower_asn, higher_asn) in [
             // both ASNs are 2-octet
             (64512, 64513),
-            // both ASNs are 2-octet
+            // boundary between 2-octet and 4-octet ASNs
             (65535, 65536),
             // ASNs on either side of the 2-octet/4-octet split
             (64512, 4200000001),
