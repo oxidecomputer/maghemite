@@ -2471,7 +2471,7 @@ impl Display for HeaderParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}/{}: bad message length {}",
+            "{}/{} (message length {})",
             self.error_code, self.error_subcode, self.length
         )
     }
@@ -2685,6 +2685,34 @@ mod tests {
     }
 
     #[test]
+    fn notification_constructors_use_expected_codes() {
+        for (notification, wire) in [
+            (NotificationMessage::bad_peer_as(), [2, 2]),
+            (NotificationMessage::bad_bgp_id(), [2, 3]),
+            (NotificationMessage::unacceptable_hold_time(), [2, 6]),
+            (NotificationMessage::hold_timer_expired(), [4, 0]),
+            (NotificationMessage::fsm_error(), [5, 0]),
+            (NotificationMessage::administrative_shutdown(), [6, 2]),
+            (NotificationMessage::administrative_reset(), [6, 4]),
+            (NotificationMessage::connection_rejected(), [6, 5]),
+            (NotificationMessage::collision_resolution(), [6, 7]),
+            (
+                NotificationMessage::new(
+                    ErrorCode::Header,
+                    ErrorSubcode::Header(HeaderErrorSubcode::BadMessageType),
+                ),
+                [1, 3],
+            ),
+        ] {
+            assert!(notification.data.is_empty());
+            assert_eq!(
+                notification_message_to_wire(&notification).unwrap(),
+                wire
+            );
+        }
+    }
+
+    #[test]
     fn notification_round_trip() {
         // Note: NotificationMessage::to_wire() does not yet serialize the data field
         // (see TODO in the impl), so we test with empty data.
@@ -2709,23 +2737,19 @@ mod tests {
     #[test]
     fn route_refresh_round_trip() {
         // IPv4 Unicast route refresh
-        let rr0 = RouteRefreshMessage {
-            afi: Afi::Ipv4.into(),
-            safi: Safi::Unicast.into(),
-        };
+        let rr0 = RouteRefreshMessage::new(Afi::Ipv4);
 
         let buf = route_refresh_message_to_wire(&rr0);
+        assert_eq!(buf, [0, 1, 0, 1]);
         let rr1 = route_refresh_message_from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr0, rr1);
 
         // IPv6 Unicast route refresh
-        let rr2 = RouteRefreshMessage {
-            afi: Afi::Ipv6.into(),
-            safi: Safi::Unicast.into(),
-        };
+        let rr2 = RouteRefreshMessage::new(Afi::Ipv6);
 
         let buf = route_refresh_message_to_wire(&rr2);
+        assert_eq!(buf, [0, 2, 0, 1]);
         let rr3 = route_refresh_message_from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr2, rr3);
@@ -3070,36 +3094,32 @@ mod tests {
 
         // First error: MalformedNextHop from parsing
         let (reason, action) = &errs[0];
-        assert!(
-            matches!(action, AttributeAction::TreatAsWithdraw),
+        assert_eq!(
+            *action,
+            AttributeAction::TreatAsWithdraw,
             "Expected TreatAsWithdraw action"
         );
-        match reason {
-            UpdateParseErrorReason::MalformedNextHop { expected, got } => {
-                assert_eq!(*expected, 4, "Expected length should be 4");
-                assert_eq!(*got, 16, "Got length should be 16");
+        assert_eq!(
+            *reason,
+            UpdateParseErrorReason::MalformedNextHop {
+                expected: 4,
+                got: 16
             }
-            other => panic!(
-                "Expected MalformedNextHop {{ expected: 4, got: 16 }}, got {:?}",
-                other
-            ),
-        }
+        );
 
         // Second error: MissingAttribute for NEXT_HOP (malformed doesn't count)
         let (reason2, action2) = &errs[1];
-        assert!(
-            matches!(action2, AttributeAction::TreatAsWithdraw),
+        assert_eq!(
+            *action2,
+            AttributeAction::TreatAsWithdraw,
             "Expected TreatAsWithdraw action for missing attr"
         );
-        assert!(
-            matches!(
-                reason2,
-                UpdateParseErrorReason::MissingAttribute {
-                    type_code: PathAttributeTypeCode::NextHop
-                }
-            ),
-            "Second error should be MissingAttribute for NextHop, got {:?}",
-            reason2
+        assert_eq!(
+            *reason2,
+            UpdateParseErrorReason::MissingAttribute {
+                type_code: PathAttributeTypeCode::NextHop
+            },
+            "Second error should be MissingAttribute for NextHop"
         );
 
         // The NLRI should still be parsed (for processing as withdrawals)
@@ -4236,23 +4256,13 @@ mod tests {
 
             let (reason, action) = result.expect_err("should return error");
 
-            match reason {
+            assert_eq!(
+                reason,
                 UpdateParseErrorReason::InvalidAttributeFlags {
-                    type_code,
-                    flags,
-                } => {
-                    assert_eq!(
-                        type_code,
-                        u8::from(PathAttributeTypeCode::Origin),
-                        "should include the attribute type code"
-                    );
-                    assert_eq!(
-                        flags, bad_flags,
-                        "should include the invalid flags"
-                    );
+                    type_code: u8::from(PathAttributeTypeCode::Origin),
+                    flags: bad_flags,
                 }
-                _ => panic!("expected InvalidAttributeFlags error"),
-            }
+            );
 
             assert_eq!(
                 action,
@@ -4495,10 +4505,10 @@ mod tests {
             assert_eq!(errs.len(), 1, "Expected 1 error (AGGREGATOR)");
 
             let (reason, action) = &errs[0];
-            assert!(
-                matches!(action, AttributeAction::Discard),
-                "AGGREGATOR error should be Discard, got {:?}",
-                action
+            assert_eq!(
+                *action,
+                AttributeAction::Discard,
+                "AGGREGATOR error should be Discard"
             );
             // The actual error type may vary based on how parsing fails
             // (UnrecognizedMandatoryAttribute, AttributeLengthError, or AttributeParseError)
@@ -5473,18 +5483,12 @@ mod tests {
             let msg = result.unwrap();
 
             // Find ATOMIC_AGGREGATE attribute
-            let atomic_attr = msg
-                .path_attributes
+            msg.path_attributes
                 .iter()
                 .find(|attr| {
                     matches!(attr.value, PathAttributeValue::AtomicAggregate)
                 })
                 .expect("Should have ATOMIC_AGGREGATE attribute");
-
-            assert!(matches!(
-                atomic_attr.value,
-                PathAttributeValue::AtomicAggregate
-            ));
         }
 
         #[test]

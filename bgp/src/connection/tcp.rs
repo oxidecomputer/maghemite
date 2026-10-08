@@ -14,9 +14,8 @@ use crate::{
     messages::{
         ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, HeaderParseError,
         MAX_MESSAGE_SIZE, Message, MessageParseError, MessageType,
-        NotificationMessage, NotificationParseError,
-        NotificationParseErrorReason, OpenErrorSubcode, OpenParseError,
-        OpenParseErrorReason, RouteRefreshParseError,
+        NotificationParseError, NotificationParseErrorReason, OpenErrorSubcode,
+        OpenParseError, OpenParseErrorReason, RouteRefreshParseError,
         RouteRefreshParseErrorReason, notification_message_from_wire,
         open_message_from_wire, route_refresh_message_from_wire,
     },
@@ -559,6 +558,25 @@ impl Drop for BgpConnectionTcp {
 }
 
 impl BgpConnectionTcp {
+    #[cfg(test)]
+    pub(crate) fn test_with_conn(
+        stream: TcpStream,
+        event_tx: Sender<FsmEvent<Self>>,
+        config: &SessionInfo,
+    ) -> Self {
+        Self::with_conn(
+            stream.local_addr().unwrap(),
+            stream.peer_addr().unwrap(),
+            stream,
+            IO_TIMEOUT,
+            event_tx,
+            Logger::root(slog::Discard, slog::o!()),
+            ConnectionDirection::Inbound,
+            config,
+        )
+        .unwrap()
+    }
+
     /// Create a new BgpConnectionTcp with an established TcpStream.
     /// This is a private constructor used by BgpConnectorTcp and BgpListenerTcp.
     /// The receive loop is not started until start_recv_loop() is called.
@@ -730,8 +748,7 @@ impl BgpConnectionTcp {
                                         "connection_id" => conn_id.short(),
                                         "error" => format!("{parse_err}")
                                     );
-                                    // Notify FSM about fatal
-                                    // (notification-worthy) parse errors.
+                                    // Notify FSM about fatal parse errors.
                                     if let Err(e) = event_tx.send(FsmEvent::Connection(
                                         ConnectionEvent::ParseError { conn_id, error: parse_err },
                                     )) {
@@ -793,10 +810,22 @@ impl BgpConnectionTcp {
             if i < Header::WIRE_SIZE {
                 continue;
             }
-            match Header::from_wire(&buf) {
-                Ok(h) => return Ok(h),
-                Err(_) => continue,
-            };
+            // A complete but invalid header is fatal, not a reason to read
+            // again (the remaining buffer is empty). Let the FSM notify/reset.
+            return Header::from_wire(&buf).map_err(|error| {
+                let subcode = match error {
+                    mg_api_types::bgp::error::WireError::MessageType(_) => {
+                        HeaderErrorSubcode::BadMessageType
+                    }
+                    // With a full header, only marker/type validation can fail.
+                    _ => HeaderErrorSubcode::ConnectionNotSynchronized,
+                };
+                RecvError::Parse(MessageParseError::Header(HeaderParseError {
+                    error_code: ErrorCode::Header,
+                    error_subcode: ErrorSubcode::Header(subcode),
+                    length: u16::from_be_bytes([buf[16], buf[17]]),
+                }))
+            });
         }
     }
 
@@ -808,8 +837,14 @@ impl BgpConnectionTcp {
     ) -> Result<Message, RecvError> {
         let hdr = Self::recv_header(stream, dropped.clone())?;
 
-        // RFC 4271 §4.1: length must be between 19 and 4096
-        if usize::from(hdr.length) < Header::WIRE_SIZE {
+        // RFC 4271 §6.1: undersized OPEN and NOTIFICATION messages are
+        // header length errors, not errors in their message bodies.
+        let minimum_length = match hdr.typ {
+            MessageType::Open => Header::WIRE_SIZE + 10,
+            MessageType::Notification => Header::WIRE_SIZE + 2,
+            _ => Header::WIRE_SIZE,
+        };
+        if usize::from(hdr.length) < minimum_length {
             return Err(RecvError::Parse(MessageParseError::Header(
                 HeaderParseError {
                     error_code: ErrorCode::Header,
@@ -893,24 +928,6 @@ impl BgpConnectionTcp {
                             },
                         ),
                     };
-
-                    // Still send NOTIFICATION for OPEN errors (required by RFC)
-                    if let Err(notify_err) = Self::send_notification(
-                        stream,
-                        log,
-                        direction,
-                        ErrorCode::Open,
-                        ErrorSubcode::Open(subcode),
-                        Vec::new(),
-                    ) {
-                        connection_log_lite!(log,
-                            error,
-                            "error sending notification: {notify_err}";
-                            "direction" => direction,
-                            "connection" => format!("{stream:?}"),
-                            "error" => format!("{notify_err}")
-                        );
-                    }
 
                     return Err(RecvError::Parse(MessageParseError::Open(
                         OpenParseError {
@@ -1058,26 +1075,6 @@ impl BgpConnectionTcp {
         );
         stream.write_all(&buf)?;
         Ok(())
-    }
-
-    fn send_notification(
-        stream: &mut TcpStream,
-        log: &Logger,
-        direction: ConnectionDirection,
-        error_code: ErrorCode,
-        error_subcode: ErrorSubcode,
-        data: Vec<u8>,
-    ) -> Result<(), Error> {
-        Self::send_msg(
-            stream,
-            log,
-            direction,
-            Message::Notification(NotificationMessage {
-                error_code,
-                error_subcode,
-                data,
-            }),
-        )
     }
 
     #[cfg(target_os = "illumos")]

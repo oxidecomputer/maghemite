@@ -14,11 +14,10 @@ use crate::{
     fanout::{Egress, Fanout4, Fanout6},
     log::{collision_log, session_log, session_log_lite},
     messages::{
-        AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
-        Community, ErrorCode, ErrorSubcode, Message, MessageKind,
-        MessageParseError, MpReachNlri, MpUnreachNlri, NotificationMessage,
-        OpenErrorSubcode, OpenMessage, PathAttributeValue, RouteRefreshMessage,
-        Safi, UpdateMessage,
+        AddPathElement, Afi, BgpNexthop, Capability, Community, ErrorCode,
+        ErrorSubcode, Message, MessageKind, MessageParseError, MpReachNlri,
+        MpUnreachNlri, NotificationMessage, OpenMessage, PathAttributeValue,
+        RouteRefreshMessage, Safi, UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult, shape_outgoing_update},
     recv_event_loop, recv_event_return,
@@ -47,6 +46,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::{
+    cmp::Ordering::{Equal, Greater, Less},
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -164,11 +164,56 @@ pub enum CollisionConnectionKind<Cnx: BgpConnection> {
     Missing,
 }
 
+/// The comparison criteria by which a CollisionResolution was decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollisionResolutionCriteria {
+    /// CollisionResolution was decided by BGP-ID (RFC 4271 §6.8)
+    HighestBgpId,
+    /// CollisionResolution was decided by ASN (RFC 6286 §2.3)
+    HighestAsn,
+}
+
+impl Display for CollisionResolutionCriteria {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::HighestBgpId => "highest BGP-ID",
+            Self::HighestAsn => "highest ASN",
+        })
+    }
+}
+
+/// Result of collision resolution indicating which connection won per
+/// [RFC 4271 §6.8].
+///
+/// The procedure initially follows [RFC 4271 §6.8] and falls back to
+/// [RFC 6286 §2.3] if both peers have the same BGP-ID.
+///
+/// [RFC 4271 §6.8]: https://datatracker.ietf.org/doc/html/rfc4271#section-6.8
+/// [RFC 6286 §2.3]: https://datatracker.ietf.org/doc/html/rfc6286#section-2.3
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollisionResolution {
+    /// The "existing" connection wins
+    ExistWins(CollisionResolutionCriteria),
+    /// The "new" connection wins
+    NewWins(CollisionResolutionCriteria),
+}
+
+impl Display for CollisionResolution {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExistWins(criteria) => {
+                write!(f, "existing connection wins ({criteria})")
+            }
+            Self::NewWins(criteria) => {
+                write!(f, "new connection wins ({criteria})")
+            }
+        }
+    }
+}
+
 /// Pure function to determine which connection wins in a collision.
-///
+/// The first comparison is by BGP-ID per RFC 4271 Section 6.8:
 /// ```text
-///    RFC 4271 Section 6.8
-///
 ///    1) The BGP Identifier of the local system is compared to the BGP
 ///       Identifier of the remote system (as specified in the OPEN
 ///       message).  Comparing BGP Identifiers is done by converting them
@@ -198,30 +243,68 @@ pub enum CollisionConnectionKind<Cnx: BgpConnection> {
 ///       message with the Error Code Cease.
 /// ```
 ///
+/// If the BGP-IDs match (eBGP w/ AS-wide BGP-IDs), then a second comparison of
+/// ASNs is performed per RFC 6286 Section 2.3:
+/// ```text
+///       For a BGP speaker that supports the AS-wide Unique BGP Identifier,
+///       the procedures for connection collision resolution are extended as
+///       follows to deal with the case in which the two BGP speakers share the
+///       same BGP Identifier (thus, it is only applicable to an external
+///       peer):
+///
+///          If the BGP Identifiers of the peers involved in the connection
+///          collision are identical, then the connection initiated by the BGP
+///          speaker with the larger AS number is preserved.
+///
+///       This extension covers cases in which the 4-octet AS numbers are
+///       involved [RFC4893].
+/// ```
+///
 /// # Arguments
-/// * `exist_direction` - direction of the existing connection (Inbound or Outbound)
+/// * `exist_direction` - direction of the existing connection ({In,Out}bound)
 /// * `local_bgp_id`  - Our BGP Identifier
 /// * `remote_bgp_id` - Peer's BGP Identifier
+/// * `local_asn`  - Our ASN
+/// * `remote_asn` - Peer's ASN
 ///
 /// # Returns
-/// `CollisionResolution` indicating whether exist or new connection wins
+/// `CollisionResolution` indicating whether exist or new connection wins, and
+/// the criteria by which the decision was made (BGP-ID or ASN)
 pub fn collision_resolution(
     exist_direction: ConnectionDirection,
     local_bgp_id: u32,
     remote_bgp_id: u32,
+    local_asn: u32,
+    remote_asn: u32,
 ) -> CollisionResolution {
-    if local_bgp_id < remote_bgp_id {
-        // The peer has a higher RID, keep the connection they initiated
-        match exist_direction {
-            ConnectionDirection::Inbound => CollisionResolution::ExistWins,
-            ConnectionDirection::Outbound => CollisionResolution::NewWins,
-        }
+    let (local, remote, criteria) = if local_bgp_id != remote_bgp_id {
+        (
+            local_bgp_id,
+            remote_bgp_id,
+            CollisionResolutionCriteria::HighestBgpId,
+        )
     } else {
-        // The local system has a higher RID, keep the connection we initiated
-        match exist_direction {
-            ConnectionDirection::Inbound => CollisionResolution::NewWins,
-            ConnectionDirection::Outbound => CollisionResolution::ExistWins,
-        }
+        // RFC 6286: matching BGP-IDs fall back to ASN comparison.
+        (
+            local_asn,
+            remote_asn,
+            CollisionResolutionCriteria::HighestAsn,
+        )
+    };
+
+    // Preserve the connection initiated by the winning speaker.
+    let winning_direction = match local.cmp(&remote) {
+        Less => ConnectionDirection::Inbound,
+        Greater => ConnectionDirection::Outbound,
+        // Matching BGP-ID and ASN is rejected during OPEN validation, but we'll
+        // cover our bases and make a deliberate (albeit arbitrary) choice.
+        Equal => ConnectionDirection::Outbound,
+    };
+
+    if exist_direction == winning_direction {
+        CollisionResolution::ExistWins(criteria)
+    } else {
+        CollisionResolution::NewWins(criteria)
     }
 }
 
@@ -563,6 +646,9 @@ pub enum StopReason {
     Reset,
     Shutdown,
     FsmError,
+    /// OPEN rejection was already notified and cleaned up by handle_open().
+    /// Account for the retry and stop its timer without another notification.
+    UnacceptableOpen,
     HoldTimeExpired,
     ConnectionRejected,
     CollisionResolution,
@@ -574,6 +660,7 @@ pub enum StopReason {
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
     },
+    NotificationReceived,
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -1090,12 +1177,14 @@ impl FsmEventHistory {
 /// These serve as aggregate counters across all connections for the session
 #[derive(Default)]
 pub struct SessionCounters {
-    // FSM Counters
+    // Connection Counters
     pub connection_retries: AtomicU64, // total number of retries
     pub active_connections_accepted: AtomicU64,
     pub active_connections_declined: AtomicU64,
     pub passive_connections_accepted: AtomicU64,
     pub passive_connections_declined: AtomicU64,
+
+    // FSM Counters
     pub transitions_to_idle: AtomicU64,
     pub transitions_to_connect: AtomicU64,
     pub transitions_to_active: AtomicU64,
@@ -1104,6 +1193,8 @@ pub struct SessionCounters {
     pub transitions_to_connection_collision: AtomicU64,
     pub transitions_to_session_setup: AtomicU64,
     pub transitions_to_established: AtomicU64,
+
+    // FSM Timer Counters
     pub hold_timer_expirations: AtomicU64,
     pub idle_hold_timer_expirations: AtomicU64,
 
@@ -1130,7 +1221,9 @@ pub struct SessionCounters {
     pub unexpected_route_refresh_message: AtomicU64,
     pub unexpected_notification_message: AtomicU64,
     pub update_nexhop_missing: AtomicU64,
-    pub open_handle_failures: AtomicU64,
+    pub open_handle_failures: AtomicU64, // incremented for any rejected OPEN
+    // Incremented per MP_REACH_NLRI or MP_UNREACH_NLRI attribute filtered out
+    // because its address family was not negotiated, not per UPDATE.
     pub unnegotiated_address_family: AtomicU64,
 
     // Send failure counters
@@ -1669,7 +1762,7 @@ const _: () = {
 ///
 /// In most cases there is a 1:1 relationship of SessionRunner:BgpConnection,
 /// which represents the underlying message passing connection between the local
-/// system and the configured peer IP address (defined in `connection.rs`).
+/// system and the configured peer IP address (defined in `connection/mod.rs`).
 /// However, it is entirely possible (and normal) to encounter a transitory
 /// condition where more than one connection is open (called a Connection
 /// Collision), for example when both BGP peers are non-passive and open a new
@@ -1711,8 +1804,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Unnumbered neighbor manager for actively querying NDP state.
     pub unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
 
-    /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
-    /// included in message history.
+    /// A log of the last `MAX_MESSAGE_HISTORY` messages in each direction.
     pub message_history: Arc<Mutex<MessageHistory>>,
 
     /// Dual-buffer FSM event history (all events + major events only)
@@ -1809,15 +1901,6 @@ impl<Cnx: BgpConnection + 'static> FsmDriver<Cnx> {
     }
 }
 
-/// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CollisionResolution {
-    /// The "existing" connection wins
-    ExistWins,
-    /// The "new" connection wins
-    NewWins,
-}
-
 impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
     fn drop(&mut self) {
         let peer = self.peer_id();
@@ -1840,6 +1923,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         router: Arc<Router<Cnx>>,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> SessionRunner<Cnx> {
+        let runner = Self::new_without_clock_thread(
+            session,
+            event_tx,
+            neighbor,
+            router,
+            unnumbered_manager,
+        );
+        runner
+            .clock
+            .start(runner.event_tx.clone(), runner.log.clone());
+        runner
+    }
+
+    /// Construct a runner whose timers do not tick automatically. Unit tests
+    /// drive the FSM by injecting events, without background clock threads.
+    pub(crate) fn new_without_clock_thread(
+        session: Arc<Mutex<SessionInfo>>,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        neighbor: NeighborInfo,
+        router: Arc<Router<Cnx>>,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
             session: session.clone(),
@@ -1850,14 +1955,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             unnumbered_manager,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
             last_state_change: Mutex::new(Instant::now()),
-            clock: Arc::new(SessionClock::new(
+            clock: Arc::new(SessionClock::new_unstarted(
                 session_info.resolution,
                 session_info.connect_retry_time,
                 session_info.idle_hold_time,
                 session_info.connect_retry_jitter,
                 session_info.idle_hold_jitter,
-                event_tx.clone(),
-                router.log.clone(),
             )),
             log: router.log.clone(),
             shutdown_state: AtomicShutdownState::new(),
@@ -2107,6 +2210,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Remove a connection from the registry
+    ///
+    /// # Locking
+    /// Acquires the connection registry and the connection's timer mutexes.
+    /// Callers must not hold those locks.
     fn unregister_conn(&self, conn_id: &ConnectionId) {
         // Remove from connection registry
         if let Some(conn_kind) = lock!(self.connection_registry).remove(conn_id)
@@ -2363,78 +2470,50 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Established(pc) => self.fsm_established(event_rx, pc),
             };
 
-            // If we have made a state transition log that and update the
-            // appropriate state variables.
-            if current.kind() != previous {
-                session_log_lite!(
-                    self,
-                    info,
-                    "fsm transition {previous} -> {}",
-                    current.kind()
-                );
-
-                // Record state transition as a major event in FSM history
-                let transition_record = FsmEventRecord {
-                    timestamp: chrono::Utc::now(),
-                    event_category: FsmEventCategory::StateTransition,
-                    event_type: format!(
-                        "{:?} -> {:?}",
-                        previous,
-                        current.kind()
-                    ),
-                    current_state: current.kind(),
-                    previous_state: Some(previous),
-                    connection_id: None,
-                    details: Some("State transition".to_string()),
-                };
-                lock!(self.fsm_event_history).record_major(transition_record);
-
-                match current.kind() {
-                    FsmStateKind::Idle => {
-                        self.counters
-                            .transitions_to_idle
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::Connect => {
-                        self.counters
-                            .transitions_to_connect
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::Active => {
-                        self.counters
-                            .transitions_to_active
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::OpenSent => {
-                        self.counters
-                            .transitions_to_open_sent
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::OpenConfirm => {
-                        self.counters
-                            .transitions_to_open_confirm
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::ConnectionCollision => {
-                        self.counters
-                            .transitions_to_connection_collision
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::SessionSetup => {
-                        self.counters
-                            .transitions_to_session_setup
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    FsmStateKind::Established => {
-                        self.counters
-                            .transitions_to_established
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                *(lock!(self.state)) = current.kind();
-                *(lock!(self.last_state_change)) = Instant::now();
-            }
+            self.record_state_transition(previous, current.kind());
         }
+    }
+
+    fn record_state_transition(
+        &self,
+        previous: FsmStateKind,
+        next: FsmStateKind,
+    ) {
+        if previous == next {
+            return;
+        }
+        session_log_lite!(self, info, "fsm transition {previous} -> {next}");
+        let transition_record = FsmEventRecord {
+            timestamp: chrono::Utc::now(),
+            event_category: FsmEventCategory::StateTransition,
+            event_type: format!("{previous:?} -> {next:?}"),
+            current_state: next,
+            previous_state: Some(previous),
+            connection_id: None,
+            details: Some("State transition".to_string()),
+        };
+        lock!(self.fsm_event_history).record_major(transition_record);
+        let counter = match next {
+            FsmStateKind::Idle => &self.counters.transitions_to_idle,
+            FsmStateKind::Connect => &self.counters.transitions_to_connect,
+            FsmStateKind::Active => &self.counters.transitions_to_active,
+            FsmStateKind::OpenSent => &self.counters.transitions_to_open_sent,
+            FsmStateKind::OpenConfirm => {
+                &self.counters.transitions_to_open_confirm
+            }
+            FsmStateKind::ConnectionCollision => {
+                &self.counters.transitions_to_connection_collision
+            }
+            FsmStateKind::SessionSetup => {
+                &self.counters.transitions_to_session_setup
+            }
+            FsmStateKind::Established => {
+                &self.counters.transitions_to_established
+            }
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        *lock!(self.state) = next;
+        *lock!(self.last_state_change) = Instant::now();
     }
 
     fn initialize_capabilities(&self) {
@@ -2651,6 +2730,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             match self.get_conn(conn_id) {
                                 Some(conn) => {
                                     session_log_lite!(
@@ -2960,6 +3041,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // DelayOpen is added, we'll need to validate conn_id
                         // against the connection before processing it.
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
@@ -2972,20 +3055,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     "message_contents" => format!("{n}")
                                 );
                                 self.bump_msg_counter(msg.kind(), false);
-                            } else {
-                                session_log_lite!(
-                                    self,
-                                    warn,
-                                    "rx unexpected {title} message (conn_id: {}), fsm transition to idle",
-                                    conn_id.short();
-                                    "message" => msg.title(),
-                                    "message_contents" => format!("{msg}")
+                                self.stop(
+                                    None,
+                                    None,
+                                    StopReason::NotificationReceived,
                                 );
-                                self.bump_msg_counter(msg.kind(), true);
+                                return FsmState::Idle;
                             }
 
+                            session_log_lite!(
+                                self,
+                                warn,
+                                "rx unexpected {title} message (conn_id: {}), fsm transition to idle",
+                                conn_id.short();
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+                            self.bump_msg_counter(msg.kind(), true);
                             session_timer!(self, connect_retry).stop();
-
                             return FsmState::Idle;
                         }
 
@@ -3181,6 +3268,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // DelayOpen is added, we'll need to validate conn_id
                         // against the connection before processing it.
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
@@ -3592,6 +3681,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
                                 new.id().short()
                             );
+                            let declined = match new_direction {
+                                ConnectionDirection::Inbound => {
+                                    &self.counters.passive_connections_declined
+                                }
+                                ConnectionDirection::Outbound => {
+                                    &self.counters.active_connections_declined
+                                }
+                            };
+                            declined.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
 
@@ -3659,18 +3757,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
+
                             if !self.validate_active_connection(
                                 conn_id,
                                 &conn,
                                 msg.title(),
                             ) {
+                                self.bump_msg_counter(msg.kind(), true);
                                 continue;
                             }
 
                             // RFC 4271 FSM Event 19
                             if let Message::Open(om) = msg {
-                                lock!(self.message_history)
-                                    .receive(om.clone().into(), *conn_id);
                                 self.counters
                                     .opens_received
                                     .fetch_add(1, Ordering::Relaxed);
@@ -3757,9 +3857,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     continue;
                                 }
                             };
-                            self.counters
-                                .hold_timer_expirations
-                                .fetch_add(1, Ordering::Relaxed);
                             self.stop(
                                 Some(&conn),
                                 None,
@@ -3942,32 +4039,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          * - changes its state to Idle.
          */
         if let Err(e) = self.handle_open(&conn, &om) {
-            match e {
-                Error::PolicyCheckFailed => {
-                    session_log!(
-                        self,
-                        info,
-                        conn,
-                        "policy check failed";
-                        "error" => format!("{e}")
-                    );
-                }
-                e => {
-                    session_log!(
-                        self,
-                        warn,
-                        conn,
-                        "failed to handle open message, fsm transition to idle";
-                        "error" => format!("{e}")
-                    );
-                    self.counters
-                        .open_handle_failures
-                        .fetch_add(1, Ordering::Relaxed);
-                    // Notification sent by handle_open for all Errors except
-                    // PolicyCheckFailed, which is handled in other match arm.
-                    return FsmState::Idle;
-                }
-            }
+            session_log!(
+                self,
+                warn,
+                conn,
+                "failed to handle open message, fsm transition to idle";
+                "error" => format!("{e}")
+            );
+            self.stop(None, None, StopReason::UnacceptableOpen);
+            return FsmState::Idle;
         }
 
         /*
@@ -3993,7 +4073,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.send_keepalive(&conn);
 
         session_timer!(self, connect_retry).stop();
-        conn_timer!(conn, keepalive).restart();
         // hold_timer set in handle_open(), enable it here
         conn_timer!(conn, hold).enable();
 
@@ -4192,7 +4271,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "keepalive timer expired, generate keepalive"
                     );
                     self.send_keepalive(&pc.conn);
-                    conn_timer!(pc.conn, keepalive).restart();
                     FsmState::OpenConfirm(pc)
                 }
 
@@ -4221,6 +4299,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 ConnectionEvent::Message { msg, conn_id } => {
+                    lock!(self.message_history).receive(msg.clone(), conn_id);
+
                     if !self.validate_active_connection(
                         &conn_id,
                         &pc.conn,
@@ -4230,48 +4310,66 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::OpenConfirm(pc);
                     }
 
-                    lock!(self.message_history).receive(msg.clone(), conn_id);
-
                     // The peer has ACK'd our open message with a keepalive. Start the
                     // session timers and enter session setup.
                     if let Message::KeepAlive = msg {
                         conn_timer!(pc.conn, hold).restart();
                         conn_timer!(pc.conn, keepalive).restart();
                         self.bump_msg_counter(msg.kind(), false);
-                        FsmState::SessionSetup(pc)
-                    } else {
-                        /*
-                         * If the local system receives a TcpConnectionFails event (Event 18)
-                         * from the underlying TCP or a NOTIFICATION message (Event 25), the
-                         * local system:
-                         *
-                         *   - sets the ConnectRetryTimer to zero,
-                         *
-                         *   - releases all BGP resources,
-                         *
-                         *   - drops the TCP connection,
-                         *
-                         *   - increments the ConnectRetryCounter by 1,
-                         *
-                         *   - (optionally) performs peer oscillation damping if the
-                         *     DampPeerOscillations attribute is set to TRUE, and
-                         *
-                         *   - changes its state to Idle.
-                         */
+                        return FsmState::SessionSetup(pc);
+                    }
+
+                    /*
+                     * If the local system receives a TcpConnectionFails event (Event 18)
+                     * from the underlying TCP or a NOTIFICATION message (Event 25), the
+                     * local system:
+                     *
+                     *   - sets the ConnectRetryTimer to zero,
+                     *
+                     *   - releases all BGP resources,
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - increments the ConnectRetryCounter by 1,
+                     *
+                     *   - (optionally) performs peer oscillation damping if the
+                     *     DampPeerOscillations attribute is set to TRUE, and
+                     *
+                     *   - changes its state to Idle.
+                     */
+                    if let Message::Notification(_) = msg {
                         session_log!(
                             self,
                             warn,
                             pc.conn,
-                            "unexpected {} received (conn_id: {}), fsm transition to idle",
+                            "{} received (conn_id: {}), fsm transition to idle",
                             msg.title(),
                             conn_id.short();
                             "message" => "notification",
                             "message_contents" => format!("{msg}")
                         );
-                        self.bump_msg_counter(msg.kind(), true);
-                        session_timer!(self, connect_retry).stop();
-                        FsmState::Idle
+                        self.bump_msg_counter(msg.kind(), false);
+                        self.stop(
+                            Some(&pc.conn),
+                            None,
+                            StopReason::NotificationReceived,
+                        );
+                        return FsmState::Idle;
                     }
+
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "unexpected {} received (conn_id: {}), fsm transition to idle",
+                        msg.title(),
+                        conn_id.short();
+                        "message" => msg.title(),
+                        "message_contents" => format!("{msg}")
+                    );
+                    self.bump_msg_counter(msg.kind(), true);
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
+                    FsmState::Idle
                 }
 
                 ConnectionEvent::ParseError {
@@ -4385,6 +4483,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
                             new.id().short()
                         );
+                        let declined = match new_direction {
+                            ConnectionDirection::Inbound => {
+                                &self.counters.passive_connections_declined
+                            }
+                            ConnectionDirection::Outbound => {
+                                &self.counters.active_connections_declined
+                            }
+                        };
+                        declined.fetch_add(1, Ordering::Relaxed);
                         return FsmState::OpenConfirm(pc);
                     }
 
@@ -4808,7 +4915,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         continue;
                                     }
                                     self.send_keepalive(&new);
-                                    conn_timer!(new, keepalive).restart();
                                 }
                                 CollisionConnectionKind::Exist => {
                                     if !conn_timer!(exist.conn, keepalive)
@@ -4817,8 +4923,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         continue;
                                     }
                                     self.send_keepalive(&exist.conn);
-                                    conn_timer!(exist.conn, keepalive)
-                                        .restart();
                                 }
 
                                 CollisionConnectionKind::Unexpected(
@@ -4964,6 +5068,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history)
+                                .receive(msg.clone(), *conn_id);
                             let msg_kind = msg.kind();
                             match self.collision_conn_kind(
                                 conn_id,
@@ -4972,11 +5078,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             ) {
                                 CollisionConnectionKind::New => {
                                     if let Message::Open(om) = msg {
-                                        lock!(self.message_history).receive(
-                                            om.clone().into(),
-                                            *conn_id,
-                                        );
-
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) =
@@ -4990,14 +5091,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "new conn failed to handle open message ({e}), existing conn falls back to open confirm";
                                                 "error" => format!("{e}")
                                             );
-                                            // notification sent by handle_open(), nothing to do here
-                                            self.counters
-                                                .connection_retries
-                                                .fetch_add(
-                                                    1,
-                                                    Ordering::Relaxed,
-                                                );
-                                            // peer oscillation damping happens in idle, nothing to do here
+                                            // handle_open already notified and unregistered the connection.
                                             return FsmState::OpenConfirm(
                                                 exist,
                                             );
@@ -5294,26 +5388,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         collision_log!(
             self,
             info,
-            &exist.conn,
             &new,
+            &exist.conn,
             "collision detected: local id {}, remote id {}",
             self.id,
             om.id
         );
 
-        match collision_resolution(exist.conn.direction(), self.id, om.id) {
-            CollisionResolution::ExistWins => {
-                // Existing connection wins
-                collision_log!(
-                    self,
-                    info,
-                    &exist.conn,
-                    &new,
-                    "collision resolution: local system wins with higher RID ({} > {})",
-                    self.id,
-                    om.id
-                );
+        let resolution = collision_resolution(
+            exist.conn.direction(),
+            self.id,
+            om.id,
+            self.asn.as_u32(),
+            om.asn(),
+        );
+        collision_log!(
+            self,
+            info,
+            &new,
+            &exist.conn,
+            "collision resolution: {resolution}"
+        );
 
+        match resolution {
+            CollisionResolution::ExistWins(_) => {
                 self.stop(Some(&new), None, StopReason::CollisionResolution);
 
                 conn_timer!(exist.conn, hold).restart();
@@ -5325,28 +5423,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmState::OpenConfirm(exist)
             }
-            CollisionResolution::NewWins => {
-                // New connection wins
-                collision_log!(
-                    self,
-                    info,
-                    &exist.conn,
-                    &new,
-                    "collision resolution: peer wins with higher RID ({} >= {})",
-                    om.id,
-                    self.id
-                );
-
+            CollisionResolution::NewWins(_) => {
                 self.stop(
                     Some(&exist.conn),
                     None,
                     StopReason::CollisionResolution,
                 );
-
-                session_timer!(self, connect_retry).stop();
-                self.counters
-                    .connection_retries
-                    .fetch_add(1, Ordering::Relaxed);
 
                 let caps = om.get_capabilities();
                 let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
@@ -5360,6 +5442,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     ipv6_unicast,
                 };
 
+                session_timer!(self, connect_retry).stop();
                 conn_timer!(new_pc.conn, hold).restart();
                 conn_timer!(new_pc.conn, keepalive).restart();
                 self.send_keepalive(&new_pc.conn);
@@ -5564,7 +5647,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
                         self.stop(
-                            Some(&exist),
+                            Some(&extra),
                             None,
                             StopReason::ConnectionRejected,
                         );
@@ -5577,6 +5660,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
                         ConnectionEvent::Message { msg, ref conn_id } => {
+                            lock!(self.message_history).receive(
+                                msg.clone(),
+                                *conn_id,
+                            );
+
                             let msg_kind = msg.kind();
                             match self.collision_conn_kind(conn_id, exist.id(), new.id()) {
                                 CollisionConnectionKind::Missing => {
@@ -5614,13 +5702,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Exist => {
+                                    // RFC 4271 FSM Event 19
                                     if let Message::Open(om) = msg {
-                                        // RFC 4271 FSM Event 19
-                                        lock!(self.message_history).receive(
-                                            om.clone().into(),
-                                            *conn_id,
-                                        );
-
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) = self.handle_open(&exist, &om) {
@@ -5629,31 +5712,29 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "error" => format!("{e}")
                                             );
 
-                                            // notification sent by handle_open(), nothing to do here
-                                            self.counters
-                                                .connection_retries
-                                                .fetch_add(1, Ordering::Relaxed);
-                                            self.stop(Some(&exist), None, StopReason::FsmError);
+                                            // handle_open already notified and unregistered the connection.
                                             return FsmState::OpenSent(new);
                                         }
 
                                         // Resolve collision on first Open - don't wait for both
-                                        collision_log!(self, info, exist, new,
+                                        collision_log!(self, info, new, exist,
                                             "exist conn received Open (conn_id: {}), resolving collision immediately",
                                             conn_id.short();
                                         );
 
-                                        match collision_resolution(
+                                        let resolution = collision_resolution(
                                             exist.direction(),
                                             self.id,
                                             om.id,
-                                        ) {
-                                            CollisionResolution::ExistWins => {
-                                                // Existing connection wins
-                                                collision_log!(self, info, exist, new,
-                                                    "exist conn wins collision, close new conn",
-                                                );
+                                            self.asn.as_u32(),
+                                            om.asn(),
+                                        );
+                                        collision_log!(self, info, new, exist,
+                                            "collision resolution: {resolution}",
+                                        );
 
+                                        match resolution {
+                                            CollisionResolution::ExistWins(_) => {
                                                 self.stop(Some(&new), None, StopReason::CollisionResolution);
 
                                                 conn_timer!(exist, hold).restart();
@@ -5677,21 +5758,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.send_keepalive(&exist_pc.conn);
                                                 return FsmState::OpenConfirm(exist_pc);
                                             }
-                                            CollisionResolution::NewWins => {
-                                                // New connection wins
-                                                collision_log!(
-                                                    self,
-                                                    info,
-                                                    exist,
-                                                    new,
-                                                    "new conn wins collision, close exist conn",
-                                                );
-
+                                            CollisionResolution::NewWins(_) => {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
                                                 session_timer!(self, connect_retry).stop();
-                                                self.counters
-                                                    .connection_retries
-                                                    .fetch_add(1, Ordering::Relaxed);
 
                                                 return FsmState::OpenSent(new);
                                             }
@@ -5717,13 +5786,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::New => {
+                                    // RFC 4271 FSM Event 19
                                     if let Message::Open(om) = msg {
-                                        // RFC 4271 FSM Event 19
-                                        lock!(self.message_history).receive(
-                                            om.clone().into(),
-                                            *conn_id,
-                                        );
-
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) = self.handle_open(&new, &om) {
@@ -5735,16 +5799,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 "new conn failed to handle {msg_kind} ({e}), fallback to existing conn";
                                                 "error" => format!("{e}")
                                             );
-
-                                            // notification sent by handle_open(), nothing to do here
-                                            self.counters
-                                                .connection_retries
-                                                .fetch_add(1, Ordering::Relaxed);
-                                            self.stop(Some(&new), None, StopReason::FsmError);
                                             return FsmState::OpenSent(exist);
                                         }
-
-                                        self.send_keepalive(&new);
 
                                         // Resolve collision on first Open - don't wait for both
                                         collision_log!(
@@ -5756,39 +5812,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             conn_id.short()
                                         );
 
-                                        match collision_resolution(
+                                        let resolution = collision_resolution(
                                             exist.direction(),
                                             self.id,
                                             om.id,
-                                        ) {
-                                            CollisionResolution::ExistWins => {
-                                                // Existing connection wins
-                                                collision_log!(
-                                                    self,
-                                                    info,
-                                                    new,
-                                                    exist,
-                                                    "exist conn wins collision, closing new"
-                                                );
+                                            self.asn.as_u32(),
+                                            om.asn(),
+                                        );
+                                        collision_log!(self, info, new, exist,
+                                            "collision resolution: {resolution}",
+                                        );
 
+                                        match resolution {
+                                            CollisionResolution::ExistWins(_) => {
                                                 self.stop(Some(&new), None, StopReason::CollisionResolution);
                                                 session_timer!(self, connect_retry).stop();
-                                                self.counters
-                                                    .connection_retries
-                                                    .fetch_add(1, Ordering::Relaxed);
 
                                                 return FsmState::OpenSent(exist);
                                             }
-                                            CollisionResolution::NewWins => {
-                                                // New connection wins
-                                                collision_log!(
-                                                    self,
-                                                    info,
-                                                    new,
-                                                    exist,
-                                                    "new conn wins collision, closing exist"
-                                                );
-
+                                            CollisionResolution::NewWins(_) => {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
 
                                                 let caps = om.get_capabilities();
@@ -6251,7 +6293,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         self.send_keepalive(&pc.conn);
-        conn_timer!(pc.conn, keepalive).restart();
 
         // Send an update to our peer with the IPv4 Unicast prefixes this router
         // is originating.
@@ -6780,9 +6821,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         pc.conn,
                         "hold timer expired, fsm transition to idle"
                     );
-                    self.counters
-                        .hold_timer_expirations
-                        .fetch_add(1, Ordering::Relaxed);
                     self.stop(
                         Some(&pc.conn),
                         None,
@@ -6842,6 +6880,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 ConnectionEvent::Message { msg, ref conn_id } => {
+                    lock!(self.message_history).receive(msg.clone(), *conn_id);
                     let msg_kind = msg.kind();
 
                     // ** Special Handling **
@@ -6874,85 +6913,98 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                              *    - changes its state to Idle.
                              */
                             if let Message::Open(om) = &msg {
-                                // This applies to situations where we enter
-                                // ConnectionCollision from OpenConfirm and the
-                                // existing connection gets a Keepalive before
-                                // the new/colliding connection got an Open.
-                                //
-                                // In that case, we transition out of
-                                // ConnectionCollision and into Established with
-                                // the existing connection, but we deliberately
-                                // do not close or unregister the new connection
-                                // so we can handle its Open when it arrives.
-                                // This allows us to delay collision resolution
-                                // until receipt of an Open message (aligning
-                                // better with the expectations of RFC 4271)
-                                // even if the existing connection moves into
-                                // Established prior to collision resolution.
-                                //
-                                // If we find ourselves in this situation, the
-                                // RFC specifies an optional boolean attribute
-                                // to influnce the resolution behavior
-                                // (CollisionDetectEstablishedState), which
-                                // effectively boils down to:
-                                // if false:
-                                //   The Established connection always wins.
-                                //   This means timing is _sometimes_ the
-                                //   deciding factor when choosing a connection
-                                //   to retain, but only if an Open isn't
-                                //   received on the new connection until
-                                //   after .
-                                // if true:
-                                //   Collision resolution is performed based
-                                //   on the BGP-ID of each peer as per the
-                                //   procedure outlined in Section 6.8. and the
-                                //   Established connection is not guaranteed
-                                //   to survive (taking timing out of the
-                                //   picture and making collision resolution
-                                //   more deterministic, in an idealistic sort
-                                //   of way).
-                                //
-                                // Note: This is not a full implementation of
-                                //       CollisionDetectEstablishedState.
-                                //
-                                // Rather, it is simply a lever for us to
-                                // choose whether to ensure determinism in
-                                // collision resolution (i.e. by forcing the
-                                // use of BGP-ID as tie-breaker) or not
-                                // (sticking to "first to Established wins")
-                                // for the scenario described above. A full
-                                // implementation would involve registration
-                                // and tracking of new connections that complete
-                                // while in Established (likely warranting
-                                // an additional CollisionPair variant and
-                                // collision_detection_* method) and adding
-                                // full handling for connections to go into
-                                // and out of Established while a collision is
-                                // underway. At the time of writing this, a full
-                                // implementation is not believed to be worth
-                                // the added complexity and maintenance burden.
-                                if lock!(self.session)
-                                    .deterministic_collision_resolution
+                                if let Err(e) =
+                                    self.handle_open(&incoming_conn, om)
                                 {
+                                    session_log!(self, warn, incoming_conn,
+                                        "colliding connection failed to handle open message ({e}), retaining established connection";
+                                        "error" => e.to_string()
+                                    );
+                                    self.bump_msg_counter(msg_kind, false);
+                                    // handle_open already unregistered the
+                                    // colliding connection.
+                                    return FsmState::Established(pc);
+                                }
+
+                                // Connection Collisions are fundamentally a
+                                // race between two parallel BGP connections. We
+                                // handle this by juggling the two connections
+                                // while they race until we receive an OPEN from
+                                // both of them (or one errors/times out).
+                                //
+                                // In the "normal" case (as much as there can
+                                // be a normal for an already odd condition),
+                                // both connections get an OPEN before either
+                                // get a KEEPALIVE. This gives us sufficient
+                                // information to perform Connection Collision
+                                // Resolution (RFC 4271 §6.8 + RFC 6286 §2.3)
+                                // immediately, so we do.
+                                //
+                                // However, it is also possible for the
+                                // timing to work out such that we enter
+                                // yet another corner case within the corner
+                                // case we're already in (corner-ception?).
+                                // e.g.
+                                // 1) Connection A receives an OPEN
+                                // 2) New Connection B completes
+                                // 3) Connection A receives a KEEPALIVE
+                                // 4) Move into Established with Connection A
+                                // 5) Connection B receives an OPEN
+                                //
+                                // This is the exact situation we're in here.
+                                //
+                                // Since we're here, we have a decision we need
+                                // to make. How do we want to handle an OPEN for
+                                // Connection B?
+                                //
+                                // RFC 4271 indicates that collision
+                                // resolution should be triggered by receipt
+                                // of an OPEN message, and the connection
+                                // receiving the OPEN should be discarded
+                                // if another connection in Established
+                                // exists... UNLESS an optional boolean is set.
+                                // The bool (CollisionDetectEstablishedState in
+                                // RFC-speak) effectively boils down to:
+                                //
+                                // if True:
+                                //   Perform Connection Collision Resolution.
+                                //   Discard the connection that lost the
+                                //   collision resolution procedure.
+                                //
+                                // if False:
+                                //    Do not perform Connection Collision
+                                //    Resolution. Discard the non-Established
+                                //    connection.
+                                //
+                                // `deterministic_collision_resolution` is mgd's
+                                // configuration knob mapping to RFC 4271's
+                                // CollisionDetectEstablishedState.
+                                let deterministic_collision_resolution =
+                                    lock!(self.session)
+                                        .deterministic_collision_resolution;
+
+                                if deterministic_collision_resolution {
                                     // Determine which connection wins using pure function
                                     let resolution = collision_resolution(
                                         pc.conn.direction(),
-                                        om.id,
                                         self.id,
+                                        om.id,
+                                        self.asn.as_u32(),
+                                        om.asn(),
                                     );
 
                                     session_log!(self,
                                         info,
                                         pc.conn,
-                                        "collision detected in established state (conn_id: {}), collision_detect_established_state enabled",
+                                        "collision in established state (conn_id: {}): {resolution}",
                                         conn_id.short();
+                                        "deterministic_collision_resolution" => deterministic_collision_resolution,
                                         "message" => "open",
-                                        "message_contents" => format!("{om}"),
-                                        "resolution" => format!("{:?}", resolution)
+                                        "message_contents" => format!("{om}")
                                     );
 
                                     match resolution {
-                                        CollisionResolution::ExistWins => {
+                                        CollisionResolution::ExistWins(_) => {
                                             // pc wins: close incoming_conn, stay Established
                                             self.bump_msg_counter(
                                                 msg_kind, true,
@@ -6964,8 +7016,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             );
                                             return FsmState::Established(pc);
                                         }
-                                        CollisionResolution::NewWins => {
-                                            // incoming_conn wins: close pc, transition to SessionSetup
+                                        CollisionResolution::NewWins(_) => {
+                                            // incoming_conn wins: close pc and wait for its KEEPALIVE.
                                             self.bump_msg_counter(
                                                 msg_kind, false,
                                             );
@@ -7005,7 +7057,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     new_pc.clone(),
                                                 );
 
-                                            return FsmState::SessionSetup(
+                                            return FsmState::OpenConfirm(
                                                 new_pc,
                                             );
                                         }
@@ -7015,8 +7067,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self,
                                         info,
                                         pc.conn,
-                                        "collision detected in established state (conn_id: {}), resolving",
+                                        "collision in established state (conn_id: {}), discarding",
                                         conn_id.short();
+                                        "deterministic_collision_resolution" => deterministic_collision_resolution,
                                         "message" => "open",
                                         "message_contents" => format!("{om}")
                                     );
@@ -7056,6 +7109,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{msg}")
                             );
                         }
+                        self.bump_msg_counter(msg_kind, true);
                         return FsmState::Established(pc);
                     }
 
@@ -7104,8 +7158,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{m}")
                             );
                             self.apply_update(m.clone(), &pc);
-                            lock!(self.message_history)
-                                .receive(m.into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             FsmState::Established(pc)
                         }
@@ -7140,9 +7192,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "notification",
                                 "message_contents" => format!("{m}")
                             );
-                            lock!(self.message_history)
-                                .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
+                            self.stop(
+                                Some(&pc.conn),
+                                None,
+                                StopReason::NotificationReceived,
+                            );
                             self.exit_established(pc)
                         }
 
@@ -7190,8 +7245,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "route refresh",
                                 "message_contents" => format!("{m}").as_str()
                             );
-                            lock!(self.message_history)
-                                .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             if let Err(e) = self.handle_refresh(m, &pc) {
                                 session_log!(
@@ -7234,7 +7287,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "error_code" => format!("{error_code:?}"),
                         "error_subcode" => format!("{error_subcode:?}")
                     );
-                    self.send_notification(&pc.conn, error_code, error_subcode);
+                    let stop_reason = StopReason::ParseError {
+                        error_code,
+                        error_subcode,
+                    };
+                    self.stop(Some(&pc.conn), None, stop_reason);
                     self.exit_established(pc)
                 }
 
@@ -7270,6 +7327,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.peer_id()
         );
 
+        // The outer FSM loop can observe shutdown before Established cleanup,
+        // or after SessionSetup has installed fanout entries. Clean up regardless
+        // of which state observed the request.
+        self.router.remove_fanout(self.peer_id());
+        self.db.remove_bgp_prefixes_from_peer(&self.peer_id());
         self.cleanup_connections();
 
         // Join the connector thread if one is running to ensure clean shutdown
@@ -7285,17 +7347,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Disable session-level timers
         self.clock.stop_all();
 
-        let previous = self.state();
-        let next = FsmStateKind::Idle;
-        if previous != next {
-            session_log_lite!(
-                self,
-                info,
-                "fsm transition {previous} -> {next}"
-            );
-            // Go back to the beginning of the state machine.
-            *(lock!(self.state)) = next;
-        }
+        self.record_state_transition(self.state(), FsmStateKind::Idle);
 
         match self.shutdown_state.finish_shutdown() {
             Ok(()) => {
@@ -7327,23 +7379,46 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
-    /// Handle an open message
+    /// Validate an OPEN and negotiate its timers. On rejection, send a
+    /// notification and unregister the connection before returning an error.
+    /// Policy execution errors fail open, but do not bypass protocol checks.
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let remote_asn = om.asn();
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn
             && remote_asn != expected_remote_asn
         {
-            self.send_notification(
-                conn,
-                ErrorCode::Open,
-                ErrorSubcode::Open(OpenErrorSubcode::BadPeerAS),
-            );
+            self.counters
+                .open_handle_failures
+                .fetch_add(1, Ordering::Relaxed);
+            self.send_notification(conn, NotificationMessage::bad_peer_as());
             self.unregister_conn(conn.id());
             return Err(Error::UnexpectedAsn(ExpectationMismatch {
                 expected: expected_remote_asn,
                 got: remote_asn,
             }));
         }
+
+        // RFC 6286:
+        // ```text
+        // If the BGP Identifier field of the OPEN message is zero, or if it
+        // is the same as the BGP Identifier of the local BGP speaker and the
+        // message is from an internal peer, then the Error Subcode is set to
+        // "Bad BGP Identifier".
+        // ```
+        //
+        // The BGP-ID is already enforced to be non-zero during deserialization.
+        if remote_asn == self.asn.as_u32() && om.id == self.id {
+            self.counters
+                .open_handle_failures
+                .fetch_add(1, Ordering::Relaxed);
+            self.send_bad_bgp_id_notification(conn);
+            self.unregister_conn(conn.id());
+            return Err(Error::BadBgpIdentifier(Ipv4Addr::from(om.id)));
+        }
+
+        // XXX: Should user-defined policy be mutually exclusive with builtin
+        //      (RFC 4271) policy? Or should it be applied in addition to the
+        //      builtin policy?
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
             let peer_ip = match self.neighbor.peer {
                 PeerId::Ip(ip) => ip,
@@ -7359,8 +7434,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Ok(result) => match result {
                     CheckerResult::Accept => {}
                     CheckerResult::Drop => {
-                        // XXX: This can probably be removed with more robust
-                        //      policy handling
+                        self.counters
+                            .open_handle_failures
+                            .fetch_add(1, Ordering::Relaxed);
+                        // Dropping an OPEN rejects the connection, not just
+                        // the message.
+                        self.send_rejected_notification(conn);
                         self.unregister_conn(conn.id());
                         return Err(Error::PolicyCheckFailed);
                     }
@@ -7377,33 +7456,47 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
 
+        // RFC 4271 §4.2:
+        // ```text
+        // Hold Time:
+        //
+        //    This 2-octet unsigned integer indicates the number of seconds
+        //    the sender proposes for the value of the Hold Timer.  Upon
+        //    receipt of an OPEN message, a BGP speaker MUST calculate the
+        //    value of the Hold Timer by using the smaller of its configured
+        //    Hold Time and the Hold Time received in the OPEN message.  The
+        //    Hold Time MUST be either zero or at least three seconds.  An
+        //    implementation MAY reject connections on the basis of the Hold
+        //    Time.  The calculated value indicates the maximum number of
+        //    seconds that may elapse between the receipt of successive
+        //    KEEPALIVE and/or UPDATE messages from the sender.
+        // ```
+        let requested = u64::from(om.hold_time);
+        if requested > 0 && requested < 3 {
+            self.counters
+                .open_handle_failures
+                .fetch_add(1, Ordering::Relaxed);
+            self.send_notification(
+                conn,
+                NotificationMessage::unacceptable_hold_time(),
+            );
+            self.unregister_conn(conn.id());
+            return Err(Error::HoldTimeTooSmall);
+        }
+
         {
             let clock = conn.clock();
             let mut ht = lock!(clock.timers.hold);
             let mut kt = lock!(clock.timers.keepalive);
             let mut theirs = false;
             // XXX: handle peer sending us a holdtime of 0 (keepalives disabled)
-            let requested = u64::from(om.hold_time);
-            if requested > 0 {
-                if requested < 3 {
-                    self.send_notification(
-                        conn,
-                        ErrorCode::Open,
-                        ErrorSubcode::Open(
-                            OpenErrorSubcode::UnacceptableHoldTime,
-                        ),
-                    );
-                    self.unregister_conn(conn.id());
-                    return Err(Error::HoldTimeTooSmall);
-                }
-                if requested < ht.interval.as_secs() {
-                    theirs = true;
-                    ht.interval = Duration::from_secs(requested);
-                    ht.restart();
-                    // per BGP RFC section 10
-                    kt.interval = Duration::from_secs(requested / 3);
-                    kt.restart();
-                }
+            if requested > 0 && requested < ht.interval.as_secs() {
+                theirs = true;
+                ht.interval = Duration::from_secs(requested);
+                ht.restart();
+                // per BGP RFC section 10
+                kt.interval = Duration::from_secs(requested / 3);
+                kt.restart();
             }
             if !theirs {
                 ht.interval = clock.timers.config_hold_time;
@@ -7415,150 +7508,110 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
+    /// Record, log, and account for a send attempt, then return its result.
+    fn send_message(&self, conn: &Cnx, msg: Message) -> Result<(), Error> {
+        let kind = msg.kind();
+        let title = msg.title();
+        lock!(self.message_history).send(msg.clone(), *conn.id());
+
+        if matches!(kind, MessageKind::KeepAlive) {
+            session_log!(self, trace, conn, "sending {title}";
+                "message" => title
+            );
+        } else {
+            session_log!(self, info, conn, "sending {title}";
+                "message" => title,
+                "message_contents" => format!("{msg}")
+            );
+        }
+
+        let (sent, failed) = match kind {
+            MessageKind::Open => {
+                (&self.counters.opens_sent, &self.counters.open_send_failure)
+            }
+            MessageKind::Notification => (
+                &self.counters.notifications_sent,
+                &self.counters.notification_send_failure,
+            ),
+            MessageKind::Update => (
+                &self.counters.updates_sent,
+                &self.counters.update_send_failure,
+            ),
+            MessageKind::KeepAlive => (
+                &self.counters.keepalives_sent,
+                &self.counters.keepalive_send_failure,
+            ),
+            MessageKind::RouteRefresh => (
+                &self.counters.route_refresh_sent,
+                &self.counters.route_refresh_send_failure,
+            ),
+        };
+        match conn.send(msg) {
+            Ok(()) => {
+                sent.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(e) => {
+                failed.fetch_add(1, Ordering::Relaxed);
+                session_log!(self, error, conn, "failed to send {title}: {e}";
+                    "message" => title,
+                    "error" => e.to_string()
+                );
+                Err(e)
+            }
+        }
+    }
+
     /// Send a keepalive message to the session peer.
     fn send_keepalive(&self, conn: &Cnx) {
-        session_log!(
-            self,
-            trace,
-            conn,
-            "sending keepalive";
-            "message" => "keepalive"
-        );
-        if let Err(e) = conn.send(Message::KeepAlive) {
-            session_log!(self, error, conn, "failed to send keepalive: {e}";
-                "error" => e.to_string()
-            );
-            self.counters
-                .keepalive_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.counters
-                .keepalives_sent
-                .fetch_add(1, Ordering::Relaxed);
+        if self.send_message(conn, Message::KeepAlive).is_ok() {
             conn_timer!(conn, keepalive).restart();
         }
     }
 
     fn send_route_refresh(&self, conn: &Cnx, af: Afi) {
-        session_log!(
-            self,
-            info,
-            conn,
-            "sending route refresh";
-            "message" => "route refresh"
-        );
-        let rr = Message::RouteRefresh(RouteRefreshMessage {
-            afi: af.into(),
-            safi: Safi::Unicast.into(),
-        });
-        if let Err(e) = conn.send(rr) {
-            session_log!(
-                self,
-                error,
-                conn,
-                "failed to send route refresh: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .route_refresh_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.counters
-                .route_refresh_sent
-                .fetch_add(1, Ordering::Relaxed);
-        }
+        let _ = self.send_message(conn, RouteRefreshMessage::new(af).into());
     }
 
     fn send_hold_timer_expired_notification(&self, conn: &Cnx) {
-        self.send_notification(
-            conn,
-            ErrorCode::HoldTimerExpired,
-            ErrorSubcode::HoldTime(0),
-        )
+        self.send_notification(conn, NotificationMessage::hold_timer_expired())
     }
 
     fn send_collision_resolution_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(
-                CeaseErrorSubcode::ConnectionCollisionResolution,
-            ),
+            NotificationMessage::collision_resolution(),
         )
     }
 
     fn send_rejected_notification(&self, conn: &Cnx) {
-        self.send_notification(
-            conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionRejected),
-        )
+        self.send_notification(conn, NotificationMessage::connection_rejected())
     }
 
     fn send_fsm_notification(&self, conn: &Cnx) {
-        self.send_notification(
-            conn,
-            ErrorCode::Fsm,
-            // Unspecific, FSM doesn't have a defined subcode
-            ErrorSubcode::Fsm(0),
-        )
+        self.send_notification(conn, NotificationMessage::fsm_error())
+    }
+
+    fn send_bad_bgp_id_notification(&self, conn: &Cnx) {
+        self.send_notification(conn, NotificationMessage::bad_bgp_id())
     }
 
     fn send_admin_shutdown_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeShutdown),
+            NotificationMessage::administrative_shutdown(),
         )
     }
 
     fn send_admin_reset_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
-            ErrorCode::Cease,
-            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeReset),
+            NotificationMessage::administrative_reset(),
         )
     }
 
-    fn send_notification(
-        &self,
-        conn: &Cnx,
-        error_code: ErrorCode,
-        error_subcode: ErrorSubcode,
-    ) {
-        let notification = NotificationMessage {
-            error_code,
-            error_subcode,
-            data: Vec::new(),
-        };
-
-        session_log!(
-            self,
-            info,
-            conn,
-            "sending notification: {error_code} / {error_subcode}";
-            "message" => "notification",
-            "message_contents" => format!("{notification}")
-        );
-
-        let msg = Message::Notification(notification);
-        lock!(self.message_history).send(msg.clone(), *conn.id());
-
-        if let Err(e) = conn.send(msg) {
-            session_log!(
-                self,
-                error,
-                conn,
-                "failed to send notification: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .notification_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        self.counters
-            .notifications_sent
-            .fetch_add(1, Ordering::Relaxed);
+    fn send_notification(&self, conn: &Cnx, notification: NotificationMessage) {
+        let _ = self.send_message(conn, Message::Notification(notification));
     }
 
     /// Send an open message to the session peer.
@@ -7617,24 +7670,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         drop(msg);
-        lock!(self.message_history).send(out.clone(), *conn.id());
-
-        self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
-        if let Err(e) = conn.send(out) {
-            session_log!(
-                self,
-                error,
-                conn,
-                "send_open failed: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .open_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-            Err(e)
-        } else {
-            Ok(())
-        }
+        self.send_message(conn, out)
     }
 
     fn v4_over_v6_nexthop(&self) -> bool {
@@ -7994,38 +8030,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: Message,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        // Record in message history
-        lock!(self.message_history).send(update.clone(), *pc.conn.id());
-
-        // Update counters
-        self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
-
-        // Log
-        session_log!(
-            self,
-            info,
-            pc.conn,
-            "sending update";
-            "message" => "update",
-            "message_contents" => format!("{update}")
-        );
-
-        // Send
-        if let Err(e) = pc.conn.send(update) {
-            session_log!(
-                self,
-                error,
-                pc.conn,
-                "failed to send update: {e}";
-                "error" => format!("{e}")
-            );
-            self.counters
-                .update_send_failure
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(e);
-        }
-
-        Ok(())
+        self.send_message(&pc.conn, update)
     }
 
     fn transition_from_idle(&self) -> FsmState<Cnx> {
@@ -8180,6 +8185,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 session_timer!(self, connect_retry).stop();
             }
 
+            StopReason::UnacceptableOpen => {
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                session_timer!(self, connect_retry).stop();
+            }
+
             StopReason::HoldTimeExpired => {
                 if let Some(c1) = conn1 {
                     self.send_hold_timer_expired_notification(c1);
@@ -8222,11 +8234,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 error_subcode,
             } => {
                 if let Some(c1) = conn1 {
-                    self.send_notification(c1, error_code, error_subcode);
+                    self.send_notification(
+                        c1,
+                        NotificationMessage::new(error_code, error_subcode),
+                    );
                 }
                 if let Some(c2) = conn2 {
-                    self.send_notification(c2, error_code, error_subcode);
+                    self.send_notification(
+                        c2,
+                        NotificationMessage::new(error_code, error_subcode),
+                    );
                 }
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                session_timer!(self, connect_retry).stop();
+            }
+            StopReason::NotificationReceived => {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
@@ -8367,7 +8391,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ///
     /// Structural errors (duplicate attributes, malformed wire format,
     /// unsupported AFI/SAFI values) are caught during parsing in
-    /// `update_message_from_wire()` and `connection_tcp.rs`, which triggers
+    /// `update_message_from_wire()` and `connection/tcp.rs`, which triggers
     /// appropriate error handling per RFC 7606. This function only handles
     /// the negotiation state check.
     fn check_afi_safi_negotiation(
@@ -9030,6 +9054,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut current = lock!(self.session);
 
         current.passive_tcp_establishment = info.passive_tcp_establishment;
+        current.deterministic_collision_resolution =
+            info.deterministic_collision_resolution;
 
         if current.remote_asn != info.remote_asn {
             current.remote_asn = info.remote_asn;
@@ -9381,8 +9407,1818 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RouterConfig;
+    use crate::connection::channel::{
+        BgpConnectionChannel, MessageResult, channel,
+    };
+    use crate::messages::{
+        CeaseErrorSubcode, OpenErrorSubcode, UpdateErrorSubcode,
+        UpdateParseError,
+    };
+    use crate::test::{
+        RouteExchange, create_test_session, create_test_session_info,
+    };
+    use mg_api_types::bgp::parse::UpdateParseErrorReason;
     use mg_common::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    // Reset exits every receive loop, including Idle. Queue it after the events
+    // that should make the handler return, and require it to remain unconsumed:
+    // the sentinel must not be what satisfies the test's state assertions.
+    // This catches exhausted input, not deadlocks.
+    fn with_fsm_sentinel<Cnx: BgpConnection, T>(
+        runner: &SessionRunner<Cnx>,
+        rx: &Receiver<FsmEvent<Cnx>>,
+        test: impl FnOnce() -> T,
+    ) -> T {
+        runner
+            .event_tx
+            .send(FsmEvent::Admin(AdminEvent::Reset))
+            .unwrap();
+        let result = test();
+        assert!(
+            matches!(rx.try_recv(), Ok(FsmEvent::Admin(AdminEvent::Reset))),
+            "FSM must return after its expected events, leaving the reset sentinel queued"
+        );
+        result
+    }
+
+    fn with_test_session(
+        name: &str,
+        test: impl FnOnce(
+            Arc<SessionRunner<BgpConnectionChannel>>,
+            Receiver<FsmEvent<BgpConnectionChannel>>,
+        ),
+    ) {
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db = rdb::test::get_test_db(name, log.clone()).unwrap();
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(64512),
+                id: 100,
+            },
+            log,
+            db.db().clone(),
+            Arc::new(Mutex::new(crate::router::SessionMap::new())),
+        ));
+        let local = "192.0.2.1:179".parse().unwrap();
+        let peer = "192.0.2.2:179".parse().unwrap();
+        let config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        let (runner, rx) = create_test_session(&router, "peer", peer, config);
+        test(runner, rx);
+    }
+
+    fn test_peer_connection(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        direction: ConnectionDirection,
+    ) -> (
+        PeerConnection<BgpConnectionChannel>,
+        crate::connection::channel::Endpoint<MessageResult>,
+    ) {
+        let (endpoint, remote) = channel();
+        let conn =
+            Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                "192.0.2.1:179".parse().unwrap(),
+                "192.0.2.2:179".parse().unwrap(),
+                endpoint,
+                runner.event_tx.clone(),
+                crate::IO_TIMEOUT,
+                runner.log.clone(),
+                direction,
+                &lock!(runner.session),
+            ));
+        (
+            PeerConnection {
+                conn,
+                id: 200,
+                asn: 64513,
+                caps: BTreeSet::new(),
+                ipv4_unicast: AfiSafiState::Negotiated,
+                ipv6_unicast: AfiSafiState::Unconfigured,
+            },
+            remote,
+        )
+    }
+
+    // Exercise the real TCP parser and FSM together: counters alone cannot
+    // detect a second NOTIFICATION written directly by the receive loop.
+    fn check_tcp_parse_error(packet: &[u8], expected: Option<[u8; 2]>) {
+        use crate::connection::tcp::BgpConnectionTcp;
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener, TcpStream};
+
+        for state in ["OpenSent", "OpenConfirm", "Established"] {
+            let log = Logger::root(slog::Discard, slog::o!());
+            let db =
+                rdb::test::get_test_db("tcp_parse_error", log.clone()).unwrap();
+            let router = Arc::new(Router::new(
+                RouterConfig {
+                    asn: Asn::FourOctet(64512),
+                    id: 100,
+                },
+                log,
+                db.db().clone(),
+                Arc::new(Mutex::new(crate::router::SessionMap::new())),
+            ));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut peer =
+                TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (stream, peer_addr) = listener.accept().unwrap();
+            let config = create_test_session_info(
+                RouteExchange::Ipv4 { nexthop: None },
+                stream.local_addr().unwrap(),
+                peer_addr,
+                false,
+            );
+            let (runner, rx) =
+                create_test_session(&router, "peer", peer_addr, config.clone());
+            let conn = Arc::new(BgpConnectionTcp::test_with_conn(
+                stream,
+                runner.event_tx.clone(),
+                &config,
+            ));
+            let pc = PeerConnection {
+                conn: conn.clone(),
+                id: 200,
+                asn: 64513,
+                caps: BTreeSet::new(),
+                ipv4_unicast: AfiSafiState::Negotiated,
+                ipv6_unicast: AfiSafiState::Unconfigured,
+            };
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Full(pc.clone()))
+                .unwrap();
+            conn.start_recv_loop().unwrap();
+            peer.write_all(packet).unwrap();
+            peer.shutdown(Shutdown::Write).unwrap();
+
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            match (&event, expected) {
+                (
+                    FsmEvent::Connection(ConnectionEvent::ParseError {
+                        conn_id,
+                        ..
+                    }),
+                    Some(_),
+                )
+                | (
+                    FsmEvent::Connection(ConnectionEvent::TcpConnectionFails(
+                        conn_id,
+                    )),
+                    None,
+                ) => assert_eq!(conn_id, conn.id()),
+                _ => panic!("{state}: unexpected event {}", event.title()),
+            }
+            runner.event_tx.send(event).unwrap();
+            let next = with_fsm_sentinel(&runner, &rx, || match state {
+                "OpenSent" => runner.fsm_open_sent(&rx, conn.clone()),
+                "OpenConfirm" => runner.fsm_open_confirm(&rx, pc.clone()),
+                "Established" => runner.fsm_established(&rx, pc.clone()),
+                _ => unreachable!(),
+            });
+            assert_eq!(next.kind(), FsmStateKind::Idle, "{state}");
+            assert_eq!(runner.connection_count(), 0, "{state}");
+            assert_eq!(
+                runner.counters.notifications_sent.load(Ordering::Relaxed),
+                u64::from(expected.is_some()),
+                "{state}",
+            );
+            drop(pc);
+            drop(conn);
+            let mut replies = Vec::new();
+            // Closing a socket with unread trailing input may reset TCP.
+            if let Err(e) = peer.read_to_end(&mut replies) {
+                assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            // Use framing only to count messages. Error-specific Data (and
+            // consequently the expected NOTIFICATION length) is not checked.
+            let mut remaining = replies.as_slice();
+            let mut notifications = Vec::new();
+            while !remaining.is_empty() {
+                assert!(remaining.len() >= 21, "{state}: truncated reply");
+                assert_eq!(&remaining[..16], &[0xff; 16], "{state}");
+                assert_eq!(remaining[18], 3, "{state}: expected NOTIFICATION");
+                let length =
+                    u16::from_be_bytes([remaining[16], remaining[17]]) as usize;
+                assert!((21..=remaining.len()).contains(&length), "{state}");
+                notifications.push([remaining[19], remaining[20]]);
+                remaining = &remaining[length..];
+            }
+            assert_eq!(
+                notifications,
+                expected.into_iter().collect::<Vec<_>>(),
+                "{state}: notification count/codes"
+            );
+            assert!(rx.try_recv().is_err(), "{state}: extra receive event");
+        }
+    }
+
+    fn tcp_test_packet(typ: u8, body: &[u8]) -> Vec<u8> {
+        let mut packet = vec![0xff; 16];
+        packet.extend_from_slice(&(19 + body.len() as u16).to_be_bytes());
+        packet.push(typ);
+        packet.extend_from_slice(body);
+        packet
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_open_parse_errors_notify_once() {
+        // Generic truncation, unsupported version, and bad BGP identifier.
+        for (body, codes) in [
+            (vec![], [1, 2]),
+            (vec![4, 0, 1, 0, 30, 192, 0, 2, 1], [1, 2]),
+            (vec![3, 0, 1, 0, 30, 192, 0, 2, 1, 0], [2, 1]),
+            (vec![4, 0, 1, 0, 30, 0, 0, 0, 0, 0], [2, 3]),
+        ] {
+            check_tcp_parse_error(&tcp_test_packet(1, &body), Some(codes));
+        }
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_header_parse_errors_notify_once() {
+        let mut bad_marker = tcp_test_packet(4, &[]);
+        bad_marker[7] = 0;
+        for (mut packet, codes) in
+            [(bad_marker, [1, 1]), (tcp_test_packet(255, &[]), [1, 3])]
+        {
+            // A valid following message must not hide an invalid header.
+            packet.extend_from_slice(&tcp_test_packet(4, &[]));
+            check_tcp_parse_error(&packet, Some(codes));
+        }
+        for length in [18u16, 4097] {
+            let mut packet = tcp_test_packet(4, &[]);
+            packet[16..18].copy_from_slice(&length.to_be_bytes());
+            check_tcp_parse_error(&packet, Some([1, 2]));
+        }
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_other_body_parse_errors_notify_once() {
+        for (typ, body, codes) in [
+            (2, vec![], [1, 2]),           // UPDATE too short
+            (2, vec![0, 5, 0, 0], [3, 1]), // invalid withdrawn length
+            (3, vec![], [1, 2]),           // NOTIFICATION missing code/subcode
+            (3, vec![1], [1, 2]),          // NOTIFICATION missing subcode
+            (4, vec![0], [1, 2]),          // KEEPALIVE must have no body
+            (5, vec![0, 1, 0], [1, 3]),    // ROUTE_REFRESH too short
+        ] {
+            check_tcp_parse_error(&tcp_test_packet(typ, &body), Some(codes));
+        }
+    }
+
+    #[test]
+    #[serial_test::parallel]
+    fn test_tcp_eof_does_not_notify() {
+        check_tcp_parse_error(&[], None);
+        check_tcp_parse_error(&[0xff; 18], None);
+        let mut packet = tcp_test_packet(1, &[0; 10]);
+        packet.pop();
+        check_tcp_parse_error(&packet, None);
+    }
+
+    fn bad_bgp_id_parse_error() -> MessageParseError {
+        use crate::messages::{OpenParseError, OpenParseErrorReason};
+
+        MessageParseError::Open(OpenParseError {
+            error_code: ErrorCode::Open,
+            error_subcode: ErrorSubcode::Open(
+                OpenErrorSubcode::BadBgpIdentifier,
+            ),
+            reason: OpenParseErrorReason::BadBgpIdentifier {
+                id: Ipv4Addr::UNSPECIFIED,
+            },
+        })
+    }
+
+    fn fatal_update_parse_error() -> MessageParseError {
+        // RFC 7606 §3(b): an oversized Withdrawn Routes Length requires a
+        // session reset, unlike recoverable attribute errors.
+        MessageParseError::Update(UpdateParseError {
+            error_code: ErrorCode::Update,
+            error_subcode: ErrorSubcode::Update(
+                UpdateErrorSubcode::MalformedAttributeList,
+            ),
+            reason: UpdateParseErrorReason::InvalidWithdrawnLength {
+                declared: 5,
+                available: 2,
+            },
+        })
+    }
+
+    #[track_caller]
+    fn assert_channel_messages(
+        rx: &Receiver<MessageResult>,
+        expected: &[Message],
+    ) {
+        assert_eq!(
+            rx.try_iter().map(Result::unwrap).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[track_caller]
+    fn assert_connection_stopped(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        conn: &Arc<BgpConnectionChannel>,
+    ) {
+        assert!(runner.get_conn(conn.id()).is_none());
+        assert!(!conn_timer!(conn, hold).enabled());
+        assert!(!conn_timer!(conn, keepalive).enabled());
+    }
+
+    #[track_caller]
+    fn assert_connection_live(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        conn: &Arc<BgpConnectionChannel>,
+    ) {
+        assert!(runner.get_conn(conn.id()).is_some());
+        assert!(conn_timer!(conn, hold).enabled());
+        assert!(conn_timer!(conn, keepalive).enabled());
+    }
+
+    #[track_caller]
+    fn assert_notification_accounting(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        sent: u64,
+        failed: u64,
+        retries: u64,
+    ) {
+        assert_eq!(
+            runner.counters.notifications_sent.load(Ordering::Relaxed),
+            sent
+        );
+        assert_eq!(
+            runner
+                .counters
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            failed
+        );
+        assert_eq!(
+            runner.counters.connection_retries.load(Ordering::Relaxed),
+            retries
+        );
+        assert_eq!(
+            lock!(runner.message_history)
+                .sent
+                .iter()
+                .filter(|entry| matches!(
+                    entry.message,
+                    Message::Notification(_)
+                ))
+                .count() as u64,
+            sent + failed,
+            "each notification attempt must be recorded exactly once",
+        );
+    }
+
+    #[track_caller]
+    fn assert_connection_state(
+        state: &FsmState<BgpConnectionChannel>,
+        expected: FsmStateKind,
+        conn: &Arc<BgpConnectionChannel>,
+    ) {
+        assert_eq!(state.kind(), expected);
+        let retained = match state {
+            FsmState::OpenSent(conn) => conn,
+            FsmState::OpenConfirm(pc)
+            | FsmState::SessionSetup(pc)
+            | FsmState::Established(pc) => &pc.conn,
+            _ => panic!("expected a connected state, got {state}"),
+        };
+        assert_eq!(retained.id(), conn.id());
+    }
+
+    fn inject_channel_parse_error(
+        runner: &SessionRunner<BgpConnectionChannel>,
+        rx: &Receiver<FsmEvent<BgpConnectionChannel>>,
+        conn: &Arc<BgpConnectionChannel>,
+        remote: &crate::connection::channel::Endpoint<MessageResult>,
+        error: MessageParseError,
+    ) {
+        remote.tx.send(Err(error)).unwrap();
+        conn.start_recv_loop().unwrap();
+        // Bound the wait before entering an FSM handler's event loop.
+        let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            &event,
+            FsmEvent::Connection(ConnectionEvent::ParseError { conn_id, .. })
+                if conn_id == conn.id()
+        ));
+        runner.event_tx.send(event).unwrap();
+    }
+
+    #[test]
+    fn test_channel_parse_error_notifies_once() {
+        with_test_session("channel_parse_error", |runner, rx| {
+            let (pc, remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Partial(pc.conn.clone()))
+                .unwrap();
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                &pc.conn,
+                &remote,
+                bad_bgp_id_parse_error(),
+            );
+            let state = with_fsm_sentinel(&runner, &rx, || {
+                runner.fsm_open_sent(&rx, pc.conn.clone())
+            });
+            assert_eq!(state.kind(), FsmStateKind::Idle);
+            assert_eq!(runner.connection_count(), 0);
+            assert_eq!(
+                remote.rx.try_iter().map(Result::unwrap).collect::<Vec<_>>(),
+                vec![Message::Notification(NotificationMessage {
+                    error_code: ErrorCode::Open,
+                    error_subcode: ErrorSubcode::Open(
+                        OpenErrorSubcode::BadBgpIdentifier,
+                    ),
+                    data: vec![],
+                })],
+            );
+            assert_eq!(
+                runner.counters.notifications_sent.load(Ordering::Relaxed),
+                1,
+            );
+        });
+    }
+
+    enum CollisionPeer {
+        Existing,
+        Incoming,
+    }
+
+    fn connection_timer_state(
+        conn: &BgpConnectionChannel,
+    ) -> [(Duration, Duration); 2] {
+        let hold = conn_timer!(conn, hold);
+        let keepalive = conn_timer!(conn, keepalive);
+        [
+            (hold.interval, hold.remaining()),
+            (keepalive.interval, keepalive.remaining()),
+        ]
+    }
+
+    #[track_caller]
+    fn assert_peer_details(
+        actual: &PeerConnection<BgpConnectionChannel>,
+        expected: &PeerConnection<BgpConnectionChannel>,
+    ) {
+        assert_eq!(
+            (
+                actual.id,
+                actual.asn,
+                &actual.caps,
+                actual.ipv4_unicast,
+                actual.ipv6_unicast
+            ),
+            (
+                expected.id,
+                expected.asn,
+                &expected.caps,
+                expected.ipv4_unicast,
+                expected.ipv6_unicast
+            ),
+        );
+    }
+
+    fn check_collision_parse_error(
+        existing_state: FsmStateKind,
+        failing_peer: CollisionPeer,
+        expected_survivor_state: FsmStateKind,
+    ) {
+        with_test_session("collision_parse_error", |runner, rx| {
+            let (mut existing, existing_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            existing.id = 201;
+            existing.caps.insert(Capability::RouteRefresh {});
+            existing.ipv6_unicast = AfiSafiState::Advertised;
+            let (incoming, incoming_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            for (pc, hold_time) in [(&existing, 90), (&incoming, 180)] {
+                lock!(runner.connection_registry)
+                    .register(ConnectionKind::Partial(pc.conn.clone()))
+                    .unwrap();
+                conn_timer!(pc.conn, hold).interval =
+                    Duration::from_secs(hold_time);
+                conn_timer!(pc.conn, keepalive).interval =
+                    Duration::from_secs(hold_time / 3);
+                conn_timer!(pc.conn, hold).restart();
+                conn_timer!(pc.conn, keepalive).restart();
+                conn_timer!(pc.conn, hold).tick(Duration::from_secs(7));
+                conn_timer!(pc.conn, keepalive).tick(Duration::from_secs(11));
+            }
+            let pair = match existing_state {
+                FsmStateKind::OpenSent => CollisionPair::OpenSent(
+                    existing.conn.clone(),
+                    incoming.conn.clone(),
+                ),
+                FsmStateKind::OpenConfirm => {
+                    lock!(runner.connection_registry)
+                        .upgrade_to_full(existing.clone());
+                    CollisionPair::OpenConfirm(
+                        existing.clone(),
+                        incoming.conn.clone(),
+                    )
+                }
+                _ => unreachable!(),
+            };
+            let (failed, failed_remote, survivor, survivor_remote) =
+                match failing_peer {
+                    CollisionPeer::Existing => (
+                        &existing.conn,
+                        &existing_remote,
+                        &incoming.conn,
+                        &incoming_remote,
+                    ),
+                    CollisionPeer::Incoming => (
+                        &incoming.conn,
+                        &incoming_remote,
+                        &existing.conn,
+                        &existing_remote,
+                    ),
+                };
+            let survivor_timers = connection_timer_state(survivor);
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                failed,
+                failed_remote,
+                bad_bgp_id_parse_error(),
+            );
+            // A wrongly ignored error must fail, not hang the test.
+            runner
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::ManualStop))
+                .unwrap();
+            let state = runner.fsm_connection_collision(&rx, pair);
+
+            assert_connection_state(&state, expected_survivor_state, survivor);
+            assert_eq!(runner.connection_count(), 1);
+            assert_connection_stopped(&runner, failed);
+            assert_connection_live(&runner, survivor);
+            assert_eq!(connection_timer_state(survivor), survivor_timers);
+            {
+                let registry = lock!(runner.connection_registry);
+                match (&state, registry.primary().unwrap()) {
+                    (FsmState::OpenSent(_), ConnectionKind::Partial(_)) => {}
+                    (
+                        FsmState::OpenConfirm(pc),
+                        ConnectionKind::Full(registered),
+                    ) => {
+                        assert_peer_details(pc, &existing);
+                        assert_peer_details(registered, &existing);
+                    }
+                    _ => panic!(
+                        "survivor registry maturity does not match FSM state"
+                    ),
+                }
+            }
+            assert_channel_messages(
+                &failed_remote.rx,
+                &[NotificationMessage::bad_bgp_id().into()],
+            );
+            assert_channel_messages(&survivor_remote.rx, &[]);
+            assert_notification_accounting(&runner, 1, 0, 1);
+            assert_eq!(lock!(runner.message_history).sent.len(), 1);
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                FsmEvent::Admin(AdminEvent::ManualStop)
+            ));
+
+            // The survivor must still be able to finish its handshake.
+            let (message, expected_next) = match expected_survivor_state {
+                FsmStateKind::OpenSent => (
+                    OpenMessage::new4(64513, 30, 200, false).into(),
+                    FsmStateKind::OpenConfirm,
+                ),
+                FsmStateKind::OpenConfirm => {
+                    (Message::KeepAlive, FsmStateKind::SessionSetup)
+                }
+                _ => unreachable!(),
+            };
+            runner
+                .event_tx
+                .send(FsmEvent::Connection(ConnectionEvent::Message {
+                    conn_id: *survivor.id(),
+                    msg: message,
+                }))
+                .unwrap();
+            let next = with_fsm_sentinel(&runner, &rx, || match state {
+                FsmState::OpenSent(conn) => runner.fsm_open_sent(&rx, conn),
+                FsmState::OpenConfirm(pc) => runner.fsm_open_confirm(&rx, pc),
+                _ => unreachable!(),
+            });
+            assert_connection_state(&next, expected_next, survivor);
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_existing_open_sent_keeps_incoming() {
+        check_collision_parse_error(
+            FsmStateKind::OpenSent,
+            CollisionPeer::Existing,
+            FsmStateKind::OpenSent,
+        );
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_incoming_keeps_existing_open_sent() {
+        check_collision_parse_error(
+            FsmStateKind::OpenSent,
+            CollisionPeer::Incoming,
+            FsmStateKind::OpenSent,
+        );
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_existing_open_confirm_keeps_incoming() {
+        check_collision_parse_error(
+            FsmStateKind::OpenConfirm,
+            CollisionPeer::Existing,
+            FsmStateKind::OpenSent,
+        );
+    }
+
+    #[test]
+    fn test_channel_parse_error_on_incoming_keeps_existing_open_confirm() {
+        check_collision_parse_error(
+            FsmStateKind::OpenConfirm,
+            CollisionPeer::Incoming,
+            FsmStateKind::OpenConfirm,
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    enum NonActivePeer {
+        Registered,
+        Stale,
+    }
+
+    fn check_non_active_parse_error(peer: NonActivePeer) {
+        for state in [
+            FsmStateKind::OpenSent,
+            FsmStateKind::OpenConfirm,
+            FsmStateKind::Established,
+        ] {
+            with_test_session("non_active_parse_error", |runner, rx| {
+                let (mut active, active_remote) = test_peer_connection(
+                    &runner,
+                    ConnectionDirection::Outbound,
+                );
+                active.ipv6_unicast = AfiSafiState::Negotiated;
+                let (other, other_remote) =
+                    test_peer_connection(&runner, ConnectionDirection::Inbound);
+                lock!(runner.connection_registry)
+                    .register(if state == FsmStateKind::OpenSent {
+                        ConnectionKind::Partial(active.conn.clone())
+                    } else {
+                        ConnectionKind::Full(active.clone())
+                    })
+                    .unwrap();
+                if let NonActivePeer::Registered = peer {
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Partial(other.conn.clone()))
+                        .unwrap();
+                }
+                for pc in [&active, &other] {
+                    conn_timer!(pc.conn, hold).restart();
+                    conn_timer!(pc.conn, keepalive).restart();
+                }
+                let prefix4: Ipv4Net = "203.0.113.0/24".parse().unwrap();
+                let prefix6: Ipv6Net = "2001:db8:42::/48".parse().unwrap();
+                let prefixes = [IpNet::V4(prefix4), IpNet::V6(prefix6)];
+                if state == FsmStateKind::Established {
+                    runner
+                        .router
+                        .add_fanout4(runner.peer_id(), runner.event_tx.clone());
+                    runner
+                        .router
+                        .add_fanout6(runner.peer_id(), runner.event_tx.clone());
+                    runner.update_rib(
+                        &UpdateMessage {
+                            nlri: vec![prefix4],
+                            path_attributes: vec![
+                                PathAttributeValue::NextHop(
+                                    "192.0.2.2".parse().unwrap(),
+                                )
+                                .into(),
+                                PathAttributeValue::MpReachNlri(
+                                    MpReachNlri::ipv6_unicast(
+                                        BgpNexthop::Ipv6Single(
+                                            "2001:db8::2".parse().unwrap(),
+                                        ),
+                                        vec![prefix6],
+                                    ),
+                                )
+                                .into(),
+                            ],
+                            ..Default::default()
+                        },
+                        &active,
+                    );
+                    for prefix in &prefixes {
+                        let paths = runner.db.get_prefix_paths(prefix);
+                        assert_eq!(paths.len(), 1);
+                        assert_eq!(
+                            paths[0].bgp.as_ref().unwrap().peer,
+                            runner.peer_id()
+                        );
+                    }
+                }
+                let paths_before =
+                    prefixes.map(|p| runner.db.get_prefix_paths(&p));
+                inject_channel_parse_error(
+                    &runner,
+                    &rx,
+                    &other.conn,
+                    &other_remote,
+                    bad_bgp_id_parse_error(),
+                );
+                let next = match state {
+                    FsmStateKind::OpenSent => {
+                        // A valid OPEN lets the handler return after ignoring the error.
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::Message {
+                                    conn_id: *active.conn.id(),
+                                    msg: OpenMessage::new4(
+                                        64513, 30, 200, false,
+                                    )
+                                    .into(),
+                                },
+                            ))
+                            .unwrap();
+                        let next = with_fsm_sentinel(&runner, &rx, || {
+                            runner.fsm_open_sent(&rx, active.conn.clone())
+                        });
+                        assert_channel_messages(
+                            &active_remote.rx,
+                            &[Message::KeepAlive],
+                        );
+                        assert_connection_state(
+                            &next,
+                            FsmStateKind::OpenConfirm,
+                            &active.conn,
+                        );
+                        next
+                    }
+                    FsmStateKind::OpenConfirm => {
+                        runner.fsm_open_confirm(&rx, active.clone())
+                    }
+                    FsmStateKind::Established => {
+                        runner.fsm_established(&rx, active.clone())
+                    }
+                    _ => unreachable!(),
+                };
+                if state != FsmStateKind::OpenSent {
+                    assert_connection_state(&next, state, &active.conn);
+                }
+                assert_channel_messages(&active_remote.rx, &[]);
+                assert_eq!(runner.connection_count(), 1);
+                assert_connection_live(&runner, &active.conn);
+                assert!(runner.get_conn(other.conn.id()).is_none());
+                match peer {
+                    NonActivePeer::Registered => {
+                        assert_connection_stopped(&runner, &other.conn);
+                        assert_channel_messages(
+                            &other_remote.rx,
+                            &[NotificationMessage::fsm_error().into()],
+                        );
+                        assert_notification_accounting(&runner, 1, 0, 1);
+                    }
+                    NonActivePeer::Stale => {
+                        // The FSM must not touch a connection it doesn't own.
+                        assert!(conn_timer!(other.conn, hold).enabled());
+                        assert!(conn_timer!(other.conn, keepalive).enabled());
+                        assert_channel_messages(&other_remote.rx, &[]);
+                        assert_notification_accounting(&runner, 0, 0, 0);
+                    }
+                }
+                if state == FsmStateKind::Established {
+                    for (prefix, before) in prefixes.iter().zip(paths_before) {
+                        assert_eq!(runner.db.get_prefix_paths(prefix), before);
+                    }
+                    read_lock!(runner.fanout4).send_all(vec![prefix4], vec![]);
+                    read_lock!(runner.fanout6).send_all(vec![prefix6], vec![]);
+                    assert!(matches!(
+                        rx.try_recv().unwrap(),
+                        FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V4(
+                            RouteUpdate4::Announce(nlri)
+                        ))) if nlri == vec![prefix4]
+                    ));
+                    assert!(matches!(
+                        rx.try_recv().unwrap(),
+                        FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V6(
+                            RouteUpdate6::Announce(nlri)
+                        ))) if nlri == vec![prefix6]
+                    ));
+                    assert!(rx.try_recv().is_err());
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn test_channel_parse_error_from_stale_connection_is_ignored() {
+        check_non_active_parse_error(NonActivePeer::Stale);
+    }
+
+    #[test]
+    fn test_channel_parse_error_closes_registered_non_active_connection() {
+        check_non_active_parse_error(NonActivePeer::Registered);
+    }
+
+    // Both delivery outcomes must remove only this peer's routes and fanout.
+    fn with_established_parse_error(
+        test: impl FnOnce(
+            &Arc<SessionRunner<BgpConnectionChannel>>,
+            &Receiver<FsmEvent<BgpConnectionChannel>>,
+            &PeerConnection<BgpConnectionChannel>,
+            crate::connection::channel::Endpoint<MessageResult>,
+        ),
+    ) {
+        with_test_session("parse_error_routes", |runner, rx| {
+            let (mut pc, remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            pc.ipv6_unicast = AfiSafiState::Negotiated;
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Full(pc.clone()))
+                .unwrap();
+            conn_timer!(pc.conn, hold).restart();
+            conn_timer!(pc.conn, keepalive).restart();
+            session_timer!(runner, connect_retry).restart();
+            runner
+                .router
+                .add_fanout4(runner.peer_id(), runner.event_tx.clone());
+            runner
+                .router
+                .add_fanout6(runner.peer_id(), runner.event_tx.clone());
+            let prefix4: Ipv4Net = "203.0.113.0/24".parse().unwrap();
+            let prefix6: Ipv6Net = "2001:db8:42::/48".parse().unwrap();
+            runner.update_rib(
+                &UpdateMessage {
+                    nlri: vec![prefix4],
+                    path_attributes: vec![
+                        PathAttributeValue::NextHop(
+                            "192.0.2.2".parse().unwrap(),
+                        )
+                        .into(),
+                        PathAttributeValue::MpReachNlri(
+                            MpReachNlri::ipv6_unicast(
+                                BgpNexthop::Ipv6Single(
+                                    "2001:db8::2".parse().unwrap(),
+                                ),
+                                vec![prefix6],
+                            ),
+                        )
+                        .into(),
+                    ],
+                    ..Default::default()
+                },
+                &pc,
+            );
+            let prefixes = [IpNet::V4(prefix4), IpNet::V6(prefix6)];
+            let other_peer = PeerId::Ip("192.0.2.9".parse().unwrap());
+            for prefix in &prefixes {
+                let paths = runner.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1);
+                assert_eq!(
+                    paths[0].bgp.as_ref().unwrap().peer,
+                    runner.peer_id()
+                );
+                let mut other_path = paths[0].clone();
+                other_path.bgp.as_mut().unwrap().peer = other_peer.clone();
+                runner.db.add_bgp_prefixes(&[*prefix], other_path);
+                assert_eq!(runner.db.get_prefix_paths(prefix).len(), 2);
+            }
+            assert!(!read_lock!(runner.fanout4).is_empty());
+            assert!(!read_lock!(runner.fanout6).is_empty());
+            let (other_tx, other_rx) = std::sync::mpsc::channel();
+            runner
+                .router
+                .add_fanout4(other_peer.clone(), other_tx.clone());
+            runner.router.add_fanout6(other_peer.clone(), other_tx);
+
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                &pc.conn,
+                &remote,
+                fatal_update_parse_error(),
+            );
+            test(&runner, &rx, &pc, remote);
+
+            assert_eq!(runner.connection_count(), 0);
+            assert_connection_stopped(&runner, &pc.conn);
+            assert!(!session_timer!(runner, connect_retry).enabled());
+            read_lock!(runner.fanout4).send_all(vec![prefix4], vec![]);
+            read_lock!(runner.fanout6).send_all(vec![prefix6], vec![]);
+            assert!(matches!(
+                other_rx.try_recv().unwrap(),
+                FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V4(
+                    RouteUpdate4::Announce(nlri)
+                ))) if nlri == vec![prefix4]
+            ));
+            assert!(matches!(
+                other_rx.try_recv().unwrap(),
+                FsmEvent::Admin(AdminEvent::Announce(RouteUpdate::V6(
+                    RouteUpdate6::Announce(nlri)
+                ))) if nlri == vec![prefix6]
+            ));
+            assert!(other_rx.try_recv().is_err());
+            assert!(rx.try_recv().is_err(), "failed peer remains in fanout");
+            for prefix in &prefixes {
+                let paths = runner.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0].bgp.as_ref().unwrap().peer, other_peer);
+            }
+            let history = lock!(runner.message_history);
+            assert_eq!(history.sent.len(), 1);
+            assert_eq!(
+                history.sent[0].message,
+                NotificationMessage::new(
+                    ErrorCode::Update,
+                    ErrorSubcode::Update(
+                        UpdateErrorSubcode::MalformedAttributeList
+                    ),
+                )
+                .into()
+            );
+            assert_eq!(history.sent[0].connection_id, *pc.conn.id());
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_cleans_established_routes() {
+        with_established_parse_error(|runner, rx, pc, remote| {
+            assert_eq!(
+                runner.fsm_established(rx, pc.clone()).kind(),
+                FsmStateKind::Idle
+            );
+            assert_channel_messages(
+                &remote.rx,
+                &[NotificationMessage::new(
+                    ErrorCode::Update,
+                    ErrorSubcode::Update(
+                        UpdateErrorSubcode::MalformedAttributeList,
+                    ),
+                )
+                .into()],
+            );
+            assert_notification_accounting(runner, 1, 0, 1);
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_cleans_routes_when_notification_fails() {
+        with_established_parse_error(|runner, rx, pc, remote| {
+            drop(remote.rx);
+            assert_eq!(
+                runner.fsm_established(rx, pc.clone()).kind(),
+                FsmStateKind::Idle
+            );
+            assert_notification_accounting(runner, 0, 1, 1);
+        });
+    }
+
+    fn check_late_events_after_parse_error(
+        replace_connection: impl FnOnce(
+            &Arc<SessionRunner<BgpConnectionChannel>>,
+            &Receiver<FsmEvent<BgpConnectionChannel>>,
+            &PeerConnection<BgpConnectionChannel>,
+            &PeerConnection<BgpConnectionChannel>,
+        ),
+    ) {
+        with_test_session("parse_error_late_events", |runner, rx| {
+            let (old, old_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Outbound);
+            let (live, live_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Full(old.clone()))
+                .unwrap();
+            inject_channel_parse_error(
+                &runner,
+                &rx,
+                &old.conn,
+                &old_remote,
+                bad_bgp_id_parse_error(),
+            );
+            with_fsm_sentinel(&runner, &rx, || {
+                // Put late events after the sentinel: the first handler must
+                // return on the fatal error, leaving these for its successor.
+                for event in [
+                    ConnectionEvent::HoldTimerExpires(*old.conn.id()),
+                    ConnectionEvent::KeepaliveTimerExpires(*old.conn.id()),
+                    ConnectionEvent::TcpConnectionFails(*old.conn.id()),
+                    ConnectionEvent::ParseError {
+                        conn_id: *old.conn.id(),
+                        error: bad_bgp_id_parse_error(),
+                    },
+                ] {
+                    runner.event_tx.send(FsmEvent::Connection(event)).unwrap();
+                }
+                replace_connection(&runner, &rx, &old, &live);
+            });
+            conn_timer!(live.conn, hold).restart();
+            conn_timer!(live.conn, keepalive).restart();
+            runner
+                .event_tx
+                .send(FsmEvent::Connection(ConnectionEvent::Message {
+                    conn_id: *live.conn.id(),
+                    msg: OpenMessage::new4(64513, 30, 200, false).into(),
+                }))
+                .unwrap();
+            let state = with_fsm_sentinel(&runner, &rx, || {
+                runner.fsm_open_sent(&rx, live.conn.clone())
+            });
+            assert_connection_state(
+                &state,
+                FsmStateKind::OpenConfirm,
+                &live.conn,
+            );
+            assert_eq!(runner.connection_count(), 1);
+            assert!(runner.get_conn(old.conn.id()).is_none());
+            assert_connection_live(&runner, &live.conn);
+            assert_channel_messages(&live_remote.rx, &[Message::KeepAlive]);
+            assert_channel_messages(
+                &old_remote.rx,
+                &[NotificationMessage::bad_bgp_id().into()],
+            );
+            assert_notification_accounting(&runner, 1, 0, 1);
+            assert_eq!(
+                runner
+                    .counters
+                    .hold_timer_expirations
+                    .load(Ordering::Relaxed),
+                0
+            );
+            assert!(rx.try_recv().is_err());
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_late_events_preserve_collision_survivor() {
+        check_late_events_after_parse_error(|runner, rx, old, live| {
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Partial(live.conn.clone()))
+                .unwrap();
+            let state = runner.fsm_connection_collision(
+                rx,
+                CollisionPair::OpenConfirm(old.clone(), live.conn.clone()),
+            );
+            assert_connection_state(&state, FsmStateKind::OpenSent, &live.conn);
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_late_events_preserve_replacement() {
+        check_late_events_after_parse_error(|runner, rx, old, live| {
+            assert_eq!(
+                runner.fsm_established(rx, old.clone()).kind(),
+                FsmStateKind::Idle
+            );
+            lock!(runner.connection_registry)
+                .register(ConnectionKind::Partial(live.conn.clone()))
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn test_channel_parse_error_is_ignored_before_open_sent() {
+        for state in [
+            FsmStateKind::Idle,
+            FsmStateKind::Connect,
+            FsmStateKind::Active,
+        ] {
+            with_test_session("early_parse_error", |runner, rx| {
+                lock!(runner.session).passive_tcp_establishment = true;
+                session_timer!(runner, idle_hold).interval =
+                    Duration::from_secs(60);
+                *lock!(runner.state) = state;
+                let (old, old_remote) = test_peer_connection(
+                    &runner,
+                    ConnectionDirection::Outbound,
+                );
+                let (incoming, incoming_remote) =
+                    test_peer_connection(&runner, ConnectionDirection::Inbound);
+                let incoming_id = *incoming.conn.id();
+                inject_channel_parse_error(
+                    &runner,
+                    &rx,
+                    &old.conn,
+                    &old_remote,
+                    bad_bgp_id_parse_error(),
+                );
+                runner
+                    .event_tx
+                    .send(if state == FsmStateKind::Idle {
+                        FsmEvent::Admin(AdminEvent::ManualStart)
+                    } else {
+                        FsmEvent::Session(SessionEvent::TcpConnectionAcked(
+                            Arc::try_unwrap(incoming.conn).ok().unwrap(),
+                        ))
+                    })
+                    .unwrap();
+                let next = with_fsm_sentinel(&runner, &rx, || match state {
+                    FsmStateKind::Idle => runner.fsm_idle(&rx),
+                    FsmStateKind::Connect => runner.fsm_connect(&rx),
+                    FsmStateKind::Active => runner.fsm_active(&rx),
+                    _ => unreachable!(),
+                });
+                if state == FsmStateKind::Idle {
+                    assert_eq!(next.kind(), FsmStateKind::Active);
+                    assert_eq!(runner.connection_count(), 0);
+                    assert!(incoming_remote.rx.try_recv().is_err());
+                } else {
+                    let FsmState::OpenSent(conn) = next else {
+                        panic!("{state:?}: incoming connection rejected");
+                    };
+                    assert_eq!(*conn.id(), incoming_id);
+                    assert_eq!(runner.connection_count(), 1);
+                    let replies = incoming_remote
+                        .rx
+                        .try_iter()
+                        .map(Result::unwrap)
+                        .collect::<Vec<_>>();
+                    assert!(matches!(replies.as_slice(), [Message::Open(_)]));
+                }
+                assert!(old_remote.rx.try_recv().is_err());
+                assert_notification_accounting(&runner, 0, 0, 0);
+                assert!(rx.try_recv().is_err());
+                let history = lock!(runner.fsm_event_history);
+                assert_eq!(history.all.len(), 2);
+                let parse = history.all.back().unwrap();
+                assert_eq!(parse.event_type, "parse error");
+                assert_eq!(parse.current_state, state);
+                assert_eq!(parse.connection_id, Some(*old.conn.id()));
+            });
+        }
+    }
+
+    fn with_running_fsm(
+        runner: &Arc<SessionRunner<BgpConnectionChannel>>,
+        rx: Receiver<FsmEvent<BgpConnectionChannel>>,
+        test: impl FnOnce(),
+    ) {
+        let driver = FsmDriver::new(runner.clone(), rx);
+        let worker = std::thread::spawn(move || driver.fsm_start());
+        // Always stop the driver, including on assertion or timeout failures.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
+        runner.shutdown();
+        runner
+            .event_tx
+            .send(FsmEvent::Admin(AdminEvent::ManualStart))
+            .unwrap();
+        worker.join().unwrap();
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    #[track_caller]
+    fn recv_channel_message(rx: &Receiver<MessageResult>) -> Message {
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()
+    }
+
+    #[test]
+    fn test_channel_parse_error_run_loop_history() {
+        with_test_session("parse_error_run_loop", |runner, rx| {
+            lock!(runner.session).passive_tcp_establishment = true;
+            let (pc, remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            let (replacement, replacement_remote) =
+                test_peer_connection(&runner, ConnectionDirection::Inbound);
+            let conn_id = *pc.conn.id();
+            let replacement_id = *replacement.conn.id();
+            runner
+                .event_tx
+                .send(FsmEvent::Session(SessionEvent::TcpConnectionAcked(
+                    Arc::try_unwrap(pc.conn).ok().unwrap(),
+                )))
+                .unwrap();
+            with_running_fsm(&runner, rx, || {
+                assert!(matches!(
+                    recv_channel_message(&remote.rx),
+                    Message::Open(_)
+                ));
+                remote
+                    .tx
+                    .send(Ok(OpenMessage::new4(64513, 30, 200, false).into()))
+                    .unwrap();
+                assert_eq!(
+                    recv_channel_message(&remote.rx),
+                    Message::KeepAlive
+                );
+
+                // A second OPEN has an invalid ID, unlike the accepted OPEN.
+                let invalid_open = OpenMessage::new4(64513, 30, 0, false);
+                let wire = crate::messages::open_message_to_wire(&invalid_open)
+                    .unwrap();
+                assert!(matches!(
+                    crate::messages::open_message_from_wire(&wire),
+                    Err(Error::BadBgpIdentifier(id))
+                        if id == Ipv4Addr::from(invalid_open.id)
+                ));
+                remote.tx.send(Err(bad_bgp_id_parse_error())).unwrap();
+                assert_eq!(
+                    recv_channel_message(&remote.rx),
+                    NotificationMessage::bad_bgp_id().into()
+                );
+
+                // An accepted replacement proves the parse-error transition completed.
+                runner
+                    .event_tx
+                    .send(FsmEvent::Session(SessionEvent::TcpConnectionAcked(
+                        Arc::try_unwrap(replacement.conn).ok().unwrap(),
+                    )))
+                    .unwrap();
+                assert!(matches!(
+                    recv_channel_message(&replacement_remote.rx),
+                    Message::Open(_)
+                ));
+                assert_channel_messages(&remote.rx, &[]);
+                let history = lock!(runner.fsm_event_history).clone();
+                let errors = history
+                    .all
+                    .iter()
+                    .filter(|event| event.event_type == "parse error")
+                    .collect::<Vec<_>>();
+                assert_eq!(errors.len(), 1);
+                assert_eq!(
+                    errors[0].event_category,
+                    FsmEventCategory::Connection
+                );
+                assert_eq!(errors[0].connection_id, Some(conn_id));
+                assert_eq!(errors[0].current_state, FsmStateKind::OpenConfirm);
+                assert_eq!(errors[0].previous_state, None);
+                let details = errors[0].details.as_ref().unwrap();
+                assert!(details.starts_with("OPEN: "));
+                assert!(details.ends_with("bad bgp identifier: 0.0.0.0"));
+                let transitions = history
+                    .major
+                    .iter()
+                    .rev()
+                    // Check every transition before the replacement's acceptance.
+                    .take_while(|event| {
+                        event.connection_id != Some(replacement_id)
+                    })
+                    .filter(|event| {
+                        event.event_category
+                            == FsmEventCategory::StateTransition
+                    })
+                    .map(|event| {
+                        (event.previous_state.unwrap(), event.current_state)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    transitions,
+                    vec![
+                        (FsmStateKind::Idle, FsmStateKind::Active),
+                        (FsmStateKind::Active, FsmStateKind::OpenSent),
+                        (FsmStateKind::OpenSent, FsmStateKind::OpenConfirm),
+                        (FsmStateKind::OpenConfirm, FsmStateKind::Idle),
+                        (FsmStateKind::Idle, FsmStateKind::Active),
+                    ]
+                );
+                assert_eq!(
+                    runner.counters.transitions_to_idle.load(Ordering::Relaxed),
+                    1
+                );
+                assert_eq!(
+                    runner
+                        .counters
+                        .transitions_to_open_confirm
+                        .load(Ordering::Relaxed),
+                    1
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn test_shutdown_cleanup_and_transition_accounting() {
+        for previous in [
+            FsmStateKind::Established,
+            FsmStateKind::SessionSetup,
+            FsmStateKind::Idle,
+        ] {
+            with_test_session("shutdown_cleanup", |runner, _rx| {
+                let (pc, _remote) = test_peer_connection(
+                    &runner,
+                    ConnectionDirection::Outbound,
+                );
+                lock!(runner.connection_registry)
+                    .register(ConnectionKind::Full(pc.clone()))
+                    .unwrap();
+                conn_timer!(pc.conn, hold).restart();
+                conn_timer!(pc.conn, keepalive).restart();
+                session_timer!(runner, connect_retry).restart();
+                session_timer!(runner, idle_hold).restart();
+                runner
+                    .router
+                    .add_fanout4(runner.peer_id(), runner.event_tx.clone());
+                runner
+                    .router
+                    .add_fanout6(runner.peer_id(), runner.event_tx.clone());
+                let prefix: Ipv4Net = "203.0.113.0/24".parse().unwrap();
+                runner.update_rib(
+                    &UpdateMessage {
+                        nlri: vec![prefix],
+                        path_attributes: vec![
+                            PathAttributeValue::NextHop(
+                                "192.0.2.2".parse().unwrap(),
+                            )
+                            .into(),
+                        ],
+                        ..Default::default()
+                    },
+                    &pc,
+                );
+                let mut other_path =
+                    runner.db.get_prefix_paths(&prefix.into()).pop().unwrap();
+                let other_peer = PeerId::Ip("192.0.2.9".parse().unwrap());
+                other_path.bgp.as_mut().unwrap().peer = other_peer.clone();
+                runner.db.add_bgp_prefixes(&[prefix.into()], other_path);
+
+                *lock!(runner.state) = previous;
+                let old_time = Instant::now() - Duration::from_secs(5);
+                *lock!(runner.last_state_change) = old_time;
+                runner.shutdown();
+                runner.on_shutdown();
+
+                assert_eq!(runner.connection_count(), 0);
+                assert!(!conn_timer!(pc.conn, hold).enabled());
+                assert!(!conn_timer!(pc.conn, keepalive).enabled());
+                assert!(!session_timer!(runner, connect_retry).enabled());
+                assert!(!session_timer!(runner, idle_hold).enabled());
+                assert!(read_lock!(runner.fanout4).is_empty());
+                assert!(read_lock!(runner.fanout6).is_empty());
+                let paths = runner.db.get_prefix_paths(&prefix.into());
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0].bgp.as_ref().unwrap().peer, other_peer);
+                assert_eq!(runner.state(), FsmStateKind::Idle);
+                assert_eq!(runner.shutdown_state(), ShutdownState::Complete);
+                let transitioned = previous != FsmStateKind::Idle;
+                assert_eq!(
+                    runner.counters.transitions_to_idle.load(Ordering::Relaxed),
+                    u64::from(transitioned)
+                );
+                assert_eq!(
+                    *lock!(runner.last_state_change) > old_time,
+                    transitioned
+                );
+                let history = lock!(runner.fsm_event_history);
+                assert_eq!(history.major.len(), usize::from(transitioned));
+                if transitioned {
+                    let event = history.major.front().unwrap();
+                    assert_eq!(event.previous_state, Some(previous));
+                    assert_eq!(event.current_state, FsmStateKind::Idle);
+                    assert_eq!(
+                        event.event_category,
+                        FsmEventCategory::StateTransition
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn test_non_active_messages_are_counted() {
+        for established in [false, true] {
+            for registered in [false, true] {
+                with_test_session("non_active_message", |runner, rx| {
+                    let (pc, _remote) = test_peer_connection(
+                        &runner,
+                        ConnectionDirection::Outbound,
+                    );
+                    let (other, _other_remote) = test_peer_connection(
+                        &runner,
+                        ConnectionDirection::Inbound,
+                    );
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Full(pc.clone()))
+                        .unwrap();
+                    if registered {
+                        lock!(runner.connection_registry)
+                            .register(ConnectionKind::Partial(
+                                other.conn.clone(),
+                            ))
+                            .unwrap();
+                    }
+                    runner
+                        .event_tx
+                        .send(FsmEvent::Connection(ConnectionEvent::Message {
+                            msg: Message::Update(UpdateMessage::default()),
+                            conn_id: *other.conn.id(),
+                        }))
+                        .unwrap();
+                    if established {
+                        assert_eq!(
+                            runner.fsm_established(&rx, pc).kind(),
+                            FsmStateKind::Established
+                        );
+                    } else {
+                        // OpenSent loops after ignoring the message; a valid OPEN lets it return.
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::Message {
+                                    msg: OpenMessage::new4(
+                                        64513, 30, 200, false,
+                                    )
+                                    .into(),
+                                    conn_id: *pc.conn.id(),
+                                },
+                            ))
+                            .unwrap();
+                        assert_eq!(
+                            with_fsm_sentinel(&runner, &rx, || {
+                                runner.fsm_open_sent(&rx, pc.conn)
+                            })
+                            .kind(),
+                            FsmStateKind::OpenConfirm
+                        );
+                    }
+                    assert_eq!(
+                        runner
+                            .counters
+                            .updates_received
+                            .load(Ordering::Relaxed),
+                        1
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .unexpected_update_message
+                            .load(Ordering::Relaxed),
+                        1
+                    );
+                    assert_eq!(
+                        lock!(runner.message_history)
+                            .received
+                            .iter()
+                            .filter(|entry| matches!(
+                                entry.message,
+                                Message::Update(_)
+                            ))
+                            .count(),
+                        1
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_same_direction_connections_are_counted_as_declined() {
+        for direction in
+            [ConnectionDirection::Inbound, ConnectionDirection::Outbound]
+        {
+            for open_confirm in [false, true] {
+                with_test_session("same_direction", |runner, rx| {
+                    let (pc, remote) = test_peer_connection(&runner, direction);
+                    let (extra, _extra_remote) =
+                        test_peer_connection(&runner, direction);
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Full(pc.clone()))
+                        .unwrap();
+                    let extra = Arc::try_unwrap(extra.conn).ok().unwrap();
+                    runner
+                        .event_tx
+                        .send(FsmEvent::Session(match direction {
+                            ConnectionDirection::Inbound => {
+                                SessionEvent::TcpConnectionAcked(extra)
+                            }
+                            ConnectionDirection::Outbound => {
+                                SessionEvent::TcpConnectionConfirmed(extra)
+                            }
+                        }))
+                        .unwrap();
+                    if open_confirm {
+                        assert_eq!(
+                            runner.fsm_open_confirm(&rx, pc.clone()).kind(),
+                            FsmStateKind::OpenConfirm
+                        );
+                    } else {
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::Message {
+                                    msg: OpenMessage::new4(
+                                        64513, 30, 200, false,
+                                    )
+                                    .into(),
+                                    conn_id: *pc.conn.id(),
+                                },
+                            ))
+                            .unwrap();
+                        assert_eq!(
+                            with_fsm_sentinel(&runner, &rx, || {
+                                runner.fsm_open_sent(&rx, pc.conn.clone())
+                            })
+                            .kind(),
+                            FsmStateKind::OpenConfirm
+                        );
+                    }
+                    assert_eq!(
+                        runner
+                            .counters
+                            .passive_connections_declined
+                            .load(Ordering::Relaxed),
+                        u64::from(direction == ConnectionDirection::Inbound)
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .active_connections_declined
+                            .load(Ordering::Relaxed),
+                        u64::from(direction == ConnectionDirection::Outbound)
+                    );
+                    assert_eq!(runner.connection_count(), 1);
+                    assert!(runner.get_conn(pc.conn.id()).is_some());
+                    assert!(
+                        remote
+                            .rx
+                            .try_iter()
+                            .all(|msg| matches!(msg, Ok(Message::KeepAlive)))
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_keepalive_timer_follows_send_result_in_fsm() {
+        for state in [
+            FsmStateKind::OpenConfirm,
+            FsmStateKind::ConnectionCollision,
+            FsmStateKind::SessionSetup,
+        ] {
+            for connected in [false, true] {
+                with_test_session("keepalive_timer", |runner, rx| {
+                    let (pc, remote) = test_peer_connection(
+                        &runner,
+                        ConnectionDirection::Outbound,
+                    );
+                    lock!(runner.connection_registry)
+                        .register(ConnectionKind::Full(pc.clone()))
+                        .unwrap();
+                    let _remote = connected.then_some(remote);
+                    conn_timer!(pc.conn, keepalive).restart();
+                    conn_timer!(pc.conn, keepalive)
+                        .tick(Duration::from_secs(1));
+                    let remaining = conn_timer!(pc.conn, keepalive).remaining();
+                    if state != FsmStateKind::SessionSetup {
+                        runner
+                            .event_tx
+                            .send(FsmEvent::Connection(
+                                ConnectionEvent::KeepaliveTimerExpires(
+                                    *pc.conn.id(),
+                                ),
+                            ))
+                            .unwrap();
+                    }
+                    let next = match state {
+                        FsmStateKind::OpenConfirm => {
+                            runner.fsm_open_confirm(&rx, pc.clone())
+                        }
+                        FsmStateKind::ConnectionCollision => {
+                            let (other, _other_remote) = test_peer_connection(
+                                &runner,
+                                ConnectionDirection::Inbound,
+                            );
+                            lock!(runner.connection_registry)
+                                .register(ConnectionKind::Partial(
+                                    other.conn.clone(),
+                                ))
+                                .unwrap();
+                            // End the collision loop by expiring the other connection.
+                            conn_timer!(other.conn, hold).restart();
+                            runner
+                                .event_tx
+                                .send(FsmEvent::Connection(
+                                    ConnectionEvent::HoldTimerExpires(
+                                        *other.conn.id(),
+                                    ),
+                                ))
+                                .unwrap();
+                            with_fsm_sentinel(&runner, &rx, || {
+                                runner.connection_collision_open_confirm(
+                                    &rx,
+                                    pc.clone(),
+                                    other.conn,
+                                )
+                            })
+                        }
+                        FsmStateKind::SessionSetup => {
+                            runner.fsm_session_setup(pc.clone())
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        next.kind(),
+                        if state == FsmStateKind::SessionSetup {
+                            FsmStateKind::Established
+                        } else {
+                            FsmStateKind::OpenConfirm
+                        }
+                    );
+                    let expected_remaining = if connected {
+                        conn_timer!(pc.conn, keepalive).interval
+                    } else {
+                        remaining
+                    };
+                    assert_eq!(
+                        conn_timer!(pc.conn, keepalive).remaining(),
+                        expected_remaining
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .keepalive_send_failure
+                            .load(Ordering::Relaxed),
+                        u64::from(!connected)
+                    );
+                    assert_eq!(
+                        runner.counters.keepalives_sent.load(Ordering::Relaxed),
+                        u64::from(connected)
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_send_wrappers_record_history_and_counters() {
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db = rdb::test::get_test_db("send_history", log.clone()).unwrap();
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(64512),
+                id: 100,
+            },
+            log.clone(),
+            db.db().clone(),
+            Arc::new(Mutex::new(crate::router::SessionMap::new())),
+        ));
+        let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
+        let peer: SocketAddr = "192.0.2.2:179".parse().unwrap();
+        let config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        let (runner, _rx) =
+            create_test_session(&router, "peer", peer, config.clone());
+        let (endpoint, remote) = channel();
+        let conn =
+            Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                local,
+                peer,
+                endpoint,
+                runner.event_tx.clone(),
+                crate::IO_TIMEOUT,
+                log,
+                ConnectionDirection::Outbound,
+                &config,
+            ));
+        let pc = PeerConnection {
+            conn: conn.clone(),
+            id: 200,
+            asn: 64513,
+            caps: BTreeSet::new(),
+            ipv4_unicast: AfiSafiState::Unconfigured,
+            ipv6_unicast: AfiSafiState::Unconfigured,
+        };
+        let update = Message::Update(UpdateMessage::default());
+        let expected = vec![
+            Message::Open(OpenMessage::new4(64512, 6, 100, false)),
+            Message::KeepAlive,
+            Message::RouteRefresh(RouteRefreshMessage {
+                afi: Afi::Ipv6.into(),
+                safi: Safi::Unicast.into(),
+            }),
+            Message::Notification(NotificationMessage {
+                error_code: ErrorCode::Cease,
+                error_subcode: ErrorSubcode::Cease(
+                    CeaseErrorSubcode::ConnectionRejected,
+                ),
+                data: vec![],
+            }),
+            update.clone(),
+        ];
+        let mut remote = Some(remote);
+        let mut expected_history = Vec::new();
+        for connected in [true, false] {
+            if !connected {
+                drop(remote.take());
+            }
+            conn_timer!(conn, keepalive).stop();
+            assert_eq!(runner.send_open(&conn).is_ok(), connected);
+            runner.send_keepalive(&conn);
+            runner.send_route_refresh(&conn, Afi::Ipv6);
+            runner.send_rejected_notification(&conn);
+            assert_eq!(
+                runner.send_update_message(update.clone(), &pc).is_ok(),
+                connected
+            );
+
+            if let Some(remote) = &remote {
+                assert_eq!(
+                    remote
+                        .rx
+                        .try_iter()
+                        .map(Result::unwrap)
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
+            }
+            assert_eq!(conn_timer!(conn, keepalive).enabled(), connected);
+            expected_history.extend(expected.iter().cloned());
+            let history = lock!(runner.message_history);
+            assert!(history.received.is_empty());
+            assert_eq!(
+                history
+                    .sent
+                    .iter()
+                    .rev()
+                    .map(|entry| entry.message.clone())
+                    .collect::<Vec<_>>(),
+                expected_history,
+                "each attempt is recorded exactly once, connected={connected}",
+            );
+            assert!(
+                history
+                    .sent
+                    .iter()
+                    .all(|entry| entry.connection_id == *conn.id())
+            );
+            drop(history);
+
+            let failures = u64::from(!connected);
+            for (sent, failed) in [
+                (
+                    &runner.counters.opens_sent,
+                    &runner.counters.open_send_failure,
+                ),
+                (
+                    &runner.counters.notifications_sent,
+                    &runner.counters.notification_send_failure,
+                ),
+                (
+                    &runner.counters.updates_sent,
+                    &runner.counters.update_send_failure,
+                ),
+                (
+                    &runner.counters.keepalives_sent,
+                    &runner.counters.keepalive_send_failure,
+                ),
+                (
+                    &runner.counters.route_refresh_sent,
+                    &runner.counters.route_refresh_send_failure,
+                ),
+            ] {
+                assert_eq!(sent.load(Ordering::Relaxed), 1);
+                assert_eq!(failed.load(Ordering::Relaxed), failures);
+            }
+        }
+
+        // A policy-dropped OPEN never reaches the send helper, even when the
+        // transport would fail. It must not add history or count an attempt.
+        *write_lock!(router.policy.shaper) = Some(
+            crate::policy::load_shaper(
+                "fn open(m, asn, addr) { ShaperResult::Drop }
+             fn update(m, asn, addr) { m.emit() }",
+            )
+            .unwrap(),
+        );
+        assert!(runner.send_open(&conn).is_ok());
+        assert_eq!(
+            lock!(runner.message_history).sent.len(),
+            expected_history.len()
+        );
+        assert_eq!(runner.counters.opens_sent.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            runner.counters.open_send_failure.load(Ordering::Relaxed),
+            1
+        );
+    }
 
     #[test]
     fn shutdown_state_transitions() {
@@ -9418,58 +11254,748 @@ mod tests {
     }
 
     #[test]
+    fn test_collision_resolution_criteria_display() {
+        for (criteria, expected) in [
+            (CollisionResolutionCriteria::HighestBgpId, "highest BGP-ID"),
+            (CollisionResolutionCriteria::HighestAsn, "highest ASN"),
+        ] {
+            assert_eq!(criteria.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_collision_resolution_display() {
+        for (resolution, expected) in [
+            (
+                CollisionResolution::ExistWins(
+                    CollisionResolutionCriteria::HighestBgpId,
+                ),
+                "existing connection wins (highest BGP-ID)",
+            ),
+            (
+                CollisionResolution::NewWins(
+                    CollisionResolutionCriteria::HighestBgpId,
+                ),
+                "new connection wins (highest BGP-ID)",
+            ),
+            (
+                CollisionResolution::ExistWins(
+                    CollisionResolutionCriteria::HighestAsn,
+                ),
+                "existing connection wins (highest ASN)",
+            ),
+            (
+                CollisionResolution::NewWins(
+                    CollisionResolutionCriteria::HighestAsn,
+                ),
+                "new connection wins (highest ASN)",
+            ),
+        ] {
+            assert_eq!(resolution.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn test_resolve_collision_decision() {
-        use crate::connection::ConnectionDirection;
-        use crate::session::collision_resolution;
+        // BGP-ID takes precedence regardless of ASN ordering, including iBGP.
+        for (local_asn, remote_asn) in
+            [(64512, 64513), (64513, 64512), (64512, 64512)]
+        {
+            for (direction, local_id, remote_id, expected) in [
+                (
+                    ConnectionDirection::Outbound,
+                    100,
+                    50,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    100,
+                    50,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    50,
+                    100,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Outbound,
+                    50,
+                    100,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestBgpId,
+                    ),
+                ),
+            ] {
+                assert_eq!(
+                    collision_resolution(
+                        direction, local_id, remote_id, local_asn, remote_asn,
+                    ),
+                    expected,
+                    "{direction:?}, IDs {local_id}/{remote_id}, ASNs {local_asn}/{remote_asn}",
+                );
+            }
+        }
+    }
 
-        // Case 1: Local wins (higher BGP ID), Connector (ours) is exist
-        // Local BGP ID (100) > Remote (50), exist is Connector (ours)
-        // Expected: ExistWins
+    #[derive(Clone, Copy, Debug)]
+    enum ExpectedWinner {
+        Existing,
+        Incoming,
+    }
+
+    #[test]
+    fn test_open_sent_validation_and_policy() {
+        #[derive(Clone, Copy, Debug)]
+        enum OpenSentPath {
+            Single,
+            CollisionExisting,
+            CollisionIncoming,
+            CollisionIncomingOpenConfirm,
+        }
+
+        for path in [
+            OpenSentPath::Single,
+            OpenSentPath::CollisionExisting,
+            OpenSentPath::CollisionIncoming,
+            OpenSentPath::CollisionIncomingOpenConfirm,
+        ] {
+            for (policy, hold_time, notification) in [
+                (
+                    "CheckerResult::Drop",
+                    30,
+                    Some((
+                        ErrorCode::Cease,
+                        ErrorSubcode::Cease(
+                            CeaseErrorSubcode::ConnectionRejected,
+                        ),
+                    )),
+                ),
+                ("CheckerResult::Accept", 30, None),
+                ("throw \"script failed\"", 30, None),
+                (
+                    "CheckerResult::Accept",
+                    2,
+                    Some((
+                        ErrorCode::Open,
+                        ErrorSubcode::Open(
+                            OpenErrorSubcode::UnacceptableHoldTime,
+                        ),
+                    )),
+                ),
+                (
+                    "throw \"script failed\"",
+                    2,
+                    Some((
+                        ErrorCode::Open,
+                        ErrorSubcode::Open(
+                            OpenErrorSubcode::UnacceptableHoldTime,
+                        ),
+                    )),
+                ),
+            ] {
+                // Successful collision resolution is covered separately.
+                if !matches!(path, OpenSentPath::Single)
+                    && notification.is_none()
+                {
+                    continue;
+                }
+                let case = format!("{path:?}, {policy}, hold={hold_time}");
+                let log = Logger::root(slog::Discard, slog::o!());
+                let db =
+                    rdb::test::get_test_db("open_sent_policy", log.clone())
+                        .unwrap();
+                let router = Arc::new(Router::new(
+                    RouterConfig {
+                        asn: Asn::FourOctet(64512),
+                        id: 100,
+                    },
+                    log.clone(),
+                    db.db().clone(),
+                    Arc::new(Mutex::new(crate::router::SessionMap::new())),
+                ));
+                *write_lock!(router.policy.checker) = Some(
+                    crate::policy::load_checker(&format!(
+                        "fn open(m, asn, addr) {{ {policy} }}
+                         fn update(m, asn, addr) {{ CheckerResult::Accept }}"
+                    ))
+                    .unwrap(),
+                );
+                let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
+                let peer: SocketAddr = "192.0.2.2:179".parse().unwrap();
+                let config = create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    local,
+                    peer,
+                    false,
+                );
+                let (runner, rx) =
+                    create_test_session(&router, "peer", peer, config.clone());
+                let make_conn =
+                    |direction| {
+                        let (endpoint, remote) = channel();
+                        let conn =
+                        BgpConnectionChannel::with_conn_without_clock_thread(
+                            local, peer, endpoint, runner.event_tx.clone(),
+                            crate::IO_TIMEOUT, log.clone(), direction, &config,
+                        );
+                        let conn = Arc::new(conn);
+                        lock!(runner.connection_registry)
+                            .register(ConnectionKind::Partial(conn.clone()))
+                            .unwrap();
+                        conn_timer!(conn, hold).restart();
+                        conn_timer!(conn, keepalive).restart();
+                        (conn, remote)
+                    };
+                let (existing, existing_peer) =
+                    make_conn(ConnectionDirection::Outbound);
+                let incoming = match path {
+                    OpenSentPath::Single => None,
+                    OpenSentPath::CollisionExisting
+                    | OpenSentPath::CollisionIncoming
+                    | OpenSentPath::CollisionIncomingOpenConfirm => {
+                        Some(make_conn(ConnectionDirection::Inbound))
+                    }
+                };
+                let (target, target_peer) = match path {
+                    OpenSentPath::Single | OpenSentPath::CollisionExisting => {
+                        (&existing, &existing_peer)
+                    }
+                    OpenSentPath::CollisionIncoming
+                    | OpenSentPath::CollisionIncomingOpenConfirm => {
+                        let (conn, remote) = incoming.as_ref().unwrap();
+                        (conn, remote)
+                    }
+                };
+                // Collision entry leaves the connect-retry timer stopped.
+                // The single-connection case also exercises stop's timer cleanup.
+                if matches!(path, OpenSentPath::Single) {
+                    session_timer!(runner, connect_retry).restart();
+                } else {
+                    session_timer!(runner, connect_retry).stop();
+                }
+                runner
+                    .event_tx
+                    .send(FsmEvent::Connection(ConnectionEvent::Message {
+                        msg: Message::Open(OpenMessage::new4(
+                            64513, hold_time, 200, false,
+                        )),
+                        conn_id: *target.id(),
+                    }))
+                    .unwrap();
+
+                let state =
+                    with_fsm_sentinel(&runner, &rx, || match &incoming {
+                        Some((conn, _))
+                            if matches!(
+                                path,
+                                OpenSentPath::CollisionIncomingOpenConfirm
+                            ) =>
+                        {
+                            let pc = PeerConnection {
+                                conn: existing.clone(),
+                                id: 200,
+                                asn: 64513,
+                                caps: BTreeSet::new(),
+                                ipv4_unicast: AfiSafiState::Unconfigured,
+                                ipv6_unicast: AfiSafiState::Unconfigured,
+                            };
+                            lock!(runner.connection_registry)
+                                .upgrade_to_full(pc.clone());
+                            runner.connection_collision_open_confirm(
+                                &rx,
+                                pc,
+                                conn.clone(),
+                            )
+                        }
+                        Some((conn, _)) => runner
+                            .connection_collision_open_sent(
+                                &rx,
+                                existing.clone(),
+                                conn.clone(),
+                            ),
+                        None => runner.fsm_open_sent(&rx, existing.clone()),
+                    });
+                let replies = target_peer
+                    .rx
+                    .try_iter()
+                    .map(Result::unwrap)
+                    .collect::<Vec<_>>();
+                if let Some((error_code, error_subcode)) = notification {
+                    assert_eq!(
+                        replies,
+                        vec![Message::Notification(NotificationMessage {
+                            error_code,
+                            error_subcode,
+                            data: vec![],
+                        })],
+                        "{case}: exactly one rejection, no KEEPALIVE"
+                    );
+                    assert!(runner.get_conn(target.id()).is_none(), "{case}");
+                    assert!(!conn_timer!(target, hold).enabled(), "{case}");
+                    assert!(
+                        !conn_timer!(target, keepalive).enabled(),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        runner
+                            .counters
+                            .connection_retries
+                            .load(Ordering::Relaxed),
+                        u64::from(matches!(path, OpenSentPath::Single)),
+                        "{case}"
+                    );
+                    assert!(
+                        !session_timer!(runner, connect_retry).enabled(),
+                        "{case}"
+                    );
+                    if let Some((incoming, incoming_peer)) = &incoming {
+                        let (survivor, survivor_peer) = if matches!(
+                            path,
+                            OpenSentPath::CollisionExisting
+                        ) {
+                            (incoming, incoming_peer)
+                        } else {
+                            (&existing, &existing_peer)
+                        };
+                        let retained = match state {
+                            FsmState::OpenConfirm(pc)
+                                if matches!(
+                                    path,
+                                    OpenSentPath::CollisionIncomingOpenConfirm
+                                ) =>
+                            {
+                                pc.conn
+                            }
+                            FsmState::OpenSent(conn)
+                                if !matches!(
+                                    path,
+                                    OpenSentPath::CollisionIncomingOpenConfirm
+                                ) =>
+                            {
+                                conn
+                            }
+                            state => panic!(
+                                "{case}: unexpected fallback state {state}"
+                            ),
+                        };
+                        assert_eq!(retained.id(), survivor.id(), "{case}");
+                        assert_eq!(runner.connection_count(), 1, "{case}");
+                        assert!(
+                            runner.get_conn(survivor.id()).is_some(),
+                            "{case}"
+                        );
+                        assert!(
+                            survivor_peer.rx.try_iter().next().is_none(),
+                            "{case}"
+                        );
+                        assert!(
+                            conn_timer!(survivor, hold).enabled(),
+                            "{case}"
+                        );
+                        assert!(
+                            conn_timer!(survivor, keepalive).enabled(),
+                            "{case}"
+                        );
+                    } else {
+                        assert_eq!(state.kind(), FsmStateKind::Idle, "{case}");
+                        assert_eq!(runner.connection_count(), 0, "{case}");
+                    }
+                } else {
+                    assert_eq!(replies, vec![Message::KeepAlive], "{case}");
+                    let FsmState::OpenConfirm(pc) = state else {
+                        panic!("{case}: expected OpenConfirm, got {state}");
+                    };
+                    assert_eq!(pc.conn.id(), target.id(), "{case}");
+                    assert!(
+                        matches!(
+                            runner.primary_connection(),
+                            Some(ConnectionKind::Full(_))
+                        ),
+                        "{case}"
+                    );
+                    assert!(conn_timer!(target, hold).enabled(), "{case}");
+                }
+            }
+        }
+    }
+
+    /// Deliver a new4(..., false) OPEN while another connection is Established.
+    /// Local BGP-ID/ASN are 100/64512; the incoming direction is opposite the
+    /// existing connection's. Check both connections' messages and the returned
+    /// and registered peer state, without running clocks or receive loops.
+    fn check_established_open(
+        existing_connection_direction: ConnectionDirection,
+        incoming_open: OpenMessage,
+        deterministic_collision_resolution: bool,
+        expected_winner: ExpectedWinner,
+        expected_notification: (ErrorCode, ErrorSubcode),
+    ) {
+        let case = format!(
+            "{existing_connection_direction:?}, OPEN {incoming_open}, deterministic={deterministic_collision_resolution}, expected={expected_winner:?}"
+        );
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db =
+            rdb::test::get_test_db("established_open", log.clone()).unwrap();
+        let router = Arc::new(Router::new(
+            RouterConfig {
+                asn: Asn::FourOctet(64512),
+                id: 100,
+            },
+            log.clone(),
+            db.db().clone(),
+            Arc::new(Mutex::new(crate::router::SessionMap::new())),
+        ));
+        let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
+        let peer: SocketAddr = "192.0.2.2:179".parse().unwrap();
+        let mut config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        config.deterministic_collision_resolution =
+            deterministic_collision_resolution;
+        let (runner, rx) =
+            create_test_session(&router, "peer", peer, config.clone());
+
+        // One connection has already accepted an OPEN; the other is waiting
+        // for the OPEN under test. Keep the peer endpoints to inspect replies.
+        let make_conn = |direction| {
+            let (endpoint, remote) = channel();
+            let conn =
+                Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                    local,
+                    peer,
+                    endpoint,
+                    runner.event_tx.clone(),
+                    crate::IO_TIMEOUT,
+                    log.clone(),
+                    direction,
+                    &config,
+                ));
+            (conn, remote)
+        };
+        let (existing, existing_peer) =
+            make_conn(existing_connection_direction);
+        let (incoming, incoming_peer) =
+            make_conn(match existing_connection_direction {
+                ConnectionDirection::Inbound => ConnectionDirection::Outbound,
+                ConnectionDirection::Outbound => ConnectionDirection::Inbound,
+            });
+        let pc = PeerConnection {
+            conn: existing.clone(),
+            // The existing peer advertised a valid ID, distinct from ours.
+            // The new OPEN may carry a different (or invalid) ID.
+            id: 200,
+            asn: incoming_open.asn(),
+            caps: BTreeSet::new(),
+            ipv4_unicast: AfiSafiState::Unconfigured,
+            ipv6_unicast: AfiSafiState::Unconfigured,
+        };
+        lock!(runner.connection_registry)
+            .register(ConnectionKind::Full(pc.clone()))
+            .unwrap();
+        lock!(runner.connection_registry)
+            .register(ConnectionKind::Partial(incoming.clone()))
+            .unwrap();
+        conn_timer!(existing, hold).restart();
+
+        let (expected_id, expected_asn, expected_caps) = match expected_winner {
+            ExpectedWinner::Existing => (pc.id, pc.asn, pc.caps.clone()),
+            ExpectedWinner::Incoming => (
+                incoming_open.id,
+                incoming_open.asn(),
+                // new4 advertises this capability, independently of the FSM's
+                // capability extraction and connection upgrade logic.
+                BTreeSet::from([Capability::FourOctetAs {
+                    asn: incoming_open.asn(),
+                }]),
+            ),
+        };
+
+        // No background producers: the OPEN is the only queued event.
+        runner
+            .event_tx
+            .send(FsmEvent::Connection(ConnectionEvent::Message {
+                msg: Message::Open(incoming_open),
+                conn_id: *incoming.id(),
+            }))
+            .unwrap();
+
+        let state = runner.fsm_established(&rx, pc);
+
+        let rejected_open = expected_notification.0 == ErrorCode::Open;
         assert_eq!(
-            collision_resolution(
+            runner.counters.opens_received.load(Ordering::Relaxed),
+            1,
+            "{case}: count the OPEN once",
+        );
+        assert_eq!(
+            runner.counters.open_handle_failures.load(Ordering::Relaxed),
+            u64::from(rejected_open),
+            "{case}: count OPEN validation failures separately",
+        );
+        assert_eq!(
+            runner
+                .counters
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            u64::from(
+                !rejected_open
+                    && matches!(expected_winner, ExpectedWinner::Existing)
+            ),
+            "{case}: invalid OPEN on a colliding connection is not unexpected",
+        );
+
+        // Check the returned state and the surviving connection separately.
+        let retained = match (expected_winner, state) {
+            (ExpectedWinner::Existing, FsmState::Established(pc)) => pc,
+            (ExpectedWinner::Incoming, FsmState::OpenConfirm(pc)) => pc,
+            (_, other) => panic!("{case}: unexpected state {other}"),
+        };
+        let (winner, loser, winning_peer, rejected_peer, hold_time, replies) =
+            match expected_winner {
+                ExpectedWinner::Incoming => (
+                    &incoming,
+                    &existing,
+                    &incoming_peer,
+                    &existing_peer,
+                    3,
+                    vec![Message::KeepAlive],
+                ),
+                ExpectedWinner::Existing => (
+                    &existing,
+                    &incoming,
+                    &existing_peer,
+                    &incoming_peer,
+                    6,
+                    vec![],
+                ),
+            };
+        assert_eq!(runner.connection_count(), 1, "{case}");
+        let Some(ConnectionKind::Full(registered)) =
+            runner.primary_connection()
+        else {
+            panic!("{case}: winner must be Full in the registry");
+        };
+        for pc in [&retained, &registered] {
+            assert_eq!(pc.conn.id(), winner.id(), "{case}");
+            assert_eq!(pc.id, expected_id, "{case}: peer BGP-ID");
+            assert_eq!(pc.asn, expected_asn, "{case}: peer ASN");
+            assert_eq!(pc.caps, expected_caps, "{case}: peer capabilities");
+        }
+        assert!(conn_timer!(winner, hold).enabled(), "{case}");
+        assert!(!conn_timer!(loser, hold).enabled(), "{case}");
+        // Retaining the existing connection preserves its hold time; accepting
+        // the new OPEN negotiates its shorter hold time.
+        assert_eq!(
+            conn_timer!(winner, hold).interval,
+            Duration::from_secs(hold_time),
+            "{case}",
+        );
+        assert_eq!(
+            winning_peer
+                .rx
+                .try_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>(),
+            replies,
+            "{case}: winner's messages",
+        );
+        assert_eq!(
+            rejected_peer
+                .rx
+                .try_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>(),
+            vec![Message::Notification(NotificationMessage {
+                error_code: expected_notification.0,
+                error_subcode: expected_notification.1,
+                data: vec![],
+            })],
+            "{case}: loser's messages",
+        );
+
+        if matches!(expected_winner, ExpectedWinner::Incoming) {
+            // The winning connection must receive its own KEEPALIVE before
+            // session setup can advertise routes and enter Established.
+            runner
+                .event_tx
+                .send(FsmEvent::Connection(ConnectionEvent::Message {
+                    msg: Message::KeepAlive,
+                    conn_id: *incoming.id(),
+                }))
+                .unwrap();
+            let FsmState::SessionSetup(confirmed) =
+                runner.fsm_open_confirm(&rx, retained)
+            else {
+                panic!("{case}: KEEPALIVE must complete confirmation");
+            };
+            assert_eq!(confirmed.conn.id(), incoming.id(), "{case}");
+        }
+    }
+
+    #[test]
+    fn test_established_collision_resolution() {
+        for (existing_connection_direction, remote_id, expected_winner) in [
+            (ConnectionDirection::Outbound, 50, ExpectedWinner::Existing),
+            (ConnectionDirection::Inbound, 50, ExpectedWinner::Incoming),
+            (ConnectionDirection::Inbound, 150, ExpectedWinner::Existing),
+            (ConnectionDirection::Outbound, 150, ExpectedWinner::Incoming),
+            (ConnectionDirection::Inbound, 100, ExpectedWinner::Existing),
+            (ConnectionDirection::Outbound, 100, ExpectedWinner::Incoming),
+        ] {
+            check_established_open(
+                existing_connection_direction,
+                OpenMessage::new4(4200000001, 3, remote_id, false),
+                true,
+                expected_winner,
+                (
+                    ErrorCode::Cease,
+                    ErrorSubcode::Cease(
+                        CeaseErrorSubcode::ConnectionCollisionResolution,
+                    ),
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn test_established_collision_resolution_disabled() {
+        // Either the higher BGP-ID or, with matching IDs, the higher ASN
+        // would make the incoming connection win if the flag were ignored.
+        for remote_id in [150, 100] {
+            check_established_open(
                 ConnectionDirection::Outbound,
-                100, // local
-                50,  // remote
-            ),
-            CollisionResolution::ExistWins
-        );
+                OpenMessage::new4(4200000001, 3, remote_id, false),
+                false,
+                ExpectedWinner::Existing,
+                (
+                    ErrorCode::Cease,
+                    ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionRejected),
+                ),
+            );
+        }
+    }
 
-        // Case 2: Local wins, Dispatcher (theirs) is exist
-        // Local BGP ID (100) > Remote (50), exist is Dispatcher (theirs), so new is Connector (ours)
-        // Our connection wins, so NewWins
-        // Expected: NewWins
-        assert_eq!(
-            collision_resolution(
-                ConnectionDirection::Inbound,
-                100, // local
-                50,  // remote
+    #[test]
+    fn test_established_collision_rejects_matching_ibgp_id() {
+        check_established_open(
+            ConnectionDirection::Inbound,
+            OpenMessage::new4(64512, 3, 100, false),
+            false,
+            ExpectedWinner::Existing,
+            (
+                ErrorCode::Open,
+                ErrorSubcode::Open(OpenErrorSubcode::BadBgpIdentifier),
             ),
-            CollisionResolution::NewWins
         );
+    }
 
-        // Case 3: Remote wins (higher BGP ID), Dispatcher (theirs) is exist
-        // Local BGP ID (50) < Remote (100), exist is Dispatcher (theirs)
-        // Expected: ExistWins
-        assert_eq!(
-            collision_resolution(
-                ConnectionDirection::Inbound,
-                50,  // local
-                100, // remote
-            ),
-            CollisionResolution::ExistWins
-        );
+    #[test]
+    fn test_established_collision_rejects_short_hold_time_without_deadlock() {
+        for hold_time in [1, 2] {
+            for deterministic_collision_resolution in [false, true] {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    check_established_open(
+                        ConnectionDirection::Outbound,
+                        OpenMessage::new4(4200000001, hold_time, 200, false),
+                        deterministic_collision_resolution,
+                        ExpectedWinner::Existing,
+                        (
+                            ErrorCode::Open,
+                            ErrorSubcode::Open(
+                                OpenErrorSubcode::UnacceptableHoldTime,
+                            ),
+                        ),
+                    );
+                    tx.send(()).unwrap();
+                });
 
-        // Case 4: Remote wins, Connector (theirs) is exist
-        // Local BGP ID (50) < Remote (100), exist is Connector (theirs)
-        // Expected: NewWins
-        assert_eq!(
-            collision_resolution(
-                ConnectionDirection::Outbound,
-                50,  // local
-                100, // remote
-            ),
-            CollisionResolution::NewWins
-        );
+                // Rejection unregisters the connection and locks its timers.
+                // Bound the wait so recursive locking fails instead of hanging
+                // the test suite, allowing time for database and session setup.
+                // Join on success or disconnection to propagate worker panics,
+                // but never on timeout: the worker may be deadlocked.
+                if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    rx.recv_timeout(Duration::from_secs(60))
+                {
+                    panic!(
+                        "OPEN rejection did not complete within 60s; hold_time={hold_time}, deterministic_collision_resolution={deterministic_collision_resolution}"
+                    );
+                }
+                if let Err(payload) = worker.join() {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_collision_matching_bgp_ids() {
+        for (lower_asn, higher_asn) in [
+            // both ASNs are 2-octet
+            (64512, 64513),
+            // boundary between 2-octet and 4-octet ASNs
+            (65535, 65536),
+            // ASNs on either side of the 2-octet/4-octet split
+            (64512, 4200000001),
+            // both ASNs are 4-octet
+            (4200000001, 4200000002),
+        ] {
+            for (direction, local_asn, remote_asn, expected) in [
+                (
+                    ConnectionDirection::Outbound,
+                    higher_asn,
+                    lower_asn,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    higher_asn,
+                    lower_asn,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Inbound,
+                    lower_asn,
+                    higher_asn,
+                    CollisionResolution::ExistWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+                (
+                    ConnectionDirection::Outbound,
+                    lower_asn,
+                    higher_asn,
+                    CollisionResolution::NewWins(
+                        CollisionResolutionCriteria::HighestAsn,
+                    ),
+                ),
+            ] {
+                assert_eq!(
+                    collision_resolution(
+                        direction, 100, 100, local_asn, remote_asn,
+                    ),
+                    expected,
+                    "{direction:?}, matching IDs, ASNs {local_asn}/{remote_asn}",
+                );
+            }
+        }
     }
 
     #[test]
