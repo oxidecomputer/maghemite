@@ -2,7 +2,8 @@
 
 use crate::dendrite::NpuvmCommits;
 use crate::scenario::{
-    InteropScenario, MgdDuoScenario, Scenario, ScenarioOptions,
+    BgpAddPathScenario, InteropScenario, MgdDuoScenario, Scenario,
+    ScenarioOptions,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -45,6 +46,7 @@ struct TopologyRun {
 enum RunTopology {
     MgdDuo(ScenarioRun<MgdDuoScenario>),
     Interop(ScenarioRun<InteropScenario>),
+    BgpAddPath(ScenarioRun<BgpAddPathScenario>),
 }
 
 #[derive(Debug, Args)]
@@ -90,6 +92,7 @@ struct TopologyCleanup {
 enum CleanupTopology {
     MgdDuo(ScenarioCleanup<MgdDuoScenario>),
     Interop(ScenarioCleanup<InteropScenario>),
+    BgpAddPath(ScenarioCleanup<BgpAddPathScenario>),
 }
 
 #[derive(Debug, Args)]
@@ -116,12 +119,18 @@ async fn run() -> anyhow::Result<()> {
             RunTopology::Interop(cmd) => {
                 cmd.scenario.run(cmd.options.scenario_options()).await?;
             }
+            RunTopology::BgpAddPath(cmd) => {
+                cmd.scenario.run(cmd.options.scenario_options()).await?;
+            }
         },
         Command::Cleanup(cmd) => match cmd.topology {
             CleanupTopology::MgdDuo(cmd) => {
                 cmd.scenario.cleanup()?;
             }
             CleanupTopology::Interop(cmd) => {
+                cmd.scenario.cleanup()?;
+            }
+            CleanupTopology::BgpAddPath(cmd) => {
                 cmd.scenario.cleanup()?;
             }
         },
@@ -182,7 +191,61 @@ mod tests {
     }
 
     #[test]
+    fn bgp_add_path_run_and_cleanup_scenarios() {
+        for scenario in ["bare", "frr", "arista", "juniper"] {
+            let cli = Cli::try_parse_from([
+                "falcon-lab",
+                "run",
+                "bgp-add-path",
+                scenario,
+                "--no-cleanup",
+                "--no-diag-on-fail",
+            ])
+            .expect("parse bgp-add-path run");
+            assert!(matches!(
+                cli.command,
+                Command::Run(TopologyRun {
+                    topology: RunTopology::BgpAddPath(ScenarioRun {
+                        options: RunOptions {
+                            no_cleanup: true,
+                            no_diag_on_fail: true,
+                            ..
+                        },
+                        ..
+                    }),
+                })
+            ));
+            let cli = Cli::try_parse_from([
+                "falcon-lab",
+                "cleanup",
+                "bgp-add-path",
+                scenario,
+            ])
+            .expect("parse bgp-add-path cleanup");
+            assert!(matches!(
+                cli.command,
+                Command::Cleanup(TopologyCleanup {
+                    topology: CleanupTopology::BgpAddPath(_),
+                })
+            ));
+        }
+    }
+
+    #[test]
     fn scenario_is_rejected_by_wrong_topology() {
+        assert!(
+            Cli::try_parse_from(["falcon-lab", "run", "bgp-add-path", "mgd",])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "falcon-lab",
+                "run",
+                "bgp-add-path",
+                "bgp-unnumbered",
+            ])
+            .is_err()
+        );
         assert!(
             Cli::try_parse_from([
                 "falcon-lab",

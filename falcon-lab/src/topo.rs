@@ -8,7 +8,7 @@ use crate::{
     frr::FrrNode,
     juniper::JuniperNode,
     mgd::MgdNode,
-    scenario::{InteropScenario, MgdDuoScenario},
+    scenario::{BgpAddPathScenario, InteropScenario, MgdDuoScenario},
 };
 
 pub(crate) trait Topology: Sized {
@@ -45,6 +45,82 @@ impl Topology for MgdDuo {
             d,
             ox1: MgdNode(ox1),
             ox2: MgdNode(ox2),
+        })
+    }
+
+    fn runner_mut(&mut self) -> &mut Runner {
+        &mut self.d
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum AddPathSpeaker {
+    Frr(FrrNode),
+    Arista(EosNode),
+    Juniper(JuniperNode),
+}
+
+/// One receiving mgd peer, a scenario-selected transit router, and two FRR origins.
+pub struct BgpAddPath {
+    pub d: Runner,
+    pub ox: MgdNode,
+    pub transit: AddPathSpeaker,
+    pub frr1: FrrNode,
+    pub frr2: FrrNode,
+}
+
+impl Topology for BgpAddPath {
+    type Scenario = BgpAddPathScenario;
+
+    fn build(scenario: BgpAddPathScenario) -> Result<Self> {
+        let mut d = Runner::new(scenario.name());
+
+        let image = match scenario {
+            BgpAddPathScenario::Bare | BgpAddPathScenario::Frr => "debian-13.2",
+            BgpAddPathScenario::Arista => "eos-4.35",
+            BgpAddPathScenario::Juniper => "junos-23.2",
+        };
+        node!(d, ox, "helios-3.0", 4, gb(4));
+        node!(d, transit, image, 4, gb(4));
+        node!(d, frr1, "debian-13.2", 4, gb(4));
+        node!(d, frr2, "debian-13.2", 4, gb(4));
+
+        // Direct links suffice for this control-plane test. With one 9p
+        // mount and no SoftNPU devices, Debian NICs start at enp0s6.
+        d.link(ox, transit);
+        d.link(transit, frr1);
+        d.link(transit, frr2);
+
+        d.default_ext_link(ox)?;
+        d.mount("cargo-bay", "/opt/cargo-bay", ox)?;
+        for peer in [frr1, frr2] {
+            d.default_ext_link(peer)?;
+            d.mount_linux("cargo-bay", "/opt/cargo-bay", peer)?;
+        }
+        d.default_ext_link(transit)?;
+        let transit = match scenario {
+            BgpAddPathScenario::Bare | BgpAddPathScenario::Frr => {
+                d.mount_linux("cargo-bay", "/opt/cargo-bay", transit)?;
+                AddPathSpeaker::Frr(FrrNode(transit))
+            }
+            BgpAddPathScenario::Arista => {
+                d.mount("cargo-bay", "/opt/cargo-bay", transit)?;
+                AddPathSpeaker::Arista(EosNode(transit))
+            }
+            BgpAddPathScenario::Juniper => {
+                d.mount_linux("cargo-bay", "/opt/cargo-bay", transit)?;
+                // The image's services mount cargo-bay and apply staged config.
+                d.do_setup(transit, false);
+                AddPathSpeaker::Juniper(JuniperNode(transit))
+            }
+        };
+
+        Ok(Self {
+            d,
+            ox: MgdNode(ox),
+            transit,
+            frr1: FrrNode(frr1),
+            frr2: FrrNode(frr2),
         })
     }
 

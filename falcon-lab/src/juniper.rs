@@ -231,6 +231,31 @@ impl JuniperNode {
         Ok(output.contains(prefix) && output.contains("BGP"))
     }
 
+    /// Count BGP route entries, including non-active paths, for an exact prefix.
+    /// Count entries rather than nexthops: ECMP is not ADD-PATH reception.
+    pub async fn bgp_imported_paths(
+        &self,
+        d: &Runner,
+        prefix: &str,
+    ) -> Result<Option<usize>> {
+        let table = if prefix.parse::<oxnet::IpNet>()?.addr().is_ipv4() {
+            "inet.0"
+        } else {
+            "inet6.0"
+        };
+        let output = self.shell(d, &format!(
+            "show route table {table} {prefix} exact protocol bgp | display json"
+        )).await?;
+        let routes: serde_json::Value =
+            serde_json::from_str(&output).context("parse Juniper BGP paths")?;
+        // The query selects one table and one exact destination; each
+        // rt-entry is a path, whether or not it won best-path selection.
+        Ok(routes
+            .pointer("/route-information/0/route-table/0/rt/0/rt-entry")
+            .and_then(|paths| paths.as_array())
+            .map(|paths| paths.len()))
+    }
+
     /// Query cRPD for the local status of a BFD session to `peer`. Returns
     /// true iff Junos reports the session as `Up`.
     pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {

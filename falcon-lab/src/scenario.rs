@@ -3,14 +3,14 @@
 #![allow(clippy::iter_nth_zero)]
 
 use crate::{
-    bgp::basic_unnumbered_neighbor,
+    bgp::{basic_numbered_neighbor, basic_unnumbered_neighbor},
     dendrite::{NpuvmCommits, softnpu_link_create, wait_for_dpd},
     diagnostics::ProtocolDiagnostics,
     eos::EosNode,
     frr::FrrNode,
     juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
-    topo::{Interop, MgdDuo, Topology},
+    topo::{AddPathSpeaker, BgpAddPath, Interop, MgdDuo, Topology},
     wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result};
@@ -68,6 +68,16 @@ const _: () = {
     let mut i = 0;
     while i < InteropScenario::VARIANTS.len() {
         assert_falcon_compatible(InteropScenario::VARIANTS[i].name());
+        i += 1;
+    }
+    let mut i = 0;
+    while i < BgpAddPathScenario::VARIANTS.len() {
+        assert_falcon_compatible(BgpAddPathScenario::VARIANTS[i].name());
+        assert!(
+            BgpAddPathScenario::VARIANTS[i].name().len()
+                + "_transit_vn_vnic0".len()
+                < 32
+        );
         i += 1;
     }
 };
@@ -195,6 +205,117 @@ impl Scenario for InteropScenario {
 
     fn cleanup(self) -> Result<()> {
         cleanup_interop_deployment(self)
+    }
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum, strum::VariantArray)]
+pub(crate) enum BgpAddPathScenario {
+    Bare,
+    Frr,
+    Arista,
+    Juniper,
+}
+
+impl BgpAddPathScenario {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Bare => "addpath_bare",
+            Self::Frr => "bgpaddpath_frr",
+            Self::Arista => "bgpaddpath_eos",
+            Self::Juniper => "bgpaddpath_jun",
+        }
+    }
+}
+
+impl Scenario for BgpAddPathScenario {
+    type Topology = BgpAddPath;
+
+    async fn run(self, options: ScenarioOptions) -> Result<()> {
+        match self {
+            Self::Bare => self.run_bare(options.persistent).await,
+            Self::Frr | Self::Arista | Self::Juniper => {
+                run_bgp_add_path(self, options).await
+            }
+        }
+    }
+
+    fn cleanup(self) -> Result<()> {
+        let deployment_result = BgpAddPath::build(self).map(drop);
+        let config_result = if matches!(self, Self::Juniper) {
+            clear_staged_routing_configs().context("clear stale Junos config")
+        } else {
+            Ok(())
+        };
+        deployment_result?;
+        config_result
+    }
+}
+
+impl AddPathSpeaker {
+    async fn setup(self, d: &Runner) -> Result<()> {
+        match self {
+            Self::Frr(peer) => {
+                setup_add_path_frr(
+                    peer,
+                    d,
+                    65001,
+                    &[(0, 1, 65000), (1, 1, 65002), (2, 1, 65003)],
+                )
+                .await
+            }
+            Self::Arista(peer) => setup_add_path_eos(peer, d).await,
+            Self::Juniper(peer) => setup_add_path_juniper(peer, d).await,
+        }
+    }
+
+    async fn imported_paths(
+        self,
+        d: &Runner,
+        family: AddressFamily,
+        prefix: &str,
+    ) -> Result<Option<usize>> {
+        match self {
+            Self::Frr(peer) => {
+                let family = match family {
+                    AddressFamily::Ipv4 => "ipv4",
+                    AddressFamily::Ipv6 => "ipv6",
+                };
+                let output = peer
+                    .shell(
+                        d,
+                        &format!("show bgp {family} unicast {prefix} json"),
+                    )
+                    .await?;
+                let routes: serde_json::Value =
+                    serde_json::from_str(&output)
+                        .context("parse transit FRR BGP paths")?;
+                Ok(routes
+                    .get("paths")
+                    .and_then(|p| p.as_array())
+                    .map(|p| p.len()))
+            }
+            Self::Arista(peer) => match family {
+                AddressFamily::Ipv4 => {
+                    let routes = peer.bgp_ipv4_imported(d).await?;
+                    let prefix: Ipv4Net = prefix.parse()?;
+                    Ok(routes
+                        .vrfs
+                        .get("default")
+                        .and_then(|vrf| vrf.bgp_route_entries.get(&prefix))
+                        .map(|entry| entry.bgp_route_paths.len()))
+                }
+                AddressFamily::Ipv6 => {
+                    let routes = peer.bgp_ipv6_imported(d).await?;
+                    let prefix: Ipv6Net = prefix.parse()?;
+                    Ok(routes
+                        .vrfs
+                        .get("default")
+                        .and_then(|vrf| vrf.bgp_route_entries.get(&prefix))
+                        .map(|entry| entry.bgp_route_paths.len()))
+                }
+            },
+            Self::Juniper(peer) => peer.bgp_imported_paths(d, prefix).await,
+        }
     }
 }
 
@@ -726,6 +847,349 @@ async fn mgd_unnumbered_body(bt: BootedMgdDuo) -> Result<()> {
     info!(ad.log, "mgd-to-mgd bgp unnumbered test passed 🎉");
 
     Ok(())
+}
+
+/// Keep this a RIB test: both paths share transit as their forwarding hop.
+async fn run_bgp_add_path(
+    scenario: BgpAddPathScenario,
+    options: ScenarioOptions,
+) -> Result<()> {
+    const LOCAL_ASN: u32 = 65000;
+    const V4_PREFIX: &str = "203.0.113.0/24";
+    const V6_PREFIX: &str = "2001:db8:100::/64";
+
+    let BgpAddPath {
+        mut d,
+        ox,
+        transit,
+        frr1,
+        frr2,
+    } = BgpAddPath::build(scenario)?;
+    d.persistent = options.persistent;
+    if matches!(scenario, BgpAddPathScenario::Juniper) {
+        clear_staged_routing_configs().context("clear stale Junos config")?;
+    }
+    timeout(LAUNCH_TIMEOUT, d.launch())
+        .await
+        .context("launch timed out")?
+        .context("launch failed")?;
+
+    let result = async {
+        let mgmt_addr = ox.illumos().dhcp(&d, HELIOS_MGMT_ADDR).await?;
+        tokio::try_join!(
+            transit.setup(&d),
+            setup_add_path_frr(frr1, &d, 65002, &[(1, 2, 65001)]),
+            setup_add_path_frr(frr2, &d, 65003, &[(2, 2, 65001)]),
+        )?;
+
+        // Establish that the sender actually has two paths before testing
+        // mgd, so a broken origin session isn't mistaken for an RX bug.
+        for (family, prefix) in [
+            (AddressFamily::Ipv4, V4_PREFIX),
+            (AddressFamily::Ipv6, V6_PREFIX),
+        ] {
+            wait_for_eq!(
+                transit.imported_paths(&d, family, prefix).await?,
+                Some(2),
+                format!("transit learned paths for {prefix}")
+            );
+        }
+
+        ox.illumos()
+            .staticaddr(&d, "vioif0/v4", "10.0.0.2/30")
+            .await?;
+        ox.illumos().addrconf(&d, "vioif0/ll").await?;
+        ox.illumos()
+            .staticaddr(&d, "vioif0/v6", "fd00:0::2/64")
+            .await?;
+        ox.run_mgd(&d).await?;
+        let mgd = ox.client(&d, mgmt_addr).await?;
+        wait_for_mgd(&mgd, OP_TIMEOUT, &d.log).await?;
+        mgd.create_router(&Router {
+            asn: LOCAL_ASN,
+            graceful_shutdown: false,
+            id: LOCAL_ASN,
+            listen: "[::]:179".to_owned(),
+        })
+        .await
+        .context("mgd: create bgp-add-path router")?;
+        for (name, addr) in
+            [("transit-v4", "10.0.0.1"), ("transit-v6", "fd00:0::1")]
+        {
+            mgd.create_neighbor(&basic_numbered_neighbor(
+                name,
+                "bgp-add-path",
+                addr.parse()?,
+                LOCAL_ASN,
+                65001,
+            ))
+            .await
+            .context("mgd: create numbered transit neighbor")?;
+        }
+        for name in ["transit-v4", "transit-v6"] {
+            wait_for_eq!(
+                neighbor_fsm_state(&mgd, LOCAL_ASN, name).await,
+                Some(FsmStateKind::Established),
+                format!("mgd bgp {name} established")
+            );
+        }
+        wait_for_eq!(
+            (
+                mgd_imported_paths(&mgd, AddressFamily::Ipv4, V4_PREFIX).await,
+                mgd_imported_paths(&mgd, AddressFamily::Ipv6, V6_PREFIX).await,
+            ),
+            (Some(2), Some(2)),
+            "mgd ADD-PATH imported paths (IPv4, IPv6) from transit"
+        );
+        info!(d.log, "{} test passed", scenario.name());
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = &result {
+        warn!(d.log, "{} failed: {e:#}", scenario.name());
+        if options.diag_on_fail {
+            ox.collect_diagnostics(&d, scenario.name()).await;
+            ox.illumos().collect_diagnostics(&d, scenario.name()).await;
+            for peer in [frr1, frr2] {
+                peer.collect_diagnostics(
+                    &d,
+                    scenario.name(),
+                    ProtocolDiagnostics::Bgp,
+                )
+                .await;
+            }
+            let (node, command) = match transit {
+                AddPathSpeaker::Frr(peer) => {
+                    peer.collect_diagnostics(
+                        &d,
+                        scenario.name(),
+                        ProtocolDiagnostics::Bgp,
+                    )
+                    .await;
+                    (peer.0, "vtysh -c 'show bgp neighbors'")
+                }
+                AddPathSpeaker::Arista(peer) => {
+                    peer.collect_diagnostics(
+                        &d,
+                        scenario.name(),
+                        ProtocolDiagnostics::Bgp,
+                    )
+                    .await;
+                    (peer.0, "docker exec ceos Cli -c 'show bgp neighbors'")
+                }
+                AddPathSpeaker::Juniper(peer) => {
+                    peer.collect_diagnostics(
+                        &d,
+                        scenario.name(),
+                        ProtocolDiagnostics::Bgp,
+                    )
+                    .await;
+                    (
+                        peer.0,
+                        "docker exec crpd1 cli -c 'show bgp neighbor | no-more'",
+                    )
+                }
+            };
+            crate::diagnostics::capture(
+                &d,
+                node,
+                scenario.name(),
+                "transit-bgp-neighbors",
+                command,
+            )
+            .await;
+        }
+    }
+    result
+}
+
+async fn setup_add_path_frr(
+    peer: FrrNode,
+    d: &Runner,
+    asn: u32,
+    // (subnet number, local host number, remote ASN), in NIC order.
+    links: &[(u8, u8, u32)],
+) -> Result<()> {
+    // The management NIC follows the data NICs. Explicit matching avoids
+    // relying on the Debian image's baked-in interface/DHCP configuration;
+    // a MAC-based client ID also keeps cloned guests' leases distinct.
+    let mgmt_slot = 6 + links.len();
+    // Falcon executes through a serial console, so use one shell line and
+    // an explicit success marker (exec does not check the shell exit code).
+    let output = d.exec(peer.0, &format!(
+        "mkdir -p /etc/systemd/network && \
+         printf '[Match]\\nName=enp0s{mgmt_slot}\\n[Network]\\nDHCP=ipv4\\n[DHCPv4]\\nClientIdentifier=mac\\n' \
+         > /etc/systemd/network/00-addpath-mgmt.network && \
+         systemctl restart systemd-networkd && \
+         /usr/lib/systemd/systemd-networkd-wait-online --interface=enp0s{mgmt_slot} --ipv4 --timeout=60 && \
+         echo ADDPATH_MGMT_READY"
+    )).await.context("configure FRR management DHCP")?;
+    anyhow::ensure!(
+        output
+            .lines()
+            .any(|line| line.trim() == "ADDPATH_MGMT_READY"),
+        "{}: management DHCP setup failed: {output}",
+        peer.name(d),
+    );
+    peer.install(d).await?;
+    peer.enable_daemons(d, &["bgpd"]).await?;
+
+    let mut config = format!(
+        "configure
+ip forwarding
+ipv6 forwarding
+router bgp {asn}
+ bgp router-id 10.0.0.{}
+ no bgp ebgp-requires-policy
+ no bgp default ipv4-unicast
+ timers bgp 2 6
+exit
+",
+        asn - 65000
+    );
+    for (index, &(subnet, local, remote_asn)) in links.iter().enumerate() {
+        let slot = 6 + index;
+        let remote = 3 - local;
+        config.push_str(&format!(
+            "interface enp0s{slot}
+ ip address 10.0.{subnet}.{local}/30
+ ipv6 address fd00:{subnet}::{local}/64
+ no shutdown
+exit
+router bgp {asn}
+ neighbor 10.0.{subnet}.{remote} remote-as {remote_asn}
+ neighbor 10.0.{subnet}.{remote} timers connect 1
+ neighbor fd00:{subnet}::{remote} remote-as {remote_asn}
+ neighbor fd00:{subnet}::{remote} timers connect 1
+ address-family ipv4 unicast
+  neighbor 10.0.{subnet}.{remote} activate
+ exit-address-family
+ address-family ipv6 unicast
+  neighbor fd00:{subnet}::{remote} activate
+ exit-address-family
+exit
+"
+        ));
+    }
+    if asn == 65001 {
+        config.push_str(&format!(
+            "router bgp {asn}
+ address-family ipv4 unicast
+  neighbor 10.0.0.2 addpath-tx-all-paths
+ exit-address-family
+ address-family ipv6 unicast
+  neighbor fd00:0::2 addpath-tx-all-paths
+ exit-address-family
+exit
+"
+        ));
+    } else {
+        config.push_str(&format!(
+            "ip route 203.0.113.0/24 null0
+ipv6 route 2001:db8:100::/64 null0
+router bgp {asn}
+ address-family ipv4 unicast
+  network 203.0.113.0/24
+ exit-address-family
+ address-family ipv6 unicast
+  network 2001:db8:100::/64
+ exit-address-family
+exit
+"
+        ));
+    }
+    config.push_str("end\nwrite memory");
+    peer.shell(d, &config).await?;
+    Ok(())
+}
+
+async fn setup_add_path_eos(peer: EosNode, d: &Runner) -> Result<()> {
+    peer.wait_for_init(d).await?;
+    let mut config = String::from(
+        "enable
+configure
+ip routing
+ipv6 unicast-routing
+router bgp 65001
+ router-id 10.0.0.1
+ no bgp default ipv4-unicast
+ timers bgp 2 6
+exit
+",
+    );
+    for (subnet, remote_asn) in [(0, 65000), (1, 65002), (2, 65003)] {
+        let port = subnet + 1;
+        config.push_str(&format!(
+            "interface Ethernet{port}
+ no switchport
+ ip address 10.0.{subnet}.1/30
+ ipv6 address fd00:{subnet}::1/64
+ no shutdown
+exit
+router bgp 65001
+ neighbor 10.0.{subnet}.2 remote-as {remote_asn}
+ neighbor fd00:{subnet}::2 remote-as {remote_asn}
+ address-family ipv4
+  neighbor 10.0.{subnet}.2 activate
+ exit
+ address-family ipv6
+  neighbor fd00:{subnet}::2 activate
+ exit
+exit
+"
+        ));
+    }
+    // "any" includes the non-best path without requiring ECMP eligibility.
+    config.push_str(
+        "router bgp 65001
+ neighbor 10.0.0.2 additional-paths send any
+ neighbor fd00:0::2 additional-paths send any
+end
+write memory",
+    );
+    peer.shell(d, &config).await?;
+    Ok(())
+}
+
+async fn setup_add_path_juniper(peer: JuniperNode, d: &Runner) -> Result<()> {
+    let mut config = String::from(
+        "set routing-options router-id 10.0.0.1
+set routing-options autonomous-system 65001
+set policy-options policy-statement addpath-export from protocol bgp
+set policy-options policy-statement addpath-export then next-hop self
+set policy-options policy-statement addpath-export then accept
+",
+    );
+    for (subnet, remote_asn) in [(0, 65000), (1, 65002), (2, 65003)] {
+        let port = subnet + 1;
+        config.push_str(&format!(
+            "set interfaces eth{port} unit 0 family inet address 10.0.{subnet}.1/30
+set interfaces eth{port} unit 0 family inet6 address fd00:{subnet}::1/64
+"
+        ));
+        for (family, address) in [
+            ("inet", format!("10.0.{subnet}.2")),
+            ("inet6", format!("fd00:{subnet}::2")),
+        ] {
+            let group = format!("link{subnet}-{family}");
+            config.push_str(&format!(
+                "set protocols bgp group {group} type external
+set protocols bgp group {group} peer-as {remote_asn}
+set protocols bgp group {group} hold-time 6
+set protocols bgp group {group} family {family} unicast
+set protocols bgp group {group} export addpath-export
+set protocols bgp group {group} neighbor {address}
+"
+            ));
+            if subnet == 0 {
+                config.push_str(&format!(
+                    "set protocols bgp group {group} family {family} unicast add-path send path-count 2\n"
+                ));
+            }
+        }
+    }
+    peer.setup(d, &config).await
 }
 
 async fn run_interop_unnumbered(
