@@ -39,8 +39,11 @@ use std::{
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {
-    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void},
-    std::os::fd::AsRawFd,
+    libc::{
+        IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, IPV6_MINHOPCOUNT, c_int, c_void,
+        socklen_t,
+    },
+    std::os::fd::{AsRawFd, RawFd},
 };
 
 #[cfg(target_os = "linux")]
@@ -49,20 +52,24 @@ use crate::connection::MAX_MD5SIG_KEYLEN;
 use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 
 #[cfg(target_os = "illumos")]
-use itertools::Itertools;
-#[cfg(target_os = "illumos")]
-use std::{collections::HashSet, net::IpAddr};
-
-const UNIT_CONNECTION: &str = "connection_tcp";
+use {
+    itertools::Itertools,
+    std::{collections::HashSet, net::IpAddr},
+};
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
 #[cfg(target_os = "illumos")]
-const PFKEY_DURATION: Duration = Duration::from_secs(60 * 2);
-#[cfg(target_os = "illumos")]
 const PFKEY_KEEPALIVE: Duration = Duration::from_secs(60);
+// `Duration * u32` is not const-stable, so derive the doubled lifetime from
+// the keepalive's seconds instead.
+#[cfg(target_os = "illumos")]
+const PFKEY_DURATION: Duration =
+    Duration::from_secs(PFKEY_KEEPALIVE.as_secs() * 2);
+
+const UNIT_CONNECTION: &str = "connection_tcp";
 
 /// Error type for recv_msg operations.
 /// Distinguishes between IO errors (connection issues) and parse errors (bad messages).
@@ -1264,30 +1271,11 @@ fn apply_min_ttl(
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
         let fd = conn.as_raw_fd();
-        let min_ttl = ttl as u32;
-        unsafe {
-            if peer.is_ipv4()
-                && libc::setsockopt(
-                    fd,
-                    IPPROTO_IP,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
-                    std::mem::size_of::<u32>() as u32,
-                ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
-            if peer.is_ipv6()
-                && libc::setsockopt(
-                    fd,
-                    IPPROTO_IPV6,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
-                    std::mem::size_of::<u32>() as u32,
-                ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
+        if peer.is_ipv4() {
+            set_ip_minttl_sockopt(fd, ttl)?;
+        }
+        if peer.is_ipv6() {
+            set_ipv6_minhopcount_sockopt(fd, ttl)?;
         }
     }
     Ok(())
@@ -1314,7 +1302,7 @@ impl Default for TcpMd5Sig {
 /// Apply TCP_MD5SIG socket option to a socket
 #[cfg(target_os = "linux")]
 fn set_md5_sig(
-    fd: i32,
+    fd: RawFd,
     keylen: u16,
     key: [u8; MAX_MD5SIG_KEYLEN],
     peer: SocketAddr,
@@ -1325,21 +1313,15 @@ fn set_md5_sig(
         ..Default::default()
     };
     let addr = socket2::SockAddr::from(peer);
+    // SAFETY: SockAddr stores its address in a sockaddr_storage.
     unsafe {
         sig.tcpm_addr = *addr.as_ptr().cast::<sockaddr_storage>();
-        if libc::setsockopt(
-            fd,
-            IPPROTO_TCP,
-            TCP_MD5SIG,
-            &sig as *const TcpMd5Sig as *const c_void,
-            std::mem::size_of::<TcpMd5Sig>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
     }
 
-    Ok(())
+    // SAFETY: TcpMd5Sig has the C layout expected by Linux TCP_MD5SIG.
+    // Its address and key are inline, its input fields are initialized,
+    // and the kernel copies the value during the call.
+    unsafe { set_sockopt(fd, IPPROTO_TCP, TCP_MD5SIG, &sig) }
 }
 
 /// Md5 security associations (PF_KEY tracking)
@@ -1483,22 +1465,7 @@ fn init_md5_associations(
     for local in locals.iter() {
         apply_md5_sa_pair(*local, peer, key)?;
     }
-
-    let yes: c_int = 1;
-    unsafe {
-        if libc::setsockopt(
-            fd,
-            IPPROTO_TCP,
-            TCP_MD5SIG,
-            &yes as *const c_int as *const c_void,
-            std::mem::size_of::<c_int>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-    }
-
-    Ok(())
+    set_md5_sockopt(fd)
 }
 
 /// Setup MD5 for outbound Illumos connections: select source addresses and
@@ -1543,4 +1510,305 @@ fn setup_outbound_md5(
     init_md5_associations(fd, key, local.clone(), peer)?;
 
     Ok((key.to_string(), local))
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn set_ipv6_minhopcount_sockopt(
+    fd: RawFd,
+    min_hopcount: u8,
+) -> Result<(), Error> {
+    let min_hopcount = c_int::from(min_hopcount);
+    // SAFETY: IPV6_MINHOPCOUNT reads a C int; min_hopcount is initialized
+    // and remains alive for the call.
+    unsafe { set_sockopt(fd, IPPROTO_IPV6, IPV6_MINHOPCOUNT, &min_hopcount) }
+}
+
+// Read-back helpers are used by the socket-option regression tests.
+// Linux does not implement getsockopt for TCP_MD5SIG.
+#[cfg(all(test, any(target_os = "linux", target_os = "illumos")))]
+fn get_ipv6_minhopcount_sockopt(fd: RawFd) -> Result<c_int, Error> {
+    // SAFETY: IPV6_MINHOPCOUNT returns a C int directly in the buffer.
+    unsafe { get_sockopt_int(fd, IPPROTO_IPV6, IPV6_MINHOPCOUNT) }
+}
+
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+fn set_ip_minttl_sockopt(fd: RawFd, min_ttl: u8) -> Result<(), Error> {
+    let min_ttl = c_int::from(min_ttl);
+    // SAFETY: IP_MINTTL reads a C int; min_ttl is initialized and remains
+    // alive for the call.
+    unsafe { set_sockopt(fd, IPPROTO_IP, IP_MINTTL, &min_ttl) }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "illumos")))]
+fn get_ip_minttl_sockopt(fd: RawFd) -> Result<c_int, Error> {
+    // SAFETY: IP_MINTTL returns a C int directly in the buffer.
+    unsafe { get_sockopt_int(fd, IPPROTO_IP, IP_MINTTL) }
+}
+
+#[cfg(target_os = "illumos")]
+fn set_md5_sockopt(fd: RawFd) -> Result<(), Error> {
+    let yes: c_int = 1;
+    // SAFETY: On illumos, TCP_MD5SIG reads a C int, not Linux's MD5
+    // structure. `yes` is initialized and remains alive for the call.
+    unsafe { set_sockopt(fd, IPPROTO_TCP, TCP_MD5SIG, &yes) }
+}
+
+#[cfg(all(test, target_os = "illumos"))]
+fn get_md5_sockopt(fd: RawFd) -> Result<c_int, Error> {
+    // SAFETY: On illumos, TCP_MD5SIG returns a C int directly in the buffer.
+    unsafe { get_sockopt_int(fd, IPPROTO_TCP, TCP_MD5SIG) }
+}
+
+/// Set a socket option using the in-memory representation of `T`.
+///
+/// # Safety
+///
+/// The caller must ensure that `T` matches the ABI of `(level, name)` on
+/// this platform and that all input fields read by the option are
+/// initialized. Any embedded pointers must satisfy the option's validity,
+/// size, lifetime, and aliasing requirements. The option must not mutate
+/// memory through the shared reference or retain pointers past their
+/// validity.
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+unsafe fn set_sockopt<T>(
+    socket: RawFd,
+    level: c_int,
+    name: c_int,
+    option_value: &T,
+) -> Result<(), Error> {
+    let expected = std::mem::size_of_val(option_value);
+    let option_len = socklen_t::try_from(expected).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "socket option buffer is too large",
+        )
+    })?;
+
+    // SAFETY: The reference supplies a live buffer of option_len bytes.
+    // The caller guarantees the option's ABI and memory-access requirements.
+    unsafe {
+        if libc::setsockopt(
+            socket,
+            level,
+            name,
+            std::ptr::from_ref(option_value).cast::<c_void>(),
+            option_len,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Read a socket option whose value is a C integer.
+///
+/// # Safety
+///
+/// `(level, option_name)` must support a `c_int` output buffer on this
+/// platform, writing the value inline without interpreting its contents as
+/// pointers or retaining the buffer after the call.
+#[cfg(all(test, any(target_os = "linux", target_os = "illumos")))]
+unsafe fn get_sockopt_int(
+    socket: RawFd,
+    level: c_int,
+    option_name: c_int,
+) -> Result<c_int, Error> {
+    let mut readback: c_int = -1;
+    // SAFETY: The caller guarantees a C integer output option. readback is
+    // initialized, exclusively borrowed, and valid for every bit pattern,
+    // including after a partial write or an error.
+    unsafe { get_sockopt(socket, level, option_name, &mut readback)? };
+    Ok(readback)
+}
+
+/// Read a fixed-size socket option into an existing value.
+///
+/// Returns an error if the returned length differs from the size of `T`.
+/// The destination may have been modified even when an error is returned.
+///
+/// # Safety
+///
+/// The caller must ensure that `T` matches the ABI of `(level, option_name)`
+/// on this platform, including any input fields the option reads. All writes
+/// must leave `option_value` valid as `T`, including on partial writes and
+/// syscall failure; the length check cannot establish Rust value validity.
+/// Any embedded pointers must satisfy the option's validity, size, lifetime,
+/// and aliasing requirements. The option must not retain pointers past their
+/// validity.
+#[cfg(all(test, any(target_os = "linux", target_os = "illumos")))]
+unsafe fn get_sockopt<T>(
+    socket: RawFd,
+    level: c_int,
+    option_name: c_int,
+    option_value: &mut T,
+) -> Result<(), Error> {
+    let expected = std::mem::size_of_val(option_value);
+    let mut option_len = socklen_t::try_from(expected).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "socket option buffer is too large",
+        )
+    })?;
+
+    // SAFETY: Both pointers refer to live, exclusively borrowed storage;
+    // option_len describes the destination's capacity. The caller guarantees
+    // the option's memory-access requirements and preserves T's validity.
+    unsafe {
+        if libc::getsockopt(
+            socket,
+            level,
+            option_name,
+            std::ptr::from_mut(option_value).cast::<c_void>(),
+            &mut option_len,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    if option_len as usize != expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unexpected socket option length",
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "illumos")))]
+mod tests {
+    use super::*;
+    use socket2::{Domain, Protocol, SockRef, Socket, Type};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    // Return the outbound native-family socket and the inbound AF_INET6
+    // socket. Keep both alive while inspecting either end. Connecting over
+    // IPv4 produces an IPv4-mapped socket on this dual-stack listener.
+    fn dual_stack_connection(connect_ip: IpAddr) -> (TcpStream, TcpStream) {
+        let listener =
+            Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))
+                .unwrap();
+        listener.set_only_v6(false).unwrap();
+        listener
+            .bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())
+            .unwrap();
+        listener.listen(1).unwrap();
+
+        let port = listener.local_addr().unwrap().as_socket().unwrap().port();
+        let client = TcpStream::connect((connect_ip, port)).unwrap();
+        let listener: TcpListener = listener.into();
+        let (accepted, peer) = listener.accept().unwrap();
+
+        assert_eq!(client.local_addr().unwrap().ip(), connect_ip);
+        assert_eq!(client.peer_addr().unwrap().ip(), connect_ip);
+        let SocketAddr::V6(peer) = peer else {
+            panic!("AF_INET6 listener returned an IPv4 socket address");
+        };
+        assert_eq!(peer.ip().to_ipv4_mapped().is_some(), connect_ip.is_ipv4());
+        assert_eq!(IpAddr::V6(*peer.ip()).to_canonical(), connect_ip);
+        assert!(accepted.local_addr().unwrap().is_ipv6());
+
+        (client, accepted)
+    }
+
+    fn check_ip_minttl_round_trip(socket: &Socket) {
+        socket.set_ttl_v4(61).unwrap();
+        let fd = socket.as_raw_fd();
+        for min_ttl in [197, 0] {
+            set_ip_minttl_sockopt(fd, min_ttl).unwrap();
+            assert_eq!(
+                get_ip_minttl_sockopt(fd).unwrap(),
+                c_int::from(min_ttl)
+            );
+            assert_eq!(socket.ttl_v4().unwrap(), 61);
+        }
+    }
+
+    fn check_ipv6_minhopcount_round_trip(socket: &Socket) {
+        socket.set_unicast_hops_v6(61).unwrap();
+        let fd = socket.as_raw_fd();
+        for min_hopcount in [197, 0] {
+            set_ipv6_minhopcount_sockopt(fd, min_hopcount).unwrap();
+            assert_eq!(
+                get_ipv6_minhopcount_sockopt(fd).unwrap(),
+                c_int::from(min_hopcount)
+            );
+            assert_eq!(socket.unicast_hops_v6().unwrap(), 61);
+        }
+    }
+
+    #[test]
+    fn ip_minttl_round_trip_outbound_ipv4() {
+        let (client, _accepted) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        check_ip_minttl_round_trip(&SockRef::from(&client));
+    }
+
+    #[test]
+    fn ipv6_minhopcount_round_trip_outbound_ipv6() {
+        let (client, _accepted) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        check_ipv6_minhopcount_round_trip(&SockRef::from(&client));
+    }
+
+    #[test]
+    fn ipv6_minhopcount_round_trip_inbound_ipv6() {
+        let (_client, stream) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        check_ipv6_minhopcount_round_trip(&SockRef::from(&stream));
+    }
+
+    // Keep mapped cases separate: older illumos kernels are affected by
+    // https://www.illumos.org/issues/18351. These remain enabled so CI can
+    // establish whether its kernel includes the fix.
+    #[test]
+    fn ip_minttl_round_trip_inbound_ipv4_mapped() {
+        let (_client, stream) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        check_ip_minttl_round_trip(&SockRef::from(&stream));
+    }
+
+    #[cfg(target_os = "illumos")]
+    fn check_md5_round_trip(fd: RawFd) {
+        // This tests only the per-socket enable flag, not PF_KEY associations
+        // or authenticated traffic. Enable it after any TCP handshake.
+        assert_eq!(get_md5_sockopt(fd).unwrap(), 0);
+        set_md5_sockopt(fd).unwrap();
+        assert_eq!(get_md5_sockopt(fd).unwrap(), 1);
+    }
+
+    #[cfg(target_os = "illumos")]
+    #[test]
+    fn md5_round_trip_outbound_ipv4() {
+        let (client, _accepted) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        check_md5_round_trip(client.as_raw_fd());
+    }
+
+    #[cfg(target_os = "illumos")]
+    #[test]
+    fn md5_round_trip_outbound_ipv6() {
+        let (client, _accepted) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        check_md5_round_trip(client.as_raw_fd());
+    }
+
+    #[cfg(target_os = "illumos")]
+    #[test]
+    fn md5_round_trip_inbound_ipv6() {
+        let (_client, stream) =
+            dual_stack_connection(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        check_md5_round_trip(stream.as_raw_fd());
+    }
+
+    #[cfg(target_os = "illumos")]
+    #[test]
+    fn md5_round_trip_inbound_ipv4_mapped() {
+        let (_client, stream) =
+            dual_stack_connection(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        check_md5_round_trip(stream.as_raw_fd());
+    }
 }
