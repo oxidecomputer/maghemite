@@ -18,6 +18,9 @@ interop  bgp-unnumbered
 interop  bfd-static-routing
 interop-3-link  bare
 interop-3-link  bgp-md5
+spine-leaf  bare
+spine-leaf  bgp-numbered
+spine-leaf  bgp-unnumbered
 ```
 
 `mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
@@ -39,13 +42,66 @@ pfexec target/release/falcon-lab cleanup interop bgp-unnumbered
 The `bare` scenarios launch their topology without applying protocol
 configuration.
 
+## Spine-leaf BGP transit
+
+`spine-leaf` connects two mgd leaves (`ox1`, `ox2`) to four spines (`frr`,
+`eos`, `junos`, `bird`), one per third-party interop stack. Each leaf has one
+link to every spine; there are no leaf-to-leaf or spine-to-spine links.
+In the BGP scenarios, both leaves run SoftNPU/Dendrite to check dataplane
+installation as well as BGP receipt. The spines transit BGP routes and
+originate no test prefixes.
+
+| Node | ASN | Originated IPv4 prefix | Originated IPv6 prefix |
+| --- | --- | --- | --- |
+| ox1 | 65001 | 198.51.100.0/24 | 2001:db8:1::/64 |
+| ox2 | 65002 | 203.0.113.0/24 | 2001:db8:2::/64 |
+| frr | 65101 | — | — |
+| eos | 65102 | — | — |
+| junos | 65103 | — | — |
+| bird | 65104 | — | — |
+
+On each leaf, `qsfp0` through `qsfp3` connect to FRR, EOS, Junos, and BIRD,
+respectively. The first and second data interfaces on each spine connect to
+`ox1` and `ox2`.
+
+- `bare` launches only the VM graph, without installing the leaf NPU software
+  or applying BGP configuration. It clears stale staged Junos configuration
+  before boot, as the other interop bare scenarios do.
+- `bgp-numbered` assigns IPv4 and IPv6 addresses to every data link. Each
+  link has two eBGP sessions: IPv4 transport for IPv4 unicast, and IPv6
+  transport for IPv6 unicast. Links use `10.20.N.0/24` and `fd20:H::/64`,
+  where N is 0–3 for ox1 and 4–7 for ox2, and H is N + 1. The leaf uses
+  host 1 and the spine host 2.
+- `bgp-unnumbered` leaves data links IPv6 link-local only, with automatically
+  generated addresses. One link-local eBGP session per link carries both
+  families, using extended next hops for IPv4. BIRD receives the discovered
+  leaf link-local addresses explicitly; router advertisements drive mgd's
+  peer discovery. Management links remain separately numbered in both scenarios.
+
+Each BGP scenario checks all sessions are Established, then checks that each
+leaf receives and selects four paths for the other leaf's two prefixes and
+installs them on all four spine-facing Dendrite ports. No custom path
+attribute is injected or asserted yet.
+
+Run one scenario at a time from the directory containing the staged
+`cargo-bay/` (including the Juniper license described below):
+
+```sh
+pfexec target/release/falcon-lab run spine-leaf bare --no-cleanup
+pfexec target/release/falcon-lab cleanup spine-leaf bare
+pfexec target/release/falcon-lab run spine-leaf bgp-numbered --no-cleanup
+pfexec target/release/falcon-lab cleanup spine-leaf bgp-numbered
+pfexec target/release/falcon-lab run spine-leaf bgp-unnumbered --no-cleanup
+pfexec target/release/falcon-lab cleanup spine-leaf bgp-unnumbered
+```
+
 ## Runtime cargo-bay contents
 
 Before running any topology, `cargo-bay/` must contain:
 
 - `mgd` and `ddmd`, staged by local test setup or the Buildomat job.
 
-The interop topology additionally requires:
+The interop and spine-leaf topologies additionally require:
 
 - `falcon-juniper-license.key`, a Juniper license file. This file is a secret:
   do not commit it, print it, include it in diagnostics, or pass its contents in
@@ -57,10 +113,10 @@ Junos CLI input file: it starts with `configure`, contains `set ...` commands,
 and ends with `commit`.
 
 Junos topology config is per-run state. `falcon-lab` removes stale
-`cargo-bay/*-junos.set` files before launching or cleaning up an interop
-topology so the guest-side apply service cannot consume configuration left by
-an earlier topology. Do not put persistent hand-written Junos config in files
-matching that pattern.
+`cargo-bay/*-junos.set` files before launching or cleaning up an interop or
+spine-leaf topology so the guest-side apply service cannot consume
+configuration left by an earlier topology. Do not put persistent hand-written
+Junos config in files matching that pattern.
 
 ## Junos license source and connectivity assumptions
 
