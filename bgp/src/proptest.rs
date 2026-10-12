@@ -19,6 +19,7 @@ use crate::messages::{
     path_attribute_flags, update_message_from_wire, update_message_nexthop,
     update_message_to_wire,
 };
+use mg_api_types::bgp::messages::{OxideVtep, OxideVtepParseError};
 use oxnet::{Ipv4Net, Ipv6Net};
 use proptest::prelude::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -264,6 +265,33 @@ proptest! {
         cases: 256,
         ..ProptestConfig::default()
     })]
+
+    // 1–255 Unicode scalars keep the payload nonempty and below 1024 bytes
+    // including the version. Weight controls so they occur regularly.
+    #[test]
+    fn prop_oxide_vtep_utf8_roundtrip(
+        router_id in prop::collection::vec(
+            prop_oneof![
+                4 => any::<char>(),
+                1 => prop::sample::select(vec!['\0', '\n', '\r', '\t']),
+            ],
+            1..=255,
+        ).prop_map(|chars| chars.into_iter().collect::<String>())
+    ) {
+        let vtep = OxideVtep::new(router_id).unwrap();
+        let wire = vtep.to_wire();
+        prop_assert_eq!(wire[0], 0);
+        prop_assert_eq!(&wire[1..], vtep.router_id().as_bytes());
+        prop_assert_eq!(OxideVtep::from_wire(&wire).unwrap(), vtep);
+    }
+
+    #[test]
+    fn prop_oxide_vtep_rejects_other_versions(version in 1u8..=255) {
+        prop_assert!(matches!(
+            OxideVtep::from_wire(&[version, b'a']),
+            Err(OxideVtepParseError::UnsupportedVersion(v)) if v == version
+        ));
+    }
 
     // -------------------------------------------------------------------------
     // Prefix Round-Trip Tests

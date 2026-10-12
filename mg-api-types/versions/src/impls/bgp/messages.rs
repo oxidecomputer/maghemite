@@ -4,65 +4,37 @@
 
 //! Display and conversion impls for the versioned BGP wire-message types.
 
+use crate::latest::bgp::{
+    error::{MessageConvertError, WireError},
+    messages::{
+        AS_TRANS, AddPathElement, Afi, Aggregator, As4Aggregator,
+        As4PathSegment, AsPathType, BGP4, BgpNexthop, Capability,
+        CapabilityCode, CeaseErrorSubcode, Community, ErrorCode, ErrorSubcode,
+        ExtendedNexthopElement, Header, HeaderErrorSubcode, Ipv6DoubleNexthop,
+        MAX_MESSAGE_SIZE, Message, MessageKind, MessageType,
+        MpReachIpv4Unicast, MpReachIpv6Unicast, MpReachNlri,
+        MpUnreachIpv4Unicast, MpUnreachIpv6Unicast, MpUnreachNlri,
+        NotificationMessage, OpenErrorSubcode, OpenMessage, OptionalParameter,
+        OxideVtep, OxideVtepParseError, PathAttribute, PathAttributeType,
+        PathAttributeTypeCode, PathAttributeValue, PathOrigin,
+        RouteRefreshMessage, Safi, UpdateErrorSubcode, UpdateMessage,
+        path_attribute_flags,
+    },
+};
+use crate::latest::rdb::rib::AddressFamily;
+
+use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 
-use crate::latest::rdb::rib::AddressFamily;
 use nom::bytes::complete::tag;
 use nom::number::complete::be_u16;
 use nom::number::complete::u8 as parse_u8;
 use num_enum::TryFromPrimitive;
 
-use crate::latest::bgp::error::WireError;
-use std::collections::BTreeSet;
-
-use crate::latest::bgp::error::MessageConvertError;
-use crate::latest::bgp::messages::AS_TRANS;
-use crate::latest::bgp::messages::AddPathElement;
-use crate::latest::bgp::messages::Afi;
-use crate::latest::bgp::messages::Aggregator;
-use crate::latest::bgp::messages::As4Aggregator;
-use crate::latest::bgp::messages::As4PathSegment;
-use crate::latest::bgp::messages::AsPathType;
-use crate::latest::bgp::messages::BGP4;
-use crate::latest::bgp::messages::BgpNexthop;
-use crate::latest::bgp::messages::Capability;
-use crate::latest::bgp::messages::CapabilityCode;
-use crate::latest::bgp::messages::CeaseErrorSubcode;
-use crate::latest::bgp::messages::Community;
-use crate::latest::bgp::messages::ErrorCode;
-use crate::latest::bgp::messages::ErrorSubcode;
-use crate::latest::bgp::messages::ExtendedNexthopElement;
-use crate::latest::bgp::messages::Header;
-use crate::latest::bgp::messages::HeaderErrorSubcode;
-use crate::latest::bgp::messages::Ipv6DoubleNexthop;
-use crate::latest::bgp::messages::MAX_MESSAGE_SIZE;
-use crate::latest::bgp::messages::Message;
-use crate::latest::bgp::messages::MessageKind;
-use crate::latest::bgp::messages::MessageType;
-use crate::latest::bgp::messages::MpReachIpv4Unicast;
-use crate::latest::bgp::messages::MpReachIpv6Unicast;
-use crate::latest::bgp::messages::MpReachNlri;
-use crate::latest::bgp::messages::MpUnreachIpv4Unicast;
-use crate::latest::bgp::messages::MpUnreachIpv6Unicast;
-use crate::latest::bgp::messages::MpUnreachNlri;
-use crate::latest::bgp::messages::NotificationMessage;
-use crate::latest::bgp::messages::OpenErrorSubcode;
-use crate::latest::bgp::messages::OpenMessage;
-use crate::latest::bgp::messages::OptionalParameter;
-use crate::latest::bgp::messages::PathAttribute;
-use crate::latest::bgp::messages::PathAttributeType;
-use crate::latest::bgp::messages::PathAttributeTypeCode;
-use crate::latest::bgp::messages::PathAttributeValue;
-use crate::latest::bgp::messages::PathOrigin;
-use crate::latest::bgp::messages::RouteRefreshMessage;
-use crate::latest::bgp::messages::Safi;
-use crate::latest::bgp::messages::UpdateErrorSubcode;
-use crate::latest::bgp::messages::UpdateMessage;
-use crate::latest::bgp::messages::path_attribute_flags;
 use oxnet::Ipv4Net;
 use oxnet::Ipv6Net;
 
@@ -727,6 +699,31 @@ impl Display for MpUnreachNlri {
     }
 }
 
+impl OxideVtep {
+    /// Decode version 0 followed by a nonempty UTF-8 router ID.
+    /// The total length, including the version byte, must be 2..=1024 bytes.
+    pub fn from_wire(input: &[u8]) -> Result<Self, OxideVtepParseError> {
+        if !(2..=1024).contains(&input.len()) {
+            return Err(OxideVtepParseError::BadLength(input.len()));
+        }
+        let version = input[0];
+        let payload = &input[1..];
+        if version != 0 {
+            return Err(OxideVtepParseError::UnsupportedVersion(version));
+        }
+
+        Self::new(String::from_utf8(payload.to_vec())?)
+    }
+
+    /// Encode the version byte and UTF-8 router ID.
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut wire = Vec::with_capacity(1 + self.router_id().len());
+        wire.push(0);
+        wire.extend_from_slice(self.router_id().as_bytes());
+        wire
+    }
+}
+
 impl Display for PathAttributeValue {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
@@ -775,6 +772,9 @@ impl Display for PathAttributeValue {
             PathAttributeValue::As4Aggregator(agg) => {
                 write!(f, "as4-aggregator: {agg}")
             }
+            PathAttributeValue::OxideVtep(vtep) => {
+                write!(f, "oxide-vtep: {}", vtep.router_id())
+            }
         }
     }
 }
@@ -812,6 +812,9 @@ impl From<&PathAttributeValue> for PathAttributeTypeCode {
             PathAttributeValue::As4Aggregator(_) => {
                 PathAttributeTypeCode::As4Aggregator
             }
+            PathAttributeValue::OxideVtep(_) => {
+                PathAttributeTypeCode::OxideVtep
+            }
         }
     }
 }
@@ -832,7 +835,8 @@ impl From<PathAttributeValue> for PathAttribute {
             | PathAttributeValue::LocalPref(_) => {
                 path_attribute_flags::TRANSITIVE
             }
-            PathAttributeValue::Communities(_) => {
+            PathAttributeValue::Communities(_)
+            | PathAttributeValue::OxideVtep(_) => {
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE
             }

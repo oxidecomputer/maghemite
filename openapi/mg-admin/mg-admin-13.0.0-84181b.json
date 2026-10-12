@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "12.0.0"
+    "version": "13.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -4432,6 +4432,19 @@
           "prefixes"
         ]
       },
+      "OxideVtep": {
+        "description": "Custom BGP Path Attribute containing information about an Oxide VTEP. This attr is added exclusively to host routes (IPv4 /32 or IPv6 /128) which correspond to VTEP IPs participating in multi-rack tunneling for DDM.",
+        "type": "object",
+        "properties": {
+          "router_id": {
+            "description": "Router ID of the VTEP originating this attribute (and its route)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "router_id"
+        ]
+      },
       "Path": {
         "type": "object",
         "properties": {
@@ -4559,6 +4572,13 @@
             "type": "string",
             "enum": [
               "as4_path"
+            ]
+          },
+          {
+            "description": "Oxide Multi-rack VTEP discovery",
+            "type": "string",
+            "enum": [
+              "oxide_vtep"
             ]
           }
         ]
@@ -4727,6 +4747,19 @@
             },
             "required": [
               "mp_unreach_nlri"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Carries an Oxide VTEP attribute",
+            "type": "object",
+            "properties": {
+              "oxide_vtep": {
+                "$ref": "#/components/schemas/OxideVtep"
+              }
+            },
+            "required": [
+              "oxide_vtep"
             ],
             "additionalProperties": false
           }
