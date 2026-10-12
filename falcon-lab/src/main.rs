@@ -3,7 +3,7 @@
 use crate::dendrite::NpuvmCommits;
 use crate::scenario::{
     Interop3LinkScenario, InteropScenario, MgdDuoScenario, Scenario,
-    ScenarioOptions,
+    ScenarioOptions, SpineLeafScenario,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -49,6 +49,7 @@ enum RunTopology {
     Interop(ScenarioRun<InteropScenario>),
     #[command(name = "interop-3-link")]
     Interop3Link(ScenarioRun<Interop3LinkScenario>),
+    SpineLeaf(ScenarioRun<SpineLeafScenario>),
 }
 
 #[derive(Debug, Args)]
@@ -96,6 +97,7 @@ enum CleanupTopology {
     Interop(ScenarioCleanup<InteropScenario>),
     #[command(name = "interop-3-link")]
     Interop3Link(ScenarioCleanup<Interop3LinkScenario>),
+    SpineLeaf(ScenarioCleanup<SpineLeafScenario>),
 }
 
 #[derive(Debug, Args)]
@@ -125,6 +127,9 @@ async fn run() -> anyhow::Result<()> {
             RunTopology::Interop3Link(cmd) => {
                 cmd.scenario.run(cmd.options.scenario_options()).await?;
             }
+            RunTopology::SpineLeaf(cmd) => {
+                cmd.scenario.run(cmd.options.scenario_options()).await?;
+            }
         },
         Command::Cleanup(cmd) => match cmd.topology {
             CleanupTopology::MgdDuo(cmd) => {
@@ -134,6 +139,9 @@ async fn run() -> anyhow::Result<()> {
                 cmd.scenario.cleanup()?;
             }
             CleanupTopology::Interop3Link(cmd) => {
+                cmd.scenario.cleanup()?;
+            }
+            CleanupTopology::SpineLeaf(cmd) => {
                 cmd.scenario.cleanup()?;
             }
         },
@@ -191,6 +199,38 @@ mod tests {
                 }),
             })
         ));
+    }
+
+    #[test]
+    fn spine_leaf_scenarios_support_run_and_cleanup() {
+        for scenario in ["bare", "bgp-numbered", "bgp-unnumbered"] {
+            for command in ["run", "cleanup"] {
+                let cli = Cli::try_parse_from([
+                    "falcon-lab",
+                    command,
+                    "spine-leaf",
+                    scenario,
+                ])
+                .expect("parse spine-leaf scenario");
+                assert!(matches!(
+                    cli.command,
+                    Command::Run(TopologyRun {
+                        topology: RunTopology::SpineLeaf(_),
+                    }) | Command::Cleanup(TopologyCleanup {
+                        topology: CleanupTopology::SpineLeaf(_),
+                    })
+                ));
+            }
+        }
+        assert!(
+            Cli::try_parse_from([
+                "falcon-lab",
+                "run",
+                "interop",
+                "bgp-numbered",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

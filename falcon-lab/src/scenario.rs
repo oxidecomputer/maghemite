@@ -11,7 +11,7 @@ use crate::{
     frr::FrrNode,
     juniper::{JuniperNode, clear_staged_routing_configs},
     mgd::{MgdNode, wait_for_mgd},
-    topo::{Interop, Interop3Link, MgdDuo, Topology},
+    topo::{Interop, Interop3Link, MgdDuo, SpineLeaf, Topology},
     wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result};
@@ -45,6 +45,7 @@ use std::{
 use tokio::time::timeout;
 
 mod bgp_md5;
+mod spine_leaf;
 
 // Falcon derives dladm link names from the deployment name by appending the
 // node, endpoint kind, and link type, and illumos reserves one byte of
@@ -79,6 +80,7 @@ macro_rules! assert_all_falcon_compatible {
 assert_all_falcon_compatible!(MgdDuoScenario);
 assert_all_falcon_compatible!(InteropScenario);
 assert_all_falcon_compatible!(Interop3LinkScenario);
+assert_all_falcon_compatible!(SpineLeafScenario);
 
 pub(crate) struct ScenarioOptions {
     persistent: bool,
@@ -245,6 +247,48 @@ impl Scenario for Interop3LinkScenario {
 
     fn cleanup(self) -> Result<()> {
         cleanup_interop_3link_deployment(self)
+    }
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum, strum::VariantArray)]
+pub(crate) enum SpineLeafScenario {
+    Bare,
+    BgpNumbered,
+    BgpUnnumbered,
+}
+
+impl SpineLeafScenario {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Bare => "spineleaf_bare",
+            Self::BgpNumbered => "spineleaf_bgpn",
+            Self::BgpUnnumbered => "spineleaf_bgpu",
+        }
+    }
+}
+
+impl Scenario for SpineLeafScenario {
+    type Topology = SpineLeaf;
+
+    async fn run(self, options: ScenarioOptions) -> Result<()> {
+        match self {
+            Self::Bare => {
+                clear_staged_routing_configs()
+                    .context("clear stale Junos config")?;
+                self.run_bare(options.persistent).await
+            }
+            Self::BgpNumbered | Self::BgpUnnumbered => {
+                spine_leaf::run(self, options).await
+            }
+        }
+    }
+
+    fn cleanup(self) -> Result<()> {
+        let deployment_result = SpineLeaf::build(self).map(drop);
+        let config_result =
+            clear_staged_routing_configs().context("clear stale Junos config");
+        deployment_result?;
+        config_result
     }
 }
 

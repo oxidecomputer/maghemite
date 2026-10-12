@@ -9,7 +9,10 @@ use crate::{
     frr::FrrNode,
     juniper::JuniperNode,
     mgd::MgdNode,
-    scenario::{Interop3LinkScenario, InteropScenario, MgdDuoScenario},
+    scenario::{
+        Interop3LinkScenario, InteropScenario, MgdDuoScenario,
+        SpineLeafScenario,
+    },
 };
 
 pub(crate) trait Topology: Sized {
@@ -173,6 +176,65 @@ impl Topology for Interop3Link {
             cr2: EosNode(nodes.cr2),
             cr3: JuniperNode(nodes.cr3),
             bird: BirdNode(nodes.bird),
+        })
+    }
+
+    fn runner_mut(&mut self) -> &mut Runner {
+        &mut self.d
+    }
+}
+
+pub struct SpineLeaf {
+    pub d: Runner,
+    pub leaves: [MgdNode; 2],
+    pub frr: FrrNode,
+    pub eos: EosNode,
+    pub junos: JuniperNode,
+    pub bird: BirdNode,
+}
+
+impl Topology for SpineLeaf {
+    type Scenario = SpineLeafScenario;
+
+    fn build(scenario: SpineLeafScenario) -> Result<Self> {
+        let mut d = Runner::new(scenario.name());
+        node!(d, ox1, "helios-3.0", 4, gb(4));
+        node!(d, ox2, "helios-3.0", 4, gb(4));
+        node!(d, frr, "debian-13.2", 4, gb(4));
+        node!(d, eos, "eos-4.35", 4, gb(4));
+        node!(d, junos, "junos-23.2", 4, gb(4));
+        node!(d, bird, "bird2", 4, gb(4));
+
+        // Each leaf's qsfp0..3 face FRR, EOS, Junos, BIRD respectively.
+        // Each spine's first two data NICs face ox1 and ox2 respectively.
+        for (leaf_index, leaf) in [ox1, ox2].into_iter().enumerate() {
+            for (port, spine) in [frr, eos, junos, bird].into_iter().enumerate()
+            {
+                let mac = if port == 3 {
+                    BirdNode::data_mac(leaf_index)
+                } else {
+                    format!("a8:40:25:02:{leaf_index:02x}:{port:02x}")
+                };
+                d.softnpu_link(leaf, spine, Some(mac), None);
+            }
+        }
+        for node in [ox1, ox2, frr, eos, junos, bird] {
+            d.default_ext_link(node)?;
+        }
+        for node in [ox1, ox2, eos] {
+            d.mount("cargo-bay", "/opt/cargo-bay", node)?;
+        }
+        for node in [frr, junos, bird] {
+            d.mount_linux("cargo-bay", "/opt/cargo-bay", node)?;
+        }
+        d.do_setup(junos, false);
+        Ok(Self {
+            d,
+            leaves: [MgdNode(ox1), MgdNode(ox2)],
+            frr: FrrNode(frr),
+            eos: EosNode(eos),
+            junos: JuniperNode(junos),
+            bird: BirdNode(bird),
         })
     }
 
