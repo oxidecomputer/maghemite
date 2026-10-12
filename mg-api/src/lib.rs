@@ -14,7 +14,7 @@ use dropshot::{
 use dropshot_api_manager_types::api_versions;
 use mg_api_types_versions::{
     latest::{self, bfd::error::BfdRequestError},
-    v1, v2, v4, v5, v8, v10,
+    v1, v2, v4, v5, v8, v10, v11,
 };
 
 api_versions!([
@@ -29,6 +29,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (13, IPV6_EXTENDED_COMMUNITIES),
     (12, BFD_NONZERO_DETECT_MULT),
     (11, PREFIX_TO_OXNET),
     (10, V4_OVER_V6_STATIC_ROUTES),
@@ -1147,7 +1148,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/history/message",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_IPV6_EXTENDED_COMMUNITIES..,
     }]
     async fn message_history(
         rqctx: RequestContext<Self::Context>,
@@ -1156,6 +1157,25 @@ pub trait MgAdminApi {
         HttpResponseOk<latest::bgp::session::MessageHistoryResponse>,
         HttpError,
     >;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/history/message",
+        operation_id = "message_history",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_IPV6_EXTENDED_COMMUNITIES,
+    }]
+    async fn message_history_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::bgp::session::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v11::bgp::session::MessageHistoryResponse>,
+        HttpError,
+    > {
+        Self::message_history(rqctx, request)
+            .await?
+            .try_map(v11::bgp::session::MessageHistoryResponse::try_from)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))
+    }
 
     #[endpoint {
         method = GET,
@@ -1170,7 +1190,7 @@ pub trait MgAdminApi {
         HttpResponseOk<v5::bgp::session::MessageHistoryResponse>,
         HttpError,
     > {
-        Ok(Self::message_history(rqctx, request)
+        Ok(Self::message_history_v11(rqctx, request)
             .await?
             .map(v5::bgp::session::MessageHistoryResponse::from))
     }

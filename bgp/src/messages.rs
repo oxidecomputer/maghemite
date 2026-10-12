@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{BGP_VERSION, error::Error};
+use mg_api_types::bgp::messages::OxideVtep;
 use mg_api_types::rdb::rib::AddressFamily;
 use nom::{
     bytes::complete::take,
@@ -415,10 +416,7 @@ fn update_message_path_attrs_to_wire(
             PathAttributeValue::MpReachNlri(_)
                 | PathAttributeValue::MpUnreachNlri(_)
         ) {
-            buf.extend_from_slice(&path_attribute_to_wire(
-                p,
-                p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
-            )?);
+            buf.extend_from_slice(&path_attribute_to_wire(p)?);
         }
     }
 
@@ -429,10 +427,7 @@ fn update_message_path_attrs_to_wire(
             PathAttributeValue::MpReachNlri(_)
                 | PathAttributeValue::MpUnreachNlri(_)
         ) {
-            buf.extend_from_slice(&path_attribute_to_wire(
-                p,
-                p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
-            )?);
+            buf.extend_from_slice(&path_attribute_to_wire(p)?);
         }
     }
 
@@ -942,12 +937,16 @@ fn update_message_path_attrs_from_wire(
 
         // ===== RFC 7606 Section 4: Validate zero-length attributes =====
         // Only AS_PATH and ATOMIC_AGGREGATE may have zero length.
-        // All other attributes with zero length are a syntax error (treat-as-withdraw).
+        // OxideVtep rejects zero length in its codec with attribute-discard.
+        // Other attributes with zero length are a syntax error (treat-as-withdraw).
         if len == 0 {
             match typ.type_code {
                 PathAttributeTypeCode::AsPath
                 | PathAttributeTypeCode::AtomicAggregate => {
                     // These are allowed to have zero length
+                }
+                PathAttributeTypeCode::OxideVtep => {
+                    // Let the value parser apply its length check and Discard policy.
                 }
                 _ => {
                     // All other attributes must have non-zero length
@@ -1100,25 +1099,24 @@ pub fn update_message_nexthop(
 /// Free-fn replacement for `PathAttribute::to_wire`. Lives here because the
 /// `bgp::error::Error` return type prevents this from being an inherent
 /// method on the migrated type.
-pub fn path_attribute_to_wire(
-    attr: &PathAttribute,
-    extended_length: bool,
-) -> Result<Vec<u8>, Error> {
-    let mut buf = path_attribute_type_to_wire(&attr.typ);
-    let val = &path_attribute_value_to_wire(&attr.value)?;
-    if extended_length {
-        if val.len() > u16::MAX as usize {
-            return Err(Error::TooLarge("extended path attribute".into()));
-        }
-        let len = val.len() as u16;
-        buf.extend_from_slice(&len.to_be_bytes())
-    } else {
-        if val.len() > u8::MAX as usize {
-            return Err(Error::TooLarge("pathattribute".into()));
-        }
-        buf.push(val.len() as u8);
+///
+/// Choose the shortest length field (RFC 4271 §4.3), deriving EXTENDED_LENGTH
+/// from the encoded value rather than trusting the stored flag.
+pub fn path_attribute_to_wire(attr: &PathAttribute) -> Result<Vec<u8>, Error> {
+    let val = path_attribute_value_to_wire(&attr.value)?;
+    let len = u16::try_from(val.len())
+        .map_err(|_| Error::TooLarge("extended path attribute".into()))?;
+    let mut flags = attr.typ.flags & !EXTENDED_LENGTH;
+    if len > u16::from(u8::MAX) {
+        flags |= EXTENDED_LENGTH;
     }
-    buf.extend_from_slice(val);
+    let mut buf = vec![flags, attr.typ.type_code.into()];
+    if flags & EXTENDED_LENGTH != 0 {
+        buf.extend_from_slice(&len.to_be_bytes());
+    } else {
+        buf.push(len as u8);
+    }
+    buf.extend_from_slice(&val);
     Ok(buf)
 }
 
@@ -1165,7 +1163,7 @@ fn validate_attribute_flags(
 
     // Define expected flags for each known attribute type
     // Format: (expected_optional, expected_transitive)
-    let expected = match typ.type_code {
+    let (expected_optional, expected_transitive) = match typ.type_code {
         // Well-known mandatory/discretionary: Optional=0, Transitive=1
         PathAttributeTypeCode::Origin
         | PathAttributeTypeCode::AsPath
@@ -1182,10 +1180,9 @@ fn validate_attribute_flags(
         PathAttributeTypeCode::Aggregator
         | PathAttributeTypeCode::Communities
         | PathAttributeTypeCode::As4Path
-        | PathAttributeTypeCode::As4Aggregator => (true, true),
+        | PathAttributeTypeCode::As4Aggregator
+        | PathAttributeTypeCode::OxideVtep => (true, true),
     };
-
-    let (expected_optional, expected_transitive) = expected;
 
     if optional != expected_optional || transitive != expected_transitive {
         let reason = UpdateParseErrorReason::InvalidAttributeFlags {
@@ -1197,13 +1194,6 @@ fn validate_attribute_flags(
     }
 
     Ok(())
-}
-
-/// Free-fn replacement for the inherent `PathAttributeType::to_wire`. The
-/// matching `from_wire` is inlined in `UpdateMessage::path_attrs_from_wire`
-/// (which produces `UpdateParseError`, not `bgp::error::Error`).
-fn path_attribute_type_to_wire(typ: &PathAttributeType) -> Vec<u8> {
-    vec![typ.flags, typ.type_code.into()]
 }
 
 /// Determine RFC 7606 action for errors on this attribute type.
@@ -1251,7 +1241,8 @@ pub fn path_attribute_type_error_action(
         // These don't affect route selection, so discard is safe.
         PathAttributeTypeCode::AtomicAggregate
         | PathAttributeTypeCode::Aggregator
-        | PathAttributeTypeCode::As4Aggregator => AttributeAction::Discard,
+        | PathAttributeTypeCode::As4Aggregator
+        | PathAttributeTypeCode::OxideVtep => AttributeAction::Discard,
     }
 }
 
@@ -1296,6 +1287,7 @@ pub fn path_attribute_value_to_wire(
         PathAttributeValue::AtomicAggregate => Ok(Vec::new()),
         PathAttributeValue::MpReachNlri(mp) => Ok(mp_reach_nlri_to_wire(mp)),
         PathAttributeValue::MpUnreachNlri(mp) => mp_unreach_nlri_to_wire(mp),
+        PathAttributeValue::OxideVtep(ox) => Ok(ox.to_wire()),
     }
 }
 
@@ -1320,13 +1312,15 @@ pub fn path_attribute_value_from_wire(
         take(n)(input)
     }
 
-    // RFC 7606 §3: Zero-length attributes only valid for AS_PATH and ATOMIC_AGGREGATE
+    // Zero length is valid for AS_PATH and ATOMIC_AGGREGATE. OxideVtep
+    // performs its own length validation below.
     if input.is_empty() {
         match type_code {
             PathAttributeTypeCode::AsPath
             | PathAttributeTypeCode::AtomicAggregate => {
                 // These attributes are allowed to be zero-length
             }
+            PathAttributeTypeCode::OxideVtep => {}
             _ => {
                 return Err(UpdateParseErrorReason::AttributeLengthError {
                     type_code,
@@ -1526,6 +1520,15 @@ pub fn path_attribute_value_from_wire(
                 }
             })?;
             Ok(PathAttributeValue::As4Aggregator(agg))
+        }
+        PathAttributeTypeCode::OxideVtep => {
+            let vtep = OxideVtep::from_wire(input).map_err(|e| {
+                UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(type_code.into()),
+                    detail: e.to_string(),
+                }
+            })?;
+            Ok(PathAttributeValue::OxideVtep(vtep))
         }
     }
 }
@@ -2541,6 +2544,119 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
+    #[test]
+    fn oxide_vtep_payload_validation() {
+        use mg_api_types::bgp::messages::OxideVtepParseError;
+
+        for len in [0, 1, 1025] {
+            assert!(matches!(
+                OxideVtep::from_wire(&vec![0; len]),
+                Err(OxideVtepParseError::BadLength(actual)) if actual == len
+            ));
+        }
+        for wire in [&[0, 0xff][..], &[0, 0xc3], &[0, 0xc0, 0x80]] {
+            assert!(matches!(
+                OxideVtep::from_wire(wire),
+                Err(OxideVtepParseError::InvalidPayload(_))
+            ));
+            assert!(matches!(
+                path_attribute_value_from_wire(
+                    wire,
+                    PathAttributeTypeCode::OxideVtep
+                ),
+                Err(UpdateParseErrorReason::AttributeParseError {
+                    type_code: Some(254),
+                    ..
+                })
+            ));
+        }
+
+        for router_id in [
+            "a".into(),
+            "rack-α\0".into(),
+            "α".repeat(511),
+            format!("{}a", "α".repeat(511)),
+        ] {
+            let mut wire = vec![0];
+            wire.extend_from_slice(router_id.as_bytes());
+            assert_eq!(
+                path_attribute_value_from_wire(
+                    &wire,
+                    PathAttributeTypeCode::OxideVtep
+                )
+                .unwrap(),
+                PathAttributeValue::OxideVtep(
+                    OxideVtep::new(router_id).unwrap()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn oxide_vtep_attribute_length_boundary_roundtrip() {
+        // 254/255 UTF-8 bytes plus the version byte: count bytes, not chars.
+        for (router_id, header) in [
+            ("α".repeat(127), &[0xc0, 254, 255][..]),
+            (format!("{}\0", "α".repeat(127)), &[0xd0, 254, 1, 0][..]),
+        ] {
+            let attr = PathAttributeValue::OxideVtep(
+                OxideVtep::new(router_id).unwrap(),
+            );
+            let update = UpdateMessage {
+                withdrawn: vec![],
+                path_attributes: vec![attr.into()],
+                nlri: vec![],
+                errors: vec![],
+            };
+
+            let wire = update_message_to_wire(&update).unwrap();
+            // Skip the withdrawn-routes and total-attributes length fields.
+            assert_eq!(&wire[4..4 + header.len()], header);
+            let decoded = update_message_from_wire(&wire).unwrap();
+            assert!(decoded.errors.is_empty());
+            assert_eq!(decoded.path_attributes.len(), 1);
+            assert_eq!(
+                decoded.path_attributes[0].value,
+                update.path_attributes[0].value
+            );
+            assert_eq!(decoded.path_attributes[0].typ.flags, header[0]);
+        }
+    }
+
+    #[test]
+    fn attribute_encoding_derives_length_flag_and_preserves_other_flags() {
+        for (count, header) in
+            [(63, &[0xe0, 8, 252][..]), (64, &[0xf0, 8, 1, 0][..])]
+        {
+            for stored_extended in [0, EXTENDED_LENGTH] {
+                let mut attr: PathAttribute = PathAttributeValue::Communities(
+                    (0..count).map(Community::from).collect(),
+                )
+                .into();
+                // Exercise stale length flags without losing the Partial bit.
+                attr.typ.flags |= PARTIAL | stored_extended;
+                let wire = path_attribute_to_wire(&attr).unwrap();
+                assert_eq!(&wire[..header.len()], header);
+                assert_eq!(wire.len(), header.len() + count as usize * 4);
+                assert_eq!(
+                    path_attribute_value_from_wire(
+                        &wire[header.len()..],
+                        PathAttributeTypeCode::Communities,
+                    )
+                    .unwrap(),
+                    attr.value,
+                );
+            }
+        }
+        let too_large: PathAttribute =
+            PathAttributeValue::Communities(vec![Community::NoExport; 16384])
+                .into();
+        assert!(matches!(
+            path_attribute_to_wire(&too_large),
+            Err(Error::TooLarge(_))
+        ));
+    }
+
     #[derive(Debug)]
     struct PrefixConversionTestCase {
         description: &'static str,
@@ -2662,6 +2778,10 @@ mod tests {
                         std::net::Ipv4Addr::new(192, 0, 2, 1),
                     ),
                 },
+                PathAttributeValue::OxideVtep(
+                    OxideVtep::new("rack-α".into()).unwrap(),
+                )
+                .into(),
             ],
             nlri: vec![
                 Ipv4Net::new_unchecked(
@@ -4393,6 +4513,47 @@ mod tests {
         /// Helper to build NLRI for a /24 prefix.
         fn nlri_prefix(a: u8, b: u8, c: u8) -> Vec<u8> {
             vec![24, a, b, c]
+        }
+
+        #[test]
+        fn malformed_oxide_vtep_is_discarded_without_withdrawing_route() {
+            let mut valid_attrs = origin_attr();
+            valid_attrs.extend(as_path_attr(64512));
+            valid_attrs.extend(next_hop_attr([192, 0, 2, 1]));
+            let nlri = nlri_prefix(203, 0, 113);
+            let expected = update_message_from_wire(&build_update_wire(
+                &valid_attrs,
+                &nlri,
+            ))
+            .unwrap();
+            assert!(expected.errors.is_empty());
+
+            for payload in
+                [vec![], vec![0], vec![0; 1025], vec![1, b'a'], vec![0, 0xff]]
+            {
+                // Put the malformed attribute before valid attributes to
+                // verify that discarding it preserves parser alignment.
+                let mut attrs = vec![0xd0, 254];
+                attrs.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+                attrs.extend(payload);
+                attrs.extend_from_slice(&valid_attrs);
+                let actual =
+                    update_message_from_wire(&build_update_wire(&attrs, &nlri))
+                        .unwrap();
+                assert_eq!(actual.path_attributes, expected.path_attributes);
+                assert_eq!(actual.nlri, expected.nlri);
+                assert!(!treat_as_withdraw(&actual.errors));
+                assert!(matches!(
+                    actual.errors.as_slice(),
+                    [(
+                        UpdateParseErrorReason::AttributeParseError {
+                            type_code: Some(254),
+                            ..
+                        },
+                        AttributeAction::Discard,
+                    )]
+                ));
+            }
         }
 
         #[test]

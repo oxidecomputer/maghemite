@@ -116,20 +116,24 @@ pub mod bgp {
         pub use crate::v4::bgp::messages::As4Aggregator;
         pub use crate::v4::bgp::messages::BgpNexthop;
         pub use crate::v4::bgp::messages::Ipv6DoubleNexthop;
-        pub use crate::v4::bgp::messages::PathAttributeType;
-        pub use crate::v4::bgp::messages::PathAttributeTypeCode;
         pub use crate::v4::bgp::messages::path_attribute_flags;
 
-        pub use crate::v11::bgp::messages::Message;
         pub use crate::v11::bgp::messages::MpReachIpv4Unicast;
         pub use crate::v11::bgp::messages::MpReachIpv6Unicast;
         pub use crate::v11::bgp::messages::MpReachNlri;
         pub use crate::v11::bgp::messages::MpUnreachIpv4Unicast;
         pub use crate::v11::bgp::messages::MpUnreachIpv6Unicast;
         pub use crate::v11::bgp::messages::MpUnreachNlri;
-        pub use crate::v11::bgp::messages::PathAttribute;
-        pub use crate::v11::bgp::messages::PathAttributeValue;
-        pub use crate::v11::bgp::messages::UpdateMessage;
+
+        pub use crate::v13::bgp::messages::Message;
+        pub use crate::v13::bgp::messages::OxideVtep;
+        pub use crate::v13::bgp::messages::OxideVtepParseError;
+        pub use crate::v13::bgp::messages::PathAttribute;
+        pub use crate::v13::bgp::messages::PathAttributeDowngradeError;
+        pub use crate::v13::bgp::messages::PathAttributeType;
+        pub use crate::v13::bgp::messages::PathAttributeTypeCode;
+        pub use crate::v13::bgp::messages::PathAttributeValue;
+        pub use crate::v13::bgp::messages::UpdateMessage;
     }
 
     pub mod session {
@@ -145,9 +149,10 @@ pub mod bgp {
         pub use crate::v5::bgp::session::MessageHistoryRequest;
 
         pub use crate::v11::bgp::session::MAX_MESSAGE_HISTORY;
-        pub use crate::v11::bgp::session::MessageHistory;
-        pub use crate::v11::bgp::session::MessageHistoryEntry;
-        pub use crate::v11::bgp::session::MessageHistoryResponse;
+
+        pub use crate::v13::bgp::session::MessageHistory;
+        pub use crate::v13::bgp::session::MessageHistoryEntry;
+        pub use crate::v13::bgp::session::MessageHistoryResponse;
     }
 }
 

@@ -48,7 +48,7 @@ use mg_api_types::ndp::{
 };
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5, v8};
+use mg_api_types_versions::{v1, v2, v4, v5, v8, v11};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
@@ -1600,6 +1600,8 @@ pub async fn message_history_v1(
         // Only include IP-based sessions in the history
         if let PeerId::Ip(addr) = key {
             let mh = lock!(session.message_history).clone();
+            let mh = v11::bgp::session::MessageHistory::try_from(mh)
+                .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
             result.insert(
                 *addr,
                 v1::bgp::session::MessageHistory::from(
@@ -1634,11 +1636,14 @@ pub async fn message_history_v4(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history)| {
-            key.parse::<IpAddr>().ok().map(|addr| {
-                (addr, v4::bgp::session::MessageHistory::from(history))
-            })
+            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
         })
-        .collect();
+        .map(|(addr, history)| {
+            let history = v11::bgp::session::MessageHistory::try_from(history)
+                .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+            Ok((addr, v4::bgp::session::MessageHistory::from(history)))
+        })
+        .collect::<Result<_, HttpError>>()?;
 
     Ok(HttpResponseOk(v4::bgp::config::MessageHistoryResponse {
         by_peer,
@@ -1664,16 +1669,19 @@ pub async fn message_history_v2(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history)| {
-            key.parse::<IpAddr>().ok().map(|addr| {
-                (
-                    addr,
-                    v2::bgp::history::MessageHistory::from(
-                        v4::bgp::session::MessageHistory::from(history),
-                    ),
-                )
-            })
+            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
         })
-        .collect();
+        .map(|(addr, history)| {
+            let history = v11::bgp::session::MessageHistory::try_from(history)
+                .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+            Ok((
+                addr,
+                v2::bgp::history::MessageHistory::from(
+                    v4::bgp::session::MessageHistory::from(history),
+                ),
+            ))
+        })
+        .collect::<Result<_, HttpError>>()?;
 
     Ok(HttpResponseOk(v2::bgp::history::MessageHistoryResponse {
         by_peer,
