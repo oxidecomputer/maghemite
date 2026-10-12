@@ -108,9 +108,10 @@ struct RunArgs {
     #[arg(long, default_value = "[::1]:12225")]
     mgs_addr: SocketAddr,
 
-    /// SocketAddr for the BGP Dispatcher to listen on.
-    #[arg(long, default_value = "[::]:179")]
-    bgp_dispatcher_addr: SocketAddr,
+    /// SocketAddr(s) for the BGP Dispatcher to listen on.
+    /// May be specified multiple times for multiple listen addresses.
+    #[arg(long, default_values = ["[::]:179"], num_args = 1..)]
+    bgp_dispatcher_addr: Vec<SocketAddr>,
 }
 
 fn main() {
@@ -287,21 +288,23 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
     let bgp_context = BgpContext::new(sessions.clone(), log.clone());
 
     if !args.no_bgp_dispatcher {
-        let bgp_dispatcher =
-            bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
-                sessions.clone(),
-                args.bgp_dispatcher_addr.to_string(),
-                log.clone(),
-                Some(bgp_context.unnumbered_manager.clone()), // Enable link-local connection routing
-            );
+        for addr in &args.bgp_dispatcher_addr {
+            let bgp_dispatcher =
+                bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
+                    sessions.clone(),
+                    addr.to_string(),
+                    log.clone(),
+                    Some(bgp_context.unnumbered_manager.clone()),
+                );
 
-        let listener_str =
-            format!("bgp-dispatcher-{}", bgp_dispatcher.listen_addr());
+            let listener_str =
+                format!("bgp-dispatcher-{}", bgp_dispatcher.listen_addr());
 
-        Builder::new()
-            .name(listener_str.clone())
-            .spawn(move || bgp_dispatcher.run::<BgpListenerTcp>())
-            .expect("failed to start {listener_str}");
+            Builder::new()
+                .name(listener_str.clone())
+                .spawn(move || bgp_dispatcher.run::<BgpListenerTcp>())
+                .expect("failed to start {listener_str}");
+        }
     }
 
     bgp_context
