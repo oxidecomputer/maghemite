@@ -11,8 +11,9 @@ pub(super) const SPINES: [(&str, u32); 4] = [
     ("junos", 65103),
     ("bird", 65104),
 ];
-pub(super) const ORIGINS4: [&str; 2] = ["198.51.100.0/24", "203.0.113.0/24"];
-pub(super) const ORIGINS6: [&str; 2] = ["2001:db8:1::/64", "2001:db8:2::/64"];
+pub(super) const ORIGINS4: [&str; 2] = ["198.51.100.1/32", "203.0.113.1/32"];
+pub(super) const ORIGINS6: [&str; 2] =
+    ["2001:db8:1::1/128", "2001:db8:2::1/128"];
 
 // Eight distinct subnets; host 1 is the leaf, host 2 the spine.
 pub(super) fn addresses(

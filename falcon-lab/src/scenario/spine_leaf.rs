@@ -13,7 +13,7 @@ use crate::{
     juniper::clear_staged_routing_configs,
     mgd::{MgdNode, wait_for_mgd},
     topo::{SpineLeaf, Topology},
-    wait_for_eq,
+    wait_for_eq, wait_for_eq_stable,
 };
 use anyhow::{Context, Result, ensure};
 use dpd_client::{
@@ -31,8 +31,10 @@ use mg_api_types::{
     rdb::rib::AddressFamily,
     rib::BestpathFanoutRequest,
 };
+use oxnet::IpNet;
 use std::{
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::NonZeroU8,
     sync::Arc,
     time::Duration,
@@ -154,14 +156,97 @@ async fn body(
         .apply(d, &config::bird(scenario, &bird_links))
         .await?;
 
+    slog::info!(
+        d.log,
+        "{}: baseline: checking both leaves have no peers and no VTEPs",
+        scenario.name()
+    );
+    for (index, leaf) in clients.iter().enumerate() {
+        expect_empty_leaf(leaf, index).await?;
+    }
+    slog::info!(d.log, "{}: baseline passed", scenario.name());
+    // No other spine may supply the same VTEP identities and mask a transit
+    // failure. Configure peers only for the spine currently under test.
+    for (spine, (name, _)) in SPINES.iter().enumerate() {
+        slog::info!(
+            d.log,
+            "{}: {name}: enabling peers on both leaves (other spines disabled)",
+            scenario.name()
+        );
+        for (index, leaf) in clients.iter().enumerate() {
+            set_spine_peers(leaf, index, spine, scenario, true)
+                .await
+                .with_context(|| format!("ox{} enable {name}", index + 1))?;
+        }
+        slog::info!(
+            d.log,
+            "{}: {name}: checking sessions, routes, dataplane, and VTEP identities",
+            scenario.name()
+        );
+        let isolated_spine = [spine];
+        let (first, second) = tokio::join!(
+            expect_leaf(&clients[0], 0, scenario, &isolated_spine, &d.log),
+            expect_leaf(&clients[1], 1, scenario, &isolated_spine, &d.log),
+        );
+        first
+            .and(second)
+            .with_context(|| format!("{name} transit"))?;
+
+        slog::info!(
+            d.log,
+            "{}: {name}: transit passed on both leaves; disabling peers",
+            scenario.name()
+        );
+        for (index, leaf) in clients.iter().enumerate() {
+            set_spine_peers(leaf, index, spine, scenario, false)
+                .await
+                .with_context(|| format!("ox{} disable {name}", index + 1))?;
+        }
+        slog::info!(
+            d.log,
+            "{}: {name}: checking both leaves return to no peers and no VTEPs",
+            scenario.name()
+        );
+        let (first, second) = tokio::join!(
+            expect_empty_leaf(&clients[0], 0),
+            expect_empty_leaf(&clients[1], 1),
+        );
+        first
+            .and(second)
+            .with_context(|| format!("{name} teardown"))?;
+        slog::info!(
+            d.log,
+            "{}: {name}: teardown passed on both leaves (3 consecutive empty samples each)",
+            scenario.name()
+        );
+    }
+
+    // Retain the original ECMP/dataplane check after testing each transit
+    // stack independently and verifying its learned state was removed.
+    slog::info!(
+        d.log,
+        "{}: ECMP: enabling all four spines on both leaves",
+        scenario.name()
+    );
+    for (index, leaf) in clients.iter().enumerate() {
+        for spine in 0..SPINES.len() {
+            set_spine_peers(leaf, index, spine, scenario, true).await?;
+        }
+    }
+    slog::info!(
+        d.log,
+        "{}: ECMP: checking sessions, four-way routes, dataplane, and VTEP identities",
+        scenario.name()
+    );
+    let all_spines: Vec<_> = (0..SPINES.len()).collect();
     let (first, second) = tokio::join!(
-        expect_leaf(&clients[0], 0, scenario),
-        expect_leaf(&clients[1], 1, scenario),
+        expect_leaf(&clients[0], 0, scenario, &all_spines, &d.log),
+        expect_leaf(&clients[1], 1, scenario, &all_spines, &d.log),
     );
     first.and(second)?;
     slog::info!(
         d.log,
-        "{}: both leaves received and installed IPv4 and IPv6 routes through all four spines",
+        "{}: isolated VTEP transit and cleanup passed for each spine; both leaves installed IPv4 and IPv6 host routes through all four spines",
         scenario.name()
     );
     Ok(())
@@ -251,25 +336,6 @@ async fn setup_leaf(
         fanout: NonZeroU8::new(4).expect("four spines"),
     })
     .await?;
-    for (port, (name, remote_asn)) in SPINES.iter().enumerate() {
-        let interface = format!("tfportqsfp{port}_0");
-        let mut neighbor = basic_unnumbered_neighbor(
-            name,
-            "spine-leaf",
-            &interface,
-            asn,
-            1800,
-        );
-        neighbor.remote_asn = Some(*remote_asn);
-        if scenario.numbered() {
-            for v6 in [false, true] {
-                mgd.create_neighbor(&numbered_neighbor(index, port, v6))
-                    .await?;
-            }
-        } else {
-            mgd.create_unnumbered_neighbor(&neighbor).await?;
-        }
-    }
     mgd.create_origin4(&Origin4 {
         asn,
         prefixes: vec![ORIGINS4[index].parse()?],
@@ -285,6 +351,45 @@ async fn setup_leaf(
         dpd,
         bird_link_local: link_locals[3],
     })
+}
+
+async fn set_spine_peers(
+    leaf: &LeafClients,
+    index: usize,
+    spine: usize,
+    scenario: SpineLeafScenario,
+    enabled: bool,
+) -> Result<()> {
+    let asn = LEAF_ASNS[index];
+    if scenario.numbered() {
+        for v6 in [false, true] {
+            let neighbor = numbered_neighbor(index, spine, v6);
+            if enabled {
+                leaf.mgd.create_neighbor(&neighbor).await?;
+            } else {
+                leaf.mgd
+                    .delete_neighbor(asn, &neighbor.host.ip().to_string())
+                    .await?;
+            }
+        }
+    } else {
+        let interface = format!("tfportqsfp{spine}_0");
+        if enabled {
+            let (name, remote_asn) = SPINES[spine];
+            let mut neighbor = basic_unnumbered_neighbor(
+                name,
+                "spine-leaf",
+                &interface,
+                asn,
+                1800,
+            );
+            neighbor.remote_asn = Some(remote_asn);
+            leaf.mgd.create_unnumbered_neighbor(&neighbor).await?;
+        } else {
+            leaf.mgd.delete_unnumbered_neighbor(asn, &interface).await?;
+        }
+    }
+    Ok(())
 }
 
 fn numbered_neighbor(leaf: usize, spine: usize, v6: bool) -> Neighbor {
@@ -330,10 +435,24 @@ async fn expect_leaf(
     leaf: &LeafClients,
     index: usize,
     scenario: SpineLeafScenario,
+    spines: &[usize],
+    log: &slog::Logger,
 ) -> Result<()> {
-    let label = format!("ox{}", index + 1);
+    let spine_names: Vec<_> = spines.iter().map(|&i| SPINES[i].0).collect();
+    let label = format!(
+        "{}: ox{} via {}",
+        scenario.name(),
+        index + 1,
+        spine_names.join(", ")
+    );
     let asn = LEAF_ASNS[index];
-    for (name, _) in SPINES {
+    wait_for_eq!(
+        leaf.mgd.get_neighbors(asn).await?.into_inner().len(),
+        spines.len() * if scenario.numbered() { 2 } else { 1 },
+        &format!("{label}: peer count")
+    );
+    for &spine in spines {
+        let (name, _) = SPINES[spine];
         let names = if scenario.numbered() {
             vec![format!("{name}-v4"), format!("{name}-v6")]
         } else {
@@ -343,37 +462,85 @@ async fn expect_leaf(
             wait_for_eq!(
                 neighbor_fsm_state(&leaf.mgd, asn, &name).await,
                 Some(FsmStateKind::Established),
-                &format!("{label} {name} Established")
+                &format!("{label}: {name} Established")
             );
         }
     }
+    slog::info!(log, "{label}: all expected sessions Established");
     let v4 = ORIGINS4[1 - index];
     let v6 = ORIGINS6[1 - index];
+    // Check interfaces as well as count: multiple targets on one port must
+    // not masquerade as installation through the expected spines.
+    let expected_ports: Vec<_> = spines
+        .iter()
+        .map(|port| (format!("qsfp{port}"), 0))
+        .collect();
     for (af, prefix) in [(AddressFamily::Ipv4, v4), (AddressFamily::Ipv6, v6)] {
         wait_for_eq!(
             mgd_imported_paths(&leaf.mgd, af, prefix).await,
-            Some(4),
-            &format!("{label} imported {prefix} through four spines")
+            Some(spines.len()),
+            &format!("{label}: imported {prefix}")
         );
         wait_for_eq!(
             mgd_selected_paths(&leaf.mgd, af, prefix).await,
-            Some(4),
-            &format!("{label} selected {prefix} through four spines")
+            Some(spines.len()),
+            &format!("{label}: selected {prefix}")
+        );
+        wait_for_eq!(
+            installed_ports(&leaf.dpd, prefix).await,
+            Some(expected_ports.clone()),
+            &format!("{label}: installed {prefix} on {expected_ports:?}")
+        );
+        slog::info!(
+            log,
+            "{label}: {prefix} imported, selected, and installed on {expected_ports:?}"
         );
     }
-    // Check interfaces as well as count: four targets on one port must not
-    // masquerade as installation through all four spines.
-    let expected: Vec<_> =
-        (0..4).map(|port| (format!("qsfp{port}"), 0)).collect();
+
+    // The prototype encodes the originating leaf's BGP ID, not the transit
+    // spine's or receiving leaf's ID. Compare the entire table, not membership.
+    let router_id = Ipv4Addr::from(LEAF_ASNS[1 - index]).to_string();
+    let expected_vteps = BTreeMap::from([
+        (
+            v4.parse::<IpNet>()?.addr().to_string(),
+            vec![router_id.clone()],
+        ),
+        (v6.parse::<IpNet>()?.addr().to_string(), vec![router_id]),
+    ]);
     wait_for_eq!(
-        installed_ports(&leaf.dpd, v4).await,
-        Some(expected.clone()),
-        &format!("{label} installed {v4} on all spine ports")
+        leaf.mgd
+            .get_vteps()
+            .await?
+            .into_inner()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>(),
+        expected_vteps.clone(),
+        &format!("{label}: VTEP identities")
     );
-    wait_for_eq!(
-        installed_ports(&leaf.dpd, v6).await,
-        Some(expected.clone()),
-        &format!("{label} installed {v6} on all spine ports")
+    slog::info!(log, "{label}: VTEP table matched {expected_vteps:?}");
+    Ok(())
+}
+
+async fn expect_empty_leaf(leaf: &LeafClients, index: usize) -> Result<()> {
+    // API errors must fail, not be interpreted as an empty table. Require
+    // consecutive empty samples before another spine can contribute routes.
+    wait_for_eq_stable!(
+        (
+            leaf.mgd
+                .get_neighbors(LEAF_ASNS[index])
+                .await?
+                .into_inner()
+                .len(),
+            leaf.mgd
+                .get_vteps()
+                .await?
+                .into_inner()
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+        ),
+        (0, BTreeMap::new()),
+        3,
+        &format!("ox{} has no peers and an empty VTEP table", index + 1)
     );
     Ok(())
 }
