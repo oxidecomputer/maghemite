@@ -21,6 +21,13 @@ use std::{
 
 const UNIT_DISPATCHER: &str = "dispatcher";
 
+/// Why the dispatcher stopped serving a listener.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AcceptLoopExit {
+    Shutdown,
+    Rebind,
+}
+
 pub struct Dispatcher<Cnx: BgpConnection + 'static> {
     /// Session map shared with all Routers, indexed by PeerId.
     pub sessions: Arc<Mutex<SessionMap<Cnx>>>,
@@ -91,7 +98,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
         let log = lock!(self.log).clone();
         info!(log, "dispatcher started");
 
-        'listener: loop {
+        loop {
             info!(log, "starting listener with bind arg: {}", &self.listen);
 
             // We need to check the shutdown flag in the listener loop so we can
@@ -102,7 +109,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     "dispatcher caught shutdown flag from listener loop"
                 );
                 self.shutdown.store(false, Ordering::Release);
-                break 'listener;
+                break;
             }
 
             let listener = match Listener::bind(
@@ -115,122 +122,125 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     error!(log, "listener bind error: {e}");
                     sleep(Duration::from_secs(1));
                     // XXX: possible death loop?
-                    continue 'listener;
+                    continue;
                 }
             };
 
-            // If the user requested to bind on port 0, a random port will be
-            // selected, so we capture the port in the logger context after the
-            // listener has been started
-            let bound_log =
-                log.new(slog::o!("bind_addr" => listener.bind_addr()));
-
-            info!(bound_log, "transitioning to accept loop");
-            'accept: loop {
-                // We also need to check the shutdown flag inside the accept
-                // loop, because we won't restart the listener loop unless we've
-                // encountered an error indicating we can't just call accept()
-                // again and we need a whole new listener.
-                if self.shutdown.load(Ordering::Acquire) {
-                    info!(
-                        bound_log,
-                        "dispatcher caught shutdown flag from accept loop"
-                    );
-                    self.shutdown.store(false, Ordering::Release);
-                    break 'listener;
-                }
-
-                let accepted = match listener.accept(
-                    bound_log.clone(),
-                    self.sessions.clone(),
-                    IO_TIMEOUT,
-                ) {
-                    Ok(c) => {
-                        debug!(bound_log,
-                            "accepted inbound connection from: {}", c.peer();
-                            "peer" => c.peer(),
-                        );
-                        c
-                    }
-                    Err(ListenerAcceptError::Timeout) => {
-                        // accept() timed out before a new connection arrived.
-                        // This is expected, carry on.
-                        continue 'accept;
-                    }
-                    Err(ListenerAcceptError::UnknownPeer(peer)) => {
-                        // Inbound connection attempt from a peer we haven't
-                        // configured (either via IP or ifname). Carry on.
-                        debug!(
-                            bound_log,
-                            "rejecting connection from unknown peer: {peer}"
-                        );
-                        continue 'accept;
-                    }
-                    Err(ListenerAcceptError::NewConnectionSetup(e)) => {
-                        // We successfully accept()'d a new connection, but we
-                        // failed to apply requisite connection settings e.g.
-                        // disabling non-blocking or setting TCP_NODELAY.
-                        // Log and carry on.
-                        warn!(
-                            bound_log,
-                            "accepted connection setup error: {e}"
-                        );
-                        continue 'accept;
-                    }
-                    Err(ListenerAcceptError::Listener(e)) => {
-                        // There has been an error on the listener itself and we
-                        // need to replace it with a new one. Break out of the
-                        // accept loop so we can create a new listener.
-                        error!(bound_log, "listener accept error: {e}");
-                        continue 'listener;
-                    }
-                };
-
-                let peer_addr = accepted.peer();
-                let key = self.resolve_session_key(peer_addr);
-                let session_log = bound_log.new(slog::o!(
-                    "peer" => peer_addr,
-                    "session_key" => format!("{key:?}"),
-                ));
-
-                let (runner, min_ttl, md5_key) = {
-                    let sessions = lock!(self.sessions);
-                    let Some(runner) = sessions.get(&key).cloned() else {
-                        debug!(
-                            session_log,
-                            "no session found for peer, dropping connection"
-                        );
-                        continue 'accept;
-                    };
-                    let config = lock!(runner.session);
-                    (
-                        runner.clone(),
-                        config.min_ttl,
-                        config.md5_auth_key.clone(),
-                    )
-                };
-
-                if let Err(e) =
-                    Listener::apply_policy(&accepted, min_ttl, md5_key)
-                {
-                    warn!(session_log,
-                        "failed to apply policy for connection";
-                        "error" => format!("{e}")
-                    );
-                }
-
-                if let Err(e) = runner.event_tx.send(FsmEvent::Session(
-                    SessionEvent::TcpConnectionAcked(accepted),
-                )) {
-                    error!(session_log,
-                        "failed to send connected event to session";
-                        "error" => format!("{e}")
-                    );
-                    continue 'listener;
-                }
+            match self.accept_loop(listener) {
+                AcceptLoopExit::Shutdown => break,
+                AcceptLoopExit::Rebind => continue,
             }
         }
         info!(log, "dispatcher shutdown complete");
+    }
+
+    /// Serve one listener until shutdown or a request to bind a replacement.
+    pub(crate) fn accept_loop<Listener: BgpListener<Cnx>>(
+        &self,
+        listener: Listener,
+    ) -> AcceptLoopExit {
+        let log = lock!(self.log).clone();
+        // If the user requested to bind on port 0, a random port will be
+        // selected, so we capture the port in the logger context after the
+        // listener has been started
+        let bound_log = log.new(slog::o!("bind_addr" => listener.bind_addr()));
+
+        info!(bound_log, "transitioning to accept loop");
+        loop {
+            // We also need to check the shutdown flag inside the accept
+            // loop, because we won't restart the listener loop unless we've
+            // encountered an error indicating we can't just call accept()
+            // again and we need a whole new listener.
+            if self.shutdown.load(Ordering::Acquire) {
+                info!(
+                    bound_log,
+                    "dispatcher caught shutdown flag from accept loop"
+                );
+                self.shutdown.store(false, Ordering::Release);
+                return AcceptLoopExit::Shutdown;
+            }
+
+            let accepted = match listener.accept(
+                bound_log.clone(),
+                self.sessions.clone(),
+                IO_TIMEOUT,
+            ) {
+                Ok(conn) => {
+                    debug!(bound_log,
+                        "accepted inbound connection from: {}", conn.peer();
+                        "peer" => conn.peer(),
+                    );
+                    conn
+                }
+                Err(ListenerAcceptError::Timeout) => {
+                    // accept() timed out before a new connection arrived.
+                    // This is expected, carry on.
+                    continue;
+                }
+                Err(ListenerAcceptError::UnknownPeer(peer)) => {
+                    // Inbound connection attempt from a peer we haven't
+                    // configured (either via IP or ifname). Carry on.
+                    debug!(
+                        bound_log,
+                        "rejecting connection from unknown peer: {peer}"
+                    );
+                    continue;
+                }
+                Err(ListenerAcceptError::NewConnectionSetup(e)) => {
+                    // We successfully accept()'d a new connection, but we
+                    // failed to apply requisite connection settings e.g.
+                    // disabling non-blocking or setting TCP_NODELAY.
+                    // Log and carry on.
+                    warn!(bound_log, "accepted connection setup error: {e}");
+                    continue;
+                }
+                Err(ListenerAcceptError::Listener(e)) => {
+                    // There has been an error on the listener itself and we
+                    // need to replace it with a new one. Break out of the
+                    // accept loop so we can create a new listener.
+                    error!(bound_log, "listener accept error: {e}");
+                    return AcceptLoopExit::Rebind;
+                }
+            };
+
+            let peer_addr = accepted.peer();
+            let key = self.resolve_session_key(peer_addr);
+            let session_log = bound_log.new(slog::o!(
+                "peer" => peer_addr,
+                "session_key" => format!("{key:?}"),
+            ));
+
+            let (runner, min_ttl, md5_key) = {
+                let sessions = lock!(self.sessions);
+                let Some(runner) = sessions.get(&key).cloned() else {
+                    debug!(
+                        session_log,
+                        "no session found for peer, dropping connection"
+                    );
+                    continue;
+                };
+                let config = lock!(runner.session);
+                (runner.clone(), config.min_ttl, config.md5_auth_key.clone())
+            };
+
+            if let Err(e) = Listener::apply_policy(&accepted, min_ttl, md5_key)
+            {
+                warn!(session_log,
+                    "failed to apply policy for connection";
+                    "error" => format!("{e}")
+                );
+            }
+
+            if let Err(e) = runner.event_tx.send(FsmEvent::Session(
+                SessionEvent::TcpConnectionAcked(accepted),
+            )) {
+                error!(session_log,
+                    "failed to send connected event to session";
+                    "error" => format!("{e}")
+                );
+                return AcceptLoopExit::Rebind;
+            }
+        }
     }
 
     pub fn listen_addr(&self) -> &str {
