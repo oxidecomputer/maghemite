@@ -88,7 +88,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
-        let mut log = lock!(self.log).clone();
+        let log = lock!(self.log).clone();
         info!(log, "dispatcher started");
 
         'listener: loop {
@@ -119,15 +119,13 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 }
             };
 
-            // If the user requested to bind on port 0, a random port will be selected,
-            // so we capture the port in the logger context after the listener has been
-            // started
+            // If the user requested to bind on port 0, a random port will be
+            // selected, so we capture the port in the logger context after the
+            // listener has been started
             let bound_log =
                 log.new(slog::o!("bind_addr" => listener.bind_addr()));
-            *lock!(self.log) = bound_log.clone();
-            log = bound_log;
 
-            info!(log, "transitioning to accept loop");
+            info!(bound_log, "transitioning to accept loop");
             'accept: loop {
                 // We also need to check the shutdown flag inside the accept
                 // loop, because we won't restart the listener loop unless we've
@@ -135,7 +133,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 // again and we need a whole new listener.
                 if self.shutdown.load(Ordering::Acquire) {
                     info!(
-                        log,
+                        bound_log,
                         "dispatcher caught shutdown flag from accept loop"
                     );
                     self.shutdown.store(false, Ordering::Release);
@@ -143,12 +141,12 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 }
 
                 let accepted = match listener.accept(
-                    log.clone(),
+                    bound_log.clone(),
                     self.sessions.clone(),
                     IO_TIMEOUT,
                 ) {
                     Ok(c) => {
-                        debug!(log,
+                        debug!(bound_log,
                             "accepted inbound connection from: {}", c.peer();
                             "peer" => c.peer(),
                         );
@@ -158,14 +156,14 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         continue 'accept;
                     }
                     Err(e) => {
-                        error!(log, "listener accept error: {e}");
+                        error!(bound_log, "listener accept error: {e}");
                         continue 'listener;
                     }
                 };
 
                 let peer_addr = accepted.peer();
                 let key = self.resolve_session_key(peer_addr);
-                let session_log = log.new(slog::o!(
+                let session_log = bound_log.new(slog::o!(
                     "peer" => peer_addr,
                     "session_key" => format!("{key:?}"),
                 ));
