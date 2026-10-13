@@ -93,7 +93,9 @@ pub enum PathAttributeTypeCode {
     As4Aggregator = 18,
 
     /// Oxide Multi-rack VTEP discovery
-    OxideVtep = 254,
+    // Prototype code; 254 collides with BIRD's internal MPLS label-stack
+    // attribute, and 255 is shared by development experiments.
+    OxideVtep = 97,
 }
 
 /// Type encoding for a path attribute.

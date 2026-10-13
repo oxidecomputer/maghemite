@@ -2565,7 +2565,7 @@ mod tests {
                     PathAttributeTypeCode::OxideVtep
                 ),
                 Err(UpdateParseErrorReason::AttributeParseError {
-                    type_code: Some(254),
+                    type_code: Some(97),
                     ..
                 })
             ));
@@ -2596,8 +2596,8 @@ mod tests {
     fn oxide_vtep_attribute_length_boundary_roundtrip() {
         // 254/255 UTF-8 bytes plus the version byte: count bytes, not chars.
         for (router_id, header) in [
-            ("α".repeat(127), &[0xc0, 254, 255][..]),
-            (format!("{}\0", "α".repeat(127)), &[0xd0, 254, 1, 0][..]),
+            ("α".repeat(127), &[0xc0, 97, 255][..]),
+            (format!("{}\0", "α".repeat(127)), &[0xd0, 97, 1, 0][..]),
         ] {
             let attr = PathAttributeValue::OxideVtep(
                 OxideVtep::new(router_id).unwrap(),
@@ -4533,7 +4533,7 @@ mod tests {
             {
                 // Put the malformed attribute before valid attributes to
                 // verify that discarding it preserves parser alignment.
-                let mut attrs = vec![0xd0, 254];
+                let mut attrs = vec![0xd0, 97];
                 attrs.extend_from_slice(&(payload.len() as u16).to_be_bytes());
                 attrs.extend(payload);
                 attrs.extend_from_slice(&valid_attrs);
@@ -4547,7 +4547,7 @@ mod tests {
                     actual.errors.as_slice(),
                     [(
                         UpdateParseErrorReason::AttributeParseError {
-                            type_code: Some(254),
+                            type_code: Some(97),
                             ..
                         },
                         AttributeAction::Discard,
