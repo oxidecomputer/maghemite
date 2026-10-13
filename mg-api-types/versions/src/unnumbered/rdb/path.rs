@@ -39,6 +39,12 @@ pub struct BgpPathProperties {
     pub local_pref: Option<u32>,
     pub as_path: Vec<u32>,
     pub stale: Option<DateTime<Utc>>,
+
+    // Prototype runtime metadata, exposed separately through the VTEP table.
+    // Keep existing RIB API schemas unchanged.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub oxide_vtep: Option<String>,
 }
 
 impl From<crate::v1::rdb::path::Path> for Path {
@@ -76,6 +82,7 @@ impl From<crate::v1::rdb::path::BgpPathProperties> for BgpPathProperties {
             local_pref: value.local_pref,
             as_path: value.as_path,
             stale: value.stale,
+            oxide_vtep: None,
         }
     }
 }

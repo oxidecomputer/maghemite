@@ -20,6 +20,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
+use mg_api_types::bgp::messages::OxideVtep;
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, Db};
@@ -28,7 +29,7 @@ use slog::Logger;
 use std::{
     collections::BTreeSet,
     fmt,
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     sync::{
         Arc, Mutex, MutexGuard, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -773,8 +774,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn base_attributes(&self) -> Vec<PathAttribute> {
-        let mut path_attributes =
-            vec![PathAttributeValue::Origin(PathOrigin::Igp).into()];
+        // Prototype: tag every originated route with the local BGP ID.
+        let vtep = OxideVtep::new(Ipv4Addr::from(self.config.id).to_string())
+            .expect("an IPv4 BGP ID fits the OxideVtep length limits");
+        let mut path_attributes = vec![
+            PathAttributeValue::Origin(PathOrigin::Igp).into(),
+            PathAttributeValue::OxideVtep(vtep).into(),
+        ];
 
         if self.graceful_shutdown.load(Ordering::Relaxed) {
             path_attributes.push(

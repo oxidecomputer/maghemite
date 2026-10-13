@@ -21,7 +21,7 @@ use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
 use mg_common::{lock, read_lock, write_lock};
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
@@ -81,6 +81,8 @@ const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 use crate::rib::{Rib, Rib4, Rib6};
 
+type VtepTable = BTreeMap<IpAddr, Vec<String>>;
+
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
 #[derive(Clone)]
@@ -103,6 +105,9 @@ pub struct Db {
     /// IPv6 Unicast routes selected from rib_in according to local policy and
     /// added to the lower half forwarding plane.
     rib6_loc: Arc<Mutex<Rib6>>,
+
+    /// Volatile VTEP identities carried by selected host routes.
+    vteps: Arc<Mutex<VtepTable>>,
 
     /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
@@ -169,6 +174,7 @@ impl Db {
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
+            vteps: Arc::new(Mutex::new(BTreeMap::new())),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
@@ -714,25 +720,12 @@ impl Db {
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
 
-        match rib_in.get(prefix) {
-            // rib-in has paths worth evaluating for loc-rib
-            Some(paths) => {
-                match bestpaths(paths, fanout.get().into()) {
-                    // bestpath found at least 1 path for loc-rib
-                    Some(bp) => {
-                        rib_loc.insert(*prefix, bp.clone());
-                    }
-                    // bestpath found no suitable paths
-                    None => {
-                        rib_loc.remove(prefix);
-                    }
-                }
-            }
-            // rib-in has no worthy paths
-            None => {
-                rib_loc.remove(prefix);
-            }
-        }
+        self.update_rib_loc(
+            prefix,
+            rib_in.get(prefix),
+            rib_loc,
+            fanout.get().into(),
+        );
     }
 
     pub fn update_rib6_loc(
@@ -751,25 +744,12 @@ impl Db {
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
 
-        match rib_in.get(prefix) {
-            // rib-in has paths worth evaluating for loc-rib
-            Some(paths) => {
-                match bestpaths(paths, fanout.get().into()) {
-                    // bestpath found at least 1 path for loc-rib
-                    Some(bp) => {
-                        rib_loc.insert(*prefix, bp.clone());
-                    }
-                    // bestpath found no suitable paths
-                    None => {
-                        rib_loc.remove(prefix);
-                    }
-                }
-            }
-            // rib-in has no worthy paths
-            None => {
-                rib_loc.remove(prefix);
-            }
-        }
+        self.update_rib_loc(
+            prefix,
+            rib_in.get(prefix),
+            rib_loc,
+            fanout.get().into(),
+        );
     }
 
     // generic helper function to kick off a bestpath run for some
@@ -796,9 +776,9 @@ impl Db {
             let mut rib4_loc = lock!(self.rib4_loc);
             for (prefix, paths) in rib4_in.iter() {
                 if bestpath_needed(&IpNet::from(*prefix), paths) {
-                    Self::update_rib_loc(
+                    self.update_rib_loc(
                         prefix,
-                        paths,
+                        Some(paths),
                         &mut rib4_loc,
                         fanout.get().into(),
                     );
@@ -812,9 +792,9 @@ impl Db {
             let mut rib6_loc = lock!(self.rib6_loc);
             for (prefix, paths) in rib6_in.iter() {
                 if bestpath_needed(&IpNet::from(*prefix), paths) {
-                    Self::update_rib_loc(
+                    self.update_rib_loc(
                         prefix,
-                        paths,
+                        Some(paths),
                         &mut rib6_loc,
                         fanout.get().into(),
                     );
@@ -823,19 +803,46 @@ impl Db {
         }
     }
 
-    fn update_rib_loc<P: Ord + Copy>(
+    fn update_rib_loc<P: Ord + Copy + Into<IpNet>>(
+        &self,
         prefix: &P,
-        paths: &BTreeSet<Path>,
+        paths: Option<&BTreeSet<Path>>,
         rib_loc: &mut BTreeMap<P, BTreeSet<Path>>,
         fanout: usize,
     ) {
-        match bestpaths(paths, fanout) {
+        match paths.and_then(|paths| bestpaths(paths, fanout)) {
             Some(bp) => {
                 rib_loc.insert(*prefix, bp);
             }
             None => {
                 rib_loc.remove(prefix);
             }
+        }
+
+        let addr = match (*prefix).into() {
+            IpNet::V4(p) if p.width() == IPV4_NET_WIDTH_MAX => {
+                IpAddr::V4(p.addr())
+            }
+            IpNet::V6(p) if p.width() == IPV6_NET_WIDTH_MAX => {
+                IpAddr::V6(p.addr())
+            }
+            _ => return,
+        };
+        let mut new_vteps: Vec<String> = rib_loc
+            .get(prefix)
+            .into_iter()
+            .flatten()
+            .filter_map(|path| path.bgp.as_ref()?.oxide_vtep.clone())
+            .collect();
+        // Multiple selected peers can carry the same originator identity.
+        new_vteps.sort_unstable();
+        new_vteps.dedup();
+
+        let mut vteps = lock!(self.vteps);
+        if new_vteps.is_empty() {
+            vteps.remove(&addr);
+        } else if vteps.get(&addr) != Some(&new_vteps) {
+            vteps.insert(addr, new_vteps);
         }
     }
 
@@ -956,6 +963,11 @@ impl Db {
             pcn.changed.insert(*prefix);
         }
         self.notify(pcn);
+    }
+
+    /// VTEP identities carried by the current bestpaths for each host route.
+    pub fn get_vteps(&self) -> BTreeMap<IpAddr, Vec<String>> {
+        lock!(self.vteps).clone()
     }
 
     fn get_static_from_tree(
@@ -1080,9 +1092,9 @@ impl Db {
                 if let IpNet::V4(p4) = prefix
                     && let Some(paths) = rib4_in.get(p4)
                 {
-                    Self::update_rib_loc(
+                    self.update_rib_loc(
                         p4,
-                        paths,
+                        Some(paths),
                         &mut rib4_loc,
                         fanout.get().into(),
                     );
@@ -1107,9 +1119,9 @@ impl Db {
                 if let IpNet::V6(p6) = prefix
                     && let Some(paths) = rib6_in.get(p6)
                 {
-                    Self::update_rib_loc(
+                    self.update_rib_loc(
                         p6,
-                        paths,
+                        Some(paths),
                         &mut rib6_loc,
                         fanout.get().into(),
                     );
@@ -1595,6 +1607,7 @@ mod test {
                 local_pref: Some(1111),
                 as_path: vec![1111, 1111, 1111],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -1611,6 +1624,7 @@ mod test {
                 local_pref: Some(2222),
                 as_path: vec![2222, 2222, 2222],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -1632,6 +1646,7 @@ mod test {
                 local_pref: Some(4444),
                 as_path: vec![2222, 2222, 2222],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -2434,6 +2449,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![65001],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };

@@ -4,7 +4,7 @@
 
 use oxnet::IpNet;
 use slog_error_chain::InlineErrorChain;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
 
 use dropshot::{
@@ -986,6 +986,16 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::rib::RibQuery>,
     ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
+
+    /// VTEP identities from selected host routes, keyed by host address.
+    #[endpoint {
+        method = GET,
+        path = "/rib/status/vteps",
+        versions = VERSION_IPV6_EXTENDED_COMMUNITIES..,
+    }]
+    async fn get_vteps(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<BTreeMap<IpAddr, Vec<String>>>, HttpError>;
 
     // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED):
     // BgpPathProperties.peer is IpAddr.

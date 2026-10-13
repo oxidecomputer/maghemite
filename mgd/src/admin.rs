@@ -39,7 +39,7 @@ use oxnet::IpNet;
 use rdb::Db;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
 use std::net::Ipv6Addr;
 use std::net::{IpAddr, SocketAddr};
@@ -424,6 +424,12 @@ impl MgAdminApi for MgAdminApiImpl {
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError> {
         rib_admin::get_rib_selected(ctx, request).await
+    }
+
+    async fn get_vteps(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<BTreeMap<IpAddr, Vec<String>>>, HttpError> {
+        Ok(HttpResponseOk(ctx.context().db.get_vteps()))
     }
 
     async fn get_rib_selected_v2(
