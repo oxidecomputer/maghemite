@@ -5,6 +5,8 @@
 #[cfg(test)]
 pub mod channel;
 pub mod tcp;
+#[cfg(test)]
+mod test;
 
 use crate::{
     clock::ConnectionClock,
@@ -36,45 +38,53 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
 /// Failure to resolve, bind, or configure a listener.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum ListenerBindError {
-    #[error("failed to resolve listen address: {0}")]
+    #[error("failed to resolve listen address")]
     AddressResolution(#[source] std::io::Error),
     #[error("listen address resolved to no addresses")]
     NoAddress,
-    #[error("failed to initialize listener: {0}")]
+    #[error("failed to initialize listener")]
     ListenerSetup(#[from] std::io::Error),
 }
 
 /// Failure to accept a connection from a BgpListener.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum ListenerAcceptError {
     #[error("timed out waiting for an inbound connection")]
     Timeout,
     #[error("connection attempt from unknown peer: {0}")]
     UnknownPeer(PeerId),
-    #[error("failed to configure accepted connection: {0}")]
+    #[error("failed to configure accepted connection")]
     NewConnectionSetup(#[source] std::io::Error),
-    #[error("failed to accept connection: {0}")]
+    #[error("failed to accept connection")]
     Listener(#[source] std::io::Error),
 }
 
 /// Failure to configure TCP MD5 authentication.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum Md5Error {
-    #[error("failed to query route to peer: {0}")]
+    #[error("failed to query route to peer")]
     RouteQuery(#[source] anyhow::Error),
-    #[error("failed to query local IP addresses: {0}")]
+    #[error("failed to query local IP addresses")]
     LocalAddressQuery(#[source] anyhow::Error),
     #[error("no local source address available for MD5 authentication")]
     NoMatchingSourceAddress,
-    #[error("failed to set up MD5 authentication: {0}")]
+    #[error("failed to set up MD5 authentication")]
     AuthenticationSetup(#[from] std::io::Error),
 }
 
 /// Failure to apply connection policy.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum ConnectionPolicyError {
-    #[error("failed to configure minimum TTL: {0}")]
+    #[error("failed to configure minimum TTL")]
     MinTtl(#[source] std::io::Error),
     #[error(transparent)]
     Md5(#[from] Md5Error),
@@ -82,32 +92,38 @@ pub enum ConnectionPolicyError {
 
 /// Failure to start an outbound connection attempt.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum ConnectError {
-    #[error("failed to initialize outbound connection: {0}")]
+    #[error("failed to initialize outbound connection")]
     ConnectionSetup(#[source] std::io::Error),
     #[error(transparent)]
     Md5(#[from] Md5Error),
-    #[error("failed to spawn connector thread: {0}")]
+    #[error("failed to spawn connector thread")]
     ThreadSpawn(#[source] std::io::Error),
 }
 
 /// Failure to encode or transmit a message on an established connection.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum SendError {
-    #[error("failed to encode BGP message: {0}")]
+    #[error("failed to encode BGP message")]
     Encode(#[source] Box<crate::error::Error>),
     #[error("BGP message length {0} exceeds the wire limit")]
     TooLarge(usize),
-    #[error("failed to write BGP message: {0}")]
+    #[error("failed to write BGP message")]
     Write(#[from] std::io::Error),
 }
 
 /// Failure to start a BgpConnection's recv loop.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(derive(strum::EnumIter)))]
 pub enum StartRecvLoopError {
-    #[error("failed to acquire connection reader: {0}")]
+    #[error("failed to acquire connection reader")]
     AcquireReader(#[source] std::io::Error),
-    #[error("failed to spawn receive thread: {0}")]
+    #[error("failed to spawn receive thread")]
     ThreadSpawn(#[source] std::io::Error),
 }
 

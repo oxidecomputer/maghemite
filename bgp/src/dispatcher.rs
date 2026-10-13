@@ -11,6 +11,7 @@ use crate::{
 };
 use mg_common::lock;
 use slog::{Logger, debug, error, info, warn};
+use slog_error_chain::InlineErrorChain;
 use std::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
@@ -119,7 +120,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             ) {
                 Ok(l) => l,
                 Err(e) => {
-                    error!(log, "listener bind error: {e}");
+                    error!(log, "listener bind error"; InlineErrorChain::new(&e));
                     sleep(Duration::from_secs(1));
                     // XXX: possible death loop?
                     continue;
@@ -191,14 +192,16 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                     // failed to apply requisite connection settings e.g.
                     // disabling non-blocking or setting TCP_NODELAY.
                     // Log and carry on.
-                    warn!(bound_log, "accepted connection setup error: {e}");
+                    warn!(bound_log, "accepted connection setup error";
+                        InlineErrorChain::new(&e));
                     continue;
                 }
                 Err(ListenerAcceptError::Listener(e)) => {
                     // There has been an error on the listener itself and we
                     // need to replace it with a new one. Break out of the
                     // accept loop so we can create a new listener.
-                    error!(bound_log, "listener accept error: {e}");
+                    error!(bound_log, "listener accept error";
+                        InlineErrorChain::new(&e));
                     return AcceptLoopExit::Rebind;
                 }
             };
@@ -207,6 +210,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             let key = self.resolve_session_key(peer_addr);
             let session_log = bound_log.new(slog::o!(
                 "peer" => peer_addr,
+                // Logger context must own its values; `?key` borrows them.
                 "session_key" => format!("{key:?}"),
             ));
 
@@ -227,7 +231,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             {
                 warn!(session_log,
                     "failed to apply policy for connection";
-                    "error" => format!("{e}")
+                    InlineErrorChain::new(&e)
                 );
             }
 
@@ -236,7 +240,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             )) {
                 error!(session_log,
                     "failed to send connected event to session";
-                    "error" => format!("{e}")
+                    "error" => %e
                 );
                 return AcceptLoopExit::Rebind;
             }

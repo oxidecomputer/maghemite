@@ -27,6 +27,7 @@ use crate::{
 };
 use mg_common::lock;
 use slog::{Logger, info};
+use slog_error_chain::InlineErrorChain;
 use std::{
     io::Read,
     io::Write,
@@ -278,16 +279,15 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
             let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
             let len = key.len();
             keyval[..len].copy_from_slice(key.as_bytes());
-            set_md5_sig(s.as_raw_fd(), len as u16, keyval, peer).map_err(
+            set_md5_sig(s.as_raw_fd(), len as u16, keyval, peer).inspect_err(
                 |e| {
                     connection_log_lite!(log,
                         warn,
-                        "failed to apply MD5 auth for {peer}: {e}";
+                        "failed to apply MD5 auth for {peer}";
                         "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
-                        "error" => format!("{e}")
+                        "error" => InlineErrorChain::new(e)
                     );
-                    e
                 },
             )?;
         }
@@ -297,15 +297,14 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         let md5_locals = if let Some(key) = &config.md5_auth_key {
             Some(
                 setup_outbound_md5(s.as_raw_fd(), key, peer.ip(), peer, &log)
-                    .map_err(|e| {
+                    .inspect_err(|e| {
                     connection_log_lite!(log,
                         warn,
-                        "failed to apply MD5 auth for {peer}: {e}";
+                        "failed to apply MD5 auth for {peer}";
                         "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
-                        "error" => format!("{e}")
+                        "error" => InlineErrorChain::new(e)
                     );
-                    e
                 })?,
             )
         } else {
@@ -1245,15 +1244,14 @@ fn create_outbound_socket(
         SocketAddr::V6(_) => socket2::Domain::IPV6,
     };
 
-    socket2::Socket::new(domain, socket2::Type::STREAM, None).map_err(|e| {
+    socket2::Socket::new(domain, socket2::Type::STREAM, None).inspect_err(|e| {
         connection_log_lite!(logger,
             warn,
-            "failed to create socket for {peer}: {e}";
+            "failed to create socket for {peer}";
             "direction" => ConnectionDirection::Outbound,
             "peer" => format!("{peer}"),
-            "error" => format!("{e}")
+            "error" => InlineErrorChain::new(e)
         );
-        e
     })
 }
 
@@ -1523,10 +1521,10 @@ fn setup_outbound_md5(
     let sources = source_address_select(peer_ip).inspect_err(|e| {
         connection_log_lite!(logger,
             warn,
-            "MD5 setup for {peer}: {e}";
+            "MD5 setup for {peer}";
             "direction" => ConnectionDirection::Outbound,
             "peer" => format!("{peer}"),
-            "error" => format!("{e}")
+            "error" => InlineErrorChain::new(e)
         );
     })?;
 

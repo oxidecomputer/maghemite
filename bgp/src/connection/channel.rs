@@ -24,6 +24,7 @@ use crate::{
 };
 use mg_common::lock;
 use slog::{Logger, info};
+use slog_error_chain::InlineErrorChain;
 use std::{
     collections::HashMap,
     io,
@@ -333,9 +334,9 @@ impl BgpConnection for BgpConnectionChannel {
         }) {
             connection_log!(self,
                 error,
-                "error sending message via channel to {} (conn_id: {}, channel_id: {}): {e}",
+                "error sending message via channel to {} (conn_id: {}, channel_id: {})",
                 self.peer(), self.id().short(), self.channel_id;
-                "error" => format!("{e}"),
+                "error" => InlineErrorChain::new(&e),
                 "network_state" => format!("{}", *NET),
                 "channel_id" => self.channel_id
             );
