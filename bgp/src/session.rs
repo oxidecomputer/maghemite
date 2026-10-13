@@ -7557,7 +7557,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     "message" => title,
                     "error" => e.to_string()
                 );
-                Err(e)
+                Err(e.into())
             }
         }
     }

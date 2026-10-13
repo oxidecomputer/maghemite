@@ -6,8 +6,10 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        BgpConnection, BgpConnector, BgpListener, ConnectError,
+        ConnectionDirection, ConnectionId, ConnectionPolicyError,
+        ListenerAcceptError, ListenerBindError, SendError, StartRecvLoopError,
+        ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -44,6 +46,8 @@ use {
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use crate::connection::Md5Error;
 #[cfg(target_os = "linux")]
 use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 
@@ -104,17 +108,15 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         addr: A,
         log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
-    ) -> Result<Self, Error>
+    ) -> Result<Self, ListenerBindError>
     where
         Self: Sized,
     {
         let addr = addr
             .to_socket_addrs()
-            .map_err(|e| Error::InvalidAddress(e.to_string()))?
+            .map_err(ListenerBindError::AddressResolution)?
             .next()
-            .ok_or(Error::InvalidAddress(
-                "at least one address required".into(),
-            ))?;
+            .ok_or(ListenerBindError::NoAddress)?;
         let listener = TcpListener::bind(addr)?;
         let bind_addr = listener.local_addr()?;
 
@@ -137,7 +139,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         log: Logger,
         sessions: Arc<Mutex<SessionMap<BgpConnectionTcp>>>,
         timeout: Duration,
-    ) -> Result<BgpConnectionTcp, Error> {
+    ) -> Result<BgpConnectionTcp, ListenerAcceptError> {
         let start = Instant::now();
         let retry_interval = Duration::from_millis(10);
 
@@ -152,7 +154,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                             "failed to set accepted connection to blocking: {e}";
                             "error" => format!("{e}")
                         );
-                        return Err(e.into());
+                        return Err(ListenerAcceptError::NewConnectionSetup(e));
                     }
 
                     // Get the actual socket addresses for this accepted
@@ -161,7 +163,9 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     // IPv4 connections (via IPv4-mapped IPv6).
                     let ip = peer.ip().to_canonical();
                     peer.set_ip(ip);
-                    let mut local = conn.local_addr()?;
+                    let mut local = conn
+                        .local_addr()
+                        .map_err(ListenerAcceptError::NewConnectionSetup)?;
                     local.set_ip(local.ip().to_canonical());
 
                     // Resolve peer address to appropriate PeerId (IP or Interface)
@@ -172,7 +176,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     let runner = lock!(sessions)
                         .get(&key)
                         .cloned()
-                        .ok_or_else(|| Error::UnknownPeer(key.clone()))?;
+                        .ok_or(ListenerAcceptError::UnknownPeer(key))?;
 
                     let config = lock!(runner.session);
                     return BgpConnectionTcp::with_conn(
@@ -184,19 +188,20 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                         log,
                         ConnectionDirection::Inbound,
                         &config,
-                    );
+                    )
+                    .map_err(ListenerAcceptError::NewConnectionSetup);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // Check if we've exceeded the timeout
                     if start.elapsed() >= timeout {
-                        return Err(Error::Timeout);
+                        return Err(ListenerAcceptError::Timeout);
                     }
                     // Sleep briefly before retrying
                     sleep(retry_interval);
                     continue;
                 }
                 Err(e) => {
-                    return Err(e.into());
+                    return Err(ListenerAcceptError::Listener(e));
                 }
             }
         }
@@ -206,11 +211,12 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         conn: &BgpConnectionTcp,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ConnectionPolicyError> {
         let tcp_stream = lock!(conn.conn);
 
         if let Some(ttl) = min_ttl {
-            apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
+            apply_min_ttl(&tcp_stream, ttl, conn.peer)
+                .map_err(ConnectionPolicyError::MinTtl)?;
         }
 
         if let Some(ref key) = md5_key {
@@ -262,8 +268,9 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
         config: SessionInfo,
-    ) -> Result<JoinHandle<()>, Error> {
-        let s = create_outbound_socket(peer, &log)?;
+    ) -> Result<JoinHandle<()>, ConnectError> {
+        let s = create_outbound_socket(peer, &log)
+            .map_err(ConnectError::ConnectionSetup)?;
 
         // Apply MD5 authentication before connecting (Linux)
         #[cfg(target_os = "linux")]
@@ -456,7 +463,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     );
                 }
             })
-            .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(ConnectError::ThreadSpawn)?;
 
         Ok(handle)
     }
@@ -488,7 +495,7 @@ pub struct BgpConnectionTcp {
 impl BgpConnection for BgpConnectionTcp {
     type Connector = BgpConnectorTcp;
 
-    fn send(&self, msg: Message) -> Result<(), Error> {
+    fn send(&self, msg: Message) -> Result<(), SendError> {
         let mut guard = lock!(self.conn);
         Self::send_msg(&mut guard, &self.log, self.direction, msg)
     }
@@ -517,7 +524,7 @@ impl BgpConnection for BgpConnectionTcp {
         &self.connection_clock
     }
 
-    fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error> {
+    fn start_recv_loop(self: &Arc<Self>) -> Result<(), StartRecvLoopError> {
         let mut state = lock!(self.recv_loop_state);
 
         // Check if already started (idempotent via typestate)
@@ -590,7 +597,7 @@ impl BgpConnectionTcp {
         log: Logger,
         direction: ConnectionDirection,
         config: &SessionInfo,
-    ) -> Result<Self, Error> {
+    ) -> std::io::Result<Self> {
         conn.set_nodelay(true)?;
 
         let id = ConnectionId::new(source, peer);
@@ -627,7 +634,9 @@ impl BgpConnectionTcp {
     }
 
     /// Spawn the receive loop thread for this connection.
-    fn spawn_recv_loop(conn_arc: Arc<Self>) -> Result<JoinHandle<()>, Error> {
+    fn spawn_recv_loop(
+        conn_arc: Arc<Self>,
+    ) -> Result<JoinHandle<()>, StartRecvLoopError> {
         let peer = conn_arc.peer;
         let event_tx = conn_arc.event_tx.clone();
         let timeout = conn_arc.recv_timeout;
@@ -646,7 +655,7 @@ impl BgpConnectionTcp {
                 "connection_id" => conn_id.short(),
                 "error" => format!("{e}")
             );
-            Error::Io(e)
+            StartRecvLoopError::AcquireReader(e)
         })?;
 
         // Use Builder instead of spawn().
@@ -776,7 +785,7 @@ impl BgpConnectionTcp {
                     "connection_id" => conn_id.short()
                 );
             })
-            .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))
+            .map_err(StartRecvLoopError::ThreadSpawn)
     }
 
     fn recv_header(
@@ -1044,7 +1053,7 @@ impl BgpConnectionTcp {
         log: &Logger,
         direction: ConnectionDirection,
         msg: Message,
-    ) -> Result<(), Error> {
+    ) -> Result<(), SendError> {
         connection_log_lite!(log,
             trace,
             "sending {} msg", msg.title();
@@ -1053,15 +1062,13 @@ impl BgpConnectionTcp {
             "message" => msg.title(),
             "message_contents" => format!("{msg}")
         );
-        let msg_buf = crate::messages::message_to_wire(&msg)?;
+        let msg_buf = crate::messages::message_to_wire(&msg)
+            .map_err(|e| SendError::Encode(Box::new(e)))?;
+        let length = msg_buf.len() + Header::WIRE_SIZE;
         let header = Header {
-            length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
-                |_| {
-                    Error::TooLarge(
-                        "BGP message being sent is too large".into(),
-                    )
-                },
-            )?,
+            length: length
+                .try_into()
+                .map_err(|_| SendError::TooLarge(length))?,
             typ: MessageType::from(&msg),
         };
         let mut buf = header.to_wire().to_vec();
@@ -1106,7 +1113,7 @@ impl BgpConnectionTcp {
         key: &str,
         locals: Vec<SocketAddr>,
         peer: SocketAddr,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Md5Error> {
         // First set up the socket using the standalone function
         init_md5_associations(fd, key, locals.clone(), peer)?;
         // Then start SA tracking and keepalive
@@ -1120,7 +1127,7 @@ impl BgpConnectionTcp {
         key: &str,
         locals: Vec<SocketAddr>,
         peer: SocketAddr,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Md5Error> {
         let mut guard = lock!(self.sas);
         match &mut *guard {
             Some(sas) => {
@@ -1142,7 +1149,7 @@ impl BgpConnectionTcp {
     }
 
     #[cfg(target_os = "illumos")]
-    fn sa_keepalive(&self) -> Result<(), Error> {
+    fn sa_keepalive(&self) -> std::io::Result<()> {
         use std::thread::sleep;
 
         let mut state = lock!(self.md5_sa_state);
@@ -1232,7 +1239,7 @@ impl BgpConnectionTcp {
 fn create_outbound_socket(
     peer: SocketAddr,
     logger: &Logger,
-) -> Result<socket2::Socket, Error> {
+) -> std::io::Result<socket2::Socket> {
     let domain = match peer {
         SocketAddr::V4(_) => socket2::Domain::IPV4,
         SocketAddr::V6(_) => socket2::Domain::IPV6,
@@ -1246,7 +1253,7 @@ fn create_outbound_socket(
             "peer" => format!("{peer}"),
             "error" => format!("{e}")
         );
-        e.into()
+        e
     })
 }
 
@@ -1256,7 +1263,7 @@ fn apply_min_ttl(
     conn: &TcpStream,
     ttl: u8,
     peer: SocketAddr,
-) -> Result<(), Error> {
+) -> std::io::Result<()> {
     conn.set_ttl(ttl.into())?;
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
@@ -1272,7 +1279,7 @@ fn apply_min_ttl(
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
             {
-                return Err(Error::Io(std::io::Error::last_os_error()));
+                return Err(std::io::Error::last_os_error());
             }
             if peer.is_ipv6()
                 && libc::setsockopt(
@@ -1283,7 +1290,7 @@ fn apply_min_ttl(
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
             {
-                return Err(Error::Io(std::io::Error::last_os_error()));
+                return Err(std::io::Error::last_os_error());
             }
         }
     }
@@ -1315,7 +1322,7 @@ fn set_md5_sig(
     keylen: u16,
     key: [u8; MAX_MD5SIG_KEYLEN],
     peer: SocketAddr,
-) -> Result<(), Error> {
+) -> Result<(), Md5Error> {
     let mut sig = TcpMd5Sig {
         tcpm_keylen: keylen,
         tcpm_key: key,
@@ -1332,7 +1339,9 @@ fn set_md5_sig(
             std::mem::size_of::<TcpMd5Sig>() as u32,
         ) != 0
         {
-            return Err(Error::Io(std::io::Error::last_os_error()));
+            return Err(Md5Error::AuthenticationSetup(
+                std::io::Error::last_os_error(),
+            ));
         }
     }
 
@@ -1358,7 +1367,7 @@ impl Md5Sas {
 
 /// Select source address based on destination using routing table lookup
 #[cfg(target_os = "illumos")]
-fn source_address_select(dst: IpAddr) -> anyhow::Result<Vec<IpAddr>> {
+fn source_address_select(dst: IpAddr) -> Result<Vec<IpAddr>, Md5Error> {
     use oxnet::IpNet;
 
     let prefix = match dst {
@@ -1367,8 +1376,11 @@ fn source_address_select(dst: IpAddr) -> anyhow::Result<Vec<IpAddr>> {
     };
     let target = IpNet::new_unchecked(dst, prefix);
 
-    let nexthop = libnet::get_route(target, None)?.gw;
-    let selected_local_addrs: Vec<IpAddr> = libnet::get_ipaddrs()?
+    let nexthop = libnet::get_route(target, None)
+        .map_err(|e| Md5Error::RouteQuery(e.into()))?
+        .gw;
+    let selected_local_addrs: Vec<IpAddr> = libnet::get_ipaddrs()
+        .map_err(|e| Md5Error::LocalAddressQuery(e.into()))?
         .into_values()
         .flatten()
         .map(|x| oxnet::IpNet::new_unchecked(x.addr, x.mask as u8))
@@ -1384,14 +1396,11 @@ fn source_address_select(dst: IpAddr) -> anyhow::Result<Vec<IpAddr>> {
 /// Helper function to select and validate MD5 source addresses.
 /// Eliminates duplication between inbound and outbound paths
 #[cfg(target_os = "illumos")]
-fn get_md5_source_addrs(peer_ip: IpAddr) -> Result<Vec<SocketAddr>, Error> {
-    let sources = source_address_select(peer_ip)
-        .map_err(|e| Error::InvalidAddress(e.to_string()))?;
+fn get_md5_source_addrs(peer_ip: IpAddr) -> Result<Vec<SocketAddr>, Md5Error> {
+    let sources = source_address_select(peer_ip)?;
 
     if sources.is_empty() {
-        return Err(Error::InvalidAddress(
-            "no source address available for MD5 SA setup".to_string(),
-        ));
+        return Err(Md5Error::NoMatchingSourceAddress);
     }
 
     Ok(sources
@@ -1434,7 +1443,7 @@ fn apply_md5_sa_pair(
     local: SocketAddr,
     peer: SocketAddr,
     key: &str,
-) -> Result<(), Error> {
+) -> std::io::Result<()> {
     for (a, b) in sa_set(local, peer) {
         let exists =
             libnet::pf_key::tcp_md5_key_get(a.into(), b.into()).is_ok();
@@ -1445,9 +1454,9 @@ fn apply_md5_sa_pair(
                 PFKEY_DURATION,
             )
             .map_err(|e| {
-                Error::Io(std::io::Error::other(format!(
+                std::io::Error::other(format!(
                     "failed to update pf_key {a} -> {b}: {e}"
-                )))
+                ))
             })?;
         } else {
             libnet::pf_key::tcp_md5_key_add(
@@ -1457,9 +1466,9 @@ fn apply_md5_sa_pair(
                 PFKEY_DURATION,
             )
             .map_err(|e| {
-                Error::Io(std::io::Error::other(format!(
+                std::io::Error::other(format!(
                     "failed to add pf_key {a} -> {b}: {e}"
-                )))
+                ))
             })?;
         }
     }
@@ -1475,7 +1484,7 @@ fn init_md5_associations(
     key: &str,
     locals: Vec<SocketAddr>,
     peer: SocketAddr,
-) -> Result<(), Error> {
+) -> Result<(), Md5Error> {
     // Set MD5 security associations for Illumos
     for local in locals.iter() {
         apply_md5_sa_pair(*local, peer, key)?;
@@ -1491,7 +1500,9 @@ fn init_md5_associations(
             std::mem::size_of::<c_int>() as u32,
         ) != 0
         {
-            return Err(Error::Io(std::io::Error::last_os_error()));
+            return Err(Md5Error::AuthenticationSetup(
+                std::io::Error::last_os_error(),
+            ));
         }
     }
 
@@ -1508,16 +1519,15 @@ fn setup_outbound_md5(
     peer_ip: IpAddr,
     peer: SocketAddr,
     logger: &Logger,
-) -> Result<(String, Vec<SocketAddr>), Error> {
-    let sources = source_address_select(peer_ip).map_err(|e| {
+) -> Result<(String, Vec<SocketAddr>), Md5Error> {
+    let sources = source_address_select(peer_ip).inspect_err(|e| {
         connection_log_lite!(logger,
             warn,
-            "failed to select source address for {peer}: {e}";
+            "MD5 setup for {peer}: {e}";
             "direction" => ConnectionDirection::Outbound,
             "peer" => format!("{peer}"),
             "error" => format!("{e}")
         );
-        Error::InvalidAddress(e.to_string())
     })?;
 
     if sources.is_empty() {
@@ -1527,9 +1537,7 @@ fn setup_outbound_md5(
             "direction" => ConnectionDirection::Outbound,
             "peer" => format!("{peer}")
         );
-        return Err(Error::InvalidAddress(
-            "no source address available".to_string(),
-        ));
+        return Err(Md5Error::NoMatchingSourceAddress);
     }
 
     let local: Vec<SocketAddr> = sources

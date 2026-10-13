@@ -8,10 +8,9 @@ pub mod tcp;
 
 use crate::{
     clock::ConnectionClock,
-    error::Error,
     messages::Message,
     router::SessionMap,
-    session::{FsmEvent, SessionInfo},
+    session::{FsmEvent, PeerId, SessionInfo},
     unnumbered::UnnumberedManager,
 };
 use slog::Logger;
@@ -35,6 +34,83 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 #[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
+/// Failure to resolve, bind, or configure a listener.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenerBindError {
+    #[error("failed to resolve listen address: {0}")]
+    AddressResolution(#[source] std::io::Error),
+    #[error("listen address resolved to no addresses")]
+    NoAddress,
+    #[error("failed to initialize listener: {0}")]
+    ListenerSetup(#[from] std::io::Error),
+}
+
+/// Failure to accept a connection from a BgpListener.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenerAcceptError {
+    #[error("timed out waiting for an inbound connection")]
+    Timeout,
+    #[error("connection attempt from unknown peer: {0}")]
+    UnknownPeer(PeerId),
+    #[error("failed to configure accepted connection: {0}")]
+    NewConnectionSetup(#[source] std::io::Error),
+    #[error("failed to accept connection: {0}")]
+    Listener(#[source] std::io::Error),
+}
+
+/// Failure to configure TCP MD5 authentication.
+#[derive(Debug, thiserror::Error)]
+pub enum Md5Error {
+    #[error("failed to query route to peer: {0}")]
+    RouteQuery(#[source] anyhow::Error),
+    #[error("failed to query local IP addresses: {0}")]
+    LocalAddressQuery(#[source] anyhow::Error),
+    #[error("no local source address available for MD5 authentication")]
+    NoMatchingSourceAddress,
+    #[error("failed to set up MD5 authentication: {0}")]
+    AuthenticationSetup(#[from] std::io::Error),
+}
+
+/// Failure to apply connection policy.
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectionPolicyError {
+    #[error("failed to configure minimum TTL: {0}")]
+    MinTtl(#[source] std::io::Error),
+    #[error(transparent)]
+    Md5(#[from] Md5Error),
+}
+
+/// Failure to start an outbound connection attempt.
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error("failed to initialize outbound connection: {0}")]
+    ConnectionSetup(#[source] std::io::Error),
+    #[error(transparent)]
+    Md5(#[from] Md5Error),
+    #[error("failed to spawn connector thread: {0}")]
+    ThreadSpawn(#[source] std::io::Error),
+}
+
+/// Failure to encode or transmit a message on an established connection.
+#[derive(Debug, thiserror::Error)]
+pub enum SendError {
+    #[error("failed to encode BGP message: {0}")]
+    Encode(#[source] Box<crate::error::Error>),
+    #[error("BGP message length {0} exceeds the wire limit")]
+    TooLarge(usize),
+    #[error("failed to write BGP message: {0}")]
+    Write(#[from] std::io::Error),
+}
+
+/// Failure to start a BgpConnection's recv loop.
+#[derive(Debug, thiserror::Error)]
+pub enum StartRecvLoopError {
+    #[error("failed to acquire connection reader: {0}")]
+    AcquireReader(#[source] std::io::Error),
+    #[error("failed to spawn receive thread: {0}")]
+    ThreadSpawn(#[source] std::io::Error),
+}
+
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
     /// Bind to an address and listen for connections.
@@ -46,7 +122,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         addr: A,
         log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
-    ) -> Result<Self, Error>
+    ) -> Result<Self, ListenerBindError>
     where
         Self: Sized;
 
@@ -59,7 +135,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         log: Logger,
         sessions: Arc<Mutex<SessionMap<Cnx>>>,
         timeout: Duration,
-    ) -> Result<Cnx, Error>;
+    ) -> Result<Cnx, ListenerAcceptError>;
 
     /// Apply policy to an established connection. This is called by the
     /// Dispatcher after accept() returns and session lookup is completed.
@@ -67,7 +143,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         conn: &Cnx,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
-    ) -> Result<(), Error>;
+    ) -> Result<(), ConnectionPolicyError>;
 
     /// `SocketAddr` the listener is receiving connections on
     fn bind_addr(&self) -> SocketAddr;
@@ -88,7 +164,7 @@ pub trait BgpConnector<Cnx: BgpConnection> {
         log: Logger,
         event_tx: Sender<FsmEvent<Cnx>>,
         config: SessionInfo,
-    ) -> Result<JoinHandle<()>, Error>
+    ) -> Result<JoinHandle<()>, ConnectError>
     where
         Self: Sized;
 }
@@ -115,7 +191,7 @@ pub trait BgpConnection: Send + Sync + Sized {
     type Connector: BgpConnector<Self>;
 
     /// Send a message over this established connection.
-    fn send(&self, msg: Message) -> Result<(), Error>;
+    fn send(&self, msg: Message) -> Result<(), SendError>;
 
     /// Return the socket address of the peer for this connection.
     fn peer(&self) -> SocketAddr;
@@ -137,7 +213,7 @@ pub trait BgpConnection: Send + Sync + Sized {
 
     /// Start the receive loop for this connection. This method is idempotent.
     /// Returns Ok(()) upon successful start of recv loop, else Err.
-    fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
+    fn start_recv_loop(self: &Arc<Self>) -> Result<(), StartRecvLoopError>;
 }
 
 pub use mg_common::thread::{ManagedThread, ThreadState};

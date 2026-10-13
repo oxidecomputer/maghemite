@@ -11,10 +11,11 @@ use crate::{
     IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        BgpConnection, BgpConnector, BgpListener, ConnectError,
+        ConnectionDirection, ConnectionId, ConnectionPolicyError,
+        ListenerAcceptError, ListenerBindError, SendError, StartRecvLoopError,
+        ThreadState,
     },
-    error::Error,
     log::{connection_log, connection_log_lite},
     messages::{Message, MessageParseError},
     router::SessionMap,
@@ -25,6 +26,7 @@ use mg_common::lock;
 use slog::{Logger, info};
 use std::{
     collections::HashMap,
+    io,
     net::{SocketAddr, ToSocketAddrs},
     sync::{
         Arc, Mutex,
@@ -94,10 +96,13 @@ impl Listener {
     fn accept(
         &self,
         timeout: Duration,
-    ) -> Result<(SocketAddr, Endpoint<MessageResult>), Error> {
+    ) -> Result<(SocketAddr, Endpoint<MessageResult>), ListenerAcceptError>
+    {
         self.rx.recv_timeout(timeout).map_err(|e| match e {
-            RecvTimeoutError::Timeout => Error::Timeout,
-            RecvTimeoutError::Disconnected => Error::Disconnected,
+            RecvTimeoutError::Timeout => ListenerAcceptError::Timeout,
+            RecvTimeoutError::Disconnected => ListenerAcceptError::Listener(
+                io::Error::new(io::ErrorKind::BrokenPipe, e),
+            ),
         })
     }
 }
@@ -139,13 +144,13 @@ impl Network {
         from: SocketAddr,
         to: SocketAddr,
         ep: Endpoint<MessageResult>,
-    ) -> Result<(), Error> {
+    ) -> io::Result<()> {
         match lock!(self.endpoints).get(&to) {
-            None => return Err(Error::ChannelConnect),
+            None => return Err(io::ErrorKind::ConnectionRefused.into()),
             Some(sender) => {
-                sender
-                    .send((from, ep))
-                    .map_err(|e| Error::ChannelSend(e.to_string()))?;
+                sender.send((from, ep)).map_err(|e| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())
+                })?;
             }
         };
 
@@ -224,17 +229,15 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         addr: A,
         log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
-    ) -> Result<Self, Error>
+    ) -> Result<Self, ListenerBindError>
     where
         Self: Sized,
     {
         let addr = addr
             .to_socket_addrs()
-            .map_err(|e| Error::InvalidAddress(e.to_string()))?
+            .map_err(ListenerBindError::AddressResolution)?
             .next()
-            .ok_or(Error::InvalidAddress(
-                "at least one address required".into(),
-            ))?;
+            .ok_or(ListenerBindError::NoAddress)?;
         let listener = NET.bind(addr);
         info!(log, "BgpConnectionChannel Listener created"; "listener" => ?listener);
         Ok(Self {
@@ -249,7 +252,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         log: Logger,
         sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>>,
         timeout: Duration,
-    ) -> Result<BgpConnectionChannel, Error> {
+    ) -> Result<BgpConnectionChannel, ListenerAcceptError> {
         let (peer, endpoint) = self.listener.accept(timeout)?;
 
         let local = self.bind_addr;
@@ -260,7 +263,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         let runner = lock!(sessions)
             .get(&key)
             .cloned()
-            .ok_or_else(|| Error::UnknownPeer(key.clone()))?;
+            .ok_or(ListenerAcceptError::UnknownPeer(key))?;
 
         let config = lock!(runner.session);
         Ok(BgpConnectionChannel::with_conn(
@@ -279,7 +282,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         _conn: &BgpConnectionChannel,
         _min_ttl: Option<u8>,
         _md5_key: Option<String>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ConnectionPolicyError> {
         // Policy application is ignored for test connections
         Ok(())
     }
@@ -315,7 +318,7 @@ pub struct BgpConnectionChannel {
 impl BgpConnection for BgpConnectionChannel {
     type Connector = BgpConnectorChannel;
 
-    fn send(&self, msg: Message) -> Result<(), Error> {
+    fn send(&self, msg: Message) -> Result<(), SendError> {
         let guard = lock!(self.conn_tx);
         connection_log!(self,
             trace,
@@ -325,10 +328,9 @@ impl BgpConnection for BgpConnectionChannel {
             "message_contents" => format!("{msg}"),
             "channel_id" => self.channel_id
         );
-        if let Err(e) = guard
-            .send(Ok(msg))
-            .map_err(|e| Error::ChannelSend(e.to_string()))
-        {
+        if let Err(e) = guard.send(Ok(msg)).map_err(|e| {
+            SendError::Write(io::Error::new(io::ErrorKind::BrokenPipe, e))
+        }) {
             connection_log!(self,
                 error,
                 "error sending message via channel to {} (conn_id: {}, channel_id: {}): {e}",
@@ -366,7 +368,7 @@ impl BgpConnection for BgpConnectionChannel {
         &self.connection_clock
     }
 
-    fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error> {
+    fn start_recv_loop(self: &Arc<Self>) -> Result<(), StartRecvLoopError> {
         let mut state = lock!(self.recv_loop_state);
 
         // Check if already started (idempotent via typestate)
@@ -453,7 +455,9 @@ impl BgpConnectionChannel {
     }
 
     /// Spawn the receive loop thread for this connection.
-    fn spawn_recv_loop(self_: Arc<Self>) -> Result<JoinHandle<()>, Error> {
+    fn spawn_recv_loop(
+        self_: Arc<Self>,
+    ) -> Result<JoinHandle<()>, StartRecvLoopError> {
         // Take the receiver. This will be None after first call.
         let rx = {
             let mut conn_rx = lock!(self_.conn_rx);
@@ -468,7 +472,10 @@ impl BgpConnectionChannel {
                 self_.channel_id;
                 "channel_id" => self_.channel_id
             );
-            Error::Disconnected
+            StartRecvLoopError::AcquireReader(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "connection receiver already consumed or unavailable",
+            ))
         })?;
 
         let peer = self_.peer;
@@ -581,7 +588,7 @@ impl BgpConnectionChannel {
                     }
                 }
             })
-            .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))
+            .map_err(StartRecvLoopError::ThreadSpawn)
     }
 }
 
@@ -607,7 +614,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
         config: SessionInfo,
-    ) -> Result<JoinHandle<()>, Error> {
+    ) -> Result<JoinHandle<()>, ConnectError> {
         let direction = ConnectionDirection::Outbound;
         let addr = config
             .bind_addr

@@ -4,7 +4,7 @@
 
 use crate::{
     IO_TIMEOUT,
-    connection::{BgpConnection, BgpListener},
+    connection::{BgpConnection, BgpListener, ListenerAcceptError},
     router::SessionMap,
     session::{FsmEvent, PeerId, SessionEvent},
     unnumbered::UnnumberedManager,
@@ -152,10 +152,35 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         );
                         c
                     }
-                    Err(crate::error::Error::Timeout) => {
+                    Err(ListenerAcceptError::Timeout) => {
+                        // accept() timed out before a new connection arrived.
+                        // This is expected, carry on.
                         continue 'accept;
                     }
-                    Err(e) => {
+                    Err(ListenerAcceptError::UnknownPeer(peer)) => {
+                        // Inbound connection attempt from a peer we haven't
+                        // configured (either via IP or ifname). Carry on.
+                        debug!(
+                            bound_log,
+                            "rejecting connection from unknown peer: {peer}"
+                        );
+                        continue 'accept;
+                    }
+                    Err(ListenerAcceptError::NewConnectionSetup(e)) => {
+                        // We successfully accept()'d a new connection, but we
+                        // failed to apply requisite connection settings e.g.
+                        // disabling non-blocking or setting TCP_NODELAY.
+                        // Log and carry on.
+                        warn!(
+                            bound_log,
+                            "accepted connection setup error: {e}"
+                        );
+                        continue 'accept;
+                    }
+                    Err(ListenerAcceptError::Listener(e)) => {
+                        // There has been an error on the listener itself and we
+                        // need to replace it with a new one. Break out of the
+                        // accept loop so we can create a new listener.
                         error!(bound_log, "listener accept error: {e}");
                         continue 'listener;
                     }
