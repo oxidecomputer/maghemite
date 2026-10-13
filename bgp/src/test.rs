@@ -5,9 +5,11 @@
 use crate::{
     BGP_PORT,
     config::{PeerConfig, RouterConfig},
-    connection::{BgpConnection, BgpListener},
-    connection_channel::{BgpConnectionChannel, BgpListenerChannel},
-    connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
+    connection::{
+        BgpConnection, BgpListener,
+        channel::{BgpConnectionChannel, BgpListenerChannel},
+        tcp::{BgpConnectionTcp, BgpListenerTcp},
+    },
     dispatcher::Dispatcher,
     router::{EnsureSessionResult, Router, SessionMap},
     session::{
@@ -35,9 +37,9 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
-        mpsc::channel,
+        mpsc::{Receiver, channel},
     },
-    thread::{Builder, sleep},
+    thread::{Builder, JoinHandle, sleep},
     time::{Duration, Instant},
 };
 
@@ -119,21 +121,32 @@ fn ensure_loop_ips(addresses: &[IpAddr]) -> IpAllocation {
 struct TestRouter<Cnx: BgpConnection + 'static> {
     router: Arc<Router<Cnx>>,
     dispatcher: Arc<Dispatcher<Cnx>>,
+    listener: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
     fn shutdown(&self) {
         self.router.shutdown();
-        self.dispatcher.shutdown();
+        let mut listener = lock!(self.listener);
+        if let Some(handle) = listener.take() {
+            self.dispatcher.shutdown();
+            if let Err(panic) = handle.join()
+                && !std::thread::panicking()
+            {
+                std::panic::resume_unwind(panic);
+            }
+        }
     }
 
     fn run<Listener: BgpListener<Cnx> + 'static>(&self) {
+        let mut listener = lock!(self.listener);
+        assert!(listener.is_none(), "listener is already running");
         self.router.run();
         let d = self.dispatcher.clone();
         let listen_addr = self.dispatcher.listen_addr().to_string();
         let listen_addr_for_log = listen_addr.clone();
         eprintln_nopipe!("Spawning Dispatcher thread for {}", listen_addr);
-        Builder::new()
+        let handle = Builder::new()
             .name(format!("bgp-listener-{}", listen_addr))
             .spawn(move || {
                 d.run::<Listener>();
@@ -143,13 +156,20 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
                 );
             })
             .expect("failed to spawn dispatcher thread");
+        *listener = Some(handle);
+    }
+}
+
+impl<Cnx: BgpConnection + 'static> Drop for TestRouter<Cnx> {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
 /// Test-specific enum describing which route address families are exchanged
 /// in a BGP session. This is independent of the TCP/IP connection address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RouteExchange {
+pub(crate) enum RouteExchange {
     Ipv4 {
         nexthop: Option<IpAddr>,
     },
@@ -185,7 +205,7 @@ struct NeighborConfig {
 /// * `local_addr` - Local bind address for this session
 /// * `remote_addr` - Remote peer address (for nexthop defaults)
 /// * `passive` - Whether to use passive TCP establishment
-fn create_test_session_info(
+pub(crate) fn create_test_session_info(
     route_exchange: RouteExchange,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
@@ -283,6 +303,31 @@ fn create_test_session_info(
     }
 }
 
+/// Create an unregistered session without starting its FSM or clock thread,
+/// leaving the event receiver for tests to inject or inspect events directly.
+pub(crate) fn create_test_session<Cnx: BgpConnection + 'static>(
+    router: &Arc<Router<Cnx>>,
+    name: &str,
+    peer_addr: SocketAddr,
+    config: SessionInfo,
+) -> (Arc<SessionRunner<Cnx>>, Receiver<FsmEvent<Cnx>>) {
+    let (tx, rx) = channel();
+    let session = Arc::new(SessionRunner::new_without_clock_thread(
+        Arc::new(Mutex::new(config)),
+        tx,
+        NeighborInfo {
+            name: Arc::new(Mutex::new(name.to_string())),
+            peer_group: String::new(),
+            peer: PeerId::Ip(peer_addr.ip()),
+            port: NonZeroU16::new(peer_addr.port())
+                .expect("test peer port is non-zero"),
+        },
+        router.clone(),
+        None,
+    ));
+    (session, rx)
+}
+
 fn test_setup<Cnx, Listener>(
     test_name: &str,
     routers: &[LogicalRouter],
@@ -352,22 +397,12 @@ where
             sessions.clone(),
         ));
 
-        // Start router and dispatcher
-        router.run();
-        let d = dispatcher.clone();
-        let listen_addr = dispatcher.listen_addr().to_string();
-        let listen_addr_for_log = listen_addr.clone();
-        eprintln_nopipe!("Spawning Dispatcher thread for {}", listen_addr);
-        Builder::new()
-            .name(format!("bgp-listener-{}", listen_addr))
-            .spawn(move || {
-                d.run::<Listener>();
-                eprintln_nopipe!(
-                    "Dispatcher thread for {} exiting",
-                    listen_addr_for_log
-                );
-            })
-            .expect("failed to spawn dispatcher thread");
+        let test_router = TestRouter {
+            router: router.clone(),
+            dispatcher,
+            listener: Mutex::new(None),
+        };
+        test_router.run::<Listener>();
 
         // Set up all peer sessions for this router
         for neighbor in &logical_router.neighbors {
@@ -426,10 +461,7 @@ where
         }
 
         // Store components
-        test_routers.push(TestRouter {
-            router: router.clone(),
-            dispatcher,
-        });
+        test_routers.push(test_router);
     }
 
     // Start all sessions
@@ -440,6 +472,38 @@ where
     }
 
     (test_routers, ip_guard)
+}
+
+#[test]
+#[serial_test::parallel]
+fn test_router_listener_shutdown_and_restart() {
+    let (routers, _guard) =
+        test_setup::<BgpConnectionChannel, BgpListenerChannel>(
+            "listener_restart",
+            &[LogicalRouter {
+                name: "listener_restart".into(),
+                asn: Asn::FourOctet(64512),
+                id: 1,
+                listen_addr: "192.0.2.250:10179".parse().unwrap(),
+                bind_addr: None,
+                neighbors: vec![],
+            }],
+        );
+    let router = &routers[0];
+    for _ in 0..3 {
+        router.shutdown();
+        assert_eq!(
+            Arc::strong_count(&router.dispatcher),
+            1,
+            "shutdown returned before the listener released its dispatcher",
+        );
+        // Repeated shutdown must not leave a request for the next listener.
+        router.shutdown();
+        router.run::<BgpListenerChannel>();
+    }
+    let dispatcher = router.dispatcher.clone();
+    drop(routers);
+    assert_eq!(Arc::strong_count(&dispatcher), 1);
 }
 
 // This test effectively does the following:
@@ -1224,6 +1288,13 @@ fn test_three_router_chain_tcp_ipv6() {
     )
 }
 
+fn print_thread_stacks() {
+    match mg_common::test::dump_thread_stacks() {
+        Ok(stacks) => eprintln_nopipe!("=== Thread stack traces ===\n{stacks}"),
+        Err(e) => eprintln_nopipe!("Could not dump thread stacks: {e}"),
+    }
+}
+
 /// Test that threads are properly cleaned up throughout the neighbor lifecycle.
 /// This test verifies that no threads leak when:
 /// 1. A neighbor is created and established
@@ -1245,6 +1316,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     // This handles the case where previous tests' threads are still being cleaned up by the OS.
     // We count only threads with names starting with "bgp-" to exclude
     // dependency threads (slog-async, rdb reapers, etc.)
+    let mut baseline_stacks_printed = false;
     wait_for!(
         {
             let count = mg_common::test::count_threads_with_prefix("bgp-")
@@ -1253,6 +1325,9 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
                 eprintln_nopipe!(
                     "Waiting for baseline to stabilize (current: {count})"
                 );
+                if !std::mem::replace(&mut baseline_stacks_printed, true) {
+                    print_thread_stacks();
+                }
             }
             count == 0
         },
@@ -1385,17 +1460,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
                 eprintln_nopipe!(
                     "BGP thread count after shutdown ({after_shutdown} != baseline {baseline})"
                 );
-
-                // Dump detailed thread stacks
-                match mg_common::test::dump_thread_stacks() {
-                    Ok(stacks) => {
-                        eprintln_nopipe!("=== Thread stack traces ===");
-                        eprintln_nopipe!("{stacks}");
-                    }
-                    Err(e) => {
-                        eprintln_nopipe!("Could not dump thread stacks: {e}");
-                    }
-                }
+                print_thread_stacks();
             }
             after_shutdown == baseline
         },
@@ -4390,41 +4455,20 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
         sockaddr!(&format!("[fe80::3]:{TEST_BGP_PORT}"));
     let peer_addr: SocketAddr =
         sockaddr!(&format!("[fe80::4]:{TEST_BGP_PORT}"));
-    let (event_tx, event_rx) = channel();
-
-    let result = old_router
-        .ensure_session(
-            PeerConfig {
-                name: "peer-old".to_string(),
-                group: String::new(),
-                id: PeerId::Ip(peer_addr.ip()),
-                port: NonZeroU16::new(peer_addr.port()).unwrap_or(BGP_PORT),
-                hold_time: TEST_HOLD_TIME_SECS,
-                idle_hold_time: 0,
-                delay_open: 0,
-                connect_retry: TEST_CONNECT_RETRY_SECS,
-                keepalive: 3,
-                resolution: 100,
-            },
-            Some(bind_addr),
-            event_tx,
-            event_rx,
-            create_test_session_info(
-                RouteExchange::Ipv6 { nexthop: None },
-                bind_addr,
-                peer_addr,
-                // See router_teardown_leaves_other_routers_sessions_alone for
-                // why passive = true.
-                true,
-            ),
-            None,
-        )
-        .expect("created session on the old router");
-
-    let session_old = match result {
-        EnsureSessionResult::New(s) => s,
-        EnsureSessionResult::Updated(s) => s,
-    };
+    // Register without starting an FSM: run() below must be its only start.
+    let (session_old, event_rx) = create_test_session(
+        &old_router,
+        "peer-old",
+        peer_addr,
+        create_test_session_info(
+            RouteExchange::Ipv6 { nexthop: None },
+            bind_addr,
+            peer_addr,
+            true,
+        ),
+    );
+    let driver = Arc::new(FsmDriver::new(session_old.clone(), event_rx));
+    assert!(lock!(sessions).insert_overwrite(driver.clone()).is_none());
     let peer_old = session_old.peer_id();
 
     // Recreate the router with an identical config, sharing the map. This
@@ -4463,9 +4507,6 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
 
     // Ensure that the owning instance's run() and shutdown() do reach
     // its own session.
-    //
-    // run() counts spawn attempts -- the duplicate thread exits immediately
-    // because the original FSM thread owns the event receiver.
     assert_eq!(
         old_router.run(),
         1,
@@ -4490,6 +4531,12 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     // See router_teardown_leaves_other_routers_sessions_alone for why
     // deletion (not just shutdown) is needed for cleanup.
     old_router.delete_session(peer_old);
+    // The map entry is gone; only this test and the FSM worker can own driver.
+    wait_for_eq!(
+        Arc::strong_count(&driver),
+        1,
+        "old router's FSM worker should exit before the test returns"
+    );
 }
 
 #[test]
@@ -4535,25 +4582,17 @@ fn admin_events_do_not_reach_other_routers_sessions() {
         Arc<SessionRunner<BgpConnectionChannel>>,
         std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
     ) {
-        let (probe_tx, probe_rx) = channel();
-        let session = Arc::new(SessionRunner::new(
-            Arc::new(Mutex::new(create_test_session_info(
+        let (session, probe_rx) = create_test_session(
+            router,
+            name,
+            peer_addr,
+            create_test_session_info(
                 RouteExchange::Ipv6 { nexthop: None },
                 bind_addr,
                 peer_addr,
                 true,
-            ))),
-            probe_tx,
-            NeighborInfo {
-                name: Arc::new(Mutex::new(name.to_string())),
-                peer_group: String::new(),
-                peer: PeerId::Ip(peer_addr.ip()),
-                port: NonZeroU16::new(peer_addr.port())
-                    .expect("test peer port is non-zero"),
-            },
-            router.clone(),
-            None,
-        ));
+            ),
+        );
         // FsmDriver::new needs a receiver -- ordinarily, `probe_rx` would be
         // provided here. But we deliberately do not pass that in so that the
         // test can receive events from it instead.

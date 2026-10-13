@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 /// This file contains code for testing purposes only. Note that it's only
-/// included in `lib.rs` with a `#[cfg(test)]` guard. The purpose of the
+/// included in `connection/mod.rs` with a `#[cfg(test)]` guard. The purpose of the
 /// code in this file is to implement BgpListener and BgpConnection such that
 /// the core functionality of the BGP upper-half in `session.rs` may be tested
 /// rapidly using a simulated network.
@@ -16,7 +16,7 @@ use crate::{
     },
     error::Error,
     log::{connection_log, connection_log_lite},
-    messages::Message,
+    messages::{Message, MessageParseError},
     router::SessionMap,
     session::{ConnectionEvent, FsmEvent, PeerId, SessionInfo},
     unnumbered::UnnumberedManager,
@@ -36,6 +36,9 @@ use std::{
 };
 
 const UNIT_CONNECTION: &str = "connection_channel";
+
+/// A message or fatal parse error.
+pub type MessageResult = Result<Message, MessageParseError>;
 
 /// Global counter for assigning unique IDs to channel pairs
 static CHANNEL_PAIR_ID: AtomicU64 = AtomicU64::new(0);
@@ -64,8 +67,9 @@ lazy_static! {
 /// messages to listeners for those addresses.
 pub struct Network {
     #[allow(clippy::type_complexity)]
-    pub endpoints:
-        Mutex<HashMap<SocketAddr, Sender<(SocketAddr, Endpoint<Message>)>>>,
+    pub endpoints: Mutex<
+        HashMap<SocketAddr, Sender<(SocketAddr, Endpoint<MessageResult>)>>,
+    >,
 }
 
 impl std::fmt::Display for Network {
@@ -82,7 +86,7 @@ impl std::fmt::Display for Network {
 /// A listener that can listen for messages on our simulated network.
 #[derive(Debug)]
 struct Listener {
-    rx: Receiver<(SocketAddr, Endpoint<Message>)>,
+    rx: Receiver<(SocketAddr, Endpoint<MessageResult>)>,
     addr: SocketAddr,
 }
 
@@ -90,7 +94,7 @@ impl Listener {
     fn accept(
         &self,
         timeout: Duration,
-    ) -> Result<(SocketAddr, Endpoint<Message>), Error> {
+    ) -> Result<(SocketAddr, Endpoint<MessageResult>), Error> {
         self.rx.recv_timeout(timeout).map_err(|e| match e {
             RecvTimeoutError::Timeout => Error::Timeout,
             RecvTimeoutError::Disconnected => Error::Disconnected,
@@ -134,7 +138,7 @@ impl Network {
         &self,
         from: SocketAddr,
         to: SocketAddr,
-        ep: Endpoint<Message>,
+        ep: Endpoint<MessageResult>,
     ) -> Result<(), Error> {
         match lock!(self.endpoints).get(&to) {
             None => return Err(Error::ChannelConnect),
@@ -289,8 +293,8 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
 pub struct BgpConnectionChannel {
     addr: SocketAddr,
     peer: SocketAddr,
-    conn_tx: Arc<Mutex<Sender<Message>>>,
-    conn_rx: Arc<Mutex<Option<Receiver<Message>>>>,
+    conn_tx: Arc<Mutex<Sender<MessageResult>>>,
+    conn_rx: Arc<Mutex<Option<Receiver<MessageResult>>>>,
     dropped: Arc<AtomicBool>,
     log: Logger,
     // direction of this connection, i.e. BgpListener or BgpConnector
@@ -322,7 +326,7 @@ impl BgpConnection for BgpConnectionChannel {
             "channel_id" => self.channel_id
         );
         if let Err(e) = guard
-            .send(msg)
+            .send(Ok(msg))
             .map_err(|e| Error::ChannelSend(e.to_string()))
         {
             connection_log!(self,
@@ -385,10 +389,34 @@ impl BgpConnectionChannel {
     /// This is a private constructor used by BgpConnectorChannel and BgpListenerChannel.
     /// The receive loop is not started until start_recv_loop() is called.
     #[allow(clippy::too_many_arguments)]
-    fn with_conn(
+    pub(crate) fn with_conn(
         addr: SocketAddr,
         peer: SocketAddr,
-        conn: Endpoint<Message>,
+        conn: Endpoint<MessageResult>,
+        event_tx: Sender<FsmEvent<Self>>,
+        timeout: Duration,
+        log: Logger,
+        direction: ConnectionDirection,
+        config: &SessionInfo,
+    ) -> Self {
+        let conn = Self::with_conn_without_clock_thread(
+            addr, peer, conn, event_tx, timeout, log, direction, config,
+        );
+        conn.connection_clock.start(
+            conn.event_tx.clone(),
+            conn.dropped.clone(),
+            conn.log.clone(),
+        );
+        conn
+    }
+
+    /// Construct a connection for tests that inject FSM events manually.
+    /// Neither the clock thread nor the receive loop is started.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_conn_without_clock_thread(
+        addr: SocketAddr,
+        peer: SocketAddr,
+        conn: Endpoint<MessageResult>,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         log: Logger,
@@ -397,15 +425,12 @@ impl BgpConnectionChannel {
     ) -> Self {
         let conn_id = ConnectionId::new(addr, peer);
         let dropped = Arc::new(AtomicBool::new(false));
-        let connection_clock = ConnectionClock::new(
+        let connection_clock = ConnectionClock::new_unstarted(
             config.resolution,
             config.keepalive_time,
             config.hold_time,
             config.delay_open_time,
             conn_id,
-            event_tx.clone(),
-            dropped.clone(),
-            log.clone(),
         );
 
         let channel_id = conn.channel_id;
@@ -472,17 +497,8 @@ impl BgpConnectionChannel {
                         break;
                     }
 
-                    // Note: Unlike BgpConnectionTcp, this has no ParseErrors.
-                    //       BgpConnectionChannel is a wrapper around Message,
-                    //       which is the type representation of a fully parsed
-                    //       and valid message. This means it's not possible to
-                    //       exchange invalid messages as-is. To support this,
-                    //       the channel would need to wrap a different type
-                    //       (feasible, but of limited utility) or update the
-                    //       Message type to include possibly-invalid states
-                    //       (also feasible, but undesirable).
                     match rx.recv_timeout(timeout) {
-                        Ok(msg) => {
+                        Ok(Ok(msg)) => {
                             connection_log_lite!(log,
                                 debug,
                                 "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
@@ -497,14 +513,41 @@ impl BgpConnectionChannel {
                                 ConnectionEvent::Message { msg, conn_id },
                             )) {
                                 connection_log_lite!(log,
-                                    error,
+                                    warn,
                                     "error sending event to {peer}: {e}";
                                     "direction" => direction.as_str(),
                                     "peer" => format!("{peer}"),
                                     "error" => format!("{e}"),
                                     "channel_id" => channel_id
                                 );
+                                break;
                             }
+                        }
+                        Ok(Err(error)) => {
+                            connection_log_lite!(log, error,
+                                "recv parse error from {peer} (conn_id: {}, channel_id: {}): {error}",
+                                conn_id.short(), channel_id;
+                                "direction" => direction.as_str(),
+                                "peer" => format!("{peer}"),
+                                "connection_id" => conn_id.short(),
+                                "channel_id" => channel_id,
+                                "error" => format!("{error}")
+                            );
+                            if let Err(e) = event_tx.send(FsmEvent::Connection(
+                                ConnectionEvent::ParseError { conn_id, error },
+                            )) {
+                                connection_log_lite!(log, warn,
+                                    "error sending parse error event to {peer}: {e}";
+                                    "direction" => direction.as_str(),
+                                    "peer" => format!("{peer}"),
+                                    "connection_id" => conn_id.short(),
+                                    "channel_id" => channel_id,
+                                    "error" => format!("{e}")
+                                );
+                            }
+                            // Like TCP, a fatal parse error ends reception;
+                            // the FSM owns NOTIFICATION sending and reset.
+                            break;
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             // Normal timeout, continue waiting for messages
@@ -521,13 +564,9 @@ impl BgpConnectionChannel {
                                 "connection_id" => conn_id.short(),
                                 "channel_id" => channel_id
                             );
-                            // Notify session runner that the connection failed,
-                            // unless this is a graceful shutdown
-                            if !dropped.load(Ordering::Relaxed)
-                                && let Err(e) = event_tx.send(FsmEvent::Connection(
-                                    ConnectionEvent::TcpConnectionFails(conn_id),
-                                ))
-                            {
+                            if let Err(e) = event_tx.send(FsmEvent::Connection(
+                                ConnectionEvent::TcpConnectionFails(conn_id),
+                            )) {
                                 connection_log_lite!(log, warn,
                                     "error sending TcpConnectionFails event to {peer}: {e}";
                                     "direction" => direction.as_str(),
@@ -675,4 +714,172 @@ pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
         Endpoint::new(rx_a, tx_a, channel_id),
         Endpoint::new(rx_b, tx_b, channel_id),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::messages::{
+        ErrorCode, ErrorSubcode, MessageParseError, OpenErrorSubcode,
+        OpenParseError, OpenParseErrorReason,
+    };
+    use crate::test::{RouteExchange, create_test_session_info};
+
+    fn test_connection() -> (
+        Arc<BgpConnectionChannel>,
+        Endpoint<MessageResult>,
+        Receiver<FsmEvent<BgpConnectionChannel>>,
+    ) {
+        let local = "192.0.2.1:179".parse().unwrap();
+        let peer = "192.0.2.2:179".parse().unwrap();
+        let config = create_test_session_info(
+            RouteExchange::Ipv4 { nexthop: None },
+            local,
+            peer,
+            false,
+        );
+        let (event_tx, event_rx) = mpsc_channel();
+        let (endpoint, remote) = channel();
+        let conn =
+            Arc::new(BgpConnectionChannel::with_conn_without_clock_thread(
+                local,
+                peer,
+                endpoint,
+                event_tx,
+                IO_TIMEOUT,
+                Logger::root(slog::Discard, slog::o!()),
+                ConnectionDirection::Inbound,
+                &config,
+            ));
+        (conn, remote, event_rx)
+    }
+
+    #[test]
+    fn receive_loop_stops_when_fsm_receiver_is_gone() {
+        let (conn, remote, event_rx) = test_connection();
+        drop(event_rx);
+        remote.tx.send(Ok(Message::KeepAlive)).unwrap();
+        let handle =
+            BgpConnectionChannel::spawn_recv_loop(conn.clone()).unwrap();
+        let (done_tx, done_rx) = mpsc_channel();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                handle.join().unwrap();
+                done_tx.send(()).unwrap();
+            });
+            let exited = done_rx.recv_timeout(Duration::from_secs(5));
+            // Release even a buggy loop before asserting, so the test cannot
+            // leave a worker waiting on an open peer channel.
+            drop(remote.tx);
+            assert!(exited.is_ok(), "receive loop outlived the FSM receiver");
+        });
+    }
+
+    #[test]
+    fn disconnect_is_reported_even_if_shutdown_arrives_after_receive() {
+        struct ShutdownOnDisconnect(Arc<AtomicBool>);
+
+        impl slog::Drain for ShutdownOnDisconnect {
+            type Ok = ();
+            type Err = std::convert::Infallible;
+
+            fn log(
+                &self,
+                record: &slog::Record<'_>,
+                _: &slog::OwnedKVList,
+            ) -> Result<(), Self::Err> {
+                // Interpose after recv_timeout reports disconnection, without
+                // a timing-dependent race or a hook in the receive loop.
+                if record.msg().to_string().contains("disconnected") {
+                    self.0.store(true, Ordering::Relaxed);
+                }
+                Ok(())
+            }
+        }
+
+        let (mut conn, remote, event_rx) = test_connection();
+        let dropped = conn.dropped.clone();
+        Arc::get_mut(&mut conn).unwrap().log =
+            Logger::root(ShutdownOnDisconnect(dropped.clone()), slog::o!());
+        drop(remote.tx);
+        BgpConnectionChannel::spawn_recv_loop(conn.clone())
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(dropped.load(Ordering::Relaxed));
+        let events = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [FsmEvent::Connection(ConnectionEvent::TcpConnectionFails(id))]
+                if id == conn.id()
+        ));
+    }
+
+    #[test]
+    fn local_shutdown_before_receive_is_silent() {
+        let (conn, remote, event_rx) = test_connection();
+        conn.dropped.store(true, Ordering::Relaxed);
+        drop(remote.tx);
+        BgpConnectionChannel::spawn_recv_loop(conn)
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(event_rx.try_iter().next().is_none());
+    }
+
+    #[test]
+    fn parse_error_is_forwarded_once_and_stops_receive_loop() {
+        let (conn, remote, event_rx) = test_connection();
+
+        conn.send(Message::KeepAlive).unwrap();
+        assert_eq!(
+            remote
+                .rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            Message::KeepAlive,
+        );
+        remote.tx.send(Ok(Message::KeepAlive)).unwrap();
+        remote
+            .tx
+            .send(Err(MessageParseError::Open(OpenParseError {
+                error_code: ErrorCode::Open,
+                error_subcode: ErrorSubcode::Open(
+                    OpenErrorSubcode::UnsupportedVersionNumber,
+                ),
+                reason: OpenParseErrorReason::InvalidVersion { version: 3 },
+            })))
+            .unwrap();
+        remote.tx.send(Ok(Message::KeepAlive)).unwrap();
+        // A buggy loop that continues after the parse error will process the
+        // queued message and EOF. Dropping the sender also lets that loop exit.
+        drop(remote.tx);
+        BgpConnectionChannel::spawn_recv_loop(conn.clone())
+            .unwrap()
+            .join()
+            .unwrap();
+
+        let events = event_rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            FsmEvent::Connection(ConnectionEvent::Message {
+                msg: Message::KeepAlive, conn_id,
+            }) if conn_id == conn.id()
+        ));
+        assert!(matches!(
+            &events[1],
+            FsmEvent::Connection(ConnectionEvent::ParseError {
+                conn_id,
+                error: MessageParseError::Open(OpenParseError {
+                    error_code: ErrorCode::Open,
+                    error_subcode: ErrorSubcode::Open(
+                        OpenErrorSubcode::UnsupportedVersionNumber,
+                    ),
+                    reason: OpenParseErrorReason::InvalidVersion { version: 3 },
+                }),
+            }) if conn_id == conn.id()
+        ));
+    }
 }

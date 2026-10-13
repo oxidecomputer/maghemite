@@ -13,8 +13,7 @@ use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
     config::{PeerConfig, RouterConfig},
-    connection::BgpConnection,
-    connection_tcp::BgpConnectionTcp,
+    connection::{BgpConnection, tcp::BgpConnectionTcp},
     policy::{PolicyKind, PolicySource},
     router::{LoadPolicyError, Router, SessionMap},
     session::{

@@ -232,7 +232,7 @@ pub struct Dispatcher<Cnx: BgpConnection> {
 
 **Purpose**: Abstraction over different transport mechanisms (TCP, in-memory channels).
 
-**Location**: `bgp/src/connection.rs`
+**Location**: `bgp/src/connection/mod.rs`
 
 **Key Methods**:
 ```rust
@@ -268,7 +268,7 @@ pub trait BgpConnection: Send + Clone {
 - **Usually 1** active connection in Established state
 - **Temporarily 2** during collision detection (until resolved)
 
-**Location**: `bgp/src/connection_tcp.rs`
+**Location**: `bgp/src/connection/tcp.rs`
 
 **Structure**:
 ```rust
@@ -316,7 +316,7 @@ When `BgpConnectionTcp::drop()` runs, it sets `dropped=true`, signaling all thre
 
 **Purpose**: Initiates outbound connections to peers.
 
-**Location**: `bgp/src/connection.rs`
+**Location**: `bgp/src/connection/mod.rs`
 
 **Key Method**:
 ```rust
@@ -1416,5 +1416,5 @@ For new developers:
 - `bgp/src/session.rs` - SessionRunner and FSM logic
 - `bgp/src/router.rs` - Router coordination
 - `bgp/src/dispatcher.rs` - Inbound connection acceptance
-- `bgp/src/connection_tcp.rs` - TCP connection implementation
-- `bgp/src/connection_channel.rs` - Test connection implementation
+- `bgp/src/connection/tcp.rs` - TCP connection implementation
+- `bgp/src/connection/channel.rs` - Test connection implementation
