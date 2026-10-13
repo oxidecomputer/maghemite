@@ -391,6 +391,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![origin_as],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         }

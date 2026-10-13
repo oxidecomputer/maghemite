@@ -162,6 +162,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![470, 64501, 64502],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -187,6 +188,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![480, 64501, 64502],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -222,6 +224,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![490, 64501, 64502],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -323,6 +326,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![470, 64501, 64502],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -333,6 +337,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true, // This path is shutdown
             bgp: Some(BgpPathProperties {
+                oxide_vtep: None,
                 origin_as: 480,
                 peer: PeerId::Ip(remote_ip2),
                 id: 48,
@@ -378,6 +383,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true,
             bgp: Some(BgpPathProperties {
+                oxide_vtep: None,
                 origin_as: 470,
                 peer: PeerId::Ip(remote_ip1),
                 id: 47,
@@ -432,6 +438,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![100],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -449,6 +456,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![100],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -468,6 +476,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![200],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -486,6 +495,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![300],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -553,6 +563,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![100],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -570,6 +581,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![100],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };
@@ -587,6 +599,7 @@ mod test {
                 local_pref: Some(100),
                 as_path: vec![100],
                 stale: None,
+                oxide_vtep: None,
             }),
             vlan_id: None,
         };

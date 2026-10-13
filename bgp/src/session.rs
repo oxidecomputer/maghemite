@@ -8599,6 +8599,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
+        let oxide_vtep =
+            update
+                .path_attributes
+                .iter()
+                .find_map(|attr| match &attr.value {
+                    PathAttributeValue::OxideVtep(vtep) => {
+                        Some(vtep.router_id().to_owned())
+                    }
+                    _ => None,
+                });
         let originated4 = match self.db.get_origin4(self.asn) {
             Ok(value) => value,
             Err(e) => {
@@ -8658,6 +8668,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         local_pref: update.local_pref(),
                         as_path,
                         stale: None,
+                        oxide_vtep: oxide_vtep.clone(),
                     }),
                     vlan_id: lock!(self.session).vlan_id,
                 };
@@ -8731,6 +8742,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 local_pref: update.local_pref(),
                                 as_path,
                                 stale: None,
+                                oxide_vtep: oxide_vtep.clone(),
                             }),
                             vlan_id: lock!(self.session).vlan_id,
                         };
@@ -8811,6 +8823,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 local_pref: update.local_pref(),
                                 as_path,
                                 stale: None,
+                                oxide_vtep,
                             }),
                             vlan_id: lock!(self.session).vlan_id,
                         };
