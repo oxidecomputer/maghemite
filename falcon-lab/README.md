@@ -53,8 +53,8 @@ originate no test prefixes.
 
 | Node | ASN | Originated IPv4 prefix | Originated IPv6 prefix |
 | --- | --- | --- | --- |
-| ox1 | 65001 | 198.51.100.0/24 | 2001:db8:1::/64 |
-| ox2 | 65002 | 203.0.113.0/24 | 2001:db8:2::/64 |
+| ox1 | 65001 | 198.51.100.1/32 | 2001:db8:1::1/128 |
+| ox2 | 65002 | 203.0.113.1/32 | 2001:db8:2::1/128 |
 | frr | 65101 | — | — |
 | eos | 65102 | — | — |
 | junos | 65103 | — | — |
@@ -78,10 +78,21 @@ respectively. The first and second data interfaces on each spine connect to
   leaf link-local addresses explicitly; router advertisements drive mgd's
   peer discovery. Management links remain separately numbered in both scenarios.
 
-Each BGP scenario checks all sessions are Established, then checks that each
-leaf receives and selects four paths for the other leaf's two prefixes and
-installs them on all four spine-facing Dendrite ports. No custom path
-attribute is injected or asserted yet.
+Each BGP scenario first tests one spine at a time, with no peers configured
+on the leaves for any other spine. Numbered mode uses two sessions per leaf
+to that spine; unnumbered mode uses one. Both leaves must establish their
+sessions, import and select exactly one path for each of the other leaf's
+host routes, and install those paths on the tested spine's Dendrite port.
+The entire VTEP table must match the other leaf's two host addresses and its
+original BGP ID (`0.0.253.233` for ox1, `0.0.253.234` for ox2), confirming
+that the spine preserved the OxideVtep attribute.
+
+After testing each spine, the scenario deletes its peers on both leaves and
+requires no peers and an empty VTEP table for three consecutive samples
+before enabling the next spine. API errors fail the check rather than count
+as empty state. This also checks the empty baseline before the first spine.
+Finally, all four spines are enabled to check four-way route selection and
+Dendrite installation, with the same exact VTEP table assertion.
 
 Run one scenario at a time from the directory containing the staged
 `cargo-bay/` (including the Juniper license described below):
