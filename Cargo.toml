@@ -107,6 +107,7 @@ percent-encoding = "2.3.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 progenitor = "0.15"
 progenitor-client = "0.15"
+progenitor-extras = "0.3.0"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 clap = { version = "4.6.6", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }

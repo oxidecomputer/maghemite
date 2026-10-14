@@ -10,6 +10,7 @@ ignored = ["oxnet", "serde", "uuid"]
 ddm-api-types-versions.workspace = true
 oxnet.workspace = true
 progenitor.workspace = true
+progenitor-extras = { workspace = true, features = ["slog"] }
 reqwest.workspace = true
 serde.workspace = true
 slog.workspace = true

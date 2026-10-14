@@ -5,19 +5,10 @@
 progenitor::generate_api!(
     spec = "../openapi/ddm-admin/ddm-admin-latest.json",
     inner_type = slog::Logger,
-    pre_hook = (|log: &slog::Logger, request: &reqwest::Request| {
-        slog::trace!(log, "client request";
-            "method" => %request.method(),
-            "uri" => %request.url(),
-            "body" => ?&request.body(),
-        );
-    }),
+    hooks = Expected,
     crates = {
         "oxnet" = "0.1.0",
     },
-    post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
-        slog::trace!(log, "client response"; "result" => ?result);
-    }),
     replace = {
         TunnelOrigin = ddm_api_types_versions::latest::net::TunnelOrigin,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
@@ -26,3 +17,5 @@ progenitor::generate_api!(
         ExternalPeers = ddm_api_types_versions::latest::external_peers::ExternalPeers,
     }
 );
+
+progenitor_extras::slog_hooks::impl_slog_client_hooks!(Client);

@@ -1407,6 +1407,7 @@ dependencies = [
  "ddm-api-types-versions",
  "oxnet",
  "progenitor 0.15.1",
+ "progenitor-extras 0.3.0",
  "reqwest 0.13.5",
  "serde",
  "slog",
@@ -3850,6 +3851,7 @@ dependencies = [
  "mg-api-types-versions",
  "oxnet",
  "progenitor 0.15.1",
+ "progenitor-extras 0.3.0",
  "reqwest 0.13.5",
  "schemars 0.8.22",
  "serde",
@@ -4574,7 +4576,7 @@ dependencies = [
  "parse-display",
  "progenitor-client 0.10.0",
  "progenitor-client 0.14.0",
- "progenitor-extras",
+ "progenitor-extras 0.2.0",
  "protocol",
  "rand 0.9.5",
  "regress 0.10.5",
@@ -5632,6 +5634,17 @@ dependencies = [
  "http",
  "progenitor-client 0.14.0",
  "tokio",
+]
+
+[[package]]
+name = "progenitor-extras"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fea8ab690a2c33f34256e93127c01803c3db4bdd6533572b5d68b937b973068"
+dependencies = [
+ "progenitor-client 0.15.1",
+ "reqwest 0.13.5",
+ "slog",
 ]
 
 [[package]]
@@ -7417,7 +7430,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7740,7 +7753,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
