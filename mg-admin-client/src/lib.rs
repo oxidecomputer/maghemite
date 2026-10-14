@@ -5,16 +5,7 @@
 progenitor::generate_api!(
     spec = "../openapi/mg-admin/mg-admin-latest.json",
     inner_type = slog::Logger,
-    pre_hook = (|log: &slog::Logger, request: &reqwest::Request| {
-        slog::trace!(log, "client request";
-            "method" => %request.method(),
-            "uri" => %request.url(),
-            "body" => ?&request.body(),
-        );
-    }),
-    post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
-        slog::trace!(log, "client response"; "result" => ?result);
-    }),
+    hooks = Expected,
     derives = [schemars::JsonSchema],
     crates = {
         "oxnet" = "0.1.6",
@@ -68,6 +59,8 @@ progenitor::generate_api!(
         Duration = std::time::Duration,
    }
 );
+
+progenitor_extras::slog_hooks::impl_slog_client_hooks!(Client);
 
 use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;
