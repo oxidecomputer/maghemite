@@ -51,6 +51,7 @@ progenitor::generate_api!(
 
         // BGP wire-message shapes.
         Afi = mg_api_types_versions::latest::bgp::messages::Afi,
+        Capability = mg_api_types_versions::latest::bgp::messages::Capability,
 
         // RIB shapes.
         BestpathFanoutRequest = mg_api_types_versions::latest::rib::BestpathFanoutRequest,
