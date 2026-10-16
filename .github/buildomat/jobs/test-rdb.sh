@@ -17,6 +17,7 @@ source .github/buildomat/test-common.sh
 
 pushd rdb
 cargo nextest run \
+    -p client-common \
     -p rdb \
     -p mg-api-types \
     -p mg-api-types-versions

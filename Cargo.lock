@@ -833,6 +833,14 @@ dependencies = [
 [[package]]
 name = "client-common"
 version = "0.1.0"
+dependencies = [
+ "omicron-common",
+ "oxnet",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "cmake"
@@ -3903,13 +3911,16 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "client-common",
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
+ "proptest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "slog",
+ "test-strategy",
  "thiserror 2.0.20",
  "uuid",
 ]
