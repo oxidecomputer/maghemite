@@ -46,7 +46,7 @@ pub enum ListenerBindError {
     #[error("listen address resolved to no addresses")]
     NoAddress,
     #[error("failed to initialize listener")]
-    ListenerSetup(#[from] std::io::Error),
+    ListenerSetup(#[source] std::io::Error),
 }
 
 /// Failure to accept a connection from a BgpListener.

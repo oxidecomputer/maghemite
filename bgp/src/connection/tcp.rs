@@ -118,15 +118,20 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             .map_err(ListenerBindError::AddressResolution)?
             .next()
             .ok_or(ListenerBindError::NoAddress)?;
-        let listener = TcpListener::bind(addr)?;
-        let bind_addr = listener.local_addr()?;
+        let listener = TcpListener::bind(addr)
+            .map_err(ListenerBindError::ListenerSetup)?;
+        let bind_addr = listener
+            .local_addr()
+            .map_err(ListenerBindError::ListenerSetup)?;
 
         info!(log, "TcpListener created"; "listener" => ?listener);
         // We set nonblocking to true on the listener because accept() can block
         // indefinitely and there isn't a portable way to do so with a timeout.
         // We would have to start using poll() to accomplish this, which is a
         // heavier lift that hasn't yet been deemed worthwhile.
-        listener.set_nonblocking(true)?;
+        listener
+            .set_nonblocking(true)
+            .map_err(ListenerBindError::ListenerSetup)?;
 
         Ok(Self {
             listener,
