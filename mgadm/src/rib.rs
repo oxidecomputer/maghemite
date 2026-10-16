@@ -8,6 +8,7 @@ use client_common::println_nopipe;
 use mg_admin_client::{Client, print_rib};
 use mg_api_types::rdb::rib::{AddressFamily, ProtocolFilter};
 use mg_api_types::rib::BestpathFanoutRequest;
+use std::collections::BTreeMap;
 use std::num::NonZeroU8;
 
 #[derive(Subcommand, Debug)]
@@ -27,6 +28,9 @@ pub struct StatusCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum StatusCmd {
+    /// Get learned VTEP identities keyed by host address.
+    Vteps,
+
     /// Get the unified adj-rib-in table. Contains routes from all
     /// protocols (e.g. BGP and static routing).
     Imported {
@@ -77,6 +81,11 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             }
         },
         Commands::Status(status_cmd) => match status_cmd.command {
+            StatusCmd::Vteps => {
+                let vteps: BTreeMap<_, _> =
+                    c.get_vteps().await?.into_inner().into_iter().collect();
+                println_nopipe!("{}", serde_json::to_string_pretty(&vteps)?);
+            }
             StatusCmd::Imported {
                 address_family,
                 protocol,
