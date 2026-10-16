@@ -192,17 +192,45 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     )
                     .map_err(ListenerAcceptError::NewConnectionSetup);
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(e) => {
+                    // Only retry for the explicit cases where it makes sense.
+                    // Otherwise, propagate an error back to the caller.
+                    match e.raw_os_error() {
+                        Some(
+                            libc::EAGAIN // aka EWOULDBLOCK
+                            | libc::EINTR
+                            | libc::ECONNABORTED,
+                        ) => {}
+
+                        #[cfg(any(target_os = "illumos", target_os = "linux"))]
+                        Some(libc::EPROTO) => {}
+
+                        // Linux-specific retryable errors.
+                        // [man accept4(2)]: https://linux.die.net/man/2/accept4
+                        #[cfg(target_os = "linux")]
+                        Some(
+                            libc::ENETDOWN
+                            | libc::ENOPROTOOPT
+                            | libc::EHOSTDOWN
+                            | libc::ENONET
+                            | libc::EHOSTUNREACH
+                            | libc::EOPNOTSUPP
+                            | libc::ENETUNREACH
+                        ) => {}
+
+                        // There's been an issue with the listener itself.
+                        _ => {
+                            return Err(ListenerAcceptError::Listener(e));
+                        }
+                    }
+
                     // Check if we've exceeded the timeout
                     if start.elapsed() >= timeout {
                         return Err(ListenerAcceptError::Timeout);
                     }
+
                     // Sleep briefly before retrying
                     sleep(retry_interval);
-                    continue;
-                }
-                Err(e) => {
-                    return Err(ListenerAcceptError::Listener(e));
                 }
             }
         }
