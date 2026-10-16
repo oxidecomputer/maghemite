@@ -45,6 +45,7 @@ use rdb::{Asn, Db};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
+use slog_error_chain::InlineErrorChain;
 use std::{
     cmp::Ordering::{Equal, Greater, Less},
     collections::{BTreeSet, VecDeque},
@@ -2180,8 +2181,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 session_log_lite!(
                     self,
                     error,
-                    "failed to spawn connection thread: {e}";
-                    "error" => format!("{e}")
+                    "failed to spawn connection thread";
+                    "error" => InlineErrorChain::new(&e)
                 );
                 return;
             }
@@ -2966,7 +2967,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     error,
                                     &accepted,
                                     "failed to register connection, fsm transition to idle";
-                                    "error" => format!("{e}")
+                                    "error" => InlineErrorChain::new(&e)
                                 );
                                 return FsmState::Idle;
                             }
@@ -3470,7 +3471,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 error,
                                 &accepted,
                                 "failed to register connection, fsm transition to idle";
-                                "error" => format!("{e}")
+                                "error" => InlineErrorChain::new(&e)
                             );
                             return FsmState::Idle;
                         }
@@ -3740,7 +3741,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 &new,
                                 &conn,
                                 "failed to register new connection in collision, stopping new conn";
-                                "error" => format!("{e}")
+                                "error" => InlineErrorChain::new(&e)
                             );
                             self.stop(Some(&new), None, StopReason::IoError);
                             continue;
@@ -4545,7 +4546,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             &new,
                             &pc.conn,
                             "failed to register new connection in collision, stopping new conn";
-                            "error" => format!("{e}")
+                            "error" => InlineErrorChain::new(&e)
                         );
                         self.stop(Some(&new), None, StopReason::IoError);
                         return FsmState::OpenConfirm(pc);
@@ -7553,11 +7554,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             Err(e) => {
                 failed.fetch_add(1, Ordering::Relaxed);
-                session_log!(self, error, conn, "failed to send {title}: {e}";
+                session_log!(self, error, conn, "failed to send {title}";
                     "message" => title,
-                    "error" => e.to_string()
+                    "error" => InlineErrorChain::new(&e)
                 );
-                Err(e)
+                Err(e.into())
             }
         }
     }
