@@ -2,7 +2,8 @@
 
 use crate::dendrite::NpuvmCommits;
 use crate::scenario::{
-    InteropScenario, MgdDuoScenario, Scenario, ScenarioOptions,
+    Interop3LinkScenario, InteropScenario, MgdDuoScenario, Scenario,
+    ScenarioOptions,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -45,6 +46,8 @@ struct TopologyRun {
 enum RunTopology {
     MgdDuo(ScenarioRun<MgdDuoScenario>),
     Interop(ScenarioRun<InteropScenario>),
+    #[command(name = "interop-3-link")]
+    Interop3Link(ScenarioRun<Interop3LinkScenario>),
 }
 
 #[derive(Debug, Args)]
@@ -90,6 +93,8 @@ struct TopologyCleanup {
 enum CleanupTopology {
     MgdDuo(ScenarioCleanup<MgdDuoScenario>),
     Interop(ScenarioCleanup<InteropScenario>),
+    #[command(name = "interop-3-link")]
+    Interop3Link(ScenarioCleanup<Interop3LinkScenario>),
 }
 
 #[derive(Debug, Args)]
@@ -116,12 +121,18 @@ async fn run() -> anyhow::Result<()> {
             RunTopology::Interop(cmd) => {
                 cmd.scenario.run(cmd.options.scenario_options()).await?;
             }
+            RunTopology::Interop3Link(cmd) => {
+                cmd.scenario.run(cmd.options.scenario_options()).await?;
+            }
         },
         Command::Cleanup(cmd) => match cmd.topology {
             CleanupTopology::MgdDuo(cmd) => {
                 cmd.scenario.cleanup()?;
             }
             CleanupTopology::Interop(cmd) => {
+                cmd.scenario.cleanup()?;
+            }
+            CleanupTopology::Interop3Link(cmd) => {
                 cmd.scenario.cleanup()?;
             }
         },
