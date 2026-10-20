@@ -1174,6 +1174,37 @@ impl FsmEventHistory {
     }
 }
 
+/// Dual-buffer BGP message history, mirroring [`FsmEventHistory`].
+///
+/// The 'all' buffer records every message. Once a session is Established it
+/// is dominated by keepalives, so the 'major' buffer records every message
+/// except keepalives to retain updates, notifications and route refreshes
+/// for longer.
+#[derive(Debug, Clone, Default)]
+pub struct MessageHistoryBuffers {
+    /// Every message, including keepalives
+    pub all: MessageHistory,
+
+    /// Every message except keepalives
+    pub major: MessageHistory,
+}
+
+impl MessageHistoryBuffers {
+    pub fn receive(&mut self, msg: Message, connection_id: ConnectionId) {
+        if !matches!(msg, Message::KeepAlive) {
+            self.major.receive(msg.clone(), connection_id);
+        }
+        self.all.receive(msg, connection_id);
+    }
+
+    pub fn send(&mut self, msg: Message, connection_id: ConnectionId) {
+        if !matches!(msg, Message::KeepAlive) {
+            self.major.send(msg.clone(), connection_id);
+        }
+        self.all.send(msg, connection_id);
+    }
+}
+
 /// Session-level counters that persist across connection changes
 /// These serve as aggregate counters across all connections for the session
 #[derive(Default)]
@@ -1805,8 +1836,9 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Unnumbered neighbor manager for actively querying NDP state.
     pub unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
 
-    /// A log of the last `MAX_MESSAGE_HISTORY` messages in each direction.
-    pub message_history: Arc<Mutex<MessageHistory>>,
+    /// Dual-buffer log of the last `MAX_MESSAGE_HISTORY` messages in each
+    /// direction (all messages + all but keepalives)
+    pub message_history: Arc<Mutex<MessageHistoryBuffers>>,
 
     /// Dual-buffer FSM event history (all events + major events only)
     pub fsm_event_history: Arc<Mutex<FsmEventHistory>>,
@@ -1969,7 +2001,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             fanout6: router.fanout6.clone(),
             router_instance_id: router.instance_id(),
             router: router.clone(),
-            message_history: Arc::new(Mutex::new(MessageHistory::default())),
+            message_history: Arc::new(Mutex::new(
+                MessageHistoryBuffers::default(),
+            )),
             fsm_event_history: Arc::new(Mutex::new(FsmEventHistory::new())),
             counters: Arc::new(SessionCounters::default()),
             db: router.db.clone(),
@@ -9770,6 +9804,7 @@ mod tests {
         );
         assert_eq!(
             lock!(runner.message_history)
+                .all
                 .sent
                 .iter()
                 .filter(|entry| matches!(
@@ -9992,7 +10027,7 @@ mod tests {
             );
             assert_channel_messages(&survivor_remote.rx, &[]);
             assert_notification_accounting(&runner, 1, 0, 1);
-            assert_eq!(lock!(runner.message_history).sent.len(), 1);
+            assert_eq!(lock!(runner.message_history).all.sent.len(), 1);
             assert!(matches!(
                 rx.try_recv().unwrap(),
                 FsmEvent::Admin(AdminEvent::ManualStop)
@@ -10346,7 +10381,7 @@ mod tests {
                 assert_eq!(paths.len(), 1);
                 assert_eq!(paths[0].bgp.as_ref().unwrap().peer, other_peer);
             }
-            let history = lock!(runner.message_history);
+            let history = &lock!(runner.message_history).all;
             assert_eq!(history.sent.len(), 1);
             assert_eq!(
                 history.sent[0].message,
@@ -10871,6 +10906,7 @@ mod tests {
                     );
                     assert_eq!(
                         lock!(runner.message_history)
+                            .all
                             .received
                             .iter()
                             .filter(|entry| matches!(
@@ -11153,9 +11189,10 @@ mod tests {
             assert_eq!(conn_timer!(conn, keepalive).enabled(), connected);
             expected_history.extend(expected.iter().cloned());
             let history = lock!(runner.message_history);
-            assert!(history.received.is_empty());
+            assert!(history.all.received.is_empty());
             assert_eq!(
                 history
+                    .all
                     .sent
                     .iter()
                     .rev()
@@ -11166,9 +11203,26 @@ mod tests {
             );
             assert!(
                 history
+                    .all
                     .sent
                     .iter()
                     .all(|entry| entry.connection_id == *conn.id())
+            );
+            assert!(history.major.received.is_empty());
+            assert_eq!(
+                history
+                    .major
+                    .sent
+                    .iter()
+                    .rev()
+                    .map(|entry| entry.message.clone())
+                    .collect::<Vec<_>>(),
+                expected_history
+                    .iter()
+                    .filter(|msg| !matches!(msg, Message::KeepAlive))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                "major history omits only keepalives, connected={connected}",
             );
             drop(history);
 
@@ -11211,7 +11265,7 @@ mod tests {
         );
         assert!(runner.send_open(&conn).is_ok());
         assert_eq!(
-            lock!(runner.message_history).sent.len(),
+            lock!(runner.message_history).all.sent.len(),
             expected_history.len()
         );
         assert_eq!(runner.counters.opens_sent.load(Ordering::Relaxed), 1);

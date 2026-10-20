@@ -163,7 +163,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     fanout: Arc<RwLock<Fanout<Cnx>>>,             // Update distribution
     router: Arc<Router<Cnx>>,                      // Parent router reference
     counters: Arc<SessionCounters>,                // Statistics (msgs sent/rcvd)
-    message_history: Arc<Mutex<MessageHistory>>,   // Last 1024 messages
+    message_history: Arc<Mutex<MessageHistoryBuffers>>, // Recent msgs (all/major)
     // ... additional fields
 }
 ```
@@ -174,6 +174,9 @@ pub struct SessionRunner<Cnx: BgpConnection> {
 - `connections`: **Registry of all active connections** (handles collision scenarios)
 - `primary`: **The "main" connection** used for queries (may differ during collision)
 - `clock`: Session-level timers (ConnectRetryTimer, IdleHoldTimer)
+- `message_history`: Rolling log of the last 1024 sent and 1024 received messages, kept in two
+  buffers: `all` (every message) and `major` (everything except keepalives, so updates and
+  notifications are retained long after keepalives would have evicted them from `all`)
 
 **Lifecycle**:
 - Created when peer is configured via `Router::new_session()` or `Router::ensure_session()`

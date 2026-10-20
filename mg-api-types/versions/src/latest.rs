@@ -65,10 +65,11 @@ pub mod bgp {
     }
 
     pub mod history {
-        pub use crate::v2::bgp::history::FsmEventBuffer;
         pub use crate::v2::bgp::history::MessageDirection;
 
         pub use crate::v11::bgp::history::Origin6;
+
+        pub use crate::v13::bgp::history::HistoryBufferSelector;
     }
 
     pub mod error {
@@ -140,14 +141,15 @@ pub mod bgp {
         pub use crate::v2::bgp::session::FsmStateKind;
 
         pub use crate::v5::bgp::session::ExportedSelector;
-        pub use crate::v5::bgp::session::FsmHistoryRequest;
         pub use crate::v5::bgp::session::FsmHistoryResponse;
-        pub use crate::v5::bgp::session::MessageHistoryRequest;
 
         pub use crate::v11::bgp::session::MAX_MESSAGE_HISTORY;
         pub use crate::v11::bgp::session::MessageHistory;
         pub use crate::v11::bgp::session::MessageHistoryEntry;
         pub use crate::v11::bgp::session::MessageHistoryResponse;
+
+        pub use crate::v13::bgp::session::FsmHistoryRequest;
+        pub use crate::v13::bgp::session::MessageHistoryRequest;
     }
 }
 
