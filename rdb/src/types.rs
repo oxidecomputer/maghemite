@@ -20,6 +20,8 @@ use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::path::Path;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
+pub use mg_api_types::mrib::*;
+
 // Marker types for compile-time address family discrimination.
 //
 // These zero-sized types enable type-level enforcement of IPv4/IPv6
@@ -323,6 +325,32 @@ impl Display for PrefixChangeNotification {
             pcn.push_str(&format!("{p} "));
         }
         write!(f, "PrefixChangeNotification [ {pcn}]")
+    }
+}
+
+/// Notification for MRIB changes, sent to registered watchers.
+///
+/// Watchers use these keys to reread the current MRIB state.
+#[derive(Clone, Default, Debug)]
+pub struct MribChangeNotification {
+    pub changed: BTreeSet<MulticastRouteKey>,
+}
+
+impl From<MulticastRouteKey> for MribChangeNotification {
+    fn from(value: MulticastRouteKey) -> Self {
+        Self {
+            changed: BTreeSet::from([value]),
+        }
+    }
+}
+
+impl Display for MribChangeNotification {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "MribChangeNotification [ ")?;
+        for key in &self.changed {
+            write!(f, "{key} ")?;
+        }
+        write!(f, "]")
     }
 }
 

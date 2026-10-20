@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Property-based tests for Prefix types using proptest
+//! Property tests for prefixes, multicast route keys, and BGP configuration.
 //!
-//! These tests verify key invariants of the Prefix types to ensure
-//! correctness and consistency of prefix operations (excluding wire format
-//! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
+//! BGP wire-format tests live in `bgp/src/proptest.rs`.
 
 use crate::types::StaticRouteKey;
+use crate::types::{
+    MulticastAddr, MulticastRouteKey, UnicastAddrV4, UnicastAddrV6, Vni,
+};
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};
 use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types_versions::v4::bgp::policy::{
@@ -492,5 +493,99 @@ proptest! {
             deserialized.parameters.allow_export6, neighbor.parameters.allow_export6,
             "IPv6 export policy should survive serialization round-trip"
         );
+    }
+}
+
+fn mcast_group_v4_strategy() -> impl Strategy<Value = MulticastAddr> {
+    (1u32..(1 << 28))
+        .prop_map(|bits| Ipv4Addr::from(0xE000_0000 | bits))
+        .prop_filter("not SSM null", |a| *a != Ipv4Addr::new(232, 0, 0, 0))
+        .prop_map(|a| MulticastAddr::try_from(a).unwrap())
+}
+
+fn mcast_group_v6_strategy() -> impl Strategy<Value = MulticastAddr> {
+    let asm = (
+        prop_oneof![Just(0u16), Just(1u16)],
+        3u16..=0xf,
+        1u128..(1 << 112),
+    )
+        .prop_filter_map("valid v6 ASM group", |(flags, scope, id)| {
+            let first = 0xff00 | (flags << 4) | scope;
+            let addr = Ipv6Addr::from((u128::from(first) << 112) | id);
+            MulticastAddr::try_from(addr).ok()
+        });
+
+    let ssm = (3u16..=0xf, 0x8000u16..=u16::MAX, any::<u16>()).prop_map(
+        |(scope, id_hi, id_lo)| {
+            let addr =
+                Ipv6Addr::new(0xff30 | scope, 0, 0, 0, 0, 0, id_hi, id_lo);
+            MulticastAddr::try_from(addr).unwrap()
+        },
+    );
+
+    prop_oneof![asm, ssm]
+}
+
+fn mcast_source_v4_strategy() -> impl Strategy<Value = IpAddr> {
+    (1u8..=223, any::<u8>(), any::<u8>(), any::<u8>())
+        .prop_filter("not loopback", |(a, ..)| *a != 127)
+        .prop_filter("not link-local", |(a, b, ..)| !(*a == 169 && *b == 254))
+        .prop_map(|(a, b, c, d)| {
+            UnicastAddrV4::new(Ipv4Addr::new(a, b, c, d))
+                .unwrap()
+                .into()
+        })
+}
+
+fn mcast_source_v6_strategy() -> impl Strategy<Value = IpAddr> {
+    (0u128..(1u128 << 125)).prop_map(|bits| {
+        UnicastAddrV6::new(Ipv6Addr::from((0x2u128 << 125) | bits))
+            .unwrap()
+            .into()
+    })
+}
+
+fn vni_strategy() -> impl Strategy<Value = Vni> {
+    (0..=Vni::MAX_VNI).prop_map(|v| Vni::new(v).unwrap())
+}
+
+fn mcast_route_key_strategy() -> impl Strategy<Value = MulticastRouteKey> {
+    fn with_source(
+        group: MulticastAddr,
+        source: impl Strategy<Value = IpAddr> + 'static,
+    ) -> BoxedStrategy<Option<IpAddr>> {
+        if group.is_ssm() {
+            source.prop_map(Some).boxed()
+        } else {
+            prop::option::of(source).boxed()
+        }
+    }
+
+    let v4 = mcast_group_v4_strategy().prop_flat_map(|g| {
+        (
+            Just(g),
+            with_source(g, mcast_source_v4_strategy()),
+            vni_strategy(),
+        )
+    });
+    let v6 = mcast_group_v6_strategy().prop_flat_map(|g| {
+        (
+            Just(g),
+            with_source(g, mcast_source_v6_strategy()),
+            vni_strategy(),
+        )
+    });
+    prop_oneof![v4, v6]
+        .prop_map(|(g, s, vni)| MulticastRouteKey::new(s, g, vni).unwrap())
+}
+
+proptest! {
+    #[test]
+    fn prop_mcast_key_json_roundtrip(key in mcast_route_key_strategy()) {
+        type Pinned = mg_api_types_versions::v14::mrib::MulticastRouteKey;
+        let bytes = serde_json::to_vec::<Pinned>(&key).expect("encode");
+        let decoded = serde_json::from_slice::<Pinned>(&bytes)
+            .expect("encoded key decodes");
+        prop_assert_eq!(decoded, key);
     }
 }
