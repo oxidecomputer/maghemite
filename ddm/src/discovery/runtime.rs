@@ -56,6 +56,7 @@ impl DiscoveryPacket {
             kind,
         }
     }
+
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
             version: Version::V2 as u8,
@@ -64,9 +65,11 @@ impl DiscoveryPacket {
             kind,
         }
     }
+
     fn is_solicitation(&self) -> bool {
         (self.flags & SOLICIT) != 0
     }
+
     fn is_advertisement(&self) -> bool {
         (self.flags & ADVERTISE) != 0
     }
@@ -85,9 +88,7 @@ struct HandlerContext {
 }
 
 struct Neighbor {
-    addr: Ipv6Addr,
-    hostname: String,
-    kind: RouterKind,
+    peer_id: PeerIdentity,
     last_seen: Instant,
 }
 
@@ -202,23 +203,20 @@ fn expire(
                         &ctx.log,
                         ctx.config.if_name,
                         "neighbor {}@{} expire",
-                        &nbr.hostname,
-                        nbr.addr
+                        &nbr.peer_id.hostname,
+                        nbr.peer_id.addr
                     );
+                    let peer_id = nbr.peer_id.clone();
                     *guard = None;
                     stats.peer_expirations.fetch_add(1, Ordering::Relaxed);
-                    emit_nbr_expire(
-                        ctx.event.clone(),
-                        ctx.log.clone(),
-                        &ctx.config.if_name,
-                    );
+                    emit_nbr_expire(&ctx, peer_id);
                 } else if dt > ctx.config.solicit_interval {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
                         "neighbor {}@{} missed solicit interval",
-                        &nbr.hostname,
-                        nbr.addr
+                        &nbr.peer_id.hostname,
+                        nbr.peer_id.addr
                     );
                 }
             }
@@ -332,15 +330,20 @@ fn handle_msg(
     if msg.is_solicitation() {
         handle_solicitation(ctx, sender, msg.hostname.clone(), stats);
     }
+
     if msg.is_advertisement() {
-        handle_advertisement(
-            ctx,
-            sender,
-            msg.hostname,
-            msg.kind,
-            msg.version,
-            stats,
-        );
+        let Ok(version) = Version::try_from(msg.version).inspect_err(|e| {
+            err!(ctx.log, ctx.config.if_name, "unsupported DDM version: {e}");
+        }) else {
+            return;
+        };
+        let peer_id = PeerIdentity {
+            addr: *sender,
+            hostname: msg.hostname,
+            kind: msg.kind,
+            version,
+        };
+        handle_advertisement(ctx, peer_id, stats);
     }
 }
 
@@ -360,40 +363,18 @@ fn handle_solicitation(
 
 fn handle_advertisement(
     ctx: &HandlerContext,
-    sender: &Ipv6Addr,
-    hostname: String,
-    kind: RouterKind,
-    version: u8,
+    peer_id: PeerIdentity,
     stats: &Arc<SessionStats>,
 ) {
-    trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
+    trc!(
+        &ctx.log,
+        ctx.config.if_name,
+        "advert from {}",
+        &peer_id.hostname
+    );
     stats
         .advertisements_received
         .fetch_add(1, Ordering::Relaxed);
-
-    // TODO: version negotiation
-    //
-    // Things currently work because ddm v1 does no version checking at all.
-    // So ddm v2 speakers can send out discovery packets with the version set to
-    // 2, and ddm v1 speakers can send out discovery packets with the version
-    // set to 1, and as long a v2 router speaks version 1 after discovering a v1
-    // peer, things will work. However, this will not work for version 3. So we
-    // need to implement version negotiation. This would also not work for
-    // changes in the discovery protocol, if we were to have changes there. So
-    // we need to come up with a general way for both protocols to evolve.
-    let version = match version {
-        2 => Version::V2,
-        3 => Version::V3,
-        x => {
-            err!(
-                ctx.log,
-                ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
-                x
-            );
-            return;
-        }
-    };
 
     let mut guard = match ctx.nbr.write() {
         Ok(nbr) => nbr,
@@ -404,21 +385,17 @@ fn handle_advertisement(
     };
     match &mut *guard {
         Some(nbr) => {
-            if *sender != nbr.addr {
+            if peer_id != nbr.peer_id {
                 inf!(
                     ctx.log,
                     ctx.config.if_name,
-                    "nbr {}@{} {} -> {}@{} {}",
-                    nbr.hostname,
-                    nbr.addr,
-                    nbr.kind,
-                    sender,
-                    hostname,
-                    kind
+                    "nbr {} -> {}",
+                    nbr.peer_id,
+                    peer_id
                 );
-                nbr.last_seen = Instant::now();
-                nbr.kind = kind;
-                nbr.addr = *sender;
+                nbr.peer_id = peer_id.clone();
+                // TODO: This name should be updated, but that requires oximeter
+                //       schema changes. Do this when that becomes an option.
                 stats.peer_address_changes.fetch_add(1, Ordering::Relaxed);
             }
             nbr.last_seen = Instant::now();
@@ -428,45 +405,32 @@ fn handle_advertisement(
                 ctx.log,
                 ctx.config.if_name,
                 "nbr is {}@{} {}",
-                sender,
-                hostname,
-                kind
+                peer_id.addr,
+                peer_id.hostname,
+                peer_id.kind
             );
             *guard = Some(Neighbor {
-                addr: *sender,
-                hostname: hostname.clone(),
+                peer_id: peer_id.clone(),
                 last_seen: Instant::now(),
-                kind,
             });
             stats.peer_established.fetch_add(1, Ordering::Relaxed);
         }
     };
     drop(guard);
-    let new_peer = PeerIdentity {
-        addr: *sender,
-        hostname,
-        kind,
-    };
-    let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
-        *info = Some(new_peer);
-        drop(info);
-        emit_nbr_update(ctx, sender, version);
+    if lock!(ctx.iface.peer_identity).as_ref() != Some(&peer_id) {
+        emit_nbr_update(ctx, peer_id);
     }
 }
 
-fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr, version: Version) {
-    if let Err(e) = ctx
-        .event
-        .send(NeighborEvent::Advertise((*addr, version)).into())
-    {
+fn emit_nbr_update(ctx: &HandlerContext, peer: PeerIdentity) {
+    if let Err(e) = ctx.event.send(NeighborEvent::Advertise(peer).into()) {
         err!(ctx.log, ctx.config.if_name, "send nbr event: {}", e);
     }
 }
 
-fn emit_nbr_expire(event: Sender<Event>, log: Logger, if_name: &str) {
-    if let Err(e) = event.send(NeighborEvent::Expire.into()) {
-        err!(log, if_name, "send nbr expire: {}", e);
+fn emit_nbr_expire(ctx: &HandlerContext, peer: PeerIdentity) {
+    if let Err(e) = ctx.event.send(NeighborEvent::Expire(peer).into()) {
+        err!(ctx.log, ctx.config.if_name, "send nbr expire: {}", e);
     }
 }
 
