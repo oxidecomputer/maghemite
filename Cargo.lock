@@ -379,7 +379,6 @@ dependencies = [
  "socket2",
  "strum 0.28.0",
  "thiserror 2.0.20",
- "uuid",
 ]
 
 [[package]]
@@ -1374,7 +1373,6 @@ dependencies = [
  "ddm-protocol",
  "dpd-client",
  "dropshot",
- "expectorate",
  "hostname 0.4.2",
  "http-body-util",
  "hyper",
@@ -1438,7 +1436,6 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
- "oxnet",
  "schemars 0.8.22",
  "serde",
  "serde_repr",
@@ -1997,7 +1994,6 @@ name = "falcon-lab"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bgp",
  "clap",
  "client-common",
  "colored",
@@ -3924,14 +3920,11 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
- "ddm-api-types",
  "libc",
  "libnet",
  "oximeter",
  "oximeter-producer",
  "oxnet",
- "schemars 0.8.22",
- "serde",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -3946,7 +3939,6 @@ dependencies = [
  "anyhow",
  "client-common",
  "ddm-api-types",
- "mg-common",
  "oxide-tokio-rt",
  "oxnet",
  "reqwest 0.13.5",
@@ -3965,14 +3957,12 @@ dependencies = [
  "mg-api-types",
  "mg-common",
  "oxnet",
- "progenitor-client 0.15.1",
  "rdb",
  "reqwest 0.13.5",
  "slog",
  "thiserror 2.0.20",
  "tokio",
  "util",
- "uuid",
 ]
 
 [[package]]
@@ -3993,7 +3983,6 @@ dependencies = [
  "client-common",
  "ddm-admin-client",
  "ddm-api-types-versions",
- "mg-common",
  "oxnet",
  "rand 0.10.2",
  "slog",
@@ -4017,12 +4006,10 @@ dependencies = [
  "colored",
  "mg-admin-client 0.1.0",
  "mg-api-types",
- "mg-api-types-versions",
  "mg-common",
  "natord",
  "oxide-tokio-rt",
  "oxnet",
- "rdb",
  "serde_json",
  "slog",
  "slog-async",
@@ -4065,7 +4052,6 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
- "socket2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -4153,8 +4139,6 @@ dependencies = [
  "ispf",
  "libc",
  "mg-common",
- "network-interface",
- "oxnet",
  "serde",
  "slog",
  "socket2",
@@ -6141,14 +6125,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "ciborium",
  "clap",
  "client-common",
  "itertools 0.15.0",
  "mg-api-types",
  "mg-api-types-versions",
  "mg-common",
- "ndp",
  "oxnet",
  "proptest",
  "schemars 0.8.22",
@@ -9428,7 +9410,6 @@ dependencies = [
  "anyhow",
  "clap",
  "client-common",
- "mg-common",
  "tokio",
 ]
 
