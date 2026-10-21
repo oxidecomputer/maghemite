@@ -57,6 +57,56 @@ fn ensure_tep_underlay_origin(
     };
 }
 
+/// Withdraw the router's TEP underlay origin (`tep/64`, see
+/// [`ensure_tep_underlay_origin`]) from ddm at teardown.
+pub(crate) fn withdraw_tep_underlay_origin(
+    client: &impl Ddm,
+    tep: Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    let target = Ipv6Net::new(tep, 64).unwrap();
+
+    let current: Vec<Ipv6Net> = match rt
+        .block_on(async { client.get_originated().await })
+        .map(|x| x.into_inner())
+    {
+        Ok(x) => x,
+        Err(e) => {
+            ddm_log!(
+                log,
+                error,
+                "withdraw: failed to get originated prefixes: {e}";
+                "error" => format!("{e}"),
+                "prefix" => format!("{target}")
+            );
+            return;
+        }
+    };
+
+    if !current.contains(&target) {
+        return;
+    }
+
+    match rt.block_on(async { client.withdraw_prefixes(&vec![target]).await }) {
+        Ok(_) => {
+            ddm_log!(log,
+                info,
+                "withdrew TEP underlay origin";
+                "prefix" => format!("{target}")
+            );
+        }
+        Err(e) => {
+            ddm_log!(log,
+                error,
+                "withdraw TEP underlay origin error: {e}";
+                "error" => format!("{e}"),
+                "prefix" => format!("{target}")
+            );
+        }
+    }
+}
+
 pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     tep: Ipv6Addr, // tunnel endpoint address
     client: &impl Ddm,

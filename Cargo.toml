@@ -151,13 +151,16 @@ iddqd = "0.4"
 
 
 [workspace.dependencies.opte-ioctl]
-git = "https://github.com/oxidecomputer/opte"
-rev = "164c7aca3f8c498a1fccbee4b9eda173d6ea2a67"
+# 662 local mode: sibling checkout (scripts/local-mode.sh); published pin:
+# git = "https://github.com/oxidecomputer/opte", rev = "ab03ab6bdb250883b3bfbab0eb84744b620dc3e1"
+path = "../opte/lib/opte-ioctl"
 
 [workspace.dependencies.oxide-vpc]
-git = "https://github.com/oxidecomputer/opte"
-rev = "164c7aca3f8c498a1fccbee4b9eda173d6ea2a67"
+# 662 local mode: sibling checkout (scripts/local-mode.sh); published pin:
+# git = "https://github.com/oxidecomputer/opte", rev = "ab03ab6bdb250883b3bfbab0eb84744b620dc3e1"
+path = "../opte/lib/oxide-vpc"
 
 [workspace.dependencies.dpd-client]
-git = "https://github.com/oxidecomputer/dendrite"
-rev = "247502812015b409d33240b836d5bf242817453d"
+# 662 local mode: sibling checkout (scripts/local-mode.sh); published pin:
+# git = "https://github.com/oxidecomputer/dendrite", rev = "714e424fbf292859b84cf2fbccb9008e90ea5042"
+path = "../dendrite/dpd-client"
