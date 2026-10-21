@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "12.0.0"
+    "version": "13.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -3075,24 +3075,6 @@
           "asn"
         ]
       },
-      "FsmEventBuffer": {
-        "oneOf": [
-          {
-            "description": "All FSM events (high frequency, includes all timers)",
-            "type": "string",
-            "enum": [
-              "all"
-            ]
-          },
-          {
-            "description": "Major events only (state transitions, admin, new connections)",
-            "type": "string",
-            "enum": [
-              "major"
-            ]
-          }
-        ]
-      },
       "FsmEventCategory": {
         "description": "Category of FSM event for filtering and display purposes",
         "type": "string",
@@ -3178,13 +3160,13 @@
             "description": "Which buffer to retrieve - if None, returns major buffer",
             "allOf": [
               {
-                "$ref": "#/components/schemas/FsmEventBuffer"
+                "$ref": "#/components/schemas/HistoryBufferSelector"
               }
             ]
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "description": "Optional peer filter using PeerId enum",
             "allOf": [
               {
                 "$ref": "#/components/schemas/PeerId"
@@ -3284,6 +3266,25 @@
           "connection_not_synchronized",
           "bad_message_length",
           "bad_message_type"
+        ]
+      },
+      "HistoryBufferSelector": {
+        "description": "Selects which history buffer to retrieve.\n\nEach BGP session keeps its FSM event and message history in two rolling buffers: one that records everything, and one that skips high-frequency events so it retains significant events for longer.",
+        "oneOf": [
+          {
+            "description": "Every entry, including timer events and keepalives.",
+            "type": "string",
+            "enum": [
+              "all"
+            ]
+          },
+          {
+            "description": "Significant entries only. FSM history keeps state transitions, admin events and new connections; message history keeps every message except keepalives.",
+            "type": "string",
+            "enum": [
+              "major"
+            ]
+          }
         ]
       },
       "ImportExportPolicy4": {
@@ -3622,6 +3623,15 @@
             "format": "uint32",
             "minimum": 0
           },
+          "buffer": {
+            "nullable": true,
+            "description": "Which buffer to retrieve - if None, returns major buffer",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryBufferSelector"
+              }
+            ]
+          },
           "direction": {
             "nullable": true,
             "description": "Optional direction filter - if None, returns both sent and received",
@@ -3633,7 +3643,7 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "description": "Optional peer filter using PeerId enum",
             "allOf": [
               {
                 "$ref": "#/components/schemas/PeerId"
