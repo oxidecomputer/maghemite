@@ -3,14 +3,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::smf::smf_refresh;
-use ddm::admin::HandlerContext;
+use ddm::admin::ApiHandlerContext;
 use slog::{Logger, error, info};
 use std::sync::{Arc, Mutex};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::Receiver;
 
 pub(crate) async fn handle_signals(
-    mut ch: Receiver<Arc<Mutex<HandlerContext>>>,
+    mut ch: Receiver<Arc<Mutex<ApiHandlerContext>>>,
     log: Logger,
 ) -> anyhow::Result<()> {
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
