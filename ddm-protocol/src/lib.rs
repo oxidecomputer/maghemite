@@ -29,13 +29,28 @@ impl From<v3::Update> for v2::Update {
 
 impl From<v2::PullResponse> for v3::PullResponse {
     fn from(value: v2::PullResponse) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let v2::PullResponse { underlay, tunnel } = value;
+
         Self {
-            underlay: value
-                .underlay
+            underlay: underlay
                 .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
-            tunnel: value
-                .tunnel
+            tunnel: tunnel
                 .map(|x| x.into_iter().map(v3::TunnelOrigin::from).collect()),
+        }
+    }
+}
+
+impl From<v3::PullResponse> for v2::PullResponse {
+    fn from(value: v3::PullResponse) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let v3::PullResponse { underlay, tunnel } = value;
+
+        Self {
+            underlay: underlay
+                .map(|x| x.into_iter().map(v2::PathVector::from).collect()),
+            tunnel: tunnel
+                .map(|x| x.into_iter().map(v2::TunnelOrigin::from).collect()),
         }
     }
 }
