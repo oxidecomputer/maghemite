@@ -7,6 +7,7 @@ edition = "2024"
 util  = { path = "../util" }
 
 [dependencies]
+uuid.workspace = true
 ddm-admin-client = { path = "../ddm-admin-client" }
 ddm-api-types-versions.workspace = true
 mg-api-types = { path = "../mg-api-types" }

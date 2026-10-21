@@ -36,6 +36,9 @@ pub enum StatusCmd {
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
+        /// Logical router to query
+        #[arg(long, default_value = "default")]
+        router: String,
     },
 
     /// Get the loc-rib table. Contains only valid routes and their
@@ -47,6 +50,9 @@ pub enum StatusCmd {
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
+        /// Logical router to query
+        #[arg(long, default_value = "default")]
+        router: String,
     },
 }
 
@@ -80,11 +86,13 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Imported {
                 address_family,
                 protocol,
-            } => get_imported(c, address_family, protocol).await?,
+                router,
+            } => get_imported(c, router, address_family, protocol).await?,
             StatusCmd::Selected {
                 address_family,
                 protocol,
-            } => get_selected(c, address_family, protocol).await?,
+                router,
+            } => get_selected(c, router, address_family, protocol).await?,
         },
     }
     Ok(())
@@ -92,11 +100,16 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 
 async fn get_imported(
     c: Client,
+    router: String,
     address_family: Option<AddressFamily>,
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let imported = c
-        .get_rib_imported(address_family.as_ref(), protocol.as_ref())
+        .get_router_rib_imported(
+            &router,
+            address_family.as_ref(),
+            protocol.as_ref(),
+        )
         .await?
         .into_inner();
 
@@ -106,11 +119,16 @@ async fn get_imported(
 
 async fn get_selected(
     c: Client,
+    router: String,
     address_family: Option<AddressFamily>,
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let selected = c
-        .get_rib_selected(address_family.as_ref(), protocol.as_ref())
+        .get_router_rib_selected(
+            &router,
+            address_family.as_ref(),
+            protocol.as_ref(),
+        )
         .await?
         .into_inner();
 

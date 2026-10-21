@@ -115,7 +115,7 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
     // A's egress targets B's listener and vice versa.
     daemon_a
         .add_peer(
-            db_a.db().clone(),
+            db_a.router().clone(),
             AddPeerRequest {
                 remote_addr: addr_b,
                 listen_addr: addr_a,
@@ -127,7 +127,7 @@ async fn two_sessions_converge_then_peer_loss_drives_down() {
         .expect("add peer to daemon a");
     daemon_b
         .add_peer(
-            db_b.db().clone(),
+            db_b.router().clone(),
             AddPeerRequest {
                 remote_addr: addr_a,
                 listen_addr: addr_b,
