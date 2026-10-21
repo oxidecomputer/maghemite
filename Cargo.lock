@@ -1444,6 +1444,7 @@ dependencies = [
  "ispf",
  "libnet",
  "mg-common",
+ "num_enum 0.7.6",
  "omicron-common",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",

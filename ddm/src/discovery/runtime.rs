@@ -8,20 +8,19 @@
 //! illumos-only.
 
 use super::{DiscoveryError, Version};
-use crate::sm::{
-    Config, Event, InterfaceState, NeighborEvent, PeerIdentity, SessionStats,
-};
+use crate::sm::{Config, DiscoveryEvent, Event, PeerIdentity, SessionStats};
 use crate::{dbg, err, inf, trc, wrn};
 use ddm_api_types::db::RouterKind;
-use mg_common::lock;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::mem::MaybeUninit;
 use std::net::{Ipv6Addr, Shutdown, SocketAddrV6};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, RwLock};
+use std::sync::mpsc::{
+    Receiver, Sender, SyncSender, TrySendError, sync_channel,
+};
 use std::thread::{sleep, spawn};
 use std::time::Instant;
 
@@ -29,6 +28,16 @@ const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
 const SOLICIT: u8 = 1;
 const ADVERTISE: u8 = 1 << 1;
+/// Advertisements waiting for the neighbor thread. A peer advertises about
+/// once per solicit interval and any one advertisement refreshes the neighbor,
+/// so a short queue suffices; listeners drop advertisements when it is full
+/// rather than letting a flood of packets grow it without bound.
+const ADVERTISEMENT_QUEUE_DEPTH: usize = 16;
+/// A peer answers each of our solicitations, so its advertisements arrive
+/// about one solicit interval apart, give or take scheduling and network
+/// jitter. Only warn about a missed interval once this multiple of it has
+/// passed without an advertisement.
+const MISSED_SOLICIT_TOLERANCE: f64 = 1.25;
 
 /// Reinterpret an initialized prefix of `[MaybeUninit<u8>]` as `[u8]`.
 ///
@@ -56,6 +65,7 @@ impl DiscoveryPacket {
             kind,
         }
     }
+
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
             version: Version::V2 as u8,
@@ -64,38 +74,43 @@ impl DiscoveryPacket {
             kind,
         }
     }
+
     fn is_solicitation(&self) -> bool {
         (self.flags & SOLICIT) != 0
     }
+
     fn is_advertisement(&self) -> bool {
         (self.flags & ADVERTISE) != 0
     }
 }
 
 #[derive(Clone)]
-struct HandlerContext {
+struct DiscoveryHandlerContext {
     hostname: String,
     config: Config,
     mc_socket: Arc<Socket>,
     uc_socket: Arc<Socket>,
-    nbr: Arc<RwLock<Option<Neighbor>>>,
+    advertisements: SyncSender<PeerIdentity>,
     log: Logger,
     event: Sender<Event>,
-    iface: Arc<InterfaceState>,
 }
 
 struct Neighbor {
-    addr: Ipv6Addr,
-    hostname: String,
-    kind: RouterKind,
+    /// The identity of the peer, comprised of parameters that
+    /// should never change over the course of a given session.
+    peer_id: PeerIdentity,
+    /// The moment that we last processed an update from the peer.
     last_seen: Instant,
+    /// The moment that we last announced this peer to the FSM.
+    /// This is used to coalesce peer announcements to the FSM, ensuring that
+    /// a `DiscoveryEvent` is announced at most once every `solicit_interval`.
+    last_announced: Instant,
 }
 
 pub(crate) fn handler(
     hostname: String,
     config: Config,
     event: Sender<Event>,
-    iface: Arc<InterfaceState>,
     stats: Arc<SessionStats>,
     log: Logger,
 ) -> Result<Arc<AtomicBool>, DiscoveryError> {
@@ -123,15 +138,16 @@ pub(crate) fn handler(
     uc.bind(&uc_sa)?;
     uc.set_read_timeout(Some(config.discovery_read_timeout))?;
 
-    let ctx = HandlerContext {
+    let (advertisements, advertisement_rx) =
+        sync_channel(ADVERTISEMENT_QUEUE_DEPTH);
+    let ctx = DiscoveryHandlerContext {
         mc_socket: Arc::new(mc),
         uc_socket: Arc::new(uc),
-        nbr: Arc::new(RwLock::new(None)),
+        advertisements,
         log: log.clone(),
         hostname,
         event,
         config,
-        iface,
     };
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -149,13 +165,13 @@ pub(crate) fn handler(
         stop.clone(),
         stats.clone(),
     )?;
-    expire(ctx, stop.clone(), stats.clone())?;
+    neighbor(ctx, advertisement_rx, stop.clone(), stats.clone());
 
     Ok(stop)
 }
 
 fn send_solicitations(
-    ctx: HandlerContext,
+    ctx: DiscoveryHandlerContext,
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
 ) {
@@ -176,53 +192,52 @@ fn send_solicitations(
     });
 }
 
-fn expire(
-    ctx: HandlerContext,
+/// Own the neighbor state for this interface. Listener threads send each
+/// advertisement here, so only this thread reads or writes the neighbor, and
+/// advertise and expire events reach the state machine in the order this
+/// thread decides on them.
+fn neighbor(
+    ctx: DiscoveryHandlerContext,
+    advertisements: Receiver<PeerIdentity>,
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
-) -> Result<(), DiscoveryError> {
+) {
     spawn(move || {
+        let missed_solicit_threshold = ctx
+            .config
+            .solicit_interval
+            .mul_f64(MISSED_SOLICIT_TOLERANCE);
+        let mut nbr: Option<Neighbor> = None;
+
         loop {
-            let mut guard = match ctx.nbr.write() {
-                Ok(nbr) => nbr,
-                Err(e) => {
-                    err!(
-                        ctx.log,
-                        ctx.config.if_name,
-                        "lock nbr on expire: {}",
-                        e
-                    );
-                    return;
-                }
-            };
-            if let Some(nbr) = &*guard {
-                let dt = Instant::now().duration_since(nbr.last_seen);
+            if let Ok(peer_id) =
+                advertisements.recv_timeout(ctx.config.solicit_interval)
+            {
+                update_neighbor(&ctx, &mut nbr, peer_id, &stats);
+            }
+
+            if let Some(n) = &nbr {
+                let dt = n.last_seen.elapsed();
                 if dt > ctx.config.expire_threshold {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
-                        "neighbor {}@{} expire",
-                        &nbr.hostname,
-                        nbr.addr
+                        "neighbor {} expire",
+                        &n.peer_id,
                     );
-                    *guard = None;
+                    nbr = None;
                     stats.peer_expirations.fetch_add(1, Ordering::Relaxed);
-                    emit_nbr_expire(
-                        ctx.event.clone(),
-                        ctx.log.clone(),
-                        &ctx.config.if_name,
-                    );
-                } else if dt > ctx.config.solicit_interval {
+                    emit_nbr_expire(&ctx);
+                } else if dt > missed_solicit_threshold {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
-                        "neighbor {}@{} missed solicit interval",
-                        &nbr.hostname,
-                        nbr.addr
+                        "neighbor {} missed solicit interval",
+                        &n.peer_id,
                     );
                 }
             }
-            drop(guard);
+
             // We don't want to emit a solicit failure event until we drop the
             // handler context. Otherwise we could create a race on the discovery
             // sockets by trying to listen on a unicast address that a socket
@@ -231,7 +246,7 @@ fn expire(
                 inf!(
                     &ctx.log,
                     ctx.config.if_name,
-                    "stopping discovery expiration thread",
+                    "stopping discovery neighbor thread",
                 );
                 let event = ctx.event.clone();
                 let log = ctx.log.clone();
@@ -243,14 +258,12 @@ fn expire(
                 emit_solicit_fail(event, log, &if_name);
                 break;
             }
-            sleep(ctx.config.solicit_interval);
         }
     });
-    Ok(())
 }
 
 fn listen(
-    ctx: HandlerContext,
+    ctx: DiscoveryHandlerContext,
     s: Arc<Socket>,
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
@@ -258,7 +271,7 @@ fn listen(
     spawn(move || {
         loop {
             if let Some((addr, msg)) = recv(&ctx, &s) {
-                handle_msg(&ctx, msg, &addr, &stats);
+                handle_msg(&ctx, msg, &addr, &stop, &stats);
             };
             if stop.load(Ordering::Relaxed) {
                 inf!(
@@ -281,7 +294,7 @@ fn listen(
 }
 
 fn recv(
-    ctx: &HandlerContext,
+    ctx: &DiscoveryHandlerContext,
     s: &Arc<Socket>,
 ) -> Option<(Ipv6Addr, DiscoveryPacket)> {
     let mut buf = [MaybeUninit::new(0); 1024];
@@ -324,28 +337,34 @@ fn recv(
 }
 
 fn handle_msg(
-    ctx: &HandlerContext,
+    ctx: &DiscoveryHandlerContext,
     msg: DiscoveryPacket,
-    sender: &Ipv6Addr,
+    source_ip: &Ipv6Addr,
+    stop: &AtomicBool,
     stats: &Arc<SessionStats>,
 ) {
     if msg.is_solicitation() {
-        handle_solicitation(ctx, sender, msg.hostname.clone(), stats);
+        handle_solicitation(ctx, source_ip, msg.hostname.clone(), stats);
     }
+
     if msg.is_advertisement() {
-        handle_advertisement(
-            ctx,
-            sender,
-            msg.hostname,
-            msg.kind,
-            msg.version,
-            stats,
-        );
+        let Ok(version) = Version::try_from(msg.version).inspect_err(|e| {
+            err!(ctx.log, ctx.config.if_name, "unsupported DDM version: {e}");
+        }) else {
+            return;
+        };
+        let sender = PeerIdentity {
+            addr: *source_ip,
+            hostname: msg.hostname,
+            kind: msg.kind,
+            version,
+        };
+        handle_advertisement(ctx, sender, stop, stats);
     }
 }
 
 fn handle_solicitation(
-    ctx: &HandlerContext,
+    ctx: &DiscoveryHandlerContext,
     sender: &Ipv6Addr,
     hostname: String,
     stats: &Arc<SessionStats>,
@@ -359,124 +378,113 @@ fn handle_solicitation(
 }
 
 fn handle_advertisement(
-    ctx: &HandlerContext,
-    sender: &Ipv6Addr,
-    hostname: String,
-    kind: RouterKind,
-    version: u8,
+    ctx: &DiscoveryHandlerContext,
+    peer_id: PeerIdentity,
+    stop: &AtomicBool,
     stats: &Arc<SessionStats>,
 ) {
-    trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
+    trc!(
+        &ctx.log,
+        ctx.config.if_name,
+        "advert from {}",
+        &peer_id.hostname
+    );
     stats
         .advertisements_received
         .fetch_add(1, Ordering::Relaxed);
 
-    // TODO: version negotiation
-    //
-    // Things currently work because ddm v1 does no version checking at all.
-    // So ddm v2 speakers can send out discovery packets with the version set to
-    // 2, and ddm v1 speakers can send out discovery packets with the version
-    // set to 1, and as long a v2 router speaks version 1 after discovering a v1
-    // peer, things will work. However, this will not work for version 3. So we
-    // need to implement version negotiation. This would also not work for
-    // changes in the discovery protocol, if we were to have changes there. So
-    // we need to come up with a general way for both protocols to evolve.
-    let version = match version {
-        2 => Version::V2,
-        3 => Version::V3,
-        x => {
-            err!(
-                ctx.log,
-                ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
-                x
-            );
-            return;
-        }
-    };
-
-    let mut guard = match ctx.nbr.write() {
-        Ok(nbr) => nbr,
-        Err(e) => {
-            err!(ctx.log, ctx.config.if_name, "lock nbr on adv: {}", e);
-            return;
-        }
-    };
-    match &mut *guard {
-        Some(nbr) => {
-            if *sender != nbr.addr {
-                inf!(
-                    ctx.log,
-                    ctx.config.if_name,
-                    "nbr {}@{} {} -> {}@{} {}",
-                    nbr.hostname,
-                    nbr.addr,
-                    nbr.kind,
-                    sender,
-                    hostname,
-                    kind
-                );
-                nbr.last_seen = Instant::now();
-                nbr.kind = kind;
-                nbr.addr = *sender;
-                stats.peer_address_changes.fetch_add(1, Ordering::Relaxed);
-            }
-            nbr.last_seen = Instant::now();
-        }
-        None => {
+    match ctx.advertisements.try_send(peer_id) {
+        Ok(()) => {}
+        // The neighbor thread is behind. Dropping is safe because later
+        // advertisements from the same peer carry the same information.
+        Err(TrySendError::Full(peer_id)) => {
             inf!(
                 ctx.log,
                 ctx.config.if_name,
-                "nbr is {}@{} {}",
-                sender,
-                hostname,
-                kind
+                "advertisement queue full, dropping advert from {peer_id}"
             );
-            *guard = Some(Neighbor {
-                addr: *sender,
-                hostname: hostname.clone(),
-                last_seen: Instant::now(),
-                kind,
-            });
-            stats.peer_established.fetch_add(1, Ordering::Relaxed);
         }
-    };
-    drop(guard);
-    let new_peer = PeerIdentity {
-        addr: *sender,
-        hostname,
-        kind,
-    };
-    let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
-        *info = Some(new_peer);
-        drop(info);
-        emit_nbr_update(ctx, sender, version);
+        // The neighbor thread exits on stop, possibly before this listener
+        // notices, so this is only an error while discovery is running.
+        Err(TrySendError::Disconnected(_)) => {
+            if !stop.load(Ordering::Relaxed) {
+                err!(
+                    ctx.log,
+                    ctx.config.if_name,
+                    "send advertisement: neighbor thread exited"
+                );
+            }
+        }
     }
 }
 
-fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr, version: Version) {
-    if let Err(e) = ctx
-        .event
-        .send(NeighborEvent::Advertise((*addr, version)).into())
-    {
+/// Record an advertisement from `peer_id` and announce it to the state machine
+/// when the neighbor is new or has changed. An unchanged neighbor is resent to
+/// at most once per solicit interval, which ensures a state machine dropping
+/// back to Solicit from Exchange upon a non-DiscoveryEvent will still receive
+/// the trigger to enter Exchange again.
+fn update_neighbor(
+    ctx: &DiscoveryHandlerContext,
+    nbr: &mut Option<Neighbor>,
+    peer_id: PeerIdentity,
+    stats: &SessionStats,
+) {
+    match nbr {
+        Some(nbr) => {
+            nbr.last_seen = Instant::now();
+            if peer_id != nbr.peer_id {
+                inf!(
+                    ctx.log,
+                    ctx.config.if_name,
+                    "nbr {} -> {}",
+                    nbr.peer_id,
+                    peer_id
+                );
+                nbr.peer_id = peer_id;
+                // TODO: This name should be updated, but that requires oximeter
+                //       schema changes. Do this when that becomes an option.
+                stats.peer_address_changes.fetch_add(1, Ordering::Relaxed);
+            } else if nbr.last_announced.elapsed() < ctx.config.solicit_interval
+            {
+                // The neighbor hasn't changed and we've notified the FSM within
+                // the last solicit_interval, so we can skip this announcement.
+                return;
+            }
+            nbr.last_announced = Instant::now();
+            emit_nbr_update(ctx, nbr.peer_id.clone());
+        }
+        None => {
+            inf!(ctx.log, ctx.config.if_name, "nbr is {peer_id}",);
+            *nbr = Some(Neighbor {
+                peer_id: peer_id.clone(),
+                last_seen: Instant::now(),
+                last_announced: Instant::now(),
+            });
+            stats.peer_established.fetch_add(1, Ordering::Relaxed);
+            emit_nbr_update(ctx, peer_id);
+        }
+    };
+}
+
+fn emit_nbr_update(ctx: &DiscoveryHandlerContext, peer: PeerIdentity) {
+    if let Err(e) = ctx.event.send(DiscoveryEvent::Advertise(peer).into()) {
         err!(ctx.log, ctx.config.if_name, "send nbr event: {}", e);
     }
 }
 
-fn emit_nbr_expire(event: Sender<Event>, log: Logger, if_name: &str) {
-    if let Err(e) = event.send(NeighborEvent::Expire.into()) {
-        err!(log, if_name, "send nbr expire: {}", e);
+fn emit_nbr_expire(ctx: &DiscoveryHandlerContext) {
+    if let Err(e) = ctx.event.send(DiscoveryEvent::Expire.into()) {
+        err!(ctx.log, ctx.config.if_name, "send nbr expire: {}", e);
     }
 }
 
 fn emit_solicit_fail(event: Sender<Event>, log: Logger, if_name: &str) {
-    if let Err(e) = event.send(NeighborEvent::SolicitFail.into()) {
+    if let Err(e) = event.send(DiscoveryEvent::SolicitFail.into()) {
         err!(log, if_name, "send solicit fail: {}", e);
     }
 }
 
-fn solicit(ctx: &HandlerContext) -> Result<usize, DiscoveryError> {
+fn solicit(ctx: &DiscoveryHandlerContext) -> Result<usize, DiscoveryError> {
     let msg = DiscoveryPacket::new_solicitation(
         ctx.hostname.clone(),
         ctx.config.kind,
@@ -489,7 +497,7 @@ fn solicit(ctx: &HandlerContext) -> Result<usize, DiscoveryError> {
 }
 
 fn advertise(
-    ctx: &HandlerContext,
+    ctx: &DiscoveryHandlerContext,
     dst: Option<Ipv6Addr>,
     stats: &Arc<SessionStats>,
 ) -> Result<usize, DiscoveryError> {

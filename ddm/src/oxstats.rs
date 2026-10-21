@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::admin::HandlerContext;
+use crate::admin::ApiHandlerContext;
 use chrono::{DateTime, Utc};
 use mg_common::{
     lock,
@@ -46,7 +46,7 @@ pub(crate) struct Stats {
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
-    ctx: Arc<Mutex<HandlerContext>>,
+    ctx: Arc<Mutex<ApiHandlerContext>>,
 }
 
 macro_rules! ddm_session_counter {
@@ -153,7 +153,7 @@ impl Producer for Stats {
         ));
 
         for peer in &ctx.peers {
-            let if_name = lock!(peer.iface.if_name).clone();
+            let if_name = peer.iface.snapshot().if_name;
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
@@ -269,7 +269,7 @@ impl Producer for Stats {
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
-    ctx: Arc<Mutex<HandlerContext>>,
+    ctx: Arc<Mutex<ApiHandlerContext>>,
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
