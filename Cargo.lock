@@ -1476,6 +1476,7 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
+ "oxnet",
  "schemars 0.8.22",
  "serde",
  "serde_repr",

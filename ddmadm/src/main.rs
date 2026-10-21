@@ -75,11 +75,32 @@ enum SubCommand {
 
     // Get external peers
     GetExternalPeers,
+
+    /// Get the rack prefixes a DDM transit router has originated.
+    RackOriginated,
+
+    /// Advertise rack prefixes from a DDM transit router.
+    RackAdvertise(RackPrefixes),
+
+    /// Withdraw rack prefixes from a DDM transit router.
+    RackWithdraw(Prefixes),
+
+    /// Get the rack prefixes a DDM router has learned from its peers.
+    RackImported,
 }
 
 #[derive(Debug, Parser)]
 struct Prefixes {
     prefixes: Vec<Ipv6Net>,
+}
+
+#[derive(Debug, Parser)]
+struct RackPrefixes {
+    prefixes: Vec<Ipv6Net>,
+
+    /// Multi-rack join address to associate with the prefixes.
+    #[arg(short, long)]
+    join_addr: Option<SocketAddrV6>,
 }
 
 #[derive(Debug, Parser)]
@@ -290,6 +311,61 @@ async fn run() -> Result<()> {
             for p in peers.address_objects {
                 println_nopipe!("{p}");
             }
+        }
+        SubCommand::RackOriginated => {
+            let msg = client.get_originated_rack_prefixes().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}",
+                "Prefix".dimmed(),
+                "Join Address".dimmed(),
+            )?;
+            for (prefix, info) in msg.into_inner() {
+                let join_addr = info
+                    .multi_rack_join_addr
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| "-".into());
+                writeln!(&mut tw, "{}\t{}", prefix, join_addr)?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::RackAdvertise(ac) => {
+            let info = types::RackPrefixInfo {
+                multi_rack_join_addr: ac.join_addr.map(Into::into),
+            };
+            let prefixes = ac
+                .prefixes
+                .iter()
+                .map(|p| (p.to_string(), info.clone()))
+                .collect();
+            client.advertise_rack_prefixes(&prefixes).await?;
+        }
+        SubCommand::RackWithdraw(ac) => {
+            client.withdraw_rack_prefixes(&ac.prefixes).await?;
+        }
+        SubCommand::RackImported => {
+            let msg = client.get_rack_prefixes().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}",
+                "Prefix".dimmed(),
+                "Join Addresses".dimmed(),
+            )?;
+            for (prefix, join_addrs) in msg.into_inner() {
+                let join_addrs = if join_addrs.is_empty() {
+                    "-".to_string()
+                } else {
+                    join_addrs
+                        .iter()
+                        .map(|a| a.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                writeln!(&mut tw, "{}\t{}", prefix, join_addrs)?;
+            }
+            tw.flush()?;
         }
     }
 

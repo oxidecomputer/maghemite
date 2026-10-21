@@ -11,18 +11,34 @@ pub mod v3;
 
 impl From<v2::Update> for v3::Update {
     fn from(value: v2::Update) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let v2::Update {
+            underlay,
+            tunnel,
+            rack,
+        } = value;
+
         Self {
-            tunnel: value.tunnel.map(v3::TunnelUpdate::from),
-            underlay: value.underlay.map(v3::UnderlayUpdate::from),
+            tunnel: tunnel.map(v3::TunnelUpdate::from),
+            underlay: underlay.map(v3::UnderlayUpdate::from),
+            rack: rack.map(v3::RackUpdate::from),
         }
     }
 }
 
 impl From<v3::Update> for v2::Update {
     fn from(value: v3::Update) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let v3::Update {
+            underlay,
+            tunnel,
+            rack,
+        } = value;
+
         Self {
-            tunnel: value.tunnel.map(v2::TunnelUpdate::from),
-            underlay: value.underlay.map(v2::UnderlayUpdate::from),
+            tunnel: tunnel.map(v2::TunnelUpdate::from),
+            underlay: underlay.map(v2::UnderlayUpdate::from),
+            rack: rack.map(v2::RackUpdate::from),
         }
     }
 }
@@ -30,13 +46,19 @@ impl From<v3::Update> for v2::Update {
 impl From<v2::PullResponse> for v3::PullResponse {
     fn from(value: v2::PullResponse) -> Self {
         // compilation barrier. if fields ever change, this destructure fails.
-        let v2::PullResponse { underlay, tunnel } = value;
+        let v2::PullResponse {
+            underlay,
+            tunnel,
+            rack,
+        } = value;
 
         Self {
             underlay: underlay
                 .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
             tunnel: tunnel
                 .map(|x| x.into_iter().map(v3::TunnelOrigin::from).collect()),
+            rack: rack
+                .map(|x| x.into_iter().map(v3::RackPrefix::from).collect()),
         }
     }
 }
@@ -44,13 +66,67 @@ impl From<v2::PullResponse> for v3::PullResponse {
 impl From<v3::PullResponse> for v2::PullResponse {
     fn from(value: v3::PullResponse) -> Self {
         // compilation barrier. if fields ever change, this destructure fails.
-        let v3::PullResponse { underlay, tunnel } = value;
+        let v3::PullResponse {
+            underlay,
+            tunnel,
+            rack,
+        } = value;
 
         Self {
             underlay: underlay
                 .map(|x| x.into_iter().map(v2::PathVector::from).collect()),
             tunnel: tunnel
                 .map(|x| x.into_iter().map(v2::TunnelOrigin::from).collect()),
+            rack: rack
+                .map(|x| x.into_iter().map(v2::RackPrefix::from).collect()),
+        }
+    }
+}
+
+impl From<v2::RackUpdate> for v3::RackUpdate {
+    fn from(value: v2::RackUpdate) -> Self {
+        let v2::RackUpdate { announce, withdraw } = value;
+        Self {
+            announce: announce.into_iter().map(v3::RackPrefix::from).collect(),
+            withdraw: withdraw.into_iter().map(v3::RackPrefix::from).collect(),
+        }
+    }
+}
+
+impl From<v3::RackUpdate> for v2::RackUpdate {
+    fn from(value: v3::RackUpdate) -> Self {
+        let v3::RackUpdate { announce, withdraw } = value;
+        Self {
+            announce: announce.into_iter().map(v2::RackPrefix::from).collect(),
+            withdraw: withdraw.into_iter().map(v2::RackPrefix::from).collect(),
+        }
+    }
+}
+
+impl From<v2::RackPrefix> for v3::RackPrefix {
+    fn from(value: v2::RackPrefix) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let v2::RackPrefix {
+            path_vector,
+            multi_rack_join_addr,
+        } = value;
+        Self {
+            path_vector: path_vector.into(),
+            multi_rack_join_addr,
+        }
+    }
+}
+
+impl From<v3::RackPrefix> for v2::RackPrefix {
+    fn from(value: v3::RackPrefix) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let v3::RackPrefix {
+            path_vector,
+            multi_rack_join_addr,
+        } = value;
+        Self {
+            path_vector: path_vector.into(),
+            multi_rack_join_addr,
         }
     }
 }

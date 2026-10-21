@@ -8,9 +8,11 @@ progenitor::generate_api!(
     hooks = Expected,
     crates = {
         "oxnet" = "0.1.0",
+        "std" = "1.0.0",
     },
     replace = {
         TunnelOrigin = ddm_api_types_versions::latest::net::TunnelOrigin,
+        RackPrefixInfo = ddm_api_types_versions::latest::net::RackPrefixInfo,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
         PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,
         Duration = std::time::Duration,

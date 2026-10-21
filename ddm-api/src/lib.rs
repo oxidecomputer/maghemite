@@ -11,7 +11,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
-use oxnet::Ipv6Net;
+use oxnet::{Ipv6Net, SocketAddrV6Json};
 use std::collections::{HashMap, HashSet};
 
 api_versions!([
@@ -26,6 +26,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (4, RACK_PREFIXES),
     (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
     (1, INITIAL),
@@ -190,4 +191,58 @@ pub trait DdmAdminApi {
     async fn get_external_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
+
+    /// Get the rack prefixes originated by this router. Only supported on
+    /// transit routers.
+    #[endpoint {
+        method = GET,
+        path = "/originated_rack_prefixes",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn get_originated_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<Ipv6Net, latest::net::RackPrefixInfo>>,
+        HttpError,
+    >;
+
+    /// Originate rack prefixes from this router, each with an optional
+    /// multi-rack join address. The body is keyed by prefix so a prefix
+    /// carries at most one join address. Advertising a prefix again replaces
+    /// its join address. Only supported on transit routers.
+    #[endpoint {
+        method = PUT,
+        path = "/rack_prefix",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn advertise_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashMap<Ipv6Net, latest::net::RackPrefixInfo>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Withdraw rack prefixes originated by this router. Only supported on
+    /// transit routers.
+    #[endpoint {
+        method = DELETE,
+        path = "/rack_prefix",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn withdraw_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<Ipv6Net>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Get the rack prefixes this router has learned from its peers, with the
+    /// multi-rack join addresses carried by their paths.
+    #[endpoint {
+        method = GET,
+        path = "/rack_prefixes",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn get_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<Ipv6Net, HashSet<SocketAddrV6Json>>>,
+        HttpError,
+    >;
 }

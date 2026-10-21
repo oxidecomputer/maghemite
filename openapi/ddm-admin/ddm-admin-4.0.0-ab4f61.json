@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "3.0.0"
+    "version": "4.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -113,6 +113,35 @@
                     "$ref": "#/components/schemas/Ipv6Net"
                   },
                   "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/originated_rack_prefixes": {
+      "get": {
+        "summary": "Get the rack prefixes originated by this router. Only supported on",
+        "description": "transit routers.",
+        "operationId": "get_originated_rack_prefixes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_RackPrefixInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/RackPrefixInfo"
+                  }
                 }
               }
             }
@@ -283,6 +312,107 @@
                     "type": "array",
                     "items": {
                       "$ref": "#/components/schemas/PathVector"
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rack_prefix": {
+      "put": {
+        "summary": "Originate rack prefixes from this router, each with an optional",
+        "description": "multi-rack join address. The body is keyed by prefix so a prefix carries at most one join address. Advertising a prefix again replaces its join address. Only supported on transit routers.",
+        "operationId": "advertise_rack_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Map_of_RackPrefixInfo",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RackPrefixInfo"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Withdraw rack prefixes originated by this router. Only supported on",
+        "description": "transit routers.",
+        "operationId": "withdraw_rack_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_Ipv6Net",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Ipv6Net"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rack_prefixes": {
+      "get": {
+        "summary": "Get the rack prefixes this router has learned from its peers, with the",
+        "description": "multi-rack join addresses carried by their paths.",
+        "operationId": "get_rack_prefixes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Set_of_SocketAddrV6",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "x-rust-type": {
+                        "crate": "std",
+                        "path": "std::net::SocketAddrV6",
+                        "version": ">=1.0.0"
+                      },
+                      "type": "string"
                     },
                     "uniqueItems": true
                   }
@@ -644,6 +774,22 @@
             ]
           }
         ]
+      },
+      "RackPrefixInfo": {
+        "description": "What a transit router originates along with one of its rack prefixes.",
+        "type": "object",
+        "properties": {
+          "multi_rack_join_addr": {
+            "nullable": true,
+            "description": "The address other racks use to join this rack, if any.",
+            "x-rust-type": {
+              "crate": "std",
+              "path": "std::net::SocketAddrV6",
+              "version": ">=1.0.0"
+            },
+            "type": "string"
+          }
+        }
       },
       "RouterKind": {
         "type": "integer",

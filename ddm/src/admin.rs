@@ -18,7 +18,8 @@ use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
 use ddm_api_types::db::{PeerInfo, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::external_peers::ExternalPeers;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{RackPrefixInfo, TunnelOrigin};
+use ddm_protocol::v3::RackPrefix;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
@@ -31,7 +32,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
-use oxnet::Ipv6Net;
+use oxnet::{Ipv6Net, SocketAddrV6Json};
 use slog::{Logger, debug, error, info, o};
 use slog_error_chain::InlineErrorChain;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -80,6 +81,19 @@ impl HandlerContext {
             return Err(AdminError::UnsupportedRouterKind(kind));
         }
         Ok(())
+    }
+
+    /// Rack prefixes this router originates, as they are sent to peers.
+    fn rack_prefixes(
+        &self,
+        prefixes: HashMap<Ipv6Net, RackPrefixInfo>,
+    ) -> HashSet<RackPrefix> {
+        prefixes
+            .into_iter()
+            .map(|(prefix, info)| {
+                crate::db::announced_rack_prefix(prefix, info, &self.router_id)
+            })
+            .collect()
     }
 }
 
@@ -607,6 +621,99 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseOk(ExternalPeers {
             address_objects: ctx.db.get_external_peers(),
         }))
+    }
+
+    async fn get_originated_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<Ipv6Net, RackPrefixInfo>>, HttpError>
+    {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+
+        let originated =
+            ctx.db.originated_rack_prefix().map_err(AdminError::Db)?;
+        Ok(HttpResponseOk(originated))
+    }
+
+    async fn advertise_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashMap<Ipv6Net, RackPrefixInfo>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+
+        let prefixes = request.into_inner();
+        let replaced = ctx
+            .db
+            .originate_rack_prefix(&prefixes)
+            .map_err(AdminError::Db)?;
+
+        // A PUT replaces a prefix's info. Peers key rack routes by their full
+        // value, so withdraw each replaced prefix with its old info before
+        // announcing the new one; otherwise peers would keep both.
+        let withdraw = ctx.rack_prefixes(replaced);
+        let announce = ctx.rack_prefixes(prefixes);
+        for e in ctx.event_channels() {
+            if !withdraw.is_empty() {
+                e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                    withdraw.clone(),
+                ))))
+                .map_err(AdminError::from)?;
+            }
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Rack(
+                announce.clone(),
+            ))))
+            .map_err(AdminError::from)?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn withdraw_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<Ipv6Net>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+
+        let prefixes = request.into_inner();
+        let removed = ctx
+            .db
+            .withdraw_rack_prefix(&prefixes)
+            .map_err(AdminError::Db)?;
+
+        // Withdraw with the info peers were sent, since they match it exactly.
+        let withdraw = ctx.rack_prefixes(removed);
+        if withdraw.is_empty() {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                withdraw.clone(),
+            ))))
+            .map_err(AdminError::from)?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn get_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<Ipv6Net, HashSet<SocketAddrV6Json>>>,
+        HttpError,
+    > {
+        let ctx = lock!(ctx.context());
+
+        let mut result: HashMap<Ipv6Net, HashSet<SocketAddrV6Json>> =
+            HashMap::new();
+        for r in ctx.db.imported_rack() {
+            result
+                .entry(r.route.destination)
+                .or_default()
+                .extend(r.multi_rack_join_addr);
+        }
+        Ok(HttpResponseOk(result))
     }
 }
 

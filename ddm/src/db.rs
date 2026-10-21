@@ -3,10 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use ddm_api_types::db::TunnelRoute;
-use ddm_api_types::net::TunnelOrigin;
-use ddm_protocol::v3::PathVector;
+use ddm_api_types::net::{RackPrefixInfo, TunnelOrigin};
+use ddm_protocol::v3::{PathVector, RackPrefix};
 use mg_common::lock;
-use oxnet::{IpNet, Ipv6Net};
+use oxnet::{IpNet, Ipv6Net, SocketAddrV6Json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{Logger, error};
@@ -21,6 +21,10 @@ const ORIGINATE: &str = "originate";
 /// The handle used to open a persistent key-value tree for originated
 /// tunnel endpoints.
 const TUNNEL_ORIGINATE: &str = "tunnel_originate";
+
+/// The handle used to open a persistent key-value tree for originated
+/// rack prefixes.
+const RACK_ORIGINATE: &str = "rack_originate";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -48,6 +52,7 @@ pub struct Db {
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
+    pub imported_rack: HashSet<RackRoute>,
     pub external_peers: BTreeSet<String>,
 }
 
@@ -102,6 +107,14 @@ impl Db {
         lock!(self.data).imported_tunnel.len()
     }
 
+    pub fn imported_rack(&self) -> HashSet<RackRoute> {
+        lock!(self.data).imported_rack.clone()
+    }
+
+    pub fn imported_rack_count(&self) -> usize {
+        lock!(self.data).imported_rack.len()
+    }
+
     pub fn import(&self, r: &HashSet<Route>) {
         lock!(self.data).imported.extend(r.clone());
     }
@@ -124,12 +137,39 @@ impl Db {
         }
     }
 
-    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
-        for p in prefixes {
-            tree.insert(p.db_key(), "")?;
+    pub fn import_rack(&self, r: &HashSet<RackRoute>) {
+        lock!(self.data).imported_rack.extend(r.iter().cloned());
+    }
+
+    pub fn delete_import_rack(&self, r: &HashSet<RackRoute>) {
+        let imported = &mut lock!(self.data).imported_rack;
+        for x in r {
+            imported.remove(x);
+        }
+    }
+
+    /// Store `(prefix, value)` entries in `tree`, keyed by prefix. Returns
+    /// the previous value of each entry whose value changed.
+    fn originate_prefix<V: AsRef<[u8]>>(
+        &self,
+        entries: impl IntoIterator<Item = (Ipv6Net, V)>,
+        tree: &str,
+    ) -> Result<Vec<(Ipv6Net, sled::IVec)>, Error> {
+        let tree = self.persistent_data.open_tree(tree)?;
+        let mut replaced = Vec::new();
+        for (p, v) in entries {
+            if let Some(old) = tree.insert(p.db_key(), v.as_ref())?
+                && old.as_ref() != v.as_ref()
+            {
+                replaced.push((p, old));
+            }
         }
         tree.flush()?;
+        Ok(replaced)
+    }
+
+    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
+        self.originate_prefix(prefixes.iter().map(|p| (*p, "")), ORIGINATE)?;
         Ok(())
     }
 
@@ -146,27 +186,47 @@ impl Db {
         Ok(())
     }
 
-    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
+    /// Originate rack prefixes. Entries are keyed by prefix, so originating a
+    /// prefix again replaces its info. Returns the previous info of each
+    /// prefix whose info changed.
+    pub fn originate_rack_prefix(
+        &self,
+        prefixes: &HashMap<Ipv6Net, RackPrefixInfo>,
+    ) -> Result<HashMap<Ipv6Net, RackPrefixInfo>, Error> {
+        let entries = prefixes
+            .iter()
+            .map(|(prefix, info)| Ok((*prefix, serde_json::to_vec(info)?)))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let replaced = self.originate_prefix(entries, RACK_ORIGINATE)?;
+        Ok(self.decode_rack_prefix_info(replaced))
+    }
+
+    /// The `(prefix, value)` entries stored in `tree`. Entries that cannot be
+    /// read are logged and skipped.
+    fn originated_prefix(
+        &self,
+        tree_name: &str,
+    ) -> Result<Vec<(Ipv6Net, sled::IVec)>, Error> {
+        let tree = self.persistent_data.open_tree(tree_name)?;
         let result = tree
             .scan_prefix(vec![])
             .filter_map(|item| {
-                let (key, _value) = match item {
+                let (key, value) = match item {
                     Ok(item) => item,
                     Err(e) => {
                         error!(
                             self.log,
-                            "db: error ddm originated prefix: {e}"
+                            "db: error ddm {tree_name} prefix: {e}"
                         );
                         return None;
                     }
                 };
                 Some(match Ipv6Net::from_db_key(&key) {
-                    Ok(item) => item,
+                    Ok(item) => (item, value),
                     Err(e) => {
                         error!(
                             self.log,
-                            "db: error parsing ddm origin entry value: {e}"
+                            "db: error parsing ddm {tree_name} entry value: {e}"
                         );
                         return None;
                     }
@@ -174,6 +234,14 @@ impl Db {
             })
             .collect();
         Ok(result)
+    }
+
+    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
+        Ok(self
+            .originated_prefix(ORIGINATE)?
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect())
     }
 
     pub fn originated_count(&self) -> Result<usize, Error> {
@@ -216,13 +284,68 @@ impl Db {
         Ok(self.originated_tunnel()?.len())
     }
 
-    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
+    pub fn originated_rack_prefix(
+        &self,
+    ) -> Result<HashMap<Ipv6Net, RackPrefixInfo>, Error> {
+        let entries = self.originated_prefix(RACK_ORIGINATE)?;
+        Ok(self.decode_rack_prefix_info(entries))
+    }
+
+    /// Decode stored rack prefix info. Entries that cannot be decoded are
+    /// logged and skipped.
+    fn decode_rack_prefix_info(
+        &self,
+        entries: Vec<(Ipv6Net, sled::IVec)>,
+    ) -> HashMap<Ipv6Net, RackPrefixInfo> {
+        entries
+            .into_iter()
+            .filter_map(|(prefix, value)| match serde_json::from_slice(&value) {
+                Ok(info) => Some((prefix, info)),
+                Err(e) => {
+                    error!(
+                        self.log,
+                        "db: error parsing info for rack prefix {prefix}: {e}"
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn originated_rack_prefix_count(&self) -> Result<usize, Error> {
+        Ok(self.originated_rack_prefix()?.len())
+    }
+
+    /// Remove prefixes from `tree`. Returns the removed entries.
+    fn withdraw_prefix(
+        &self,
+        prefixes: &HashSet<Ipv6Net>,
+        tree: &str,
+    ) -> Result<Vec<(Ipv6Net, sled::IVec)>, Error> {
+        let tree = self.persistent_data.open_tree(tree)?;
+        let mut removed = Vec::new();
         for p in prefixes {
-            tree.remove(p.db_key())?;
+            if let Some(old) = tree.remove(p.db_key())? {
+                removed.push((*p, old));
+            }
         }
         tree.flush()?;
+        Ok(removed)
+    }
+
+    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
+        self.withdraw_prefix(prefixes, ORIGINATE)?;
         Ok(())
+    }
+
+    /// Stop originating rack prefixes. Returns the info of each prefix that
+    /// was originated.
+    pub fn withdraw_rack_prefix(
+        &self,
+        prefixes: &HashSet<Ipv6Net>,
+    ) -> Result<HashMap<Ipv6Net, RackPrefixInfo>, Error> {
+        let removed = self.withdraw_prefix(prefixes, RACK_ORIGINATE)?;
+        Ok(self.decode_rack_prefix_info(removed))
     }
 
     pub fn withdraw_tunnel(
@@ -238,10 +361,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn remove_nexthop_routes(
-        &self,
-        nexthop: Ipv6Addr,
-    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
+    pub fn remove_nexthop_routes(&self, nexthop: Ipv6Addr) -> RemovedRoutes {
         let mut data = lock!(self.data);
         // Routes are generally held in sets to prevent duplication and provide
         // handy set-algebra operations.
@@ -264,15 +384,32 @@ impl Db {
         for x in &tnl_removed {
             data.imported_tunnel.remove(x);
         }
-        (removed, tnl_removed)
+
+        let rack_removed: HashSet<RackRoute> = data
+            .imported_rack
+            .iter()
+            .filter(|x| x.route.nexthop == nexthop)
+            .cloned()
+            .collect();
+        data.imported_rack.retain(|x| x.route.nexthop != nexthop);
+
+        RemovedRoutes {
+            underlay: removed,
+            tunnel: tnl_removed,
+            rack: rack_removed,
+        }
     }
 
-    pub fn routes_by_vector(
-        &self,
-        dst: Ipv6Net,
-        nexthop: Ipv6Addr,
-    ) -> HashSet<Route> {
-        self.imported_matching(|r| r.destination == dst && r.nexthop == nexthop)
+    /// Whether any underlay or rack route still uses the forwarding entry for
+    /// `dst` via `nexthop`. Underlay and rack routes are separate in the RIB
+    /// but install into the same underlay forwarding table, so the entry can
+    /// only be removed once neither table has a route along that vector.
+    pub fn vector_in_use(&self, dst: Ipv6Net, nexthop: Ipv6Addr) -> bool {
+        let data = lock!(self.data);
+        let on_vector =
+            |r: &Route| r.destination == dst && r.nexthop == nexthop;
+        data.imported.iter().any(on_vector)
+            || data.imported_rack.iter().any(|r| on_vector(&r.route))
     }
 
     pub fn get_external_peers(&self) -> BTreeSet<String> {
@@ -299,6 +436,54 @@ impl From<Route> for PathVector {
         Self {
             destination: val.destination,
             path: val.path,
+        }
+    }
+}
+
+/// The rack prefix this router sends to peers for one of its originated rack
+/// prefixes. Peers match rack routes by their full value, so announcements,
+/// withdrawals and pull responses must all build it here.
+pub fn announced_rack_prefix(
+    destination: Ipv6Net,
+    info: RackPrefixInfo,
+    router_id: &str,
+) -> RackPrefix {
+    RackPrefix {
+        path_vector: PathVector {
+            destination,
+            path: vec![router_id.to_string()],
+        },
+        multi_rack_join_addr: info.multi_rack_join_addr,
+    }
+}
+
+/// The routes [`Db::remove_nexthop_routes`] removed, by RIB table.
+#[derive(Debug, Default)]
+pub struct RemovedRoutes {
+    pub underlay: HashSet<Route>,
+    pub tunnel: HashSet<TunnelRoute>,
+    pub rack: HashSet<RackRoute>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct RackRoute {
+    pub route: Route,
+    pub multi_rack_join_addr: Option<SocketAddrV6Json>,
+}
+
+impl From<RackRoute> for RackPrefix {
+    fn from(val: RackRoute) -> Self {
+        // compilation barrier. if fields ever change, this destructure fails.
+        let RackRoute {
+            route,
+            multi_rack_join_addr,
+        } = val;
+
+        Self {
+            path_vector: route.into(),
+            multi_rack_join_addr,
         }
     }
 }
@@ -496,5 +681,114 @@ mod test {
             nexthop: "fe80:a::1".parse().unwrap(),
         });
         assert_eq!(to_del, expected_del);
+    }
+
+    #[test]
+    fn test_rack_routes() {
+        let path = std::env::temp_dir()
+            .join(format!("ddm-test-rack-routes-{}", std::process::id()));
+        // A failed earlier run may have left its database behind.
+        let _ = std::fs::remove_dir_all(&path);
+        let log = Logger::root(slog::Discard, slog::o!());
+        let db = Db::new(path.to_str().unwrap(), log).unwrap();
+
+        let rack: Ipv6Net = "fd00:1::/56".parse().unwrap();
+        let addr_a: SocketAddrV6Json = "[fd00:1::a]:4444"
+            .parse::<std::net::SocketAddrV6>()
+            .unwrap()
+            .into();
+        let addr_b: SocketAddrV6Json = "[fd00:1::b]:4444"
+            .parse::<std::net::SocketAddrV6>()
+            .unwrap()
+            .into();
+        let route = |nexthop: &str, hop: &str| Route {
+            destination: rack,
+            nexthop: nexthop.parse().unwrap(),
+            ifname: "tfportqsfp0_0".into(),
+            path: vec![hop.into()],
+        };
+        let t1 = route("fe80::1", "t1");
+        let t2 = route("fe80::2", "t2");
+        let rr = |route: &Route, addr: Option<&SocketAddrV6Json>| RackRoute {
+            route: route.clone(),
+            multi_rack_join_addr: addr.cloned(),
+        };
+
+        // Rack routes stay out of the underlay RIB.
+        db.import_rack(&[rr(&t1, Some(&addr_a)), rr(&t2, None)].into());
+        assert!(db.imported().is_empty());
+
+        // An underlay route along t1's vector shares its forwarding entry.
+        // Withdrawing it leaves the entry in use by the rack route.
+        let u1 = Route {
+            path: vec!["s1".into()],
+            ..t1.clone()
+        };
+        db.import(&[u1.clone()].into());
+        db.delete_import(&[u1].into());
+        assert!(db.vector_in_use(rack, t1.nexthop));
+
+        // The same path with a second join address is a separate rack route.
+        // Withdrawing one of them keeps the vector in use.
+        db.import_rack(&[rr(&t1, Some(&addr_b))].into());
+        db.delete_import_rack(&[rr(&t1, Some(&addr_a))].into());
+        assert!(db.vector_in_use(rack, t1.nexthop));
+
+        // Once neither table has a route along the vector, it is unused.
+        db.delete_import_rack(&[rr(&t1, Some(&addr_b))].into());
+        assert!(!db.vector_in_use(rack, t1.nexthop));
+
+        // Expiring a peer removes its routes from both tables.
+        let u2 = Route {
+            path: vec!["s2".into()],
+            ..t2.clone()
+        };
+        db.import(&[u2.clone()].into());
+        let removed = db.remove_nexthop_routes(t2.nexthop);
+        assert_eq!(removed.underlay, [u2].into());
+        assert_eq!(removed.rack, [rr(&t2, None)].into());
+        assert!(!db.vector_in_use(rack, t2.nexthop));
+        assert!(db.imported_rack().is_empty());
+
+        // Originating a prefix again replaces its join address and reports
+        // the address it replaced, so the caller can withdraw it.
+        let other: Ipv6Net = "fd00:2::/56".parse().unwrap();
+        let origin = |prefix, addr: Option<&SocketAddrV6Json>| {
+            (
+                prefix,
+                RackPrefixInfo {
+                    multi_rack_join_addr: addr.cloned(),
+                },
+            )
+        };
+        let replaced = db
+            .originate_rack_prefix(
+                &[origin(rack, Some(&addr_a)), origin(other, None)].into(),
+            )
+            .unwrap();
+        assert!(replaced.is_empty());
+        let replaced = db
+            .originate_rack_prefix(
+                &[origin(rack, Some(&addr_b)), origin(other, None)].into(),
+            )
+            .unwrap();
+        assert_eq!(replaced, [origin(rack, Some(&addr_a))].into());
+        assert_eq!(
+            db.originated_rack_prefix().unwrap(),
+            [origin(rack, Some(&addr_b)), origin(other, None)].into()
+        );
+
+        // Withdrawing reports what was originated, and nothing for a prefix
+        // that was not.
+        let removed = db.withdraw_rack_prefix(&[rack].into()).unwrap();
+        assert_eq!(removed, [origin(rack, Some(&addr_b))].into());
+        assert!(db.withdraw_rack_prefix(&[rack].into()).unwrap().is_empty());
+        assert_eq!(
+            db.originated_rack_prefix().unwrap(),
+            [origin(other, None)].into()
+        );
+
+        drop(db);
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

@@ -11,6 +11,7 @@ use crate::db::Db;
 use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::v3::RackPrefix;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
@@ -56,6 +57,7 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
+    Rack(HashSet<RackPrefix>),
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +88,9 @@ pub enum NeighborEvent {
     Expire,
 }
 
+// Peer events carry a full `Update` by value. Events are moved through
+// channels at a low rate, so the size difference is not worth boxing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Event {
     Neighbor(NeighborEvent),
@@ -225,6 +230,72 @@ impl Display for PeerIdentity {
     }
 }
 
+/// Route advertisement allowances.
+///
+/// Indicates which route types may be advertised to a peer (true = allowed).
+/// Allowances are granted as a function of our RouterKind and that of the peer
+/// we're considering sending advertisements to.
+#[derive(Clone)]
+pub struct RouteAdvertisementAllowances {
+    underlay: bool,
+    tunnel: bool,
+    rack: bool,
+    redistributed: bool,
+}
+
+impl RouteAdvertisementAllowances {
+    /// Calculate and return RouteAdvertisementAllowances
+    pub fn new(my_kind: RouterKind, peer_kind: RouterKind) -> Self {
+        use RouterKind::*;
+
+        match (my_kind, peer_kind) {
+            // Server-to-*:
+            // Originate underlay and tunnel prefixes. Redistribute nothing.
+            // XXX: Should Servers be allowed to originate tunnel prefixes?
+            (Server, Server | Transit) => Self {
+                underlay: true,
+                tunnel: true,
+                rack: false,
+                redistributed: false,
+            },
+
+            // Transit-to-Server:
+            // Originate underlay and tunnel prefixes. Redistribute everything.
+            (Transit, Server) => Self {
+                underlay: true,
+                tunnel: true,
+                rack: false,
+                redistributed: true,
+            },
+
+            // Transit-to-Transit:
+            // Originate rack prefixes. Redistribute nothing.
+            (Transit, Transit) => Self {
+                underlay: false,
+                tunnel: false,
+                rack: true,
+                redistributed: false,
+            },
+        }
+    }
+
+    pub fn underlay(&self) -> bool {
+        self.underlay
+    }
+
+    pub fn tunnel(&self) -> bool {
+        self.tunnel
+    }
+
+    pub fn rack(&self) -> bool {
+        self.rack
+    }
+
+    pub fn redistributed(&self) -> bool {
+        self.redistributed
+    }
+}
+
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
@@ -291,6 +362,7 @@ pub struct SessionStats {
     pub updates_received: AtomicU64,
     pub imported_underlay_prefixes: AtomicU64,
     pub imported_tunnel_endpoints: AtomicU64,
+    pub imported_rack_prefixes: AtomicU64,
     pub update_send_fail: AtomicU64,
 }
 
@@ -338,5 +410,47 @@ pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
     // index removals.
     for i in dead_channels.iter().rev() {
         event_channels.remove(*i);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use RouterKind::*;
+
+    /// (local kind, peer kind, [underlay, tunnel, rack, redistributed])
+    type Row = (RouterKind, RouterKind, [bool; 4]);
+
+    /// The policy matrix, written out by hand rather than derived from
+    /// `RouteAdvertisementAllowances::new`.
+    const EXPECTED_ROUTE_ALLOWANCES: [Row; 4] = [
+        // Servers originate their own prefixes and never redistribute.
+        (Server, Server, [true, true, false, false]),
+        (Server, Transit, [true, true, false, false]),
+        // Transits pass everything they know down to servers, except the
+        // rack aggregate, which only matters between racks.
+        (Transit, Server, [true, true, false, true]),
+        // Transits exchange only rack aggregates with each other.
+        (Transit, Transit, [false, false, true, false]),
+    ];
+
+    #[test]
+    fn route_advertisement_allowances() {
+        let kinds = [Server, Transit];
+        for local in kinds {
+            for peer in kinds {
+                let rows: Vec<_> = EXPECTED_ROUTE_ALLOWANCES
+                    .iter()
+                    .filter(|(l, p, _)| *l == local && *p == peer)
+                    .collect();
+                assert_eq!(rows.len(), 1, "{local} -> {peer}: expected 1 row");
+                let expected = rows[0].2;
+
+                let a = RouteAdvertisementAllowances::new(local, peer);
+                let actual =
+                    [a.underlay(), a.tunnel(), a.rack(), a.redistributed()];
+                assert_eq!(actual, expected, "{local} -> {peer}");
+            }
+        }
     }
 }

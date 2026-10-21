@@ -24,6 +24,8 @@ pub mod exchange {
 
 pub mod net {
     pub use crate::v1::net::TunnelOrigin;
+
+    pub use crate::v4::net::RackPrefixInfo;
 }
 
 pub mod external_peers {

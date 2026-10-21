@@ -11,11 +11,13 @@ use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
     SmContext, SmError, StateMachine,
 };
-use crate::sm::PeerIdentity;
+use crate::db::RemovedRoutes;
+use crate::sm::{PeerIdentity, RouteAdvertisementAllowances};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
-use ddm_api_types::db::RouterKind;
 use ddm_api_types::net::TunnelOrigin;
-use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
+use ddm_protocol::v3::{
+    PathVector, RackPrefix, RackUpdate, TunnelUpdate, UnderlayUpdate, Update,
+};
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
@@ -258,13 +260,21 @@ impl State for Solicit {
 
 struct Exchange {
     peer: PeerIdentity,
+    peer_allowances: RouteAdvertisementAllowances,
     ctx: SmContext,
     log: Logger,
 }
 
 impl Exchange {
     fn new(ctx: SmContext, peer: PeerIdentity, log: Logger) -> Self {
-        Self { ctx, peer, log }
+        let peer_allowances =
+            RouteAdvertisementAllowances::new(ctx.config.kind, peer.kind);
+        Self {
+            ctx,
+            peer,
+            peer_allowances,
+            log,
+        }
     }
 
     fn initial_pull(&mut self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
@@ -337,10 +347,22 @@ impl Exchange {
 
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
-        let (mut to_remove, to_remove_tnl) =
-            self.ctx.db.remove_nexthop_routes(self.peer.addr);
+
+        // compilation barrier. a new RIB table must be handled here.
+        let RemovedRoutes {
+            underlay: mut to_remove,
+            tunnel: to_remove_tnl,
+            rack: mut to_remove_rack,
+        } = self.ctx.db.remove_nexthop_routes(self.peer.addr);
+
+        // Underlay and rack routes share the underlay forwarding table. Every
+        // route via this peer is now gone from both RIB tables, so all of
+        // their forwarding entries go.
         let mut routes: Vec<crate::sys::Route> = Vec::new();
-        for x in &to_remove {
+        for x in to_remove
+            .iter()
+            .chain(to_remove_rack.iter().map(|r| &r.route))
+        {
             let mut r: crate::sys::Route = x.clone().into();
             r.ifname.clone_from(&self.ctx.config.if_name);
             routes.push(r);
@@ -364,12 +386,7 @@ impl Exchange {
                 to_remove_tnl
             );
         }
-        if self.ctx.config.kind != RouterKind::Transit {
-            return;
-        }
 
-        // if we're a transit router propagate withdraws for the
-        // expired peer.
         dbg!(
             self.log,
             self.ctx.config.if_name,
@@ -402,11 +419,11 @@ impl Exchange {
         } else {
             Some(UnderlayUpdate::withdraw(
                 to_remove
-                    .iter()
+                    .into_iter()
                     .map(|x| PathVector {
                         destination: x.destination,
                         path: {
-                            let mut ps = x.path.clone();
+                            let mut ps = x.path;
                             ps.push(self.ctx.router_id.clone());
                             ps
                         },
@@ -419,13 +436,61 @@ impl Exchange {
             None
         } else {
             Some(TunnelUpdate::withdraw(
-                to_remove_tnl.iter().cloned().map(Into::into).collect(),
+                to_remove_tnl.into_iter().map(Into::into).collect(),
             ))
         };
 
-        let push = Update { underlay, tunnel };
+        // Only send withdraws for expirations that result in a total loss
+        // of reachability to a destination for the given path.
+        let imported_rack = self.ctx.db.imported_rack();
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "imported_rack: {imported_rack:#?}"
+        );
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "to_remove_rack: {to_remove_rack:#?}"
+        );
+        to_remove_rack.retain(|x| {
+            !imported_rack.iter().any(|y| {
+                y.multi_rack_join_addr == x.multi_rack_join_addr
+                    && y.route.destination == x.route.destination
+                    && y.route.path == x.route.path
+            })
+        });
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "to_remove_rack (retained): {to_remove_rack:#?}"
+        );
+
+        let rack = if to_remove_rack.is_empty() {
+            None
+        } else {
+            Some(RackUpdate::withdraw(
+                to_remove_rack
+                    .into_iter()
+                    .map(|x| {
+                        let mut rp = RackPrefix::from(x);
+                        rp.path_vector.path.push(self.ctx.router_id.clone());
+                        rp
+                    })
+                    .collect(),
+            ))
+        };
+
+        if underlay.is_none() && tunnel.is_none() && rack.is_none() {
+            return;
+        }
+
         super::send(
-            Event::Peer(PeerEvent::Push(push.clone())),
+            Event::Peer(PeerEvent::Push(Update {
+                underlay,
+                tunnel,
+                rack,
+            })),
             &mut self.ctx.event_channels,
         );
     }
@@ -442,6 +507,7 @@ impl State for Exchange {
                 self.ctx.clone(),
                 self.ctx.config.addr,
                 self.peer.clone(),
+                self.peer_allowances.clone(),
                 self.log.clone(),
             ) {
                 Ok(handle) => break handle,
@@ -492,6 +558,11 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                     prefixes,
                 ))) => {
+                    // skip if we aren't allowed to transmit underlay prefixes
+                    if !self.peer_allowances.underlay() {
+                        continue;
+                    }
+
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -534,6 +605,11 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
+                    // skip if we aren't allowed to transmit tunnel prefixes
+                    if !self.peer_allowances.tunnel() {
+                        continue;
+                    }
+
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
                     let Err(e) = crate::exchange::announce_tunnel(
                         &self.ctx,
@@ -572,9 +648,58 @@ impl State for Exchange {
                         event,
                     );
                 }
+                Event::Admin(AdminEvent::Announce(PrefixSet::Rack(
+                    prefixes,
+                ))) => {
+                    // skip if we aren't allowed to transmit rack prefixes
+                    if !self.peer_allowances.rack() {
+                        continue;
+                    }
+
+                    let Err(e) = crate::exchange::announce_rack(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        prefixes,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "rack prefix announce: {e}",
+                    );
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed rack prefix announce",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                     prefixes,
                 ))) => {
+                    // skip if we aren't allowed to transmit underlay prefixes
+                    if !self.peer_allowances.underlay() {
+                        continue;
+                    }
+
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -617,6 +742,11 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
+                    // skip if we aren't allowed to transmit tunnel prefixes
+                    if !self.peer_allowances.tunnel() {
+                        continue;
+                    }
+
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
 
                     let Err(e) = crate::exchange::withdraw_tunnel(
@@ -640,6 +770,46 @@ impl State for Exchange {
                         self.log,
                         self.ctx.config.if_name,
                         "expiring peer {} due to failed tunnel withdraw",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
+                Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                    prefixes,
+                ))) => {
+                    // skip if we aren't allowed to transmit rack prefixes
+                    if !self.peer_allowances.rack() {
+                        continue;
+                    }
+
+                    let Err(e) = crate::exchange::withdraw_rack(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        prefixes,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(self.log, self.ctx.config.if_name, "withdraw: {}", e,);
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed withdraw",
                         self.peer,
                     );
                     self.expire_peer(
@@ -721,6 +891,7 @@ impl State for Exchange {
                                 .with_path_element(self.ctx.router_id.clone()),
                             ),
                             tunnel: None,
+                            rack: None,
                         })))
                         .is_ok()
                     {
@@ -739,6 +910,11 @@ impl State for Exchange {
                     return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
+                    // skip if we aren't allowed to redistribute prefixes
+                    if !self.peer_allowances.redistributed() {
+                        continue;
+                    }
+
                     inf!(
                         self.log,
                         self.ctx.config.if_name,
@@ -854,6 +1030,18 @@ impl State for Exchange {
                             )
                         }
 
+                        sans_loops.with_path_element(self.ctx.router_id.clone())
+                    });
+                    update.rack = update.rack.map(|r| {
+                        let sans_loops = r.break_loops(&self.ctx.router_id);
+                        for x in r.announce.difference(&sans_loops.announce) {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "loop detected: dropping rack announcement: {:?}",
+                                x,
+                            )
+                        }
                         sans_loops.with_path_element(self.ctx.router_id.clone())
                     });
                     super::send(
