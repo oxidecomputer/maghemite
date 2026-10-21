@@ -15,6 +15,7 @@ use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
@@ -73,8 +74,8 @@ pub enum PeerEvent {
 #[derive(Debug, Clone)]
 pub enum NeighborEvent {
     /// An event sent from the discovery subsystem to the state machine letting
-    /// it know the link local ipv6 address of the peer and it's version.
-    Advertise((Ipv6Addr, Version)),
+    /// it know the identity of the peer.
+    Advertise(PeerIdentity),
 
     /// An event sent from the discovery subsystem to the state machine letting
     /// it know that solicitation has failed.
@@ -211,6 +212,17 @@ pub struct PeerIdentity {
     pub addr: Ipv6Addr,
     pub hostname: String,
     pub kind: RouterKind,
+    pub version: Version,
+}
+
+impl Display for PeerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PeerIdentity {{ addr={}, hostname={}, kind={}, version={} }}",
+            self.addr, self.hostname, self.kind, self.version as u8,
+        )
+    }
 }
 
 pub struct InterfaceState {

@@ -10,7 +10,7 @@
 use super::ExchangeError;
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
-use crate::sm::{Config, Event, PeerEvent, SmContext};
+use crate::sm::{Config, Event, PeerEvent, PeerIdentity, SmContext};
 use crate::{err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_protocol::{v2, v3};
@@ -43,64 +43,60 @@ const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
 #[derive(Clone)]
 pub struct HandlerContext {
     ctx: SmContext,
-    peer: Ipv6Addr,
+    peer: PeerIdentity,
 }
 
 pub(crate) fn announce_underlay(
     ctx: &SmContext,
     config: Config,
     prefixes: HashSet<v3::PathVector>,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::announce(prefixes);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn announce_tunnel(
     ctx: &SmContext,
     config: Config,
     endpoints: HashSet<v3::TunnelOrigin>,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn withdraw_underlay(
     ctx: &SmContext,
     config: Config,
     prefixes: HashSet<v3::PathVector>,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::withdraw(prefixes);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn withdraw_tunnel(
     ctx: &SmContext,
     config: Config,
     endpoints: HashSet<v3::TunnelOrigin>,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn do_pull(
     ctx: &SmContext,
-    addr: &Ipv6Addr,
+    addr: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<v3::PullResponse, ExchangeError> {
     let uri = format!(
@@ -113,7 +109,7 @@ pub(crate) fn do_pull(
 
 pub(crate) fn do_pull_v2(
     ctx: &SmContext,
-    addr: &Ipv6Addr,
+    addr: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<v2::PullResponse, ExchangeError> {
     let uri = format!(
@@ -151,14 +147,13 @@ fn do_pull_common(
 
 pub(crate) fn pull(
     ctx: &SmContext,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), ExchangeError> {
-    let pr: v3::PullResponse = match version {
-        Version::V2 => do_pull_v2(ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull(ctx, &addr, &rt)?,
+    let pr: v3::PullResponse = match peer.version {
+        Version::V2 => do_pull_v2(ctx, peer.addr, &rt)?.into(),
+        Version::V3 => do_pull(ctx, peer.addr, &rt)?,
     };
 
     if stop.load(Ordering::Relaxed) {
@@ -167,7 +162,7 @@ pub(crate) fn pull(
 
     let update = v3::Update::announce(pr);
 
-    handle_update(&update, ctx, addr);
+    handle_update(&update, ctx, &peer);
 
     Ok(())
 }
@@ -176,17 +171,16 @@ fn send_update(
     ctx: &SmContext,
     config: Config,
     update: v3::Update,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
-    match version {
+    match peer.version {
         Version::V2 => {
-            send_update_v2(ctx, config, update.into(), addr, rt, log)
+            send_update_v2(ctx, config, update.into(), peer.addr, rt, log)
         }
-        Version::V3 => send_update_v3(ctx, config, update, addr, rt, log),
+        Version::V3 => send_update_v3(ctx, config, update, peer.addr, rt, log),
     }
 }
 
@@ -262,7 +256,7 @@ fn send_update_common(
 pub fn handler(
     ctx: SmContext,
     addr: Ipv6Addr,
-    peer: Ipv6Addr,
+    peer: PeerIdentity,
     log: Logger,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
     let context = Arc::new(Mutex::new(HandlerContext {
@@ -363,7 +357,7 @@ async fn push_handler_common(
     let ctx = ctx.context().lock().await.clone();
 
     tokio::task::spawn_blocking(move || {
-        handle_update(&update, &ctx.ctx, ctx.peer);
+        handle_update(&update, &ctx.ctx, &ctx.peer);
     })
     .await
     .map_err(|e| {
@@ -389,7 +383,7 @@ async fn pull_handler_v2(
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
             // don't redistribute prefixes to their originators
-            if route.nexthop == ctx.peer {
+            if route.nexthop == ctx.peer.addr {
                 continue;
             }
             let mut pv = v3::PathVector {
@@ -400,7 +394,7 @@ async fn pull_handler_v2(
             underlay.insert(pv);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
-            if route.nexthop == ctx.peer {
+            if route.nexthop == ctx.peer.addr {
                 continue;
             }
             let tv = route.origin;
@@ -465,7 +459,7 @@ async fn pull_handler(
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
             // don't redistribute prefixes to their originators
-            if route.nexthop == ctx.peer {
+            if route.nexthop == ctx.peer.addr {
                 continue;
             }
             let mut pv = v3::PathVector {
@@ -476,7 +470,7 @@ async fn pull_handler(
             underlay.insert(pv);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
-            if route.nexthop == ctx.peer {
+            if route.nexthop == ctx.peer.addr {
                 continue;
             }
             let tv = route.origin;
@@ -525,15 +519,15 @@ async fn pull_handler(
     }))
 }
 
-fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
+fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
     if let Some(underlay_update) = &update.underlay {
-        handle_underlay_update(underlay_update, ctx, peer_addr);
+        handle_underlay_update(underlay_update, ctx, peer);
     }
 
     if let Some(tunnel_update) = &update.tunnel {
-        handle_tunnel_update(tunnel_update, ctx, peer_addr);
+        handle_tunnel_update(tunnel_update, ctx, peer);
     }
 
     // distribute updates
@@ -554,7 +548,7 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
 fn handle_tunnel_update(
     update: &v3::TunnelUpdate,
     ctx: &SmContext,
-    peer_addr: Ipv6Addr,
+    peer: &PeerIdentity,
 ) {
     let mut import = HashSet::new();
     let mut remove = HashSet::new();
@@ -570,7 +564,7 @@ fn handle_tunnel_update(
                 vni: x.vni,
                 metric: x.metric,
             },
-            nexthop: peer_addr,
+            nexthop: peer.addr,
         });
     }
     db.import_tunnel(&import);
@@ -583,7 +577,7 @@ fn handle_tunnel_update(
                 vni: x.vni,
                 metric: x.metric,
             },
-            nexthop: peer_addr,
+            nexthop: peer.addr,
         });
     }
     db.delete_import_tunnel(&remove);
@@ -623,7 +617,7 @@ fn handle_tunnel_update(
 fn handle_underlay_update(
     update: &v3::UnderlayUpdate,
     ctx: &SmContext,
-    peer_addr: Ipv6Addr,
+    peer: &PeerIdentity,
 ) {
     let mut import = HashSet::new();
     let mut add = Vec::new();
@@ -637,14 +631,14 @@ fn handle_underlay_update(
         }
         import.insert(Route {
             destination: prefix.destination,
-            nexthop: peer_addr,
+            nexthop: peer.addr,
             ifname: ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
         let mut r = crate::sys::Route::new(
             prefix.destination.addr().into(),
             prefix.destination.width(),
-            peer_addr.into(),
+            peer.addr.into(),
         );
         r.ifname.clone_from(&ctx.config.if_name);
         add.push(r);
@@ -656,7 +650,7 @@ fn handle_underlay_update(
     for prefix in &update.withdraw {
         withdraw.insert(Route {
             destination: prefix.destination,
-            nexthop: peer_addr,
+            nexthop: peer.addr,
             ifname: ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
