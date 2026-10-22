@@ -697,6 +697,14 @@ impl State for Exchange {
                     }
                 }
                 Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
+                    // Send the new peer only the routes learned from our own
+                    // peer. Every sibling does the same, so together they send
+                    // one copy of the imported table rather than one each.
+                    //
+                    // Sending and registering in this one step keeps our share
+                    // consistent: routes we imported before now are in this
+                    // push, and later ones reach the new peer through our
+                    // Redistribute fan-out once it is registered.
                     if tx
                         .send(Event::Peer(PeerEvent::Push(Update {
                             underlay: Some(
@@ -704,7 +712,7 @@ impl State for Exchange {
                                     announce: self
                                         .ctx
                                         .db
-                                        .imported()
+                                        .imported_from(self.peer.addr)
                                         .into_iter()
                                         .map(Into::into)
                                         .collect(),

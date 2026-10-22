@@ -72,6 +72,24 @@ impl Db {
         lock!(self.data).imported.clone()
     }
 
+    /// Imported routes for which `filter` returns true.
+    fn imported_matching(
+        &self,
+        filter: impl Fn(&Route) -> bool,
+    ) -> HashSet<Route> {
+        lock!(self.data)
+            .imported
+            .iter()
+            .filter(|r| filter(r))
+            .cloned()
+            .collect()
+    }
+
+    /// Imported routes learned from the peer at `nexthop`.
+    pub fn imported_from(&self, nexthop: Ipv6Addr) -> HashSet<Route> {
+        self.imported_matching(|r| r.nexthop == nexthop)
+    }
+
     pub fn imported_count(&self) -> usize {
         lock!(self.data).imported.len()
     }
@@ -253,15 +271,8 @@ impl Db {
         &self,
         dst: Ipv6Net,
         nexthop: Ipv6Addr,
-    ) -> Vec<Route> {
-        let data = lock!(self.data);
-        let mut result = Vec::new();
-        for x in &data.imported {
-            if x.destination == dst && x.nexthop == nexthop {
-                result.push(x.clone());
-            }
-        }
-        result
+    ) -> HashSet<Route> {
+        self.imported_matching(|r| r.destination == dst && r.nexthop == nexthop)
     }
 
     pub fn get_external_peers(&self) -> BTreeSet<String> {
