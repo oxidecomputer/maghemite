@@ -54,6 +54,12 @@ pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error(transparent)]
+    Send(#[from] crate::connection::SendError),
+
+    #[error(transparent)]
+    StartRecvLoop(#[from] crate::connection::StartRecvLoopError),
+
     #[error("timeout")]
     Timeout,
 

@@ -24,7 +24,7 @@ progenitor::generate_api!(
         // BGP admin shapes.
         CheckerSource = mg_api_types_versions::latest::bgp::config::CheckerSource,
         ExportedSelector = mg_api_types_versions::latest::bgp::session::ExportedSelector,
-        FsmEventBuffer = mg_api_types_versions::latest::bgp::history::FsmEventBuffer,
+        HistoryBufferSelector = mg_api_types_versions::latest::bgp::history::HistoryBufferSelector,
         Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv4UnicastConfig,
         Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv6UnicastConfig,
         JitterRange = mg_api_types_versions::latest::bgp::config::JitterRange,

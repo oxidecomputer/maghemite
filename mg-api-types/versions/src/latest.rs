@@ -65,10 +65,11 @@ pub mod bgp {
     }
 
     pub mod history {
-        pub use crate::v2::bgp::history::FsmEventBuffer;
         pub use crate::v2::bgp::history::MessageDirection;
 
         pub use crate::v11::bgp::history::Origin6;
+
+        pub use crate::v13::bgp::history::HistoryBufferSelector;
     }
 
     pub mod error {
@@ -140,14 +141,15 @@ pub mod bgp {
         pub use crate::v2::bgp::session::FsmStateKind;
 
         pub use crate::v5::bgp::session::ExportedSelector;
-        pub use crate::v5::bgp::session::FsmHistoryRequest;
         pub use crate::v5::bgp::session::FsmHistoryResponse;
-        pub use crate::v5::bgp::session::MessageHistoryRequest;
 
         pub use crate::v11::bgp::session::MAX_MESSAGE_HISTORY;
         pub use crate::v11::bgp::session::MessageHistory;
         pub use crate::v11::bgp::session::MessageHistoryEntry;
         pub use crate::v11::bgp::session::MessageHistoryResponse;
+
+        pub use crate::v13::bgp::session::FsmHistoryRequest;
+        pub use crate::v13::bgp::session::MessageHistoryRequest;
     }
 }
 
@@ -177,25 +179,25 @@ pub mod rdb {
 }
 
 pub mod mrib {
-    pub use crate::v13::mrib::EmbeddedIpv4;
-    pub use crate::v13::mrib::InvalidEmbeddedRp;
-    pub use crate::v13::mrib::InvalidMulticastSource;
-    pub use crate::v13::mrib::MulticastAddr;
-    pub use crate::v13::mrib::MulticastAddrV4;
-    pub use crate::v13::mrib::MulticastAddrV6;
-    pub use crate::v13::mrib::MulticastGroupError;
-    pub use crate::v13::mrib::MulticastRoute;
-    pub use crate::v13::mrib::MulticastRouteError;
-    pub use crate::v13::mrib::MulticastRouteKey;
-    pub use crate::v13::mrib::MulticastRouteKeyV4;
-    pub use crate::v13::mrib::MulticastRouteKeyV6;
-    pub use crate::v13::mrib::MulticastSourceProtocol;
-    pub use crate::v13::mrib::UnderlayMulticastError;
-    pub use crate::v13::mrib::UnderlayMulticastIpv6;
-    pub use crate::v13::mrib::UnicastAddrV4;
-    pub use crate::v13::mrib::UnicastAddrV6;
-    pub use crate::v13::mrib::Vni;
-    pub use crate::v13::mrib::VniError;
+    pub use crate::v14::mrib::EmbeddedIpv4;
+    pub use crate::v14::mrib::InvalidEmbeddedRp;
+    pub use crate::v14::mrib::InvalidMulticastSource;
+    pub use crate::v14::mrib::MulticastAddr;
+    pub use crate::v14::mrib::MulticastAddrV4;
+    pub use crate::v14::mrib::MulticastAddrV6;
+    pub use crate::v14::mrib::MulticastGroupError;
+    pub use crate::v14::mrib::MulticastRoute;
+    pub use crate::v14::mrib::MulticastRouteError;
+    pub use crate::v14::mrib::MulticastRouteKey;
+    pub use crate::v14::mrib::MulticastRouteKeyV4;
+    pub use crate::v14::mrib::MulticastRouteKeyV6;
+    pub use crate::v14::mrib::MulticastSourceProtocol;
+    pub use crate::v14::mrib::UnderlayMulticastError;
+    pub use crate::v14::mrib::UnderlayMulticastIpv6;
+    pub use crate::v14::mrib::UnicastAddrV4;
+    pub use crate::v14::mrib::UnicastAddrV6;
+    pub use crate::v14::mrib::Vni;
+    pub use crate::v14::mrib::VniError;
 }
 
 pub mod ndp {

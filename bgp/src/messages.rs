@@ -1964,7 +1964,13 @@ pub fn optional_parameter_to_wire(
                 let cbuf = capability_to_wire(c)?;
                 csbuf.extend_from_slice(&cbuf);
             }
-            buf.push(csbuf.len() as u8);
+            let len = u8::try_from(csbuf.len()).map_err(|_| {
+                Error::TooLarge(format!(
+                    "capabilities optional parameter is too long: {} bytes",
+                    csbuf.len()
+                ))
+            })?;
+            buf.push(len);
             buf.extend_from_slice(&csbuf);
             Ok(buf)
         }
@@ -2048,10 +2054,14 @@ pub fn capability_to_wire(c: &Capability) -> Result<Vec<u8>, Error> {
             Ok(buf)
         }
         Capability::ExtendedNextHopEncoding { elements } => {
-            let mut buf = vec![
-                CapabilityCode::ExtendedNextHopEncoding as u8,
-                (elements.len() * 6) as u8,
-            ];
+            let len = u8::try_from(elements.len() * 6).map_err(|_| {
+                Error::TooLarge(format!(
+                    "ExtendedNextHopEncoding capability has too many elements: {} elements",
+                    elements.len()
+                ))
+            })?;
+            let mut buf =
+                vec![u8::from(CapabilityCode::ExtendedNextHopEncoding), len];
             for e in elements {
                 buf.extend_from_slice(&e.afi.to_be_bytes());
                 buf.extend_from_slice(&e.safi.to_be_bytes());
@@ -2626,6 +2636,42 @@ mod tests {
 
         let om1 = open_message_from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
+    }
+
+    #[test]
+    fn capability_length_fields_reject_overflow() {
+        let enhe = |n: u16| Capability::ExtendedNextHopEncoding {
+            elements: (0..n)
+                .map(|i| ExtendedNexthopElement {
+                    afi: i,
+                    safi: 1,
+                    nh_afi: 2,
+                })
+                .collect(),
+        };
+
+        // Capability Length (RFC 5492 §4): 42 * 6 = 252 fits in one octet,
+        // 43 * 6 = 258 does not.
+        let buf = capability_to_wire(&enhe(42)).expect("42 elements fit");
+        assert_eq!(buf[1], 252);
+        assert!(matches!(
+            capability_to_wire(&enhe(43)),
+            Err(Error::TooLarge(_))
+        ));
+
+        // Parameter Length (RFC 4271 §4.2): a 254-byte capability fits in
+        // one octet, adding a 6-byte capability (260 bytes) does not.
+        let buf = optional_parameter_to_wire(&OptionalParameter::Capabilities(
+            BTreeSet::from([enhe(42)]),
+        ))
+        .expect("254-byte parameter fits");
+        assert_eq!(buf[1], 254);
+        assert!(matches!(
+            optional_parameter_to_wire(&OptionalParameter::Capabilities(
+                BTreeSet::from([enhe(42), Capability::FourOctetAs { asn: 1 }])
+            )),
+            Err(Error::TooLarge(_))
+        ));
     }
 
     #[test]
