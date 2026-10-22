@@ -634,8 +634,8 @@ impl From<MulticastAddrV6> for IpAddr {
     Hash,
     Serialize,
     Deserialize,
-    JsonSchema,
 )]
+#[serde(try_from = "IpAddr", into = "IpAddr")]
 pub enum MulticastAddr {
     /// An IPv4 multicast group address.
     V4(MulticastAddrV4),
@@ -735,6 +735,24 @@ impl TryFrom<IpAddr> for MulticastAddr {
             IpAddr::V4(v4) => Self::try_from(v4),
             IpAddr::V6(v6) => Self::try_from(v6),
         }
+    }
+}
+
+impl JsonSchema for MulticastAddr {
+    fn schema_name() -> String {
+        "MulticastAddr".to_string()
+    }
+
+    fn json_schema(
+        generator: &mut schemars::r#gen::SchemaGenerator,
+    ) -> schemars::schema::Schema {
+        let mut schema = IpAddr::json_schema(generator).into_object();
+        schema.metadata().description = Some(
+            "A validated multicast group address (IPv4 or IPv6), one of \
+             [`MulticastAddrV4`] or [`MulticastAddrV6`]."
+                .to_string(),
+        );
+        schema.into()
     }
 }
 
@@ -1209,6 +1227,23 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<MulticastAddrV6>("\"ff04::1\"").is_err()
+        );
+
+        for (addr, json) in [
+            (MulticastAddr::from(v4), "\"239.1.1.1\""),
+            (MulticastAddr::from(v6), "\"ff0e::1\""),
+        ] {
+            assert_eq!(serde_json::to_string(&addr).unwrap(), json);
+            assert_eq!(
+                serde_json::from_str::<MulticastAddr>(json).unwrap(),
+                addr
+            );
+        }
+        assert!(serde_json::from_str::<MulticastAddr>("\"10.0.0.1\"").is_err());
+        assert!(serde_json::from_str::<MulticastAddr>("\"ff04::1\"").is_err());
+        assert!(
+            serde_json::from_str::<MulticastAddr>(r#"{"V4":"239.1.1.1"}"#)
+                .is_err()
         );
     }
 
