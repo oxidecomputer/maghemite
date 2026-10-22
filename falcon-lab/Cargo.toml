@@ -16,7 +16,6 @@ dpd-client.workspace = true
 clap.workspace = true
 oxnet.workspace = true
 oxide-tokio-rt.workspace = true
-bgp.workspace = true
 colored.workspace = true
 strum.workspace = true
 mg-api-types.workspace = true
