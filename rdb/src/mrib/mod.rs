@@ -61,7 +61,10 @@ use oxnet::IpNet;
 use slog::Logger;
 
 use crate::log::rdb_log;
-use crate::types::{MribChangeNotification, MulticastRoute, MulticastRouteKey};
+use crate::types::{
+    MribChangeNotification, MulticastRoute, MulticastRouteKey,
+    MulticastSourceProtocol, RouteOriginFilter,
+};
 
 pub(crate) mod store;
 
@@ -70,6 +73,34 @@ const UNIT_MRIB: &str = "mrib";
 
 /// MRIB table mapping multicast route keys to routes.
 pub type MribTable = BTreeMap<MulticastRouteKey, MulticastRoute>;
+
+/// Extension methods on [`MribTable`] that don't fit on the underlying
+/// `BTreeMap`.
+pub trait MribTableExt {
+    /// Drop routes whose origin does not match `origin`. `None` is a
+    /// pass-through.
+    fn filter_by_origin(self, origin: Option<RouteOriginFilter>) -> Self;
+}
+
+impl MribTableExt for MribTable {
+    fn filter_by_origin(self, origin: Option<RouteOriginFilter>) -> Self {
+        let Some(origin) = origin else {
+            return self;
+        };
+        self.into_iter()
+            .filter(|(_, route)| match (origin, route.source) {
+                (
+                    RouteOriginFilter::Static,
+                    MulticastSourceProtocol::Static,
+                ) => true,
+                (
+                    RouteOriginFilter::Dynamic,
+                    MulticastSourceProtocol::Static,
+                ) => false,
+            })
+            .collect()
+    }
+}
 
 /// The Multicast Routing Information Base.
 ///

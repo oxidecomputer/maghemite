@@ -32,6 +32,8 @@ use client_common::multicast::group::{validate_group_v4, validate_group_v6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::v1::rdb::rib::AddressFamily;
+
 pub use client_common::multicast::group::{
     InvalidEmbeddedRp, MulticastGroupError,
 };
@@ -40,7 +42,7 @@ pub use client_common::multicast::{
 };
 pub use client_common::vni::{Vni, VniError};
 
-/// The reason an address cannot serve as a multicast (S,G) source.
+/// The reason an address cannot serve as a multicast `(S,G)` source.
 ///
 /// The rules are validated in variant order. An address that breaks more
 /// than one rule only reports the first hit.
@@ -756,9 +758,9 @@ impl JsonSchema for MulticastAddr {
     }
 }
 
-/// Reject a (*,G) wildcard key on an SSM group.
+/// Reject a `(*,G)` wildcard key on an SSM group.
 ///
-/// ASM groups can carry a source, which allows for (S,G) source filtering
+/// ASM groups can carry a source, which allows for `(S,G)` source filtering
 /// outside the SSM range.
 fn require_ssm_source(
     group: MulticastAddr,
@@ -792,14 +794,14 @@ fn require_ssm_source(
 pub struct MulticastRouteKeyV4 {
     /// Multicast group address.
     pub(crate) group: MulticastAddrV4,
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV4>,
     /// VNI (Virtual Network Identifier).
     pub(crate) vni: Vni,
 }
 
 impl MulticastRouteKeyV4 {
-    /// Return the source address, or `None` for a (*,G) wildcard route.
+    /// Return the source address, or `None` for a `(*,G)` wildcard route.
     #[inline]
     pub const fn source(&self) -> Option<UnicastAddrV4> {
         self.source
@@ -822,7 +824,7 @@ impl MulticastRouteKeyV4 {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MulticastRouteKeyV4")]
 pub(crate) struct MulticastRouteKeyV4Shadow {
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV4>,
     /// Multicast group address.
     pub(crate) group: MulticastAddrV4,
@@ -886,14 +888,14 @@ impl JsonSchema for MulticastRouteKeyV4 {
 pub struct MulticastRouteKeyV6 {
     /// Multicast group address.
     pub(crate) group: MulticastAddrV6,
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV6>,
     /// VNI (Virtual Network Identifier).
     pub(crate) vni: Vni,
 }
 
 impl MulticastRouteKeyV6 {
-    /// Return the source address, or `None` for a (*,G) wildcard route.
+    /// Return the source address, or `None` for a `(*,G)` wildcard route.
     #[inline]
     pub const fn source(&self) -> Option<UnicastAddrV6> {
         self.source
@@ -916,7 +918,7 @@ impl MulticastRouteKeyV6 {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MulticastRouteKeyV6")]
 pub(crate) struct MulticastRouteKeyV6Shadow {
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV6>,
     /// Multicast group address.
     pub(crate) group: MulticastAddrV6,
@@ -1088,7 +1090,7 @@ impl MulticastRouteKey {
         }
     }
 
-    /// Create an any-source multicast route key (*,G) with the default VNI.
+    /// Create an any-source multicast route key `(*,G)` with the default VNI.
     ///
     /// # Errors
     ///
@@ -1102,7 +1104,7 @@ impl MulticastRouteKey {
         Self::new(None, group, Vni::DEFAULT_MULTICAST)
     }
 
-    /// Create a source-specific IPv4 multicast route key (S,G) with the
+    /// Create a source-specific IPv4 multicast route key `(S,G)` with the
     /// default VNI.
     pub fn source_specific_v4(
         source: UnicastAddrV4,
@@ -1115,7 +1117,7 @@ impl MulticastRouteKey {
         })
     }
 
-    /// Create a source-specific IPv6 multicast route key (S,G) with the
+    /// Create a source-specific IPv6 multicast route key `(S,G)` with the
     /// default VNI.
     pub fn source_specific_v6(
         source: UnicastAddrV6,
@@ -1156,7 +1158,7 @@ impl MulticastRouteKey {
 /// Multicast route entry -> key, underlay group, and metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MulticastRoute {
-    /// The multicast route key (S,G) or (*,G).
+    /// The multicast route key `(S,G)` or `(*,G)`.
     pub key: MulticastRouteKey,
     /// Underlay multicast group address within the `ff04::/64` subnet allocated
     /// by Omicron for rack-internal multicast traffic.
@@ -1218,6 +1220,74 @@ impl MulticastRoute {
 pub enum MulticastSourceProtocol {
     /// Static route configured via API.
     Static,
+}
+
+/// A static multicast route.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct StaticMulticastRoute {
+    /// The multicast route key `(S,G)` or `(*,G)`.
+    pub key: MulticastRouteKey,
+    /// Underlay multicast group address (`ff04::/64`).
+    pub underlay_group: UnderlayMulticastIpv6,
+}
+
+/// Request body for adding static multicast routes to the MRIB.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribAddStaticRequest {
+    /// List of static multicast routes to add.
+    pub routes: Vec<StaticMulticastRoute>,
+}
+
+/// Request body for deleting static multicast routes from the MRIB.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribDeleteStaticRequest {
+    /// List of route keys to delete.
+    pub keys: Vec<MulticastRouteKey>,
+}
+
+/// Filter for multicast route origin.
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq,
+)]
+pub enum RouteOriginFilter {
+    /// Static routes only (operator configured).
+    Static,
+    /// Dynamic routes only (learned via IGMP, MLD, etc.).
+    Dynamic,
+}
+
+/// Query parameters for MRIB routes.
+///
+/// When `group` is provided -> lookup a specific route.
+/// When `group` is not provided -> list all routes (with optional filters).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribQuery {
+    /// Multicast group address.
+    ///
+    /// If provided, the query returns a specific route.
+    /// If omitted, the query returns all routes matching the filters.
+    #[serde(default)]
+    pub group: Option<MulticastAddr>,
+    /// Source address (`None` for `(*,G)` routes).
+    ///
+    /// Only used when `group` is set.
+    #[serde(default)]
+    pub source: Option<IpAddr>,
+    /// VNI (defaults to the fleet-wide multicast VNI).
+    ///
+    /// Only used when `group` is set.
+    #[serde(default = "default_multicast_vni")]
+    pub vni: Vni,
+    /// Filter by address family.
+    ///
+    /// Only used when listing all routes.
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+    /// Filter by route origin ("Static" or "Dynamic").
+    ///
+    /// Only used when listing all routes.
+    #[serde(default)]
+    pub route_origin: Option<RouteOriginFilter>,
 }
 
 #[cfg(test)]
