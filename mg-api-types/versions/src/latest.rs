@@ -194,6 +194,7 @@ pub mod mrib {
     pub use crate::v14::mrib::MulticastRouteKey;
     pub use crate::v14::mrib::MulticastRouteKeyV4;
     pub use crate::v14::mrib::MulticastRouteKeyV6;
+    pub use crate::v14::mrib::MulticastSourceError;
     pub use crate::v14::mrib::MulticastSourceProtocol;
     pub use crate::v14::mrib::RouteOriginFilter;
     pub use crate::v14::mrib::StaticMulticastRoute;
