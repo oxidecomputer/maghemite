@@ -46,6 +46,72 @@ pub enum ExchangeError {
     #[error("timeout error: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
 
+    #[error("unexpected http status: {0}")]
+    Status(hyper::StatusCode),
+
     #[error("json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+}
+
+impl ExchangeError {
+    pub(crate) fn is_transient(&self) -> bool {
+        match self {
+            Self::Io(_)
+            | Self::Hyper(_)
+            | Self::HyperClient(_)
+            | Self::Timeout(_) => true,
+            Self::Status(status) => {
+                status.is_server_error()
+                    || *status == hyper::StatusCode::REQUEST_TIMEOUT
+                    || *status == hyper::StatusCode::TOO_MANY_REQUESTS
+            }
+            Self::SerdeJson(_) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hyper::StatusCode;
+
+    use super::ExchangeError;
+
+    #[test]
+    fn transient_statuses_are_retried() {
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert!(ExchangeError::Status(status).is_transient(), "{status}");
+        }
+    }
+
+    #[test]
+    fn persistent_statuses_are_not_retried() {
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_FOUND,
+            StatusCode::METHOD_NOT_ALLOWED,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            StatusCode::MOVED_PERMANENTLY,
+        ] {
+            assert!(!ExchangeError::Status(status).is_transient(), "{status}");
+        }
+    }
+
+    #[test]
+    fn decode_errors_are_not_transient() {
+        let e = serde_json::from_str::<u32>("not json").unwrap_err();
+        assert!(!ExchangeError::SerdeJson(e).is_transient());
+    }
+
+    #[test]
+    fn io_errors_are_retried() {
+        let e = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(ExchangeError::Io(e).is_transient());
+    }
 }
