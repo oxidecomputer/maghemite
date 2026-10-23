@@ -856,6 +856,20 @@ impl MulticastRoute {
             updated: now,
         }
     }
+
+    /// Compare every field except for `created` and `updated`.
+    pub fn eq_ignore_timestamps(&self, other: &Self) -> bool {
+        let Self {
+            key,
+            underlay_group,
+            source,
+            created: _,
+            updated: _,
+        } = self;
+        *key == other.key
+            && *underlay_group == other.underlay_group
+            && *source == other.source
+    }
 }
 
 /// Protocol that originated a multicast route entry.

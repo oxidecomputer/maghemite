@@ -18,10 +18,10 @@ chrono.workspace = true
 clap = { workspace = true, optional = true }
 oxnet.workspace = true
 mg-api-types = { workspace = true, features = ["clap"] }
+mg-api-types-versions.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-mg-api-types-versions.workspace = true
 
 [features]
 clap = ["dep:clap"]
