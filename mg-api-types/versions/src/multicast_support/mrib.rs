@@ -35,98 +35,14 @@ use serde::{Deserialize, Serialize};
 pub use client_common::multicast::group::{
     InvalidEmbeddedRp, MulticastGroupError,
 };
+pub use client_common::multicast::source::{
+    EmbeddedIpv4, InvalidMulticastSource, MulticastSourceError, UnicastAddrV4,
+    UnicastAddrV6,
+};
 pub use client_common::multicast::{
     UnderlayMulticastError, UnderlayMulticastIpv6,
 };
 pub use client_common::vni::{Vni, VniError};
-
-/// The reason an address cannot serve as a multicast (S,G) source.
-///
-/// The rules are validated in variant order. An address that breaks more
-/// than one rule only reports the first hit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InvalidMulticastSource {
-    /// `0.0.0.0` or `::`.
-    Unspecified,
-
-    /// `127.0.0.0/8` or `::1`.
-    Loopback,
-
-    /// `255.255.255.255`, the limited broadcast address that [RFC 919] §7
-    /// dictates must not be forwarded. IPv6 has no broadcast address, making
-    /// this IPv4 only.
-    ///
-    /// [RFC 919]: https://www.rfc-editor.org/rfc/rfc919.html
-    Broadcast,
-
-    /// `169.254.0.0/16` ([RFC 3927]) or `fe80::/10` ([RFC 4291] §2.5.6).
-    ///
-    /// [RFC 3927]: https://www.rfc-editor.org/rfc/rfc3927.html
-    /// [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html
-    LinkLocal,
-
-    /// `0.0.0.0/8`. [RFC 1122] §3.2.1.3 permits it as a source before a
-    /// host learns its own address, but reverse-path forwarding cannot
-    /// resolve it to an incoming interface.
-    ///
-    /// [RFC 1122]: https://www.rfc-editor.org/rfc/rfc1122.html
-    ThisNetwork,
-
-    /// The class E block `240.0.0.0/4`, which the IANA special-purpose
-    /// registry ([RFC 6890]) marks "Source: False".
-    ///
-    /// [RFC 6890]: https://www.rfc-editor.org/rfc/rfc6890.html
-    Reserved,
-}
-
-impl fmt::Display for InvalidMulticastSource {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unspecified => write!(f, "is the unspecified address"),
-            Self::Loopback => write!(f, "is a loopback address"),
-            Self::Broadcast => write!(f, "is the broadcast address"),
-            Self::LinkLocal => write!(f, "is a link-local address"),
-            Self::ThisNetwork => {
-                write!(f, "is in 0.0.0.0/8 (this host on this network)")
-            }
-            Self::Reserved => {
-                write!(f, "is in the reserved class E block (240.0.0.0/4)")
-            }
-        }
-    }
-}
-
-/// The IPv6 representation of an embedded IPv4 address.
-///
-/// Both variants carry the IPv4 address within the low 32 bits and differ only
-/// in the 96-bit prefix ahead of those bits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EmbeddedIpv4 {
-    /// The `::ffff:0:0/96` form, which represents an IPv4 node's address
-    /// to an IPv6 application ([RFC 4291] §2.5.5.2).
-    ///
-    /// [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html
-    Mapped,
-
-    /// The `::/96` form, which [RFC 4291] §2.5.5.1 deprecates because the
-    /// transition mechanisms that used it are obsolete.
-    ///
-    /// [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html
-    Compatible,
-}
-
-impl fmt::Display for EmbeddedIpv4 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Mapped => {
-                write!(f, "IPv4-mapped (::ffff:0:0/96, RFC 4291 §2.5.5.2)")
-            }
-            Self::Compatible => {
-                write!(f, "IPv4-compatible (::/96, RFC 4291 §2.5.5.1)")
-            }
-        }
-    }
-}
 
 /// Errors raised while validating multicast addresses and route keys.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -149,50 +65,10 @@ pub enum MulticastRouteError {
         group: IpAddr,
     },
 
-    /// A source address is a multicast address (not a unicast one).
-    #[error(
-        "Source IP {0} must be a unicast address (multicast addresses are not \
-         allowed)"
-    )]
-    SourceNotUnicast(IpAddr),
-
-    /// An IPv4 source address is invalid if it is loopback, broadcast,
-    /// unspecified, link-local, in the "this host on this network" block
-    /// `0.0.0.0/8`, or in the class E block `240.0.0.0/4`.
-    #[error("Source IP {addr} {reason}, which is not a valid source address")]
-    InvalidIpv4Source {
-        /// The rejected source address.
-        addr: Ipv4Addr,
-        /// The source rule that failed.
-        reason: InvalidMulticastSource,
-    },
-
-    /// An IPv6 source address is invalid if it is loopback, unspecified, or
-    /// link-local.
-    #[error("Source IP {addr} {reason}, which is not a valid source address")]
-    InvalidIpv6Source {
-        /// The rejected source address.
-        addr: Ipv6Addr,
-        /// The source rule that failed.
-        reason: InvalidMulticastSource,
-    },
-
-    /// An IPv6 source address is invalid if it uses an IPv4-mapped
-    /// ([RFC 4291] §2.5.5.2) or IPv4-compatible ([RFC 4291] §2.5.5.1)
-    /// representation. Either form converts to an IPv4 address and would
-    /// carry IPv4 semantics past the IPv4 source checks.
-    ///
-    /// [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html
-    #[error(
-        "Source IP {addr} embeds an IPv4 address, {form}, which is not a \
-         valid IPv6 source address"
-    )]
-    Ipv4EmbeddedSource {
-        /// The rejected source address.
-        addr: Ipv6Addr,
-        /// The embedded IPv4 form it uses.
-        form: EmbeddedIpv4,
-    },
+    /// The source address failed unicast source validation, returning a
+    /// [`MulticastSourceError`].
+    #[error(transparent)]
+    Source(#[from] MulticastSourceError),
 
     /// An SSM group requires a source address ([RFC 4607] §2).
     ///
@@ -209,216 +85,6 @@ pub enum MulticastRouteError {
 
 const fn default_multicast_vni() -> Vni {
     Vni::DEFAULT_MULTICAST
-}
-
-// TODO: replace the source validation in `UnicastAddrV4` and `UnicastAddrV6`
-// with a validated source newtype in oxnet, shared with dendrite's dpd-types
-// validation and omicron's source checks.
-/// A validated IPv4 unicast address for multicast source fields.
-///
-/// A source must be unicast and routable. IPv4 excludes loopback, broadcast
-/// ([RFC 919] §7), the unspecified address, link-local ([RFC 3927]),
-/// `0.0.0.0/8` ([RFC 1122] §3.2.1.3), and `240.0.0.0/4` ([RFC 1112] §4).
-/// Private ranges ([RFC 1918]) are allowed because overlay guests can use
-/// them.
-///
-/// [RFC 919]: https://www.rfc-editor.org/rfc/rfc919.html
-/// [RFC 1112]: https://www.rfc-editor.org/rfc/rfc1112.html
-/// [RFC 1122]: https://www.rfc-editor.org/rfc/rfc1122.html
-/// [RFC 1918]: https://www.rfc-editor.org/rfc/rfc1918.html
-/// [RFC 3927]: https://www.rfc-editor.org/rfc/rfc3927.html
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(try_from = "Ipv4Addr", into = "Ipv4Addr")]
-#[schemars(transparent)]
-pub struct UnicastAddrV4(Ipv4Addr);
-
-impl UnicastAddrV4 {
-    /// Create a validated IPv4 unicast address.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MulticastRouteError::SourceNotUnicast`] for a multicast
-    /// address, or [`MulticastRouteError::InvalidIpv4Source`] for the first
-    /// [`InvalidMulticastSource`] rule the address hits.
-    pub fn new(value: Ipv4Addr) -> Result<Self, MulticastRouteError> {
-        let invalid = |reason| {
-            Err(MulticastRouteError::InvalidIpv4Source {
-                addr: value,
-                reason,
-            })
-        };
-        if value.is_multicast() {
-            return Err(MulticastRouteError::SourceNotUnicast(IpAddr::V4(
-                value,
-            )));
-        }
-        if value.is_unspecified() {
-            return invalid(InvalidMulticastSource::Unspecified);
-        }
-        if value.is_loopback() {
-            return invalid(InvalidMulticastSource::Loopback);
-        }
-        if value.is_broadcast() {
-            return invalid(InvalidMulticastSource::Broadcast);
-        }
-        if value.is_link_local() {
-            return invalid(InvalidMulticastSource::LinkLocal);
-        }
-        if value.octets()[0] == 0 {
-            return invalid(InvalidMulticastSource::ThisNetwork);
-        }
-        if value.octets()[0] >= 240 {
-            return invalid(InvalidMulticastSource::Reserved);
-        }
-        Ok(Self(value))
-    }
-
-    /// Return the inner IPv4 address.
-    #[inline]
-    pub const fn ip(&self) -> Ipv4Addr {
-        self.0
-    }
-}
-
-impl fmt::Display for UnicastAddrV4 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl TryFrom<Ipv4Addr> for UnicastAddrV4 {
-    type Error = MulticastRouteError;
-    fn try_from(value: Ipv4Addr) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<UnicastAddrV4> for Ipv4Addr {
-    fn from(addr: UnicastAddrV4) -> Self {
-        addr.0
-    }
-}
-
-impl From<UnicastAddrV4> for IpAddr {
-    fn from(addr: UnicastAddrV4) -> Self {
-        IpAddr::V4(addr.0)
-    }
-}
-
-/// A validated IPv6 unicast address for multicast source fields.
-///
-/// A source must be unicast and routable. IPv6 excludes loopback, the
-/// unspecified address, link-local ([RFC 4291] §2.5.6), and the IPv4-mapped
-/// ([RFC 4291] §2.5.5.2) and IPv4-compatible ([RFC 4291] §2.5.5.1) forms.
-/// ULA (`fc00::/7`, [RFC 4193]) is allowed because overlay guests can use it.
-///
-/// [RFC 4193]: https://www.rfc-editor.org/rfc/rfc4193.html
-/// [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
-#[schemars(transparent)]
-pub struct UnicastAddrV6(Ipv6Addr);
-
-impl UnicastAddrV6 {
-    /// Create a validated IPv6 unicast address.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MulticastRouteError::SourceNotUnicast`] for a multicast
-    /// address, [`MulticastRouteError::InvalidIpv6Source`] for the first
-    /// [`InvalidMulticastSource`] rule the address hits, or
-    /// [`MulticastRouteError::Ipv4EmbeddedSource`] for an IPv4-mapped or
-    /// IPv4-compatible address.
-    pub fn new(value: Ipv6Addr) -> Result<Self, MulticastRouteError> {
-        let invalid = |reason| {
-            Err(MulticastRouteError::InvalidIpv6Source {
-                addr: value,
-                reason,
-            })
-        };
-        if value.is_multicast() {
-            return Err(MulticastRouteError::SourceNotUnicast(IpAddr::V6(
-                value,
-            )));
-        }
-        if value.is_unspecified() {
-            return invalid(InvalidMulticastSource::Unspecified);
-        }
-        if value.is_loopback() {
-            return invalid(InvalidMulticastSource::Loopback);
-        }
-        if value.is_unicast_link_local() {
-            return invalid(InvalidMulticastSource::LinkLocal);
-        }
-
-        let embedded = match value.segments() {
-            [0, 0, 0, 0, 0, 0xffff, ..] => Some(EmbeddedIpv4::Mapped),
-            [0, 0, 0, 0, 0, 0, ..] => Some(EmbeddedIpv4::Compatible),
-            _ => None,
-        };
-        if let Some(form) = embedded {
-            return Err(MulticastRouteError::Ipv4EmbeddedSource {
-                addr: value,
-                form,
-            });
-        }
-        Ok(Self(value))
-    }
-
-    /// Return the inner IPv6 address.
-    #[inline]
-    pub const fn ip(&self) -> Ipv6Addr {
-        self.0
-    }
-}
-
-impl fmt::Display for UnicastAddrV6 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl TryFrom<Ipv6Addr> for UnicastAddrV6 {
-    type Error = MulticastRouteError;
-    fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<UnicastAddrV6> for Ipv6Addr {
-    fn from(addr: UnicastAddrV6) -> Self {
-        addr.0
-    }
-}
-
-impl From<UnicastAddrV6> for IpAddr {
-    fn from(addr: UnicastAddrV6) -> Self {
-        IpAddr::V6(addr.0)
-    }
 }
 
 /// A validated IPv4 multicast address.
@@ -451,9 +117,8 @@ impl MulticastAddrV4 {
     ///
     /// # Errors
     ///
-    /// Returns [`MulticastRouteError::Group`] with the first
-    /// [`MulticastGroupError`] the address fails.
-    pub fn new(value: Ipv4Addr) -> Result<Self, MulticastRouteError> {
+    /// Returns the first [`MulticastGroupError`] the address fails.
+    pub fn new(value: Ipv4Addr) -> Result<Self, MulticastGroupError> {
         validate_group_v4(value)?;
         Ok(Self(value))
     }
@@ -477,7 +142,7 @@ impl fmt::Display for MulticastAddrV4 {
 }
 
 impl TryFrom<Ipv4Addr> for MulticastAddrV4 {
-    type Error = MulticastRouteError;
+    type Error = MulticastGroupError;
 
     fn try_from(value: Ipv4Addr) -> Result<Self, Self::Error> {
         Self::new(value)
@@ -576,9 +241,8 @@ impl MulticastAddrV6 {
     ///
     /// # Errors
     ///
-    /// Returns [`MulticastRouteError::Group`] with the first
-    /// [`MulticastGroupError`] the address fails.
-    pub fn new(value: Ipv6Addr) -> Result<Self, MulticastRouteError> {
+    /// Returns the first [`MulticastGroupError`] the address fails.
+    pub fn new(value: Ipv6Addr) -> Result<Self, MulticastGroupError> {
         validate_group_v6(value)?;
         Ok(Self(value))
     }
@@ -602,7 +266,7 @@ impl fmt::Display for MulticastAddrV6 {
 }
 
 impl TryFrom<Ipv6Addr> for MulticastAddrV6 {
-    type Error = MulticastRouteError;
+    type Error = MulticastGroupError;
 
     fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
         Self::new(value)
@@ -654,7 +318,7 @@ impl MulticastAddr {
         b: u8,
         c: u8,
         d: u8,
-    ) -> Result<Self, MulticastRouteError> {
+    ) -> Result<Self, MulticastGroupError> {
         Ok(Self::V4(MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d))?))
     }
 
@@ -663,7 +327,7 @@ impl MulticastAddr {
     /// # Errors
     ///
     /// Returns the error from [`MulticastAddrV6::new`].
-    pub fn new_v6(segments: [u16; 8]) -> Result<Self, MulticastRouteError> {
+    pub fn new_v6(segments: [u16; 8]) -> Result<Self, MulticastGroupError> {
         Ok(Self::V6(MulticastAddrV6::new(Ipv6Addr::from(segments))?))
     }
 
@@ -712,7 +376,7 @@ impl From<MulticastAddrV6> for MulticastAddr {
 }
 
 impl TryFrom<Ipv4Addr> for MulticastAddr {
-    type Error = MulticastRouteError;
+    type Error = MulticastGroupError;
 
     fn try_from(value: Ipv4Addr) -> Result<Self, Self::Error> {
         Ok(Self::V4(MulticastAddrV4::new(value)?))
@@ -720,7 +384,7 @@ impl TryFrom<Ipv4Addr> for MulticastAddr {
 }
 
 impl TryFrom<Ipv6Addr> for MulticastAddr {
-    type Error = MulticastRouteError;
+    type Error = MulticastGroupError;
 
     fn try_from(value: Ipv6Addr) -> Result<Self, Self::Error> {
         Ok(Self::V6(MulticastAddrV6::new(value)?))
@@ -728,7 +392,7 @@ impl TryFrom<Ipv6Addr> for MulticastAddr {
 }
 
 impl TryFrom<IpAddr> for MulticastAddr {
-    type Error = MulticastRouteError;
+    type Error = MulticastGroupError;
 
     fn try_from(value: IpAddr) -> Result<Self, Self::Error> {
         match value {
@@ -1028,11 +692,8 @@ impl MulticastRouteKey {
     /// Returns [`MulticastRouteError::SourceFamilyMismatch`] if `source` and
     /// `group` use different IP address families.
     ///
-    /// Returns [`MulticastRouteError::SourceNotUnicast`],
-    /// [`MulticastRouteError::InvalidIpv4Source`],
-    /// [`MulticastRouteError::InvalidIpv6Source`], or
-    /// [`MulticastRouteError::Ipv4EmbeddedSource`] if `source` fails
-    /// validation as a [`UnicastAddrV4`] or [`UnicastAddrV6`].
+    /// Returns [`MulticastRouteError::Source`] if `source` fails validation
+    /// as a [`UnicastAddrV4`] or [`UnicastAddrV6`].
     ///
     /// [RFC 4607]: https://www.rfc-editor.org/rfc/rfc4607.html
     pub fn new(
@@ -1261,98 +922,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unicast_source_rejection_variants() {
-        for (addr, expected) in [
-            ("0.0.0.0", InvalidMulticastSource::Unspecified),
-            ("127.0.0.1", InvalidMulticastSource::Loopback),
-            ("255.255.255.255", InvalidMulticastSource::Broadcast),
-            ("0.1.2.3", InvalidMulticastSource::ThisNetwork),
-            ("169.254.10.1", InvalidMulticastSource::LinkLocal),
-            ("240.0.0.1", InvalidMulticastSource::Reserved),
-            ("255.255.255.254", InvalidMulticastSource::Reserved),
-        ] {
-            match UnicastAddrV4::new(addr.parse().unwrap()) {
-                Err(MulticastRouteError::InvalidIpv4Source {
-                    reason, ..
-                }) => {
-                    assert_eq!(reason, expected, "{addr}")
-                }
-                other => panic!("{addr} rejected as {other:?}"),
-            }
-        }
-        for (addr, expected) in [
-            ("::", InvalidMulticastSource::Unspecified),
-            ("::1", InvalidMulticastSource::Loopback),
-            ("fe80::1", InvalidMulticastSource::LinkLocal),
-            ("febf:ffff::1", InvalidMulticastSource::LinkLocal),
-        ] {
-            match UnicastAddrV6::new(addr.parse().unwrap()) {
-                Err(MulticastRouteError::InvalidIpv6Source {
-                    reason, ..
-                }) => {
-                    assert_eq!(reason, expected, "{addr}")
-                }
-                other => panic!("{addr} rejected as {other:?}"),
-            }
-        }
-
-        for (addr, expected) in [
-            ("::ffff:192.0.2.1", EmbeddedIpv4::Mapped),
-            ("::192.0.2.1", EmbeddedIpv4::Compatible),
-        ] {
-            match UnicastAddrV6::new(addr.parse().unwrap()) {
-                Err(MulticastRouteError::Ipv4EmbeddedSource {
-                    form, ..
-                }) => {
-                    assert_eq!(form, expected, "{addr}")
-                }
-                other => panic!("{addr} rejected as {other:?}"),
-            }
-        }
-
-        for addr in ["224.0.0.1", "224.9.9.9"] {
-            assert!(
-                matches!(
-                    UnicastAddrV4::new(addr.parse().unwrap()),
-                    Err(MulticastRouteError::SourceNotUnicast(_))
-                ),
-                "{addr} should be rejected as non-unicast"
-            );
-        }
-
-        for addr in ["ff0e::1", "ff0e::2"] {
-            assert!(
-                matches!(
-                    UnicastAddrV6::new(addr.parse().unwrap()),
-                    Err(MulticastRouteError::SourceNotUnicast(_))
-                ),
-                "{addr} should be rejected as non-unicast"
-            );
-        }
-
-        for addr in ["100.64.0.1", "223.255.255.255"] {
-            assert!(
-                UnicastAddrV4::new(addr.parse().unwrap()).is_ok(),
-                "{addr} should be accepted as a source"
-            );
-        }
-    }
-
-    fn v6(addr: &str) -> Result<MulticastAddrV6, MulticastRouteError> {
+    fn v6(addr: &str) -> Result<MulticastAddrV6, MulticastGroupError> {
         MulticastAddrV6::new(addr.parse().unwrap())
     }
 
     fn group_err(
-        res: Result<MulticastAddrV6, MulticastRouteError>,
+        res: Result<MulticastAddrV6, MulticastGroupError>,
     ) -> MulticastGroupError {
         match res {
-            Err(MulticastRouteError::Group(e)) => e,
+            Err(e) => e,
             other => panic!("expected a group error, got {other:?}"),
         }
     }
 
-    fn group(addr: &str) -> Result<MulticastAddr, MulticastRouteError> {
+    fn group(addr: &str) -> Result<MulticastAddr, MulticastGroupError> {
         MulticastAddr::try_from(addr.parse::<IpAddr>().unwrap())
     }
 
@@ -1401,9 +984,7 @@ mod tests {
             assert!(
                 matches!(
                     group(addr),
-                    Err(MulticastRouteError::Group(
-                        MulticastGroupError::NotMulticast(_)
-                    ))
+                    Err(MulticastGroupError::NotMulticast(_))
                 ),
                 "{addr} should be rejected as non-multicast"
             );
@@ -1420,15 +1001,11 @@ mod tests {
         }
         assert!(matches!(
             MulticastAddrV4::new(Ipv4Addr::new(224, 0, 0, 0)),
-            Err(MulticastRouteError::Group(
-                MulticastGroupError::ReservedBaseAddress(_)
-            ))
+            Err(MulticastGroupError::ReservedBaseAddress(_))
         ));
         assert!(matches!(
             MulticastAddrV4::new(Ipv4Addr::new(232, 0, 0, 0)),
-            Err(MulticastRouteError::Group(
-                MulticastGroupError::ReservedSsmNull(_)
-            ))
+            Err(MulticastGroupError::ReservedSsmNull(_))
         ));
     }
 
@@ -1662,10 +1239,12 @@ mod tests {
                 group("232.1.2.3").unwrap(),
                 Vni::DEFAULT_MULTICAST,
             ),
-            Err(MulticastRouteError::InvalidIpv6Source {
-                reason: InvalidMulticastSource::Loopback,
-                ..
-            })
+            Err(MulticastRouteError::Source(
+                MulticastSourceError::InvalidIpv6 {
+                    reason: InvalidMulticastSource::Loopback,
+                    ..
+                }
+            ))
         ));
     }
 

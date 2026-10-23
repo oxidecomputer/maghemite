@@ -9,6 +9,7 @@
 
 pub mod address;
 pub mod group;
+pub mod source;
 
 use std::fmt;
 use std::net::{IpAddr, Ipv6Addr};
