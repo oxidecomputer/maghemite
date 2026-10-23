@@ -259,12 +259,6 @@ impl Asn {
     }
 }
 
-pub fn to_buf<T: ?Sized + Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(&value, &mut buf)?;
-    Ok(buf)
-}
-
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, JsonSchema)]
 pub enum PolicyAction {
     Allow,
