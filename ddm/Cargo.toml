@@ -5,7 +5,6 @@ edition = "2024"
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-expectorate.workspace = true
 
 [dependencies]
 slog.workspace = true

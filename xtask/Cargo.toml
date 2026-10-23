@@ -7,5 +7,4 @@ edition = "2024"
 client-common.workspace = true
 anyhow.workspace = true
 clap.workspace = true
-mg-common.workspace = true
 tokio.workspace = true

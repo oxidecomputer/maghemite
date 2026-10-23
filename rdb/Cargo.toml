@@ -7,7 +7,6 @@ edition = "2024"
 client-common.workspace = true
 sled.workspace = true
 serde.workspace = true
-ciborium.workspace = true
 anyhow.workspace = true
 schemars.workspace = true
 serde_json.workspace = true
@@ -20,7 +19,6 @@ clap = { workspace = true, optional = true }
 oxnet.workspace = true
 mg-api-types = { workspace = true, features = ["clap"] }
 mg-api-types-versions.workspace = true
-ndp.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
