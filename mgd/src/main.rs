@@ -37,11 +37,14 @@ mod bfd_admin;
 mod bgp_admin;
 mod error;
 mod log;
+mod mrib_admin;
 mod oxstats;
 mod rib_admin;
 mod signal;
 mod smf;
 mod static_admin;
+#[cfg(test)]
+mod test;
 mod unnumbered_manager;
 mod validation;
 
@@ -570,19 +573,12 @@ mod tests {
     use rdb::StaticRouteKey;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
-    use tempfile::TempDir;
 
-    fn setup_test_db() -> (rdb::Db, TempDir, Logger) {
-        let temp_dir = TempDir::new().unwrap();
-        let log = mg_common::log::init_logger();
-        let db = rdb::Db::new(temp_dir.path().to_str().unwrap(), log.clone())
-            .unwrap();
-        (db, temp_dir, log)
-    }
+    use crate::test::test_db;
 
     #[test]
     fn test_initialize_static_routes_deduplicates_same_nexthop() {
-        let (db, _temp, log) = setup_test_db();
+        let (db, log) = test_db("static_routes_dedup_nexthop");
 
         // Add two routes with different host bits but same nexthop
         // They should normalize to the same route and deduplicate
@@ -628,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_initialize_static_routes_creates_ecmp() {
-        let (db, _temp, log) = setup_test_db();
+        let (db, log) = test_db("static_routes_ecmp");
 
         // Add two routes with different host bits AND different nexthops
         // They should normalize to the same prefix but keep both routes (ECMP)
@@ -672,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_initialize_static_routes_preserves_normalized() {
-        let (db, _temp, log) = setup_test_db();
+        let (db, log) = test_db("static_routes_normalized");
 
         // Add a route that's already normalized
         let routes = vec![StaticRouteKey {
@@ -695,7 +691,7 @@ mod tests {
 
     #[test]
     fn test_initialize_static_routes_empty_db() {
-        let (db, _temp, log) = setup_test_db();
+        let (db, log) = test_db("static_routes_empty");
 
         // Run initialization on empty DB - should not panic
         initialize_static_routes(&db, &log);
@@ -707,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_initialize_static_routes_ipv6() {
-        let (db, _temp, log) = setup_test_db();
+        let (db, log) = test_db("static_routes_ipv6");
 
         // Test IPv6 normalization
         let routes = vec![
@@ -743,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_initialize_static_routes_mixed_families() {
-        let (db, _temp, log) = setup_test_db();
+        let (db, log) = test_db("static_routes_mixed");
 
         // Test mixed IPv4 and IPv6 routes
         let routes = vec![

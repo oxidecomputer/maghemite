@@ -4,6 +4,7 @@
 
 use crate::unnumbered_manager::{AddNeighborError, ResolveNeighborError};
 use dropshot::{ClientErrorStatusCode, HttpError};
+use mg_api_types::mrib::MulticastRouteError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -30,6 +31,9 @@ pub enum Error {
 
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+
+    #[error("invalid multicast route: {0}")]
+    MulticastRoute(#[from] MulticastRouteError),
 }
 
 impl From<Error> for HttpError {
@@ -94,7 +98,7 @@ impl From<Error> for HttpError {
             Error::InternalCommunication(_) => {
                 Self::for_internal_error(value.to_string())
             }
-            Error::InvalidRequest(_) => {
+            Error::InvalidRequest(_) | Error::MulticastRoute(_) => {
                 Self::for_bad_request(None, value.to_string())
             }
         }

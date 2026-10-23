@@ -57,6 +57,19 @@ progenitor::generate_api!(
         StaticRoute6 = mg_api_types_versions::latest::static_routes::StaticRoute6,
         StaticRoute6List = mg_api_types_versions::latest::static_routes::StaticRoute6List,
 
+        // MRIB shapes.
+        MribAddStaticRequest = mg_api_types_versions::latest::mrib::MribAddStaticRequest,
+        MribDeleteStaticRequest = mg_api_types_versions::latest::mrib::MribDeleteStaticRequest,
+        MulticastAddr = mg_api_types_versions::latest::mrib::MulticastAddr,
+        MulticastRoute = mg_api_types_versions::latest::mrib::MulticastRoute,
+        MulticastRouteKey = mg_api_types_versions::latest::mrib::MulticastRouteKey,
+        MulticastRouteKeyV4 = mg_api_types_versions::latest::mrib::MulticastRouteKeyV4,
+        MulticastRouteKeyV6 = mg_api_types_versions::latest::mrib::MulticastRouteKeyV6,
+        MulticastSourceProtocol = mg_api_types_versions::latest::mrib::MulticastSourceProtocol,
+        RouteOriginFilter = mg_api_types_versions::latest::mrib::RouteOriginFilter,
+        StaticMulticastRoute = mg_api_types_versions::latest::mrib::StaticMulticastRoute,
+        Vni = mg_api_types_versions::latest::mrib::Vni,
+
         Duration = std::time::Duration,
    }
 );

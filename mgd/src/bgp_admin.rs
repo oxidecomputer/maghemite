@@ -2668,25 +2668,18 @@ pub(crate) mod helpers {
 #[cfg(test)]
 mod tests {
     use super::{do_bgp_apply, do_delete_router};
-    use crate::{
-        admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
-    };
-    use bgp::{BGP_PORT, policy::PolicySource, router::SessionMap};
-    use client_common::println_nopipe;
+    use crate::{admin::HandlerContext, test::test_ctx};
+    use bgp::{BGP_PORT, policy::PolicySource};
     use mg_api_types::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters, Ipv4UnicastConfig,
         Ipv6UnicastConfig, UnnumberedBgpPeerConfig,
     };
     use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-    use mg_common::stats::MgLowerStats;
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-    use rdb::test::get_test_db;
     use std::{
         collections::HashMap,
-        env::temp_dir,
-        fs::{create_dir_all, remove_dir_all},
         net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-        sync::{Arc, Mutex},
+        sync::Arc,
     };
 
     const POLICY_SOURCE: &str = r#"
@@ -2698,34 +2691,6 @@ fn update(message, asn, addr) {
     CheckerResult::Accept
 }
 "#;
-
-    /// Build a fresh handler context backed by an isolated on-disk test db.
-    fn test_ctx(name: &str) -> Arc<HandlerContext> {
-        let tmpdir = temp_dir();
-        let tmpdir =
-            format!("{}/maghemite-test/{name}", tmpdir.to_str().unwrap());
-        if std::fs::exists(&tmpdir).unwrap() {
-            remove_dir_all(&tmpdir).unwrap();
-        }
-        create_dir_all(&tmpdir).unwrap();
-        println_nopipe!("tmpdir is {tmpdir}");
-        let log = mg_common::log::init_file_logger(&format!("{name}.log"));
-        let db = get_test_db(name, log.clone()).unwrap();
-        Arc::new(HandlerContext {
-            #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-            tep: Ipv6Addr::UNSPECIFIED,
-            bgp: BgpContext::new(
-                Arc::new(Mutex::new(SessionMap::new())),
-                log.clone(),
-            ),
-            bfd: BfdContext::new(log.clone()),
-            log: log.clone(),
-            db: (*db).clone(),
-            mg_lower_stats: Arc::new(MgLowerStats::default()),
-            stats_server_running: Mutex::new(false),
-            oximeter_port: 0,
-        })
-    }
 
     /// Common peer parameters with both address families enabled.
     fn params(hold_time: u64) -> BgpPeerParameters {

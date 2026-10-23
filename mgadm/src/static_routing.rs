@@ -2,22 +2,27 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use client_common::println_nopipe;
 use mg_admin_client::Client;
+use mg_api_types::mrib::MulticastRoute;
 use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use oxnet::{Ipv4Net, Ipv6Net};
 use std::net::{IpAddr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    // Unicast static routes
     GetV4Routes,
     AddV4Route(StaticRoute4),
     RemoveV4Routes(StaticRoute4),
     GetV6Routes,
     AddV6Route(StaticRoute6),
     RemoveV6Routes(StaticRoute6),
+
+    // Multicast static routes (read-only -> Omicron is source of truth)
+    GetMroutes,
 }
 
 #[derive(Debug, Args)]
@@ -102,8 +107,37 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             };
             client.static_remove_v6_route(&arg).await?;
         }
+        Commands::GetMroutes => {
+            let routes = client
+                .static_list_mcast_routes()
+                .await
+                .context("list static multicast routes")?
+                .into_inner();
+
+            if routes.is_empty() {
+                println_nopipe!("No static multicast routes");
+            } else {
+                print_mroutes(&routes);
+            }
+        }
     }
     Ok(())
+}
+
+fn print_mroutes(routes: &[MulticastRoute]) {
+    for route in routes {
+        let source = route
+            .key
+            .source()
+            .map_or_else(|| "*".to_string(), |s| s.to_string());
+
+        println_nopipe!(
+            "({source}, {}) vni={} underlay={}",
+            route.key.group(),
+            route.key.vni(),
+            route.underlay_group,
+        );
+    }
 }
 
 #[cfg(test)]

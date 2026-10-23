@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "13.0.0"
+    "version": "14.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1234,6 +1234,150 @@
         }
       }
     },
+    "/mrib/status/imported": {
+      "get": {
+        "summary": "Get imported multicast routes from `mrib_in`.",
+        "operationId": "get_mrib_imported",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family.\n\nOnly used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "description": "Multicast group address.\n\nIf provided, the query returns a specific route. If omitted, the query returns all routes matching the filters.",
+            "schema": {
+              "$ref": "#/components/schemas/MulticastAddr"
+            }
+          },
+          {
+            "in": "query",
+            "name": "route_origin",
+            "description": "Filter by route origin (\"Static\" or \"Dynamic\").\n\nOnly used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/RouteOriginFilter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "description": "Source address (`None` for `(*,G)` routes).\n\nOnly used when `group` is set.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vni",
+            "description": "VNI (defaults to the fleet-wide multicast VNI).\n\nOnly used when `group` is set.",
+            "schema": {
+              "$ref": "#/components/schemas/Vni"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mrib/status/selected": {
+      "get": {
+        "summary": "Get selected multicast routes from `mrib_loc`.",
+        "operationId": "get_mrib_selected",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family.\n\nOnly used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "description": "Multicast group address.\n\nIf provided, the query returns a specific route. If omitted, the query returns all routes matching the filters.",
+            "schema": {
+              "$ref": "#/components/schemas/MulticastAddr"
+            }
+          },
+          {
+            "in": "query",
+            "name": "route_origin",
+            "description": "Filter by route origin (\"Static\" or \"Dynamic\").\n\nOnly used when listing all routes.",
+            "schema": {
+              "$ref": "#/components/schemas/RouteOriginFilter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "description": "Source address (`None` for `(*,G)` routes).\n\nOnly used when `group` is set.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vni",
+            "description": "VNI (defaults to the fleet-wide multicast VNI).\n\nOnly used when `group` is set.",
+            "schema": {
+              "$ref": "#/components/schemas/Vni"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/ndp/interface": {
       "get": {
         "operationId": "get_ndp_interface_detail",
@@ -1474,6 +1618,84 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/static/mroute": {
+      "get": {
+        "summary": "List all configured static multicast routes.",
+        "operationId": "static_list_mcast_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Add static multicast routes.",
+        "operationId": "static_add_mcast_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribAddStaticRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove static multicast routes.",
+        "operationId": "static_remove_mcast_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribDeleteStaticRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -3802,6 +4024,183 @@
           }
         ]
       },
+      "MribAddStaticRequest": {
+        "description": "Request body for adding static multicast routes to the MRIB.",
+        "type": "object",
+        "properties": {
+          "routes": {
+            "description": "List of static multicast routes to add.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticMulticastRoute"
+            }
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "MribDeleteStaticRequest": {
+        "description": "Request body for deleting static multicast routes from the MRIB.",
+        "type": "object",
+        "properties": {
+          "keys": {
+            "description": "List of route keys to delete.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MulticastRouteKey"
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "MulticastRoute": {
+        "description": "Multicast route entry -> key, underlay group, and metadata.",
+        "type": "object",
+        "properties": {
+          "created": {
+            "description": "Creation timestamp.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "key": {
+            "description": "The multicast route key `(S,G)` or `(*,G)`.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastRouteKey"
+              }
+            ]
+          },
+          "source": {
+            "description": "Protocol that originated the route.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastSourceProtocol"
+              }
+            ]
+          },
+          "underlay_group": {
+            "description": "Underlay multicast group address within the `ff04::/64` subnet allocated by Omicron for rack-internal multicast traffic.\n\nOverlay multicast addresses are mapped 1:1 to these admin-local scope underlay addresses. OPTE's M2P (multicast-to-underlay) mapping translates an overlay group to this address for guest-originated traffic and uses it as the packet's outer IPv6 destination. The switch performs the same mapping for external ingress and replicates via its PRE (Packet Replication Engine) or similar.\n\nOmicron owns group creation, deletion, and NAT configuration, while ddmd programs underlay members on the switch from imported DDM subscriptions.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "updated": {
+            "description": "Last updated timestamp.",
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "created",
+          "key",
+          "source",
+          "underlay_group",
+          "updated"
+        ]
+      },
+      "MulticastRouteKey": {
+        "description": "Multicast route key: (Source, Group) when a source is set, or (*, Group) without one (i.e., any-source multicast).\n\nUses type-enforced IP address family matching: IPv4 sources can only be paired with IPv4 groups, and IPv6 sources with IPv6 groups.",
+        "oneOf": [
+          {
+            "description": "An IPv4 route key.",
+            "type": "object",
+            "properties": {
+              "V4": {
+                "$ref": "#/components/schemas/MulticastRouteKeyV4"
+              }
+            },
+            "required": [
+              "V4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "An IPv6 route key.",
+            "type": "object",
+            "properties": {
+              "V6": {
+                "$ref": "#/components/schemas/MulticastRouteKeyV6"
+              }
+            },
+            "required": [
+              "V6"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "MulticastRouteKeyV4": {
+        "description": "IPv4 multicast route key with type-enforced IP address family matching.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "description": "Multicast group address.",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Source address (`None` for `(*,G)` routes).",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "vni": {
+            "description": "VNI (Virtual Network Identifier).",
+            "default": 77,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
+          }
+        },
+        "required": [
+          "group"
+        ]
+      },
+      "MulticastRouteKeyV6": {
+        "description": "IPv6 multicast route key with type-enforced IP address family matching.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "description": "Multicast group address.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Source address (`None` for `(*,G)` routes).",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "vni": {
+            "description": "VNI (Virtual Network Identifier).",
+            "default": 77,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
+          }
+        },
+        "required": [
+          "group"
+        ]
+      },
+      "MulticastSourceProtocol": {
+        "description": "Protocol that originated a multicast route entry.",
+        "oneOf": [
+          {
+            "description": "Static route configured via API.",
+            "type": "string",
+            "enum": [
+              "Static"
+            ]
+          }
+        ]
+      },
       "NdpInterface": {
         "description": "NDP state for an interface",
         "type": "object",
@@ -5275,6 +5674,29 @@
           "code"
         ]
       },
+      "StaticMulticastRoute": {
+        "description": "A static multicast route.",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "The multicast route key `(S,G)` or `(*,G)`.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastRouteKey"
+              }
+            ]
+          },
+          "underlay_group": {
+            "description": "Underlay multicast group address (`ff04::/64`).",
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "key",
+          "underlay_group"
+        ]
+      },
       "StaticRoute4": {
         "type": "object",
         "properties": {
@@ -5790,6 +6212,13 @@
           "withdrawn"
         ]
       },
+      "Vni": {
+        "description": "A validated Geneve Virtual Network Identifier.\n\nWraps a 24-bit VNI, rejecting any value above [`Vni::MAX_VNI`] at construction and deserialization.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "maximum": 16777215
+      },
       "AddressFamily": {
         "description": "Represents the address family (protocol version) for network routes.\n\nThis is the canonical source of truth for address family definitions across the entire codebase. All routing-related components (RIB operations, BGP messages, API filtering, CLI tools) use this single enum rather than defining their own.\n\n# Semantics\n\nWhen used in filtering contexts (e.g., database queries or API parameters), `Option<AddressFamily>` is preferred: - `None` = no filter (match all address families) - `Some(Ipv4)` = IPv4 routes only - `Some(Ipv6)` = IPv6 routes only\n\n# Examples\n\n```ignore use mg_api_types::rdb::AddressFamily;\n\nlet ipv4 = AddressFamily::Ipv4; let ipv6 = AddressFamily::Ipv6;\n\n// For filtering, use Option let filter: Option<AddressFamily> = Some(AddressFamily::Ipv4); let no_filter: Option<AddressFamily> = None; // matches all families ```",
         "oneOf": [
@@ -5805,6 +6234,30 @@
             "type": "string",
             "enum": [
               "Ipv6"
+            ]
+          }
+        ]
+      },
+      "MulticastAddr": {
+        "description": "A validated multicast group address (IPv4 or IPv6), one of [`MulticastAddrV4`] or [`MulticastAddrV6`].",
+        "type": "string",
+        "format": "ip"
+      },
+      "RouteOriginFilter": {
+        "description": "Filter for multicast route origin.",
+        "oneOf": [
+          {
+            "description": "Static routes only (operator configured).",
+            "type": "string",
+            "enum": [
+              "Static"
+            ]
+          },
+          {
+            "description": "Dynamic routes only (learned via IGMP, MLD, etc.).",
+            "type": "string",
+            "enum": [
+              "Dynamic"
             ]
           }
         ]
