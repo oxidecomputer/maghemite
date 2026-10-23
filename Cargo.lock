@@ -905,7 +905,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=9ffd5a1a49eb4b0c48eb66a139298e90b0951796#9ffd5a1a49eb4b0c48eb66a139298e90b0951796"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1074,12 +1074,6 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "crc8"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b31d2174830f395fd7e413c2f8a119252de36356982f805f495269331e97559e"
 
 [[package]]
 name = "critical-section"
@@ -1668,16 +1662,16 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=9ffd5a1a49eb4b0c48eb66a139298e90b0951796#9ffd5a1a49eb4b0c48eb66a139298e90b0951796"
 dependencies = [
  "async-trait",
  "chrono",
  "common",
- "crc8",
  "futures",
  "http",
  "oxnet",
- "progenitor 0.14.0",
+ "progenitor 0.15.1",
+ "progenitor-extras 0.3.0",
  "regress 0.11.1",
  "reqwest 0.13.5",
  "schemars 0.8.22",
@@ -1692,7 +1686,7 @@ dependencies = [
 [[package]]
 name = "dpd-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=9ffd5a1a49eb4b0c48eb66a139298e90b0951796#9ffd5a1a49eb4b0c48eb66a139298e90b0951796"
 dependencies = [
  "dpd-types-versions",
 ]
@@ -1700,7 +1694,7 @@ dependencies = [
 [[package]]
 name = "dpd-types-versions"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=9ffd5a1a49eb4b0c48eb66a139298e90b0951796#9ffd5a1a49eb4b0c48eb66a139298e90b0951796"
 dependencies = [
  "chrono",
  "dropshot",
