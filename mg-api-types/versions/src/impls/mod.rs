@@ -6,4 +6,5 @@
 
 pub(crate) mod bfd;
 pub(crate) mod bgp;
+pub(crate) mod mrib;
 pub(crate) mod rdb;
