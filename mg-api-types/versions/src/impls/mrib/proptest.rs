@@ -22,8 +22,9 @@ use test_strategy::{Arbitrary, proptest};
 use crate::latest::mrib::{
     EmbeddedIpv4, InvalidEmbeddedRp, InvalidMulticastSource, MulticastAddr,
     MulticastAddrV4, MulticastAddrV6, MulticastGroupError, MulticastRoute,
-    MulticastRouteError, MulticastRouteKey, MulticastSourceProtocol,
-    UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6, Vni, VniError,
+    MulticastRouteError, MulticastRouteKey, MulticastSourceError,
+    MulticastSourceProtocol, UnderlayMulticastIpv6, UnicastAddrV4,
+    UnicastAddrV6, Vni, VniError,
 };
 
 /// Usable IPv6 multicast scopes, containing every scope
@@ -507,10 +508,10 @@ fn spec_underlay(addr: Ipv6Addr) -> bool {
 
 /// Spec for an IPv4 (S,G) source per RFC 919 §7, RFC 1122 §3.2.1.3,
 /// RFC 3927, and RFC 6890.
-fn spec_source_v4(addr: Ipv4Addr) -> Result<(), MulticastRouteError> {
+fn spec_source_v4(addr: Ipv4Addr) -> Result<(), MulticastSourceError> {
     let octets = addr.octets();
     if octets[0] & 0xf0 == 0xe0 {
-        return Err(MulticastRouteError::SourceNotUnicast(IpAddr::V4(addr)));
+        return Err(MulticastSourceError::NotUnicast(IpAddr::V4(addr)));
     }
     let reason = match octets {
         [0, 0, 0, 0] => InvalidMulticastSource::Unspecified,
@@ -521,16 +522,16 @@ fn spec_source_v4(addr: Ipv4Addr) -> Result<(), MulticastRouteError> {
         [240..=255, ..] => InvalidMulticastSource::Reserved,
         _ => return Ok(()),
     };
-    Err(MulticastRouteError::InvalidIpv4Source { addr, reason })
+    Err(MulticastSourceError::InvalidIpv4 { addr, reason })
 }
 
 /// Spec for an IPv6 (S,G) source per RFC 4291 §2.5.
-fn spec_source_v6(addr: Ipv6Addr) -> Result<(), MulticastRouteError> {
+fn spec_source_v6(addr: Ipv6Addr) -> Result<(), MulticastSourceError> {
     if u128::from(addr) >> 120 == 0xff {
-        return Err(MulticastRouteError::SourceNotUnicast(IpAddr::V6(addr)));
+        return Err(MulticastSourceError::NotUnicast(IpAddr::V6(addr)));
     }
     let embedded =
-        |form| Err(MulticastRouteError::Ipv4EmbeddedSource { addr, form });
+        |form| Err(MulticastSourceError::Ipv4Embedded { addr, form });
     let reason = match addr.segments() {
         [0, 0, 0, 0, 0, 0, 0, 0] => InvalidMulticastSource::Unspecified,
         [0, 0, 0, 0, 0, 0, 0, 1] => InvalidMulticastSource::Loopback,
@@ -539,7 +540,7 @@ fn spec_source_v6(addr: Ipv6Addr) -> Result<(), MulticastRouteError> {
         [0, 0, 0, 0, 0, 0, ..] => return embedded(EmbeddedIpv4::Compatible),
         _ => return Ok(()),
     };
-    Err(MulticastRouteError::InvalidIpv6Source { addr, reason })
+    Err(MulticastSourceError::InvalidIpv6 { addr, reason })
 }
 
 fn outcome<T, E>(res: &Result<T, E>) -> Result<(), &E> {
@@ -937,7 +938,7 @@ fn prop_group_v4_matches_spec(
     addr: Ipv4Addr,
 ) {
     let got = MulticastAddrV4::new(addr);
-    let want = spec_group_v4(addr).map_err(MulticastRouteError::from);
+    let want = spec_group_v4(addr);
     prop_assert_eq!(outcome(&got), outcome(&want), "{}", addr);
     prop_assert_eq!(
         json_accepts::<MulticastAddrV4>(&addr),
@@ -961,7 +962,7 @@ fn prop_group_v6_matches_spec(
     #[strategy(group_v6_candidate_strategy())] addr: Ipv6Addr,
 ) {
     let got = MulticastAddrV6::new(addr);
-    let want = spec_group_v6(addr).map_err(MulticastRouteError::from);
+    let want = spec_group_v6(addr);
     prop_assert_eq!(outcome(&got), outcome(&want), "{}", addr);
     prop_assert_eq!(
         json_accepts::<MulticastAddrV6>(&addr),
