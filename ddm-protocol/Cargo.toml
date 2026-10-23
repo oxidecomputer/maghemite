@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dpd-types-versions.workspace = true
 oxnet.workspace = true
 schemars.workspace = true
 serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 expectorate.workspace = true
