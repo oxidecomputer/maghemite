@@ -123,7 +123,7 @@ sled = "0.34"
 camino = "1.2.6"
 http = "1.5.0"
 http-body-util = "0.1"
-rand = "0.10.2"
+rand = "0.10.3"
 backoff = "0.4"
 chrono = { version = "0.4.45", features = ["serde"] }
 oxide-tokio-rt = "0.1.6"
