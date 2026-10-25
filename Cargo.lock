@@ -342,7 +342,7 @@ dependencies = [
  "slog-error-chain",
  "socket2",
  "test-strategy",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -378,7 +378,7 @@ dependencies = [
  "slog-error-chain",
  "socket2",
  "strum 0.28.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -495,7 +495,7 @@ dependencies = [
  "sled-hardware-types",
  "slog",
  "slog-error-chain",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "uuid",
  "vsss-rs",
@@ -850,7 +850,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -874,7 +874,7 @@ dependencies = [
  "omicron-workspace-hack",
  "schemars 0.8.22",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -920,7 +920,7 @@ dependencies = [
  "slog-bunyan",
  "slog-term",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs)",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -1156,7 +1156,7 @@ dependencies = [
  "libc",
  "num-derive",
  "num-traits",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1395,7 +1395,7 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "uuid",
 ]
@@ -1538,7 +1538,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1634,7 +1634,7 @@ dependencies = [
  "libdlpi-sys",
  "num_enum 0.7.6",
  "pretty-hex",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1661,7 +1661,7 @@ dependencies = [
  "pretty-hex",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zerocopy 0.8.56",
 ]
 
@@ -1709,7 +1709,7 @@ dependencies = [
  "rand 0.9.5",
  "schemars 0.8.22",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -1769,7 +1769,7 @@ dependencies = [
  "slog-bunyan",
  "slog-json",
  "slog-term",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -1810,7 +1810,7 @@ dependencies = [
  "similar 2.7.0",
  "supports-color",
  "textwrap",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1860,7 +1860,7 @@ checksum = "dc09b90bda5770641457f1c0a42c8203c48f5a3d9799dcf1bafbd84e30ccf080"
 dependencies = [
  "pest",
  "pest_derive",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1964,7 +1964,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2288,7 +2288,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slog",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "uuid",
 ]
@@ -2332,7 +2332,7 @@ dependencies = [
  "omicron-workspace-hack",
  "schemars 0.8.22",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tufaceous-artifact",
  "uuid",
 ]
@@ -2409,7 +2409,7 @@ dependencies = [
  "secrecy",
  "serde",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 
@@ -2421,7 +2421,7 @@ checksum = "4a42c6ab99e8c06cf862540c646368223b12225328d094fb0ed7755434376a1e"
 dependencies = [
  "camino",
  "hex",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2434,7 +2434,7 @@ dependencies = [
  "camino",
  "fs-err",
  "git-stub",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2639,7 +2639,7 @@ dependencies = [
  "once_cell",
  "rand 0.9.5",
  "ring",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tokio",
  "tracing",
@@ -2683,7 +2683,7 @@ dependencies = [
  "rand 0.9.5",
  "resolv-conf",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -3108,7 +3108,7 @@ dependencies = [
  "slog-error-chain",
  "slog-term",
  "smf 0.2.3",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tofino",
  "tokio",
  "uuid",
@@ -3269,7 +3269,7 @@ dependencies = [
  "qorb",
  "reqwest 0.13.5",
  "slog",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3465,7 +3465,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -3580,7 +3580,7 @@ version = "0.1.0"
 dependencies = [
  "libfalcon",
  "oxide-tokio-rt",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3665,7 +3665,7 @@ dependencies = [
  "rand 0.10.3",
  "rusty-doors",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "winnow 1.0.4",
 ]
@@ -3920,7 +3920,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slog",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -3972,7 +3972,7 @@ dependencies = [
  "rdb",
  "reqwest 0.13.5",
  "slog",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "util",
 ]
@@ -4065,7 +4065,7 @@ dependencies = [
  "slog-error-chain",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "uuid",
 ]
@@ -4154,7 +4154,7 @@ dependencies = [
  "serde",
  "slog",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4299,7 +4299,7 @@ dependencies = [
  "tabled 0.15.0",
  "test-strategy",
  "textwrap",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tough",
  "trust-quorum-protocol",
@@ -4341,7 +4341,7 @@ dependencies = [
  "sled-hardware-types",
  "slog-error-chain",
  "strum 0.27.2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tough",
  "tufaceous-artifact",
  "url",
@@ -4587,7 +4587,7 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "strum 0.27.2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tufaceous-artifact",
  "uuid",
@@ -4605,7 +4605,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-error-chain",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -4621,7 +4621,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_with",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4825,7 +4825,7 @@ dependencies = [
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=164c7aca3f8c498a1fccbee4b9eda173d6ea2a67)",
  "postcard",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4839,7 +4839,7 @@ dependencies = [
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
  "postcard",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4956,7 +4956,7 @@ dependencies = [
  "slog-term",
  "strum 0.27.2",
  "termtree",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "usdt 0.5.0",
@@ -4994,7 +4994,7 @@ dependencies = [
  "slog",
  "slog-dtrace",
  "slog-error-chain",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "uuid",
 ]
@@ -5068,7 +5068,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "strum 0.27.2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -5662,7 +5662,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "typify 0.4.3",
  "unicode-ident",
 ]
@@ -5684,7 +5684,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "typify 0.6.2",
  "unicode-ident",
 ]
@@ -5706,7 +5706,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "typify 0.6.2",
  "unicode-ident",
 ]
@@ -5728,7 +5728,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.3",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "typify 0.8.0",
  "unicode-ident",
 ]
@@ -5926,7 +5926,7 @@ dependencies = [
  "hickory-resolver 0.24.4",
  "rand 0.9.5",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5953,7 +5953,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -5976,7 +5976,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -6150,7 +6150,7 @@ dependencies = [
  "serde_json",
  "sled",
  "slog",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -7149,7 +7149,7 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "swrite",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tufaceous-artifact",
  "uuid",
 ]
@@ -7187,7 +7187,7 @@ dependencies = [
  "slog",
  "slog-error-chain",
  "strum 0.27.2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "trust-quorum-types-versions",
  "tufaceous-artifact",
  "uuid",
@@ -7203,7 +7203,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "slog",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -7831,11 +7831,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -7851,9 +7851,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8010,7 +8010,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5eb4bcf85c373ff09a8beb87a477c2df185cd8842a770386a88bc3ff7ac5abb"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "usdt 0.5.0",
 ]
@@ -8348,7 +8348,7 @@ dependencies = [
  "slog-async",
  "slog-term",
  "tabled 0.21.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "transceiver-decode",
  "transceiver-messages",
@@ -8364,7 +8364,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "static_assertions",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "transceiver-messages",
 ]
 
@@ -8378,7 +8378,7 @@ dependencies = [
  "hubpack",
  "schemars 0.8.22",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -8410,7 +8410,7 @@ dependencies = [
  "slog-error-chain",
  "static_assertions",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "trust-quorum-types",
  "uuid",
  "zeroize",
@@ -8444,7 +8444,7 @@ dependencies = [
  "sled-hardware-types",
  "slog",
  "slog-error-chain",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -8467,7 +8467,7 @@ dependencies = [
  "serde_human_bytes",
  "strum 0.26.3",
  "test-strategy",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -8553,7 +8553,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "unicode-ident",
 ]
 
@@ -8573,7 +8573,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "unicode-ident",
 ]
 
@@ -8593,7 +8593,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.3",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "unicode-ident",
 ]
 
@@ -8876,7 +8876,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "thread-id 5.1.0",
 ]
 
