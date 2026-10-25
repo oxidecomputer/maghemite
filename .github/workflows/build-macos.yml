@@ -26,7 +26,7 @@ jobs:
     #
     # Use the oldest supported arm64 image to do this build. Building on a newer
     # image risks binaries that fail on older versions of macOS.
-    runs-on: macos-15
+    runs-on: macos-26
     # This must stay below the 40 minutes the macos buildomat job waits for this
     # run. See the XXX in .github/buildomat/jobs/macos.sh.
     timeout-minutes: 35
