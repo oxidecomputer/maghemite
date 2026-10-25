@@ -15,6 +15,7 @@ use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use types::PortId;
 
 #[cfg(target_os = "illumos")]
@@ -100,6 +101,7 @@ pub fn add_underlay_routes(
     config: &Config,
     routes: Vec<Route>,
     rt: &Arc<tokio::runtime::Handle>,
+    stop: &AtomicBool,
 ) {
     match &config.dpd {
         Some(dpd) => {
@@ -116,6 +118,7 @@ pub fn add_underlay_routes(
                 &config.if_name,
                 rt,
                 log,
+                stop,
             );
         }
         None => {
@@ -125,7 +128,7 @@ pub fn add_underlay_routes(
                 "sending {} routes to illumos",
                 routes.len(),
             );
-            add_routes_illumos(log, routes, &config.if_name);
+            add_routes_illumos(log, routes, &config.if_name, stop);
         }
     }
 }
@@ -137,6 +140,7 @@ pub fn add_routes_dendrite(
     ifname: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
+    stop: &AtomicBool,
 ) {
     dbg!(log, ifname, "sending to dpd host={} port={}", host, port);
 
@@ -147,6 +151,9 @@ pub fn add_routes_dendrite(
     let client = Client::new(&format!("http://{host}:{port}"), client_state);
 
     for r in routes {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         let cidr = match r.dest {
             IpAddr::V6(addr) => match Ipv6Net::new(addr, r.prefix_len) {
                 Ok(cidr) => cidr,
@@ -278,6 +285,7 @@ pub fn add_tunnel_routes(
     _log: &Logger,
     _ifname: &str,
     _routes: &HashSet<TunnelRoute>,
+    _stop: &AtomicBool,
 ) -> Result<(), String> {
     todo!();
 }
@@ -287,14 +295,21 @@ pub fn add_tunnel_routes(
     log: &Logger,
     ifname: &str,
     routes: &HashSet<TunnelRoute>,
+    stop: &AtomicBool,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
         IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
         SetVirt2BoundaryReq,
     };
+    if stop.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
 
     for (pfx, tep) in tunnel_route_update_map(routes) {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         for t in &tep {
             inf!(
                 log,
@@ -521,8 +536,16 @@ pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
     Ok(result)
 }
 
-pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
+pub fn add_routes_illumos(
+    log: &Logger,
+    routes: Vec<Route>,
+    ifname: &str,
+    stop: &AtomicBool,
+) {
     for r in routes {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         let gw = r.gw;
 
         inf!(log, ifname, "adding route {} -> {}", r.dest, r.gw,);
