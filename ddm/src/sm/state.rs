@@ -79,8 +79,11 @@ impl State for Init {
                     Event::Admin(AdminEvent::Shutdown) => {
                         return (None, event);
                     }
-                    Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
-                        self.ctx.event_channels.push(tx);
+                    Event::Admin(AdminEvent::NewExternalPeer {
+                        aobj_name,
+                        tx,
+                    }) => {
+                        self.ctx.event_channels.insert(aobj_name, tx);
                     }
                     _ => {
                         wrn!(
@@ -235,8 +238,8 @@ impl State for Solicit {
                         e
                     );
                 }
-                Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
-                    self.ctx.event_channels.push(tx);
+                Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
+                    self.ctx.event_channels.insert(aobj_name, tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {
@@ -473,7 +476,10 @@ impl State for Exchange {
         if self.ctx.iface.external && self.ctx.first_run {
             self.ctx.first_run = false;
             crate::sm::send(
-                Event::Admin(AdminEvent::NewExternalPeer(self.ctx.tx.clone())),
+                Event::Admin(AdminEvent::NewExternalPeer {
+                    aobj_name: self.ctx.config.aobj_name.clone(),
+                    tx: self.ctx.tx.clone(),
+                }),
                 &mut self.ctx.event_channels,
             );
         }
@@ -699,7 +705,7 @@ impl State for Exchange {
                         );
                     }
                 }
-                Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
+                Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
                     // Send the new peer only the routes learned from our own
                     // peer. Every sibling does the same, so together they send
                     // one copy of the imported table rather than one each.
@@ -727,7 +733,7 @@ impl State for Exchange {
                         })))
                         .is_ok()
                     {
-                        self.ctx.event_channels.push(tx.clone());
+                        self.ctx.event_channels.insert(aobj_name, tx);
                     }
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
