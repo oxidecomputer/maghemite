@@ -13,7 +13,7 @@ use ddm::defaults::{
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::sm::{DpdConfig, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
@@ -182,7 +182,10 @@ async fn run() {
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
+    let peers = sms
+        .iter()
+        .map(|x| (x.ctx.config.aobj_name.clone(), x.ctx.clone()))
+        .collect();
 
     let context = Arc::new(Mutex::new(HandlerContext {
         db,

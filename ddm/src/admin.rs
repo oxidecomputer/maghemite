@@ -33,9 +33,9 @@ use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
 use oxnet::{Ipv6Net, SocketAddrV6Json};
-use slog::{Logger, debug, error, info, o};
+use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -60,7 +60,7 @@ pub struct RouterStats {
 pub struct HandlerContext {
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
+    pub peers: BTreeMap<String, SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
     pub router_kind: RouterKind,
@@ -72,7 +72,7 @@ pub struct HandlerContext {
 
 impl HandlerContext {
     pub fn event_channels(&self) -> impl Iterator<Item = &Sender<Event>> {
-        self.peers.iter().map(|x| &x.tx)
+        self.peers.values().map(|x| &x.tx)
     }
 
     /// Reject the request unless this router is of kind `kind`.
@@ -245,7 +245,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
-        for sm in &ctx.peers {
+        for sm in ctx.peers.values() {
             // Compute status first so peer_status() never runs while we hold
             // any of the InterfaceState mutexes below.
             let status = sm.iface.peer_status();
@@ -528,14 +528,10 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         // State machines are identified by address object name, so an
         // external peer must not reuse one belonging to a static peer.
-        if let Some(p) = ctx.peers.iter().find(|p| {
-            !p.iface.external
-                && rq.address_objects.contains(&p.config.aobj_name)
+        if let Some(aobj) = rq.address_objects.iter().find(|aobj| {
+            ctx.peers.get(*aobj).is_some_and(|p| !p.iface.external)
         }) {
-            return Err(AdminError::AddressObjectInUse(
-                p.config.aobj_name.clone(),
-            )
-            .into());
+            return Err(AdminError::AddressObjectInUse(aobj.clone()).into());
         }
 
         let current = ctx.db.get_external_peers();
@@ -583,7 +579,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 event_channels: ctx
                     .peers
                     .iter()
-                    .map(|p| (p.config.aobj_name.clone(), p.tx.clone()))
+                    .map(|(aobj, p)| (aobj.clone(), p.tx.clone()))
                     .collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
@@ -601,32 +597,17 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
             sm.run().unwrap();
 
-            ctx.peers.push(sm_ctx.clone());
+            ctx.peers.insert(addr_obj.clone(), sm_ctx);
         }
-
-        // Ensure our indices are unique and ordered.
-        let mut remove_idx = BTreeSet::default();
 
         for aobj in to_remove.into_iter() {
-            for (i, p) in ctx.peers.iter().enumerate() {
-                if p.iface.external {
-                    if &p.config.aobj_name == aobj {
-                        let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
-                        remove_idx.insert(i);
-                        info!(
-                            ctx.log,
-                            "removing external peeer for address object {aobj}"
-                        );
-                    } else {
-                        debug!(ctx.log, "{aobj} != {}", p.config.aobj_name);
-                    }
-                }
-            }
-        }
-        // remove peers back to front so we don't shift the order out from under
-        // ourselves for the indexes we just gathered.
-        for i in remove_idx.iter().rev() {
-            ctx.peers.remove(*i);
+            let Some(p) = ctx.peers.get(aobj).filter(|p| p.iface.external)
+            else {
+                continue;
+            };
+            let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+            info!(ctx.log, "removing external peer for address object {aobj}");
+            ctx.peers.remove(aobj);
         }
 
         Ok(HttpResponseUpdatedNoContent())
