@@ -357,6 +357,7 @@ impl Exchange {
             tunnel: to_remove_tnl,
             rack: mut to_remove_rack,
         } = self.ctx.db.remove_nexthop_routes(self.peer.addr);
+        self.ctx.stats.update_imported(&self.ctx.db, self.peer.addr);
 
         // Underlay and rack routes share the underlay forwarding table. Every
         // route via this peer is now gone from both RIB tables, so all of

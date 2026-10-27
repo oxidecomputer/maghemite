@@ -7,13 +7,14 @@ use clap::Parser;
 use client_common::println_nopipe;
 use colored::*;
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::db::PeerStatus;
+use ddm_api_types_versions::latest::db::{PeerStats, PeerStatus, RouterKind};
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
 use mg_common::format_duration_human;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
+use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tabwriter::TabWriter;
@@ -35,8 +36,15 @@ struct Arg {
 
 #[derive(Debug, Parser)]
 enum SubCommand {
-    /// Get a DDM router's peers.
+    /// Get the routing session on each address object, and its peer.
     GetPeers,
+
+    /// Get the counters of each routing session, or of one.
+    PeerStats {
+        /// Address object of the session to show. Shows every session if
+        /// omitted.
+        aobj_name: Option<String>,
+    },
 
     /// Expire a peer.
     ExpirePeer(Peer),
@@ -152,35 +160,64 @@ async fn run() -> Result<()> {
             writeln!(
                 &mut tw,
                 "{}\t{}\t{}\t{}\t{}\t{}",
-                "Interface".dimmed(),
+                "Address Object".dimmed(),
                 "Host".dimmed(),
                 "Address".dimmed(),
                 "Kind".dimmed(),
                 "Status".dimmed(),
                 "Duration".dimmed(),
             )?;
-            let mut peers: Vec<_> = msg.into_inner().into_iter().collect();
-            peers.sort_by_key(|(index, _)| index.clone());
-            for (index, info) in &peers {
+            let peers: BTreeMap<_, _> = msg.into_inner().into_iter().collect();
+            for (aobj, info) in &peers {
                 let (state, duration) = match &info.status {
                     PeerStatus::Init(d) => ("Init", d),
                     PeerStatus::Solicit(d) => ("Solicit", d),
                     PeerStatus::Exchange(d) => ("Exchange", d),
                     PeerStatus::Expired(d) => ("Expired", d),
                 };
+                let (host, addr, kind) = match &info.peer {
+                    Some(p) => (
+                        p.host.clone(),
+                        p.addr.to_string(),
+                        match p.kind {
+                            RouterKind::Server => "Server",
+                            RouterKind::Transit => "Transit",
+                        },
+                    ),
+                    None => ("-".into(), "-".into(), "-"),
+                };
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}\t{}\t{}",
-                    index,
-                    info.host,
-                    info.addr,
-                    match info.kind {
-                        ddm_api_types_versions::latest::db::RouterKind::Server => "Server",
-                        ddm_api_types_versions::latest::db::RouterKind::Transit => "Transit",
-                    },
+                    aobj,
+                    host,
+                    addr,
+                    kind,
                     state,
                     format_duration_human(*duration),
                 )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::PeerStats { aobj_name } => {
+            let stats: BTreeMap<String, PeerStats> = match aobj_name {
+                Some(aobj) => {
+                    let s = client.get_peer_stats(&aobj).await?.into_inner();
+                    [(aobj, s)].into()
+                }
+                None => client
+                    .get_peers_stats()
+                    .await?
+                    .into_inner()
+                    .into_iter()
+                    .collect(),
+            };
+            let mut tw = TabWriter::new(stdout());
+            for (aobj, s) in &stats {
+                writeln!(&mut tw, "{}", aobj.bold())?;
+                for (name, value) in peer_stats_rows(s) {
+                    writeln!(&mut tw, "  {}\t{}", name.dimmed(), value)?;
+                }
             }
             tw.flush()?;
         }
@@ -370,6 +407,40 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn peer_stats_rows(s: &PeerStats) -> [(&'static str, u64); 13] {
+    // compilation barrier. a new counter must be shown here.
+    let PeerStats {
+        solicitations_sent,
+        solicitations_received,
+        advertisements_sent,
+        advertisements_received,
+        peer_expirations,
+        peer_address_changes,
+        peer_established,
+        updates_sent,
+        updates_received,
+        update_send_fail,
+        imported_underlay_prefixes,
+        imported_tunnel_endpoints,
+        imported_rack_prefixes,
+    } = *s;
+    [
+        ("Solicitations sent", solicitations_sent),
+        ("Solicitations received", solicitations_received),
+        ("Advertisements sent", advertisements_sent),
+        ("Advertisements received", advertisements_received),
+        ("Peer expirations", peer_expirations),
+        ("Peer address changes", peer_address_changes),
+        ("Peer sessions established", peer_established),
+        ("Updates sent", updates_sent),
+        ("Updates received", updates_received),
+        ("Update send failures", update_send_fail),
+        ("Imported underlay prefixes", imported_underlay_prefixes),
+        ("Imported tunnel endpoints", imported_tunnel_endpoints),
+        ("Imported rack prefixes", imported_rack_prefixes),
+    ]
 }
 
 fn init_logger() -> Logger {

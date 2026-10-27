@@ -4,4 +4,6 @@
 
 //! Version `RACK_PREFIXES` of the DDM Admin API.
 
+pub mod admin;
+pub mod db;
 pub mod net;

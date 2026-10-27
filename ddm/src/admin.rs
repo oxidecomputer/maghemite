@@ -14,14 +14,18 @@ use crate::sm::{
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
-use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, RouterKind, TunnelRoute};
+use ddm_api_types::admin::{
+    EnableStatsRequest, ExpirePathParams, PeerStatsPathParams, PrefixMap,
+};
+use ddm_api_types::db::{Peer, PeerInfo, PeerStats, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::external_peers::ExternalPeers;
 use ddm_api_types::net::{RackPrefixInfo, TunnelOrigin};
+use ddm_api_types_versions::v2;
 use ddm_protocol::v3::RackPrefix;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
+use dropshot::ClientErrorStatusCode;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
@@ -106,6 +110,9 @@ enum AdminError {
     #[error("address object {0} is in use by a non-external peer")]
     AddressObjectInUse(String),
 
+    #[error("no routing session on address object {0}")]
+    UnknownAddressObject(String),
+
     #[error("{0}")]
     Db(crate::db::Error),
 
@@ -130,6 +137,15 @@ impl From<AdminError> for HttpError {
             AdminError::UnsupportedRouterKind(_)
             | AdminError::AddressObjectInUse(_) => {
                 Self::for_bad_request(None, e.to_string())
+            }
+            AdminError::UnknownAddressObject(_) => {
+                // Unlike for_not_found, this sends the message to the
+                // client, so it learns which name was not found.
+                Self::for_client_error(
+                    None,
+                    ClientErrorStatusCode::NOT_FOUND,
+                    e.to_string(),
+                )
             }
             AdminError::Db(_)
             | AdminError::EventSend
@@ -242,7 +258,26 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let mut result = HashMap::new();
+        for (aobj, sm) in &ctx.peers {
+            // Compute status first so peer_status() never runs while we hold
+            // any of the InterfaceState mutexes below.
+            let status = sm.iface.peer_status();
+            let peer = lock!(sm.iface.peer_identity).clone().map(|p| Peer {
+                addr: p.addr,
+                host: p.hostname,
+                kind: p.kind,
+            });
+            result.insert(aobj.clone(), PeerInfo { status, peer });
+        }
+        Ok(HttpResponseOk(result))
+    }
+
+    async fn get_peers_v2(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v2::db::PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
         for sm in ctx.peers.values() {
@@ -255,7 +290,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             };
             result.insert(
                 if_index,
-                PeerInfo {
+                v2::db::PeerInfo {
                     status,
                     addr: peer.addr,
                     host: peer.hostname,
@@ -264,6 +299,31 @@ impl DdmAdminApi for DdmAdminApiImpl {
             );
         }
         Ok(HttpResponseOk(result))
+    }
+
+    async fn get_peers_stats(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerStats>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        Ok(HttpResponseOk(
+            ctx.peers
+                .iter()
+                .map(|(aobj, sm)| (aobj.clone(), sm.stats.snapshot()))
+                .collect(),
+        ))
+    }
+
+    async fn get_peer_stats(
+        ctx: RequestContext<Self::Context>,
+        params: Path<PeerStatsPathParams>,
+    ) -> Result<HttpResponseOk<PeerStats>, HttpError> {
+        let aobj = params.into_inner().aobj_name;
+        let ctx = lock!(ctx.context());
+        let sm = ctx
+            .peers
+            .get(&aobj)
+            .ok_or(AdminError::UnknownAddressObject(aobj))?;
+        Ok(HttpResponseOk(sm.stats.snapshot()))
     }
 
     async fn expire_peer(

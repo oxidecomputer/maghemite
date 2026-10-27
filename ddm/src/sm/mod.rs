@@ -9,7 +9,7 @@
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
-use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::db::{PeerStats, PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::v3::RackPrefix;
 use mg_common::lock;
@@ -18,7 +18,7 @@ use slog::Logger;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
 use std::net::Ipv6Addr;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -365,6 +365,62 @@ pub struct SessionStats {
     pub imported_tunnel_endpoints: AtomicU64,
     pub imported_rack_prefixes: AtomicU64,
     pub update_send_fail: AtomicU64,
+}
+
+impl SessionStats {
+    /// The current value of every counter.
+    pub fn snapshot(&self) -> PeerStats {
+        // compilation barrier. a new counter must be reported here.
+        let Self {
+            solicitations_sent,
+            solicitations_received,
+            advertisements_sent,
+            advertisements_received,
+            peer_expirations,
+            peer_address_changes,
+            peer_established,
+            updates_sent,
+            updates_received,
+            imported_underlay_prefixes,
+            imported_tunnel_endpoints,
+            imported_rack_prefixes,
+            update_send_fail,
+        } = self;
+        let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        PeerStats {
+            solicitations_sent: get(solicitations_sent),
+            solicitations_received: get(solicitations_received),
+            advertisements_sent: get(advertisements_sent),
+            advertisements_received: get(advertisements_received),
+            peer_expirations: get(peer_expirations),
+            peer_address_changes: get(peer_address_changes),
+            peer_established: get(peer_established),
+            updates_sent: get(updates_sent),
+            updates_received: get(updates_received),
+            update_send_fail: get(update_send_fail),
+            imported_underlay_prefixes: get(imported_underlay_prefixes),
+            imported_tunnel_endpoints: get(imported_tunnel_endpoints),
+            imported_rack_prefixes: get(imported_rack_prefixes),
+        }
+    }
+
+    /// Set the imported counts to the routes `db` holds from `peer`.
+    pub fn update_imported(&self, db: &Db, peer: Ipv6Addr) {
+        let set =
+            |c: &AtomicU64, n: usize| c.store(n as u64, Ordering::Relaxed);
+        set(
+            &self.imported_underlay_prefixes,
+            db.imported_from(peer).len(),
+        );
+        set(
+            &self.imported_tunnel_endpoints,
+            db.imported_tunnel_from(peer).len(),
+        );
+        set(
+            &self.imported_rack_prefixes,
+            db.imported_rack_from(peer).len(),
+        );
+    }
 }
 
 #[derive(Clone)]

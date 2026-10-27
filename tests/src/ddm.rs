@@ -521,9 +521,9 @@ async fn run_trio_tests(
     let t1 = Client::new("http://10.0.0.3:8000", log.clone());
 
     // If we never get a response from a server, return 99 as a sentinel value.
-    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 2);
+    wait_for_eq!(peer_count(&s1).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&s2).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&t1).await.unwrap_or(99), 2);
 
     println_nopipe!("initial peering test passed");
 
@@ -607,7 +607,7 @@ async fn run_trio_tests(
     let peers = t1.get_peers().await?;
     let p0: Ipv6Addr = peers
         .values()
-        .next()
+        .find_map(|x| x.peer.as_ref())
         .ok_or(anyhow!("expected transit peer"))?
         .addr;
 
@@ -815,10 +815,10 @@ async fn run_quartet_tests(
     let t1 = Client::new("http://10.0.0.4:8000", log.clone());
 
     // If we never get a response from a server, return 99 as a sentinel value.
-    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s3.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
+    wait_for_eq!(peer_count(&s1).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&s2).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&s3).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&t1).await.unwrap_or(99), 3);
 
     println_nopipe!("initial peering test passed");
 
@@ -1096,6 +1096,9 @@ async fn run_sextet_tests(
                     if let Ok(peers) = c.get_peers().await {
                         println_nopipe!("peers: {peers:#?}");
                     }
+                    if let Ok(stats) = c.get_peers_stats().await {
+                        println_nopipe!("peer stats: {stats:#?}");
+                    }
                     if let Ok(prefixes) = c.get_prefixes().await {
                         println_nopipe!("prefixes: {prefixes:#?}");
                     }
@@ -1180,10 +1183,7 @@ async fn run_sextet_tests(
                 stringify!($client),
                 $count
             );
-            wait_for_eq!(
-                $client.get_peers().await.map(|x| x.len()).ok(),
-                Some($count)
-            );
+            wait_for_eq!(peer_count(&$client).await.ok(), Some($count));
         }};
     }
 
@@ -1280,12 +1280,55 @@ async fn run_sextet_tests(
                 .await
                 .expect("get peers")
                 .values()
+                .filter_map(|x| x.peer.as_ref())
                 .map(|x| x.addr.to_string())
                 .collect::<Vec<_>>();
 
             for p in pfx_nexthops.keys() {
                 assert!(peers.contains(p), "nexthop {p} is not a peer");
             }
+        }};
+    }
+
+    // The routes a session currently imports from its own peer, as
+    // `Some((underlay, rack))`, or `None` when the router has no session on
+    // that address object.
+    macro_rules! assert_session_imports {
+        ($client:expr, $aobj:expr, $expected:expr) => {{
+            println_nopipe!(
+                "ensure {} session {} imports {:?}",
+                stringify!($client),
+                $aobj,
+                $expected
+            );
+            wait_for_eq!(
+                $client.get_peer_stats($aobj).await.ok().map(|s| (
+                    s.imported_underlay_prefixes,
+                    s.imported_rack_prefixes
+                )),
+                $expected
+            );
+        }};
+    }
+
+    // Servers have a single session, so check whichever one it is.
+    macro_rules! assert_server_imports {
+        ($client:expr, $expected:expr) => {{
+            println_nopipe!(
+                "ensure {} imports {:?}",
+                stringify!($client),
+                $expected
+            );
+            wait_for_eq!(
+                $client.get_peers_stats().await.ok().map(|m| m
+                    .values()
+                    .map(|s| (
+                        s.imported_underlay_prefixes,
+                        s.imported_rack_prefixes
+                    ))
+                    .collect::<Vec<_>>()),
+                Some(vec![$expected])
+            );
         }};
     }
 
@@ -1374,6 +1417,8 @@ async fn run_sextet_tests(
     // The address objects for each qsfp on each switch in the test environment.
     const QSFP0: &str = "tfportqsfp0_0/v6";
     const QSFP1: &str = "tfportqsfp1_0/v6";
+    const REAR0: &str = "tfportrear0_0/v6";
+    const REAR1: &str = "tfportrear1_0/v6";
 
     let ext_peers_both = ExternalPeers {
         address_objects: [QSFP0, QSFP1].map(String::from).into(),
@@ -1549,6 +1594,30 @@ async fn run_sextet_tests(
         assert_rack_reach!(racks);
 
         assert_all_nexthops_are_peers!();
+
+        // Check what each session imports from its own peer. A transit
+        // router's backplane sessions each import their server's /64. Its
+        // front sessions import only the other rack's /56, and only while
+        // peered: t1/qsfp0 peers with t2/qsfp1, and t1/qsfp1 with t2/qsfp0.
+        // Each server imports its rack sibling's /64 and, while the racks are
+        // peered, the other rack's /56.
+        let q0_q1 = peer_is_set(x, QSFP0) && peer_is_set(y, QSFP1);
+        let q1_q0 = peer_is_set(x, QSFP1) && peer_is_set(y, QSFP0);
+        let front = |cfg: &ExternalPeers, aobj, peered: bool| {
+            peer_is_set(cfg, aobj).then_some((0, u64::from(peered)))
+        };
+        for (t, cfg, q0, q1) in [(&t1, x, q0_q1, q1_q0), (&t2, y, q1_q0, q0_q1)]
+        {
+            assert_session_imports!(t, REAR0, Some((1, 0)));
+            assert_session_imports!(t, REAR1, Some((1, 0)));
+            assert_session_imports!(t, QSFP0, front(cfg, QSFP0, q0));
+            assert_session_imports!(t, QSFP1, front(cfg, QSFP1, q1));
+        }
+        let server = (1, u64::from(peered));
+        assert_server_imports!(s1, server);
+        assert_server_imports!(s2, server);
+        assert_server_imports!(s3, server);
+        assert_server_imports!(s4, server);
     }
 
     Ok(())
@@ -1560,6 +1629,15 @@ async fn prefix_count(c: &Client) -> Result<usize> {
         .values()
         .map(|x| x.len())
         .sum::<usize>())
+}
+
+/// The number of routing sessions that have discovered a peer.
+async fn peer_count(c: &Client) -> Result<usize> {
+    Ok(c.get_peers()
+        .await?
+        .values()
+        .filter(|x| x.peer.is_some())
+        .count())
 }
 
 async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {

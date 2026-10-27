@@ -185,6 +185,8 @@
     },
     "/peers": {
       "get": {
+        "summary": "Get the routing session on each address object, keyed by address",
+        "description": "object name, including sessions that have not discovered a peer.",
         "operationId": "get_peers",
         "responses": {
           "200": {
@@ -415,6 +417,71 @@
                       "type": "string"
                     },
                     "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/stats/peer/{aobj_name}": {
+      "get": {
+        "summary": "Get the counters of the routing session on one address object.",
+        "description": "Address object names contain a `/` (e.g. `tfportqsfp0_0/v6`), which must be percent-encoded as `%2F` in the path. Returns 404 if no session uses the address object.",
+        "operationId": "get_peer_stats",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "aobj_name",
+            "description": "Address object name of the routing session.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerStats"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/stats/peers": {
+      "get": {
+        "summary": "Get the counters of the routing session on each address object, keyed",
+        "description": "by address object name.",
+        "operationId": "get_peers_stats",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerStats",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerStats"
                   }
                 }
               }
@@ -673,8 +740,8 @@
           "path"
         ]
       },
-      "PeerInfo": {
-        "description": "Information about a DDM peer.",
+      "Peer": {
+        "description": "A discovered DDM peer.",
         "type": "object",
         "properties": {
           "addr": {
@@ -686,16 +753,118 @@
           },
           "kind": {
             "$ref": "#/components/schemas/RouterKind"
+          }
+        },
+        "required": [
+          "addr",
+          "host",
+          "kind"
+        ]
+      },
+      "PeerInfo": {
+        "description": "The routing session on one address object, and its peer if one has been discovered.",
+        "type": "object",
+        "properties": {
+          "peer": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Peer"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/PeerStatus"
           }
         },
         "required": [
-          "addr",
-          "host",
-          "kind",
           "status"
+        ]
+      },
+      "PeerStats": {
+        "description": "Counters for the routing session on one address object. The imported counts are the routes currently imported from this session's peer.",
+        "type": "object",
+        "properties": {
+          "advertisements_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "advertisements_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_rack_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_tunnel_endpoints": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_underlay_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_address_changes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_send_fail": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "advertisements_received",
+          "advertisements_sent",
+          "imported_rack_prefixes",
+          "imported_tunnel_endpoints",
+          "imported_underlay_prefixes",
+          "peer_address_changes",
+          "peer_established",
+          "peer_expirations",
+          "solicitations_received",
+          "solicitations_sent",
+          "update_send_fail",
+          "updates_received",
+          "updates_sent"
         ]
       },
       "PeerStatus": {

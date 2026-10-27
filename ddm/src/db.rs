@@ -96,10 +96,6 @@ impl Db {
         self.imported_matching(|d| &d.imported, |r| r.nexthop == nexthop)
     }
 
-    pub fn imported_count(&self) -> usize {
-        lock!(self.data).imported.len()
-    }
-
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
         lock!(self.data).imported_tunnel.clone()
     }
@@ -112,10 +108,6 @@ impl Db {
         self.imported_matching(|d| &d.imported_tunnel, |r| r.nexthop == nexthop)
     }
 
-    pub fn imported_tunnel_count(&self) -> usize {
-        lock!(self.data).imported_tunnel.len()
-    }
-
     pub fn imported_rack(&self) -> HashSet<RackRoute> {
         lock!(self.data).imported_rack.clone()
     }
@@ -126,10 +118,6 @@ impl Db {
             |d| &d.imported_rack,
             |r| r.route.nexthop == nexthop,
         )
-    }
-
-    pub fn imported_rack_count(&self) -> usize {
-        lock!(self.data).imported_rack.len()
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
