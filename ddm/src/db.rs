@@ -77,13 +77,14 @@ impl Db {
         lock!(self.data).imported.clone()
     }
 
-    /// Imported routes for which `filter` returns true.
-    fn imported_matching(
+    /// Routes in the imported table chosen by `table` for which `filter`
+    /// returns true.
+    fn imported_matching<T: Clone + Eq + std::hash::Hash>(
         &self,
-        filter: impl Fn(&Route) -> bool,
-    ) -> HashSet<Route> {
-        lock!(self.data)
-            .imported
+        table: impl Fn(&DbData) -> &HashSet<T>,
+        filter: impl Fn(&T) -> bool,
+    ) -> HashSet<T> {
+        table(&lock!(self.data))
             .iter()
             .filter(|r| filter(r))
             .cloned()
@@ -92,7 +93,7 @@ impl Db {
 
     /// Imported routes learned from the peer at `nexthop`.
     pub fn imported_from(&self, nexthop: Ipv6Addr) -> HashSet<Route> {
-        self.imported_matching(|r| r.nexthop == nexthop)
+        self.imported_matching(|d| &d.imported, |r| r.nexthop == nexthop)
     }
 
     pub fn imported_count(&self) -> usize {
@@ -103,12 +104,28 @@ impl Db {
         lock!(self.data).imported_tunnel.clone()
     }
 
+    /// Imported tunnel routes learned from the peer at `nexthop`.
+    pub fn imported_tunnel_from(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> HashSet<TunnelRoute> {
+        self.imported_matching(|d| &d.imported_tunnel, |r| r.nexthop == nexthop)
+    }
+
     pub fn imported_tunnel_count(&self) -> usize {
         lock!(self.data).imported_tunnel.len()
     }
 
     pub fn imported_rack(&self) -> HashSet<RackRoute> {
         lock!(self.data).imported_rack.clone()
+    }
+
+    /// Imported rack routes learned from the peer at `nexthop`.
+    pub fn imported_rack_from(&self, nexthop: Ipv6Addr) -> HashSet<RackRoute> {
+        self.imported_matching(
+            |d| &d.imported_rack,
+            |r| r.route.nexthop == nexthop,
+        )
     }
 
     pub fn imported_rack_count(&self) -> usize {
