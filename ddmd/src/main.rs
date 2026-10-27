@@ -21,6 +21,8 @@ use ddm_api_types::db::RouterKind;
 use mg_common::lock;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use std::sync::mpsc::channel;
@@ -263,9 +265,14 @@ fn start_state_machines(
     }
 
     let mut sms = Vec::new();
-    let mut event_channels = Vec::new();
+    let mut event_channels = BTreeMap::new();
 
     for name in &arg.addresses {
+        if event_channels.contains_key(name) {
+            slog::warn!(log, "ignoring repeated address object {name}");
+            continue;
+        }
+
         let (tx, rx) = channel();
 
         let config = ddm::sm::Config {
@@ -290,7 +297,7 @@ fn start_state_machines(
         let ctx = SmContext {
             config,
             db: db.clone(),
-            event_channels: Vec::new(),
+            event_channels: BTreeMap::new(),
             tx: tx.clone(),
             log: log.clone(),
             router_id: router_id.to_string(),
@@ -303,19 +310,18 @@ fn start_state_machines(
 
         let sm = StateMachine { ctx, rx: Some(rx) };
         sms.push(sm);
-        event_channels.push(tx);
+        event_channels.insert(name.clone(), tx);
     }
 
     // Add an event channel sender for each state machine to every other state
     // machine.
-    for (i, sm) in sms.iter_mut().enumerate() {
-        for (j, e) in event_channels.iter().enumerate() {
-            // dont give a state machine an event sender to itself.
-            if i == j {
-                continue;
-            }
-            sm.ctx.event_channels.push(e.clone());
-        }
+    for sm in &mut sms {
+        // dont give a state machine an event sender to itself.
+        sm.ctx.event_channels = event_channels
+            .iter()
+            .filter(|(name, _)| **name != sm.ctx.config.aobj_name)
+            .map(|(name, tx)| (name.clone(), tx.clone()))
+            .collect();
     }
 
     for sm in &mut sms {
