@@ -89,6 +89,9 @@ enum AdminError {
     #[error("only supported for {0} routers")]
     UnsupportedRouterKind(RouterKind),
 
+    #[error("address object {0} is in use by a non-external peer")]
+    AddressObjectInUse(String),
+
     #[error("admin event send: sending on a closed channel")]
     EventSend,
 
@@ -108,7 +111,8 @@ impl From<AdminError> for HttpError {
     fn from(e: AdminError) -> Self {
         let msg = InlineErrorChain::new(&e).to_string();
         match e {
-            AdminError::UnsupportedRouterKind(_) => {
+            AdminError::UnsupportedRouterKind(_)
+            | AdminError::AddressObjectInUse(_) => {
                 Self::for_bad_request(None, msg)
             }
             AdminError::EventSend | AdminError::StatsServer(_) => {
@@ -467,6 +471,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         let rq = request.into_inner();
 
+        // State machines are identified by address object name, so an
+        // external peer must not reuse one belonging to a static peer.
+        if let Some(aobj) = ctx
+            .peers
+            .iter()
+            .filter(|p| !p.iface.external)
+            .map(|p| &p.config.aobj_name)
+            .find(|aobj| rq.address_objects.contains(*aobj))
+        {
+            return Err(AdminError::AddressObjectInUse(aobj.clone()).into());
+        }
+
         let current = ctx.db.get_external_peers();
         let to_create = rq.address_objects.difference(&current);
         let to_remove = current.difference(&rq.address_objects);
@@ -509,7 +525,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
             let sm_ctx = SmContext {
                 config,
                 db: ctx.db.clone(),
-                event_channels: ctx.event_channels().cloned().collect(),
+                event_channels: ctx
+                    .peers
+                    .iter()
+                    .map(|p| (p.config.aobj_name.clone(), p.tx.clone()))
+                    .collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
                 router_id: ctx.router_id.clone(),
