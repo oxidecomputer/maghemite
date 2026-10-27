@@ -225,10 +225,11 @@ pub trait DdmAdminApi {
     /// Originate rack prefixes from this router, each with an optional
     /// multi-rack join address. The body is keyed by prefix so a prefix
     /// carries at most one join address. Advertising a prefix again replaces
-    /// its join address. Only supported on transit routers.
+    /// its join address. Originated prefixes not in the body are left
+    /// unchanged. Only supported on transit routers.
     #[endpoint {
         method = PUT,
-        path = "/rack_prefix",
+        path = "/originated_rack_prefixes",
         versions = VERSION_RACK_PREFIXES..,
     }]
     async fn advertise_rack_prefixes(
@@ -240,7 +241,7 @@ pub trait DdmAdminApi {
     /// transit routers.
     #[endpoint {
         method = DELETE,
-        path = "/rack_prefix",
+        path = "/originated_rack_prefixes",
         versions = VERSION_RACK_PREFIXES..,
     }]
     async fn withdraw_rack_prefixes(
