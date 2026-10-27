@@ -15,7 +15,7 @@ use ddm_protocol::v3::RackPrefix;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -24,9 +24,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use uuid::Uuid;
-
-#[cfg(target_os = "illumos")]
-use std::collections::BTreeSet;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) mod state;
@@ -45,9 +42,13 @@ pub enum AdminEvent {
     /// Synchronize with active peers by pulling their prefixes.
     Sync,
 
-    /// A new external peer has been added to the router that can be reached
-    /// using the provided sender.
-    NewExternalPeer(Sender<Event>),
+    /// A new external peer has been added to the router. Its state machine,
+    /// identified by its address object name, can be reached using the
+    /// provided sender.
+    NewExternalPeer {
+        aobj_name: String,
+        tx: Sender<Event>,
+    },
 
     /// Shutdown on receipt of this event.
     Shutdown,
@@ -371,7 +372,7 @@ pub struct SmContext {
     pub config: Config,
     pub db: Db,
     pub tx: Sender<Event>,
-    pub event_channels: Vec<Sender<Event>>,
+    pub event_channels: BTreeMap<String, Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub router_id: String,
     pub iface: Arc<InterfaceState>,
@@ -393,24 +394,13 @@ impl StateMachine {
     }
 }
 
-/// Send an event to all channels in the list, removing any channels from the
-/// list that are dead.
+/// Send an event to all sibling channels, removing any channels that are dead.
 #[cfg(target_os = "illumos")]
-pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
-    // Ensure our indices are unique and ordered.
-    let mut dead_channels = BTreeSet::default();
-    for (i, c) in event_channels.iter().enumerate() {
-        if c.send(e.clone()).is_err() {
-            dead_channels.insert(i);
-        }
-    }
-    // we need to remove in descending order, so we don't remove `i` and then
-    // try to remove `i+1` later which wlll be a _different_ item than we grabbed
-    // the index for. Removing from the top down causes no shifting for subsequent
-    // index removals.
-    for i in dead_channels.iter().rev() {
-        event_channels.remove(*i);
-    }
+pub(crate) fn send(
+    e: Event,
+    event_channels: &mut BTreeMap<String, Sender<Event>>,
+) {
+    event_channels.retain(|_, tx| tx.send(e.clone()).is_ok());
 }
 
 #[cfg(test)]

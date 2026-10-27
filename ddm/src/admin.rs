@@ -103,6 +103,9 @@ enum AdminError {
     #[error("only supported for {0} routers")]
     UnsupportedRouterKind(RouterKind),
 
+    #[error("address object {0} is in use by a non-external peer")]
+    AddressObjectInUse(String),
+
     #[error("{0}")]
     Db(crate::db::Error),
 
@@ -124,7 +127,8 @@ impl From<SendError<Event>> for AdminError {
 impl From<AdminError> for HttpError {
     fn from(e: AdminError) -> Self {
         match e {
-            AdminError::UnsupportedRouterKind(_) => {
+            AdminError::UnsupportedRouterKind(_)
+            | AdminError::AddressObjectInUse(_) => {
                 Self::for_bad_request(None, e.to_string())
             }
             AdminError::Db(_)
@@ -522,6 +526,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         let rq = request.into_inner();
 
+        // State machines are identified by address object name, so an
+        // external peer must not reuse one belonging to a static peer.
+        if let Some(p) = ctx.peers.iter().find(|p| {
+            !p.iface.external
+                && rq.address_objects.contains(&p.config.aobj_name)
+        }) {
+            return Err(AdminError::AddressObjectInUse(
+                p.config.aobj_name.clone(),
+            )
+            .into());
+        }
+
         let current = ctx.db.get_external_peers();
         let to_create = rq.address_objects.difference(&current);
         let to_remove = current.difference(&rq.address_objects);
@@ -564,7 +580,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
             let sm_ctx = SmContext {
                 config,
                 db: ctx.db.clone(),
-                event_channels: ctx.event_channels().cloned().collect(),
+                event_channels: ctx
+                    .peers
+                    .iter()
+                    .map(|p| (p.config.aobj_name.clone(), p.tx.clone()))
+                    .collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
                 router_id: ctx.router_id.clone(),
