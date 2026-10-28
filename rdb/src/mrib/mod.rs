@@ -461,7 +461,7 @@ mod tests {
     use mg_common::log::*;
 
     use super::*;
-    use crate::test::underlay_group;
+    use crate::test::{underlay_group, vni};
     use crate::types::{
         MulticastAddr, MulticastAddrV4, MulticastAddrV6,
         MulticastSourceProtocol, UnicastAddrV4, UnicastAddrV6,
@@ -476,7 +476,8 @@ mod tests {
         mrib.watch("test-watcher".to_string(), tx);
 
         let group = MulticastAddr::new_v4(225, 3, 3, 3).expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -508,7 +509,8 @@ mod tests {
         assert_eq!(read_lock!(mrib.watchers).len(), 1);
 
         let group = MulticastAddr::new_v4(225, 6, 6, 6).expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
 
         mrib.notify(MribChangeNotification::from(key));
         assert_eq!(read_lock!(mrib.watchers).len(), 1);
@@ -532,7 +534,8 @@ mod tests {
         assert_eq!(read_lock!(mrib.watchers).len(), 2);
 
         let group = MulticastAddr::new_v4(225, 7, 7, 7).expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
 
         mrib.notify(MribChangeNotification::from(key));
         assert!(live_rx.try_recv().unwrap().changed.contains(&key));
@@ -548,7 +551,8 @@ mod tests {
         let mrib = Mrib::new(log);
 
         let group = MulticastAddr::new_v4(225, 4, 4, 4).expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -561,7 +565,8 @@ mod tests {
             .expect("valid unicast");
         let group_v4 = MulticastAddrV4::new(Ipv4Addr::new(225, 4, 4, 4))
             .expect("valid mcast");
-        let key_sg = MulticastRouteKey::source_specific_v4(source, group_v4);
+        let key_sg =
+            MulticastRouteKey::source_specific_v4(source, group_v4, vni());
         mrib.add_route(MulticastRoute::new(
             key_sg,
             underlay_group(),
@@ -604,7 +609,7 @@ mod tests {
                     let group =
                         MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, octet))
                             .expect("valid mcast");
-                    MulticastRouteKey::source_specific_v4(source, group)
+                    MulticastRouteKey::source_specific_v4(source, group, vni())
                 })
                 .collect();
         for key in &keys {
@@ -616,6 +621,7 @@ mod tests {
         }
         let any_source = MulticastRouteKey::any_source(
             MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
+            vni(),
         )
         .expect("ASM group");
         mrib.add_route(MulticastRoute::new(
@@ -657,7 +663,8 @@ mod tests {
             0xff3e, 0, 0, 0, 0, 0, 0x8000, 1,
         ))
         .expect("valid mcast");
-        let v6_key = MulticastRouteKey::source_specific_v6(v6_source, v6_group);
+        let v6_key =
+            MulticastRouteKey::source_specific_v6(v6_source, v6_group, vni());
         mrib.add_route(MulticastRoute::new(
             v6_key,
             underlay_group(),
@@ -691,7 +698,7 @@ mod tests {
             .expect("valid unicast");
         let group = MulticastAddrV4::new(Ipv4Addr::new(232, 7, 7, 7))
             .expect("valid mcast");
-        let key = MulticastRouteKey::source_specific_v4(source, group);
+        let key = MulticastRouteKey::source_specific_v4(source, group, vni());
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -725,7 +732,8 @@ mod tests {
         // IPv6 any-source multicast route (*,G)
         let group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
             .expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -742,7 +750,8 @@ mod tests {
         let group_v6 =
             MulticastAddrV6::new(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1))
                 .expect("valid mcast");
-        let key_sg = MulticastRouteKey::source_specific_v6(source, group_v6);
+        let key_sg =
+            MulticastRouteKey::source_specific_v6(source, group_v6, vni());
         let route_sg = MulticastRoute::new(
             key_sg,
             underlay_group(),
@@ -760,6 +769,7 @@ mod tests {
 
         let v4_key = MulticastRouteKey::any_source(
             MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
+            vni(),
         )
         .expect("ASM group");
         mrib.add_route(MulticastRoute::new(

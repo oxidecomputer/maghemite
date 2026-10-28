@@ -27,22 +27,23 @@ use std::fmt::{self, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use chrono::{DateTime, Utc};
-use client_common::multicast::address::is_ssm_address;
-use client_common::multicast::group::{validate_group_v4, validate_group_v6};
+use dpd_types_versions::v14::mcast::{
+    is_ssm_address, validate_external_multicast_ipv4,
+    validate_external_multicast_ipv6,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use client_common::multicast::group::{
-    InvalidEmbeddedRp, MulticastGroupError,
-};
-pub use client_common::multicast::source::{
-    EmbeddedIpv4, InvalidMulticastSource, MulticastSourceError, UnicastAddrV4,
-    UnicastAddrV6,
-};
-pub use client_common::multicast::{
+pub use dpd_types_versions::v1::network::VniError;
+pub use dpd_types_versions::v8::mcast::{
     UnderlayMulticastError, UnderlayMulticastIpv6,
 };
-pub use client_common::vni::{Vni, VniError};
+pub use dpd_types_versions::v14::mcast::{
+    EmbeddedIpv4, ExternalMulticastIpError as MulticastGroupError,
+    InvalidEmbeddedRp, InvalidMulticastSource, MulticastSourceError,
+    UnicastAddrV4, UnicastAddrV6,
+};
+pub use dpd_types_versions::v14::network::Vni;
 
 /// Errors raised while validating multicast addresses and route keys.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -83,10 +84,6 @@ pub enum MulticastRouteError {
     },
 }
 
-const fn default_multicast_vni() -> Vni {
-    Vni::DEFAULT_MULTICAST
-}
-
 /// A validated IPv4 multicast address.
 ///
 /// IPv4 admits the whole multicast range apart from the base address of
@@ -109,7 +106,6 @@ const fn default_multicast_vni() -> Vni {
     JsonSchema,
 )]
 #[serde(try_from = "Ipv4Addr", into = "Ipv4Addr")]
-#[schemars(transparent)]
 pub struct MulticastAddrV4(Ipv4Addr);
 
 impl MulticastAddrV4 {
@@ -119,7 +115,7 @@ impl MulticastAddrV4 {
     ///
     /// Returns the first [`MulticastGroupError`] the address fails.
     pub fn new(value: Ipv4Addr) -> Result<Self, MulticastGroupError> {
-        validate_group_v4(value)?;
+        validate_external_multicast_ipv4(value)?;
         Ok(Self(value))
     }
 
@@ -233,7 +229,6 @@ impl From<MulticastAddrV4> for IpAddr {
     JsonSchema,
 )]
 #[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
-#[schemars(transparent)]
 pub struct MulticastAddrV6(Ipv6Addr);
 
 impl MulticastAddrV6 {
@@ -243,7 +238,7 @@ impl MulticastAddrV6 {
     ///
     /// Returns the first [`MulticastGroupError`] the address fails.
     pub fn new(value: Ipv6Addr) -> Result<Self, MulticastGroupError> {
-        validate_group_v6(value)?;
+        validate_external_multicast_ipv6(value)?;
         Ok(Self(value))
     }
 
@@ -420,9 +415,9 @@ impl JsonSchema for MulticastAddr {
     }
 }
 
-/// Reject a (*,G) wildcard key on an SSM group.
+/// Reject a `(*,G)` wildcard key on an SSM group.
 ///
-/// ASM groups can carry a source, which allows for (S,G) source filtering
+/// ASM groups can carry a source, which allows for `(S,G)` source filtering
 /// outside the SSM range.
 fn require_ssm_source(
     group: MulticastAddr,
@@ -456,14 +451,14 @@ fn require_ssm_source(
 pub struct MulticastRouteKeyV4 {
     /// Multicast group address.
     pub(crate) group: MulticastAddrV4,
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV4>,
     /// VNI (Virtual Network Identifier).
     pub(crate) vni: Vni,
 }
 
 impl MulticastRouteKeyV4 {
-    /// Return the source address, or `None` for a (*,G) wildcard route.
+    /// Return the source address, or `None` for a `(*,G)` wildcard route.
     #[inline]
     pub const fn source(&self) -> Option<UnicastAddrV4> {
         self.source
@@ -486,12 +481,11 @@ impl MulticastRouteKeyV4 {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MulticastRouteKeyV4")]
 pub(crate) struct MulticastRouteKeyV4Shadow {
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV4>,
     /// Multicast group address.
     pub(crate) group: MulticastAddrV4,
     /// VNI (Virtual Network Identifier).
-    #[serde(default = "default_multicast_vni")]
     pub(crate) vni: Vni,
 }
 
@@ -550,14 +544,14 @@ impl JsonSchema for MulticastRouteKeyV4 {
 pub struct MulticastRouteKeyV6 {
     /// Multicast group address.
     pub(crate) group: MulticastAddrV6,
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV6>,
     /// VNI (Virtual Network Identifier).
     pub(crate) vni: Vni,
 }
 
 impl MulticastRouteKeyV6 {
-    /// Return the source address, or `None` for a (*,G) wildcard route.
+    /// Return the source address, or `None` for a `(*,G)` wildcard route.
     #[inline]
     pub const fn source(&self) -> Option<UnicastAddrV6> {
         self.source
@@ -580,12 +574,11 @@ impl MulticastRouteKeyV6 {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MulticastRouteKeyV6")]
 pub(crate) struct MulticastRouteKeyV6Shadow {
-    /// Source address (`None` for (*,G) routes).
+    /// Source address (`None` for `(*,G)` routes).
     pub(crate) source: Option<UnicastAddrV6>,
     /// Multicast group address.
     pub(crate) group: MulticastAddrV6,
     /// VNI (Virtual Network Identifier).
-    #[serde(default = "default_multicast_vni")]
     pub(crate) vni: Vni,
 }
 
@@ -749,7 +742,7 @@ impl MulticastRouteKey {
         }
     }
 
-    /// Create an any-source multicast route key (*,G) with the default VNI.
+    /// Create an any-source multicast route key `(*,G)`.
     ///
     /// # Errors
     ///
@@ -759,33 +752,34 @@ impl MulticastRouteKey {
     /// [RFC 4607]: https://www.rfc-editor.org/rfc/rfc4607.html
     pub fn any_source(
         group: MulticastAddr,
+        vni: Vni,
     ) -> Result<Self, MulticastRouteError> {
-        Self::new(None, group, Vni::DEFAULT_MULTICAST)
+        Self::new(None, group, vni)
     }
 
-    /// Create a source-specific IPv4 multicast route key (S,G) with the
-    /// default VNI.
+    /// Create a source-specific IPv4 multicast route key `(S,G)`.
     pub fn source_specific_v4(
         source: UnicastAddrV4,
         group: MulticastAddrV4,
+        vni: Vni,
     ) -> Self {
         Self::V4(MulticastRouteKeyV4 {
             source: Some(source),
             group,
-            vni: Vni::DEFAULT_MULTICAST,
+            vni,
         })
     }
 
-    /// Create a source-specific IPv6 multicast route key (S,G) with the
-    /// default VNI.
+    /// Create a source-specific IPv6 multicast route key `(S,G)`.
     pub fn source_specific_v6(
         source: UnicastAddrV6,
         group: MulticastAddrV6,
+        vni: Vni,
     ) -> Self {
         Self::V6(MulticastRouteKeyV6 {
             source: Some(source),
             group,
-            vni: Vni::DEFAULT_MULTICAST,
+            vni,
         })
     }
 
@@ -817,7 +811,7 @@ impl MulticastRouteKey {
 /// Multicast route entry -> key, underlay group, and metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MulticastRoute {
-    /// The multicast route key (S,G) or (*,G).
+    /// The multicast route key `(S,G)` or `(*,G)`.
     pub key: MulticastRouteKey,
     /// Underlay multicast group address within the `ff04::/64` subnet allocated
     /// by Omicron for rack-internal multicast traffic.
@@ -881,9 +875,111 @@ pub enum MulticastSourceProtocol {
     Static,
 }
 
+#[cfg(any(test, feature = "testing"))]
+mod arbitrary_impls {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use dpd_types_versions::testing::{
+        ipv4_asm_group_strategy, ipv4_ssm_group_strategy,
+        ipv6_asm_group_strategy, ipv6_ssm_group_strategy,
+    };
+    use proptest::prelude::*;
+
+    use super::{
+        MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRouteKey,
+        UnicastAddrV4, UnicastAddrV6, Vni,
+    };
+
+    fn group_v4(addr: Ipv4Addr) -> MulticastAddr {
+        MulticastAddrV4::new(addr)
+            .expect("generated IPv4 group is valid")
+            .into()
+    }
+
+    fn group_v6(addr: Ipv6Addr) -> MulticastAddr {
+        MulticastAddrV6::new(addr)
+            .expect("generated IPv6 group is valid")
+            .into()
+    }
+
+    /// Generate valid IPv4 multicast groups (ASM or SSM).
+    impl Arbitrary for MulticastAddrV4 {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+            prop_oneof![ipv4_asm_group_strategy(), ipv4_ssm_group_strategy()]
+                .prop_map(|addr| {
+                    MulticastAddrV4::new(addr)
+                        .expect("generated IPv4 group is valid")
+                })
+                .boxed()
+        }
+    }
+
+    /// Generate valid IPv6 multicast groups (ASM or SSM).
+    impl Arbitrary for MulticastAddrV6 {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+            prop_oneof![ipv6_asm_group_strategy(), ipv6_ssm_group_strategy()]
+                .prop_map(|addr| {
+                    MulticastAddrV6::new(addr)
+                        .expect("generated IPv6 group is valid")
+                })
+                .boxed()
+        }
+    }
+
+    /// Generate valid route keys of each IP address family: ASM `(*,G)`, ASM
+    /// `(S,G)` (with a source), and SSM `(S,G)`.
+    impl Arbitrary for MulticastRouteKey {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+            let parts = prop_oneof![
+                2 => (
+                    proptest::option::of(any::<UnicastAddrV4>()),
+                    ipv4_asm_group_strategy(),
+                )
+                    .prop_map(|(src, grp)| {
+                        (src.map(IpAddr::from), group_v4(grp))
+                    }),
+                1 => (any::<UnicastAddrV4>(), ipv4_ssm_group_strategy())
+                    .prop_map(|(src, grp)| {
+                        (Some(IpAddr::from(src)), group_v4(grp))
+                    }),
+                2 => (
+                    proptest::option::of(any::<UnicastAddrV6>()),
+                    ipv6_asm_group_strategy(),
+                )
+                    .prop_map(|(src, grp)| {
+                        (src.map(IpAddr::from), group_v6(grp))
+                    }),
+                1 => (any::<UnicastAddrV6>(), ipv6_ssm_group_strategy())
+                    .prop_map(|(src, grp)| {
+                        (Some(IpAddr::from(src)), group_v6(grp))
+                    }),
+            ];
+            (parts, any::<Vni>())
+                .prop_map(|((source, group), vni)| {
+                    MulticastRouteKey::new(source, group, vni)
+                        .expect("generated route key parts are valid")
+                })
+                .boxed()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vni() -> Vni {
+        Vni::new(77).unwrap()
+    }
 
     #[test]
     fn multicast_addr_serializes_as_ip_string() {
@@ -1081,7 +1177,7 @@ mod tests {
             assert!(
                 matches!(
                     group_err(v6(addr)),
-                    MulticastGroupError::InvalidIpv6Ssm(_)
+                    MulticastGroupError::ReservedSsmNull(_)
                 ),
                 "{addr} should be rejected as invalid SSM"
             );
@@ -1115,7 +1211,8 @@ mod tests {
             .unwrap_or_else(|e| panic!("{addr} should be accepted: {e}"));
         assert!(!parsed.is_ssm(), "{addr} should not be SSM");
         assert!(
-            MulticastRouteKey::any_source(MulticastAddr::V6(parsed)).is_ok(),
+            MulticastRouteKey::any_source(MulticastAddr::V6(parsed), vni())
+                .is_ok(),
             "(*,{addr}) should be accepted as ASM"
         );
     }
@@ -1148,8 +1245,8 @@ mod tests {
             let group = group(addr).unwrap();
 
             for res in [
-                MulticastRouteKey::new(None, group, Vni::DEFAULT_MULTICAST),
-                MulticastRouteKey::any_source(group),
+                MulticastRouteKey::new(None, group, vni()),
+                MulticastRouteKey::any_source(group, vni()),
             ] {
                 assert!(
                     matches!(
@@ -1170,12 +1267,12 @@ mod tests {
                 r#"{"V4":{"source":null,"group":"232.1.2.3","vni":77}}"#,
                 "232.1.2.3",
             ),
-            (r#"{"V4":{"group":"232.1.2.3"}}"#, "232.1.2.3"),
+            (r#"{"V4":{"group":"232.1.2.3","vni":77}}"#, "232.1.2.3"),
             (
                 r#"{"V6":{"source":null,"group":"ff3e::4000:1","vni":77}}"#,
                 "ff3e::4000:1",
             ),
-            (r#"{"V6":{"group":"ffbe::1"}}"#, "ffbe::1"),
+            (r#"{"V6":{"group":"ffbe::1","vni":77}}"#, "ffbe::1"),
         ] {
             let err = serde_json::from_str::<MulticastRouteKey>(json)
                 .expect_err(json)
@@ -1187,19 +1284,29 @@ mod tests {
         }
 
         for json in [
-            r#"{"V4":{"source":null,"group":"239.1.2.3"}}"#,
-            r#"{"V4":{"source":"192.0.2.1","group":"232.1.2.3"}}"#,
-            r#"{"V6":{"group":"ff0e::1"}}"#,
-            r#"{"V6":{"source":"2001:db8::1","group":"ff3e::4000:1"}}"#,
+            r#"{"V4":{"source":null,"group":"239.1.2.3","vni":77}}"#,
+            r#"{"V4":{"source":"192.0.2.1","group":"232.1.2.3","vni":77}}"#,
+            r#"{"V6":{"group":"ff0e::1","vni":77}}"#,
+            r#"{"V6":{"source":"2001:db8::1","group":"ff3e::4000:1","vni":77}}"#,
         ] {
             let key = serde_json::from_str::<MulticastRouteKey>(json)
                 .unwrap_or_else(|e| panic!("{json} should decode: {e}"));
-            assert_eq!(key.vni(), Vni::DEFAULT_MULTICAST, "{json}");
+            assert_eq!(key.vni(), vni(), "{json}");
         }
     }
 
     #[test]
-    fn route_key_schema_defaults_vni() {
+    fn route_key_requires_vni() {
+        for json in [
+            r#"{"V4":{"source":null,"group":"239.1.2.3"}}"#,
+            r#"{"V6":{"group":"ff0e::1"}}"#,
+        ] {
+            let err = serde_json::from_str::<MulticastRouteKey>(json)
+                .expect_err(json)
+                .to_string();
+            assert!(err.contains("missing field `vni`"), "{json}: {err}");
+        }
+
         for schema in [
             serde_json::to_value(schemars::schema_for!(MulticastRouteKeyV4))
                 .unwrap(),
@@ -1207,12 +1314,8 @@ mod tests {
                 .unwrap(),
         ] {
             let required = schema["required"].as_array().unwrap();
-            assert!(!required.contains(&"vni".into()), "{schema}");
-            assert_eq!(
-                schema["properties"]["vni"]["default"],
-                serde_json::json!(77),
-                "{schema}"
-            );
+            assert!(required.contains(&"vni".into()), "{schema}");
+            assert!(schema["properties"]["vni"].get("default").is_none());
         }
     }
 
@@ -1221,13 +1324,14 @@ mod tests {
         let sg = MulticastRouteKey::new(
             Some("192.0.2.1".parse().unwrap()),
             group("232.1.2.3").unwrap(),
-            Vni::DEFAULT_MULTICAST,
+            vni(),
         )
         .unwrap();
         assert_eq!(sg.to_string(), "(192.0.2.1,232.1.2.3)@77");
 
         let any =
-            MulticastRouteKey::any_source(group("ff0e::1").unwrap()).unwrap();
+            MulticastRouteKey::any_source(group("ff0e::1").unwrap(), vni())
+                .unwrap();
         assert_eq!(any.to_string(), "(*,ff0e::1)@77");
     }
 
@@ -1237,7 +1341,7 @@ mod tests {
             MulticastRouteKey::new(
                 Some("::1".parse().unwrap()),
                 group("232.1.2.3").unwrap(),
-                Vni::DEFAULT_MULTICAST,
+                vni(),
             ),
             Err(MulticastRouteError::Source(
                 MulticastSourceError::InvalidIpv6 {
@@ -1255,7 +1359,7 @@ mod tests {
             MulticastRouteKey::new(
                 Some("2001:db8::1".parse().unwrap()),
                 group,
-                Vni::DEFAULT_MULTICAST,
+                vni(),
             ),
             Err(MulticastRouteError::SourceFamilyMismatch { .. })
         ));

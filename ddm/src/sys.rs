@@ -187,7 +187,7 @@ pub fn add_routes_dendrite(
                 .and_then(|x| x.parse::<u8>().ok())
             {
                 let port_name = format!("rear{}", egress_port_num);
-                match types::Rear::try_from(&port_name) {
+                match types::Rear::try_from(port_name.as_str()) {
                     Ok(rear) => PortId::Rear(rear),
                     Err(e) => {
                         err!(log, ifname, "bad port name ({port_name}): {e}");
@@ -201,7 +201,7 @@ pub fn add_routes_dendrite(
                 .and_then(|x| x.parse::<u8>().ok())
             {
                 let port_name = format!("qsfp{}", egress_port_num);
-                match types::Qsfp::try_from(&port_name) {
+                match types::Qsfp::try_from(port_name.as_str()) {
                     Ok(qsfp) => PortId::Qsfp(qsfp),
                     Err(e) => {
                         err!(log, ifname, "bad port name ({port_name}): {e}");
