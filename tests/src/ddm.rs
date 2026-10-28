@@ -1292,21 +1292,18 @@ async fn run_sextet_tests(
 
     // The routes a session currently imports from its own peer, as
     // `Some((underlay, rack))`, or `None` when the router has no session on
-    // that address object.
+    // that address object. Any other error keeps polling.
     macro_rules! assert_session_imports {
-        ($client:expr, $aobj:expr, $expected:expr) => {{
+        ($name:expr, $client:expr, $aobj:expr, $expected:expr) => {{
             println_nopipe!(
                 "ensure {} session {} imports {:?}",
-                stringify!($client),
+                $name,
                 $aobj,
                 $expected
             );
             wait_for_eq!(
-                $client.get_peer_stats($aobj).await.ok().map(|s| (
-                    s.imported_underlay_prefixes,
-                    s.imported_rack_prefixes
-                )),
-                $expected
+                session_imports($client, $aobj).await.ok(),
+                Some($expected)
             );
         }};
     }
@@ -1606,12 +1603,13 @@ async fn run_sextet_tests(
         let front = |cfg: &ExternalPeers, aobj, peered: bool| {
             peer_is_set(cfg, aobj).then_some((0, u64::from(peered)))
         };
-        for (t, cfg, q0, q1) in [(&t1, x, q0_q1, q1_q0), (&t2, y, q1_q0, q0_q1)]
+        for (name, t, cfg, q0, q1) in
+            [("t1", &t1, x, q0_q1, q1_q0), ("t2", &t2, y, q1_q0, q0_q1)]
         {
-            assert_session_imports!(t, REAR0, Some((1, 0)));
-            assert_session_imports!(t, REAR1, Some((1, 0)));
-            assert_session_imports!(t, QSFP0, front(cfg, QSFP0, q0));
-            assert_session_imports!(t, QSFP1, front(cfg, QSFP1, q1));
+            assert_session_imports!(name, t, REAR0, Some((1, 0)));
+            assert_session_imports!(name, t, REAR1, Some((1, 0)));
+            assert_session_imports!(name, t, QSFP0, front(cfg, QSFP0, q0));
+            assert_session_imports!(name, t, QSFP1, front(cfg, QSFP1, q1));
         }
         let server = (1, u64::from(peered));
         assert_server_imports!(s1, server);
@@ -1629,6 +1627,19 @@ async fn prefix_count(c: &Client) -> Result<usize> {
         .values()
         .map(|x| x.len())
         .sum::<usize>())
+}
+
+/// The routes a session imports from its own peer, as `(underlay, rack)`, or
+/// `None` if `c` has no session on `aobj`.
+async fn session_imports(c: &Client, aobj: &str) -> Result<Option<(u64, u64)>> {
+    match c.get_peer_stats(aobj).await {
+        Ok(s) => Ok(Some((
+            s.imported_underlay_prefixes,
+            s.imported_rack_prefixes,
+        ))),
+        Err(e) if e.status().is_some_and(|s| s.as_u16() == 404) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// The number of routing sessions that have discovered a peer.
