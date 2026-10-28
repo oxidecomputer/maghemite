@@ -1385,24 +1385,8 @@ async fn run_sextet_tests(
     let rack_a_join: SocketAddrV6 = "[fd00:a:0:1::10]:4444".parse()?;
     let rack_b_join: SocketAddrV6 = "[fd00:b:0:3::10]:4444".parse()?;
 
-    macro_rules! advertise_rack {
-        ($client:expr, $prefix:expr, $join:expr) => {
-            $client
-                .advertise_rack_prefixes(
-                    &[(
-                        $prefix.to_string(),
-                        RackPrefixInfo {
-                            multi_rack_join_addr: $join.map(Into::into),
-                        },
-                    )]
-                    .into(),
-                )
-                .await?
-        };
-    }
-
-    advertise_rack!(t1, rack_a, Some(rack_a_join));
-    advertise_rack!(t2, rack_b, None::<SocketAddrV6>);
+    advertise_rack(&t1, rack_a, Some(rack_a_join)).await?;
+    advertise_rack(&t2, rack_b, None).await?;
 
     //
     // Starting out we should have just the backplane peers.
@@ -1572,8 +1556,8 @@ async fn run_sextet_tests(
         } else {
             (Some(rack_a_join), None)
         };
-        advertise_rack!(t1, rack_a, a_join);
-        advertise_rack!(t2, rack_b, b_join);
+        advertise_rack(&t1, rack_a, a_join).await?;
+        advertise_rack(&t2, rack_b, b_join).await?;
 
         t1.set_external_peers(x).await?;
         t2.set_external_peers(y).await?;
@@ -1642,6 +1626,20 @@ async fn session_imports(c: &Client, aobj: &str) -> Result<Option<(u64, u64)>> {
         Err(e) if e.status().is_some_and(|s| s.as_u16() == 404) => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Originate `prefix` from transit router `c`, with optional join address.
+async fn advertise_rack(
+    c: &Client,
+    prefix: Ipv6Net,
+    join: Option<SocketAddrV6>,
+) -> Result<()> {
+    let info = RackPrefixInfo {
+        multi_rack_join_addr: join.map(Into::into),
+    };
+    c.advertise_rack_prefixes(&[(prefix.to_string(), info)].into())
+        .await?;
+    Ok(())
 }
 
 /// The number of routing sessions that have discovered a peer.
