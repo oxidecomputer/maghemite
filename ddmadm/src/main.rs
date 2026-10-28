@@ -14,7 +14,7 @@ use mg_common::cli::oxide_cli_style;
 use mg_common::format_duration_human;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Write, stdout};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tabwriter::TabWriter;
@@ -358,7 +358,7 @@ async fn run() -> Result<()> {
                 "Prefix".dimmed(),
                 "Join Address".dimmed(),
             )?;
-            for (prefix, info) in msg.into_inner() {
+            for (prefix, info) in by_prefix(msg.into_inner()) {
                 let join_addr = info
                     .multi_rack_join_addr
                     .map(|a| a.to_string())
@@ -390,12 +390,14 @@ async fn run() -> Result<()> {
                 "Prefix".dimmed(),
                 "Join Addresses".dimmed(),
             )?;
-            for (prefix, join_addrs) in msg.into_inner() {
+            for (prefix, join_addrs) in by_prefix(msg.into_inner()) {
                 let join_addrs = if join_addrs.is_empty() {
                     "-".to_string()
                 } else {
                     join_addrs
                         .iter()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
                         .map(|a| a.to_string())
                         .collect::<Vec<_>>()
                         .join(" ")
@@ -407,6 +409,14 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Entries of a map keyed by prefix, in prefix order. Keys that fail to parse
+/// as a prefix sort first.
+fn by_prefix<V>(m: HashMap<String, V>) -> Vec<(String, V)> {
+    let mut rows: Vec<_> = m.into_iter().collect();
+    rows.sort_by_key(|(p, _)| p.parse::<Ipv6Net>().ok());
+    rows
 }
 
 fn peer_stats_rows(s: &PeerStats) -> [(&'static str, u64); 13] {
