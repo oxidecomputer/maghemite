@@ -361,9 +361,13 @@ fn termination_handler(
 
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
-            let imported = db.imported();
-            let routes: Vec<Route> =
-                imported.iter().map(|x| (x.clone()).into()).collect();
+            // delete underlay routes imported from both underlay/rack tables
+            let routes: Vec<Route> = db
+                .imported()
+                .into_iter()
+                .chain(db.imported_rack().into_iter().map(|y| y.route))
+                .map(Into::into)
+                .collect();
             ddm::sys::remove_underlay_routes(
                 &log,
                 "shutdown-all",
@@ -372,11 +376,11 @@ fn termination_handler(
                 &rt,
             );
 
-            let imported_tnl = db.imported_tunnel();
+            let imported_tunnel = db.imported_tunnel();
             if let Err(e) = ddm::sys::remove_tunnel_routes(
                 &log,
                 "shutdown-all",
-                &imported_tnl,
+                &imported_tunnel,
             ) {
                 error!(log, "shutdown tunnel routes: {e}");
             }
