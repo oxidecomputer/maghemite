@@ -714,6 +714,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
         // announcing the new one; otherwise peers would keep both.
         let withdraw = ctx.rack_prefixes(replaced);
         let announce = ctx.rack_prefixes(prefixes);
+
+        if withdraw.is_empty() && announce.is_empty() {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+
         for e in ctx.event_channels() {
             if !withdraw.is_empty() {
                 e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
@@ -721,10 +726,12 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 ))))
                 .map_err(AdminError::from)?;
             }
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Rack(
-                announce.clone(),
-            ))))
-            .map_err(AdminError::from)?;
+            if !announce.is_empty() {
+                e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Rack(
+                    announce.clone(),
+                ))))
+                .map_err(AdminError::from)?;
+            }
         }
 
         Ok(HttpResponseUpdatedNoContent())
