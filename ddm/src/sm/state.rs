@@ -513,6 +513,8 @@ impl State for Exchange {
         event: Receiver<Event>,
     ) -> (Option<Box<dyn State>>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Exchange);
+        *lock!(self.ctx.iface.peer_identity) = Some(self.peer.clone());
+
         let exchange_thread = loop {
             match exchange::handler(
                 self.ctx.clone(),

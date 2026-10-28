@@ -448,10 +448,7 @@ fn handle_advertisement(
         kind,
         version,
     };
-    let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
-        *info = Some(new_peer.clone());
-        drop(info);
+    if lock!(ctx.iface.peer_identity).as_ref() != Some(&new_peer) {
         emit_nbr_update(ctx, new_peer);
     }
 }
