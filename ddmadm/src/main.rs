@@ -390,18 +390,17 @@ async fn run() -> Result<()> {
                 "Prefix".dimmed(),
                 "Join Addresses".dimmed(),
             )?;
-            for (prefix, join_addrs) in by_prefix(msg.into_inner()) {
-                let join_addrs = if join_addrs.is_empty() {
-                    "-".to_string()
-                } else {
-                    join_addrs
-                        .iter()
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .map(|a| a.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                };
+            for (prefix, infos) in by_prefix(msg.into_inner()) {
+                // One entry per distinct path; "-" marks a path without a
+                // join address.
+                let join_addrs = infos
+                    .iter()
+                    .map(|i| i.multi_rack_join_addr.as_ref())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(|a| a.map_or("-".to_string(), |a| a.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 writeln!(&mut tw, "{}\t{}", prefix, join_addrs)?;
             }
             tw.flush()?;

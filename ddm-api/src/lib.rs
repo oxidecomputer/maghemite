@@ -12,7 +12,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
-use oxnet::{Ipv6Net, SocketAddrV6Json};
+use oxnet::Ipv6Net;
 use std::collections::{HashMap, HashSet};
 
 api_versions!([
@@ -250,7 +250,8 @@ pub trait DdmAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     /// Get the rack prefixes this router has learned from its peers, with the
-    /// multi-rack join addresses carried by their paths.
+    /// distinct info carried by their paths, including paths that carry no
+    /// multi-rack join address.
     #[endpoint {
         method = GET,
         path = "/rack_prefixes",
@@ -259,7 +260,7 @@ pub trait DdmAdminApi {
     async fn get_rack_prefixes(
         ctx: RequestContext<Self::Context>,
     ) -> Result<
-        HttpResponseOk<HashMap<Ipv6Net, HashSet<SocketAddrV6Json>>>,
+        HttpResponseOk<HashMap<Ipv6Net, HashSet<latest::net::RackPrefixInfo>>>,
         HttpError,
     >;
 

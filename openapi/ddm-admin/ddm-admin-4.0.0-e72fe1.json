@@ -394,7 +394,7 @@
     "/rack_prefixes": {
       "get": {
         "summary": "Get the rack prefixes this router has learned from its peers, with the",
-        "description": "multi-rack join addresses carried by their paths.",
+        "description": "distinct info carried by their paths, including paths that carry no multi-rack join address.",
         "operationId": "get_rack_prefixes",
         "responses": {
           "200": {
@@ -402,17 +402,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Map_of_Set_of_SocketAddrV6",
+                  "title": "Map_of_Set_of_RackPrefixInfo",
                   "type": "object",
                   "additionalProperties": {
                     "type": "array",
                     "items": {
-                      "x-rust-type": {
-                        "crate": "std",
-                        "path": "std::net::SocketAddrV6",
-                        "version": ">=1.0.0"
-                      },
-                      "type": "string"
+                      "$ref": "#/components/schemas/RackPrefixInfo"
                     },
                     "uniqueItems": true
                   }

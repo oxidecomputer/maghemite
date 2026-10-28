@@ -36,7 +36,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use mg_common::lock;
-use oxnet::{Ipv6Net, SocketAddrV6Json};
+use oxnet::Ipv6Net;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -768,18 +768,19 @@ impl DdmAdminApi for DdmAdminApiImpl {
     async fn get_rack_prefixes(
         ctx: RequestContext<Self::Context>,
     ) -> Result<
-        HttpResponseOk<HashMap<Ipv6Net, HashSet<SocketAddrV6Json>>>,
+        HttpResponseOk<HashMap<Ipv6Net, HashSet<RackPrefixInfo>>>,
         HttpError,
     > {
         let ctx = lock!(ctx.context());
 
-        let mut result: HashMap<Ipv6Net, HashSet<SocketAddrV6Json>> =
+        let mut result: HashMap<Ipv6Net, HashSet<RackPrefixInfo>> =
             HashMap::new();
         for r in ctx.db.imported_rack() {
-            result
-                .entry(r.route.destination)
-                .or_default()
-                .extend(r.multi_rack_join_addr);
+            result.entry(r.route.destination).or_default().insert(
+                RackPrefixInfo {
+                    multi_rack_join_addr: r.multi_rack_join_addr,
+                },
+            );
         }
         Ok(HttpResponseOk(result))
     }

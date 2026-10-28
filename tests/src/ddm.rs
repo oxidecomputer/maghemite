@@ -1152,8 +1152,9 @@ async fn run_sextet_tests(
         t2: BTreeSet<Ipv6Net>,
     }
 
-    /// Learned rack prefixes and their multi-rack join addresses.
-    type RackMap = BTreeMap<Ipv6Net, BTreeSet<SocketAddrV6>>;
+    /// Learned rack prefixes and the multi-rack join address of each distinct
+    /// path, `None` for a path without one.
+    type RackMap = BTreeMap<Ipv6Net, BTreeSet<Option<SocketAddrV6>>>;
 
     #[derive(Default)]
     struct PeerReachableRacks {
@@ -1249,9 +1250,12 @@ async fn run_sextet_tests(
                     .map(|x| x
                         .into_inner()
                         .into_iter()
-                        .map(|(prefix, addrs)| (
+                        .map(|(prefix, infos)| (
                             prefix.parse::<Ipv6Net>().unwrap(),
-                            addrs.into_iter().collect::<BTreeSet<_>>(),
+                            infos
+                                .into_iter()
+                                .map(|i| i.multi_rack_join_addr.map(|a| a.0))
+                                .collect::<BTreeSet<_>>(),
                         ))
                         .collect::<RackMap>())
                     .ok(),
@@ -1518,24 +1522,22 @@ async fn run_sextet_tests(
     // redistributes it to its own servers; it never sends its own rack's /56
     // to its servers.
     type Join = Option<SocketAddrV6>;
-    let expected_reachable_racks = |peered: bool,
-                                    a_join: Join,
-                                    b_join: Join|
-     -> PeerReachableRacks {
-        if !peered {
-            return PeerReachableRacks::default();
-        }
-        let from_a: RackMap = [(rack_a, a_join.into_iter().collect())].into();
-        let from_b: RackMap = [(rack_b, b_join.into_iter().collect())].into();
-        PeerReachableRacks {
-            s1: from_b.clone(),
-            s2: from_b.clone(),
-            t1: from_b,
-            s3: from_a.clone(),
-            s4: from_a.clone(),
-            t2: from_a,
-        }
-    };
+    let expected_reachable_racks =
+        |peered: bool, a_join: Join, b_join: Join| -> PeerReachableRacks {
+            if !peered {
+                return PeerReachableRacks::default();
+            }
+            let from_a: RackMap = [(rack_a, [a_join].into())].into();
+            let from_b: RackMap = [(rack_b, [b_join].into())].into();
+            PeerReachableRacks {
+                s1: from_b.clone(),
+                s2: from_b.clone(),
+                t1: from_b,
+                s3: from_a.clone(),
+                s4: from_a.clone(),
+                t2: from_a,
+            }
+        };
 
     // The choices we have for each switch are none, one or both peers where the
     // one case can be either of the peers.
