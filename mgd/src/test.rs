@@ -129,8 +129,3 @@ pub(crate) async fn raw_status(
     }
     req.send().await.expect("send request").status().as_u16()
 }
-
-/// Return the HTTP status code carried by a client error, if any.
-pub(crate) fn status<E>(err: &mg_admin_client::Error<E>) -> Option<u16> {
-    err.status().map(|s| s.as_u16())
-}

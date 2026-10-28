@@ -1831,12 +1831,12 @@ mod test {
     use crate::{
         StaticRouteKey,
         db::{Db, MRIB_SOURCE_CHUNK},
-        test::{TestDb, underlay_group},
+        test::{TestDb, underlay_group, vni},
         types::{
             Asn, MulticastAddr, MulticastAddrV4, MulticastAddrV6,
             MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
             PrefixDbKey, UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
-            Vni, test_helpers::path_vecs_equal,
+            test_helpers::path_vecs_equal,
         },
     };
     use client_common::eprintln_nopipe;
@@ -2189,12 +2189,8 @@ mod test {
             };
             db.add_static_routes(&[static_route]).unwrap();
 
-            let key = MulticastRouteKey::new(
-                Some(source),
-                group,
-                Vni::DEFAULT_MULTICAST,
-            )
-            .expect("valid unicast source in the group's address family");
+            let key = MulticastRouteKey::new(Some(source), group, vni())
+                .expect("valid unicast source in the group's address family");
             let route = MulticastRoute::new(
                 key,
                 underlay_group(),
@@ -2259,7 +2255,7 @@ mod test {
             .expect("valid unicast");
         let group = MulticastAddrV4::new(Ipv4Addr::new(232, 9, 9, 9))
             .expect("valid mcast");
-        let key = MulticastRouteKey::source_specific_v4(source, group);
+        let key = MulticastRouteKey::source_specific_v4(source, group, vni());
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -2379,7 +2375,7 @@ mod test {
         let key = MulticastRouteKey::new(
             Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
             MulticastAddr::new_v4(225, 1, 1, 2).expect("valid mcast"),
-            Vni::DEFAULT_MULTICAST,
+            vni(),
         )
         .expect("valid unicast source in the group's address family");
 
@@ -2468,7 +2464,7 @@ mod test {
         let key = MulticastRouteKey::new(
             Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
             MulticastAddr::new_v4(225, 1, 1, 2).expect("valid mcast"),
-            Vni::DEFAULT_MULTICAST,
+            vni(),
         )
         .expect("valid unicast source in the group address family");
         let route = MulticastRoute {
@@ -2529,7 +2525,7 @@ mod test {
         let asm_group =
             MulticastAddr::new_v4(225, 5, 5, 5).expect("valid mcast");
         let star_g_key =
-            MulticastRouteKey::any_source(asm_group).expect("ASM group");
+            MulticastRouteKey::any_source(asm_group, vni()).expect("ASM group");
         let star_g_route = MulticastRoute::new(
             star_g_key,
             underlay_group(),
@@ -2551,7 +2547,8 @@ mod test {
             .expect("valid mcast");
         let source = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 100))
             .expect("valid unicast");
-        let sg_key = MulticastRouteKey::source_specific_v4(source, ssm_group);
+        let sg_key =
+            MulticastRouteKey::source_specific_v4(source, ssm_group, vni());
         let sg_route = MulticastRoute::new(
             sg_key,
             underlay_group(),
@@ -2573,7 +2570,7 @@ mod test {
             MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 0x5555])
                 .expect("valid mcast");
         let v6_star_g_key =
-            MulticastRouteKey::any_source(v6_group).expect("ASM group");
+            MulticastRouteKey::any_source(v6_group, vni()).expect("ASM group");
         let v6_star_g_route = MulticastRoute::new(
             v6_star_g_key,
             underlay_group(),
@@ -2595,8 +2592,11 @@ mod test {
             0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100,
         ))
         .expect("valid unicast");
-        let v6_sg_key =
-            MulticastRouteKey::source_specific_v6(v6_source, v6_ssm_group);
+        let v6_sg_key = MulticastRouteKey::source_specific_v6(
+            v6_source,
+            v6_ssm_group,
+            vni(),
+        );
         let v6_sg_route = MulticastRoute::new(
             v6_sg_key,
             underlay_group(),
@@ -2630,7 +2630,8 @@ mod test {
         let _ = std::fs::remove_dir_all(&db_path);
 
         let group = MulticastAddr::new_v4(225, 2, 2, 2).expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -2641,7 +2642,8 @@ mod test {
             .expect("valid unicast");
         let sg_group = MulticastAddrV4::new(Ipv4Addr::new(232, 2, 2, 2))
             .expect("valid mcast");
-        let sg_key = MulticastRouteKey::source_specific_v4(source, sg_group);
+        let sg_key =
+            MulticastRouteKey::source_specific_v4(source, sg_group, vni());
         let sg_route = MulticastRoute::new(
             sg_key,
             underlay_group(),
@@ -2689,7 +2691,8 @@ mod test {
         let _ = std::fs::remove_dir_all(&db_path);
 
         let group = MulticastAddr::new_v4(225, 3, 3, 3).expect("valid mcast");
-        let key = MulticastRouteKey::any_source(group).expect("ASM group");
+        let key =
+            MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
             key,
             underlay_group(),
@@ -2698,13 +2701,13 @@ mod test {
 
         let other_group =
             MulticastAddr::new_v4(225, 4, 4, 4).expect("valid mcast");
-        let other_key =
-            MulticastRouteKey::any_source(other_group).expect("ASM group");
+        let other_key = MulticastRouteKey::any_source(other_group, vni())
+            .expect("ASM group");
 
         let bad_json_group =
             MulticastAddr::new_v4(225, 5, 5, 5).expect("valid mcast");
-        let bad_json_key =
-            MulticastRouteKey::any_source(bad_json_group).expect("ASM group");
+        let bad_json_key = MulticastRouteKey::any_source(bad_json_group, vni())
+            .expect("ASM group");
 
         // Write a valid entry and three corrupt ones.
         {
@@ -2792,7 +2795,7 @@ mod test {
             .map(|host| {
                 let source = UnicastAddrV4::new(Ipv4Addr::new(10, 8, 8, host))
                     .expect("valid unicast");
-                MulticastRouteKey::source_specific_v4(source, group)
+                MulticastRouteKey::source_specific_v4(source, group, vni())
             })
             .collect();
         let routes: Vec<MulticastRoute> = keys
@@ -2856,7 +2859,7 @@ mod test {
                 let group =
                     MulticastAddrV4::new(Ipv4Addr::new(232, 9, 0, octet))
                         .expect("valid mcast");
-                MulticastRouteKey::source_specific_v4(source, group)
+                MulticastRouteKey::source_specific_v4(source, group, vni())
             })
             .collect();
         let routes: Vec<MulticastRoute> = keys
@@ -2915,6 +2918,7 @@ mod test {
 
         let any_source = MulticastRouteKey::any_source(
             MulticastAddr::new_v4(225, 9, 9, 9).expect("valid mcast"),
+            vni(),
         )
         .expect("ASM group");
         let source_specific = [(1u8, 1u8), (1, 2), (2, 3)].map(|(host, g)| {
@@ -2922,7 +2926,7 @@ mod test {
                 .expect("valid unicast");
             let group = MulticastAddrV4::new(Ipv4Addr::new(232, 9, 9, g))
                 .expect("valid mcast");
-            MulticastRouteKey::source_specific_v4(source, group)
+            MulticastRouteKey::source_specific_v4(source, group, vni())
         });
         let keys: Vec<MulticastRouteKey> =
             std::iter::once(any_source).chain(source_specific).collect();

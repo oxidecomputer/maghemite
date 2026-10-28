@@ -185,6 +185,7 @@ pub mod mrib {
     pub use crate::v14::mrib::MribAddStaticRequest;
     pub use crate::v14::mrib::MribDeleteStaticRequest;
     pub use crate::v14::mrib::MribQuery;
+    pub use crate::v14::mrib::MribQueryError;
     pub use crate::v14::mrib::MulticastAddr;
     pub use crate::v14::mrib::MulticastAddrV4;
     pub use crate::v14::mrib::MulticastAddrV6;

@@ -21,8 +21,6 @@ use mg_api_types::mrib::{
 };
 use mg_api_types::rdb::rib::AddressFamily;
 
-const DEFAULT_VNI: u32 = Vni::DEFAULT_MULTICAST.as_u32();
-
 fn parse_route_origin(s: &str) -> Result<RouteOriginFilter, String> {
     match s.to_lowercase().as_str() {
         "static" => Ok(RouteOriginFilter::Static),
@@ -54,16 +52,16 @@ pub enum StatusCmd {
         address_family: Option<AddressFamily>,
 
         /// Multicast group address (if omitted, lists all routes).
-        #[arg(short, long, conflicts_with_all = ["address_family", "origin"])]
+        #[arg(short, long, conflicts_with = "address_family")]
         group: Option<IpAddr>,
 
         /// Source address (omit for any-source (*,G)).
-        #[arg(short, long, requires = "group")]
+        #[arg(short, long, conflicts_with = "address_family")]
         source: Option<IpAddr>,
 
-        /// VNI (defaults to Vni::DEFAULT_MULTICAST for fleet-scoped multicast).
-        #[arg(short, long, requires = "group", default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(Vni::MAX_VNI as i64)))]
-        vni: u32,
+        /// VNI to filter by (if omitted, matches every VNI).
+        #[arg(short, long)]
+        vni: Option<Vni>,
 
         /// Filter by route origin ("static" or "dynamic").
         #[arg(long, value_parser = parse_route_origin)]
@@ -78,16 +76,16 @@ pub enum StatusCmd {
         address_family: Option<AddressFamily>,
 
         /// Multicast group address (if omitted, lists all routes).
-        #[arg(short, long, conflicts_with_all = ["address_family", "origin"])]
+        #[arg(short, long, conflicts_with = "address_family")]
         group: Option<IpAddr>,
 
         /// Source address (omit for any-source (*,G)).
-        #[arg(short, long, requires = "group")]
+        #[arg(short, long, conflicts_with = "address_family")]
         source: Option<IpAddr>,
 
-        /// VNI (defaults to Vni::DEFAULT_MULTICAST for fleet-scoped multicast).
-        #[arg(short, long, requires = "group", default_value_t = DEFAULT_VNI, value_parser = clap::value_parser!(u32).range(0..=(Vni::MAX_VNI as i64)))]
-        vni: u32,
+        /// VNI to filter by (if omitted, matches every VNI).
+        #[arg(short, long)]
+        vni: Option<Vni>,
 
         /// Filter by route origin ("static" or "dynamic").
         #[arg(long, value_parser = parse_route_origin)]
@@ -96,132 +94,61 @@ pub enum StatusCmd {
 }
 
 pub async fn commands(command: Commands, c: Client) -> Result<()> {
-    match command {
-        Commands::Status(status_cmd) => match status_cmd.command {
+    let Commands::Status(status_cmd) = command;
+    let (selected, address_family, group, source, vni, origin) =
+        match status_cmd.command {
             StatusCmd::Imported {
+                address_family,
                 group,
                 source,
                 vni,
-                address_family,
                 origin,
-            } => {
-                if let Some(g) = group {
-                    get_route(c, g, source, Vni::new(vni)?).await?
-                } else {
-                    get_imported(c, address_family, origin).await?
-                }
-            }
+            } => (false, address_family, group, source, vni, origin),
             StatusCmd::Selected {
+                address_family,
                 group,
                 source,
                 vni,
-                address_family,
                 origin,
-            } => {
-                if let Some(g) = group {
-                    get_route_selected(c, g, source, Vni::new(vni)?).await?
-                } else {
-                    get_selected(c, address_family, origin).await?
-                }
-            }
-        },
+            } => (true, address_family, group, source, vni, origin),
+        };
+
+    let group = group
+        .map(MulticastAddr::try_from)
+        .transpose()
+        .context("invalid multicast group")?;
+
+    let res = if selected {
+        c.get_mrib_selected(
+            address_family.as_ref(),
+            group.as_ref(),
+            origin.as_ref(),
+            source.as_ref(),
+            vni.as_ref(),
+        )
+        .await
+    } else {
+        c.get_mrib_imported(
+            address_family.as_ref(),
+            group.as_ref(),
+            origin.as_ref(),
+            source.as_ref(),
+            vni.as_ref(),
+        )
+        .await
+    };
+    let routes = res.context("get MRIB routes")?.into_inner();
+
+    let filtered = group.is_some()
+        || source.is_some()
+        || vni.is_some()
+        || address_family.is_some()
+        || origin.is_some();
+    if routes.is_empty() && filtered {
+        println_nopipe!("No multicast routes match the given filters");
+        return Ok(());
     }
-    Ok(())
-}
-
-async fn get_imported(
-    c: Client,
-    address_family: Option<AddressFamily>,
-    origin: Option<RouteOriginFilter>,
-) -> Result<()> {
-    let routes = c
-        .get_mrib_imported(
-            address_family.as_ref(),
-            None,
-            origin.as_ref(),
-            None,
-            None,
-        )
-        .await
-        .context("get imported MRIB routes")?
-        .into_inner();
     print_routes(&routes);
-    Ok(())
-}
-
-async fn get_selected(
-    c: Client,
-    address_family: Option<AddressFamily>,
-    origin: Option<RouteOriginFilter>,
-) -> Result<()> {
-    let routes = c
-        .get_mrib_selected(
-            address_family.as_ref(),
-            None,
-            origin.as_ref(),
-            None,
-            None,
-        )
-        .await
-        .context("get selected MRIB routes")?
-        .into_inner();
-    print_routes(&routes);
-    Ok(())
-}
-
-async fn get_route(
-    c: Client,
-    group: IpAddr,
-    source: Option<IpAddr>,
-    vni: Vni,
-) -> Result<()> {
-    let group =
-        MulticastAddr::try_from(group).context("invalid multicast group")?;
-    let route = c
-        .get_mrib_imported(
-            None,
-            Some(&group),
-            None,
-            source.as_ref(),
-            Some(&vni),
-        )
-        .await
-        .with_context(|| format!("look up imported MRIB route for {group}"))?
-        .into_inner()
-        .into_iter()
-        .next()
-        .context("route not found")?;
-
-    println_nopipe!("{route:#?}");
-
-    Ok(())
-}
-
-async fn get_route_selected(
-    c: Client,
-    group: IpAddr,
-    source: Option<IpAddr>,
-    vni: Vni,
-) -> Result<()> {
-    let group =
-        MulticastAddr::try_from(group).context("invalid multicast group")?;
-    let route = c
-        .get_mrib_selected(
-            None,
-            Some(&group),
-            None,
-            source.as_ref(),
-            Some(&vni),
-        )
-        .await
-        .with_context(|| format!("look up selected MRIB route for {group}"))?
-        .into_inner()
-        .into_iter()
-        .next()
-        .context("route not found in mrib_loc")?;
-
-    println_nopipe!("{route:#?}");
-
     Ok(())
 }
 
@@ -280,7 +207,7 @@ mod tests {
                     Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
                 );
                 assert_eq!(source, None);
-                assert_eq!(vni, DEFAULT_VNI);
+                assert_eq!(vni, None);
             }
             _ => panic!("expected Imported"),
         }
@@ -314,7 +241,7 @@ mod tests {
                     source,
                     Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
                 );
-                assert_eq!(vni, 100);
+                assert_eq!(vni, Some(Vni::new(100).unwrap()));
             }
             _ => panic!("expected Imported"),
         }
@@ -352,7 +279,7 @@ mod tests {
                         0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
                     )))
                 );
-                assert_eq!(vni, 42);
+                assert_eq!(vni, Some(Vni::new(42).unwrap()));
             }
             _ => panic!("expected Selected"),
         }
@@ -417,21 +344,29 @@ mod tests {
     }
 
     #[test]
-    fn test_status_rejects_ignored_selectors() {
+    fn test_status_filter_combinations() {
+        let parses = |table, args: &[&str]| {
+            let argv = ["test", "status", table]
+                .into_iter()
+                .chain(args.iter().copied());
+            TestCli::try_parse_from(argv).is_ok()
+        };
         for table in ["imported", "selected"] {
             for args in [
+                &["-g", "239.1.1.1", "ipv4"][..],
+                &["-s", "10.0.0.1", "ipv4"],
+                &["-v", "16777216"],
+                &["-v", "not-a-vni"],
+            ] {
+                assert!(!parses(table, args), "{table} {args:?} should fail");
+            }
+            for args in [
                 &["-g", "239.1.1.1", "--origin", "dynamic"][..],
-                &["-g", "239.1.1.1", "ipv4"],
                 &["-s", "10.0.0.1"],
                 &["-v", "100"],
+                &["-v", "100", "--origin", "static", "ipv6"],
             ] {
-                let argv = ["test", "status", table]
-                    .into_iter()
-                    .chain(args.iter().copied());
-                assert!(
-                    TestCli::try_parse_from(argv).is_err(),
-                    "{table} {args:?} should be rejected"
-                );
+                assert!(parses(table, args), "{table} {args:?} should parse");
             }
         }
     }

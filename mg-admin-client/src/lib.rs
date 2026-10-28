@@ -61,6 +61,8 @@ progenitor::generate_api!(
         MribAddStaticRequest = mg_api_types_versions::latest::mrib::MribAddStaticRequest,
         MribDeleteStaticRequest = mg_api_types_versions::latest::mrib::MribDeleteStaticRequest,
         MulticastAddr = mg_api_types_versions::latest::mrib::MulticastAddr,
+        MulticastAddrV4 = mg_api_types_versions::latest::mrib::MulticastAddrV4,
+        MulticastAddrV6 = mg_api_types_versions::latest::mrib::MulticastAddrV6,
         MulticastRoute = mg_api_types_versions::latest::mrib::MulticastRoute,
         MulticastRouteKey = mg_api_types_versions::latest::mrib::MulticastRouteKey,
         MulticastRouteKeyV4 = mg_api_types_versions::latest::mrib::MulticastRouteKeyV4,
@@ -68,6 +70,9 @@ progenitor::generate_api!(
         MulticastSourceProtocol = mg_api_types_versions::latest::mrib::MulticastSourceProtocol,
         RouteOriginFilter = mg_api_types_versions::latest::mrib::RouteOriginFilter,
         StaticMulticastRoute = mg_api_types_versions::latest::mrib::StaticMulticastRoute,
+        UnderlayMulticastIpv6 = mg_api_types_versions::latest::mrib::UnderlayMulticastIpv6,
+        UnicastAddrV4 = mg_api_types_versions::latest::mrib::UnicastAddrV4,
+        UnicastAddrV6 = mg_api_types_versions::latest::mrib::UnicastAddrV6,
         Vni = mg_api_types_versions::latest::mrib::Vni,
 
         Duration = std::time::Duration,

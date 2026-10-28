@@ -4056,6 +4056,16 @@
           "keys"
         ]
       },
+      "MulticastAddrV4": {
+        "description": "A validated IPv4 multicast address.\n\nIPv4 admits the whole multicast range apart from the base address of `224.0.0.0`, which [RFC 1112] §4 guarantees is never assigned to a group, and the SSM null address of `232.0.0.0` ([RFC 4607] §4.3).\n\n[RFC 1112]: https://www.rfc-editor.org/rfc/rfc1112.html [RFC 4607]: https://www.rfc-editor.org/rfc/rfc4607.html",
+        "type": "string",
+        "format": "ipv4"
+      },
+      "MulticastAddrV6": {
+        "description": "A validated IPv6 multicast address.\n\nAll IPv6 scopes are admitted except for the reserved scope of `0x0` and the interface-local `0x1` and link-local `0x2` ones, which a router must not forward past ([RFC 4291] §2.7). Scope `0xf` is retained because [RFC 4291] §2.7 treats it as global when it is sent or received. Addresses on the `ff04::/64` underlay subnet are rejected.\n\nThe four flag bits above the scope nibble are `|X|R|P|T|` ([RFC 7371] §4.2.1): T marks a transient address, P a prefix-based one, R an embedded rendezvous point, and X may be either zero or one. [RFC 7371] §4.1.1 names the same field `|X|Y|P|T|`, where Y is the bit that [RFC 3956] defines as the R flag.\n\nPrefix-based addresses require only that the P flag implies the T flag ([RFC 7371] §4.1.1, which replaces that passage of [RFC 3306] §4). The replacement drops the \"reserved field MUST be zero\" rule. The `ff2` and `rsvd` nibbles are sent as zero and ignored on receipt instead, per [RFC 7371] §4.1.1 and [RFC 3956] §3. Neither is validated here. The prefix length is otherwise unbounded. The `plen` ceiling of 64 comes from [RFC 3956] §4 and applies to embedded rendezvous point (RP) addresses only. [RFC 3306] §4 notes the same 64-bit ceiling on the network prefix without requiring it.\n\nEmbedded RP addresses require the R, P, and T flags ([RFC 7371] §4.2.2 and §4.2.3), a prefix length from 1 through 64, a nonzero RP interface ID ([RFC 3956] §6.3), and a derived RP address outside `::/16`, link-local space, and the multicast range. [RFC 3956] §4 states those exclusions as requirements, and §10 repeats them as a security consideration.\n\nSSM classification is described on [`is_ssm_address`]. The only SSM address rejected is the reserved null address of `ff3x::4000:0` from [RFC 4607] §4.3. The network prefix is unchecked otherwise: [RFC 3306] §6 applies to the node that's forming the address, and [RFC 4607] §1 has a system treat all of the `ff3x::/32` block as SSM.\n\nGroup IDs below `4000:0` are assigned with flags P=T=0 ([RFC 3307] §4.1), making them invalid SSM addresses that routers may drop ([RFC 4607] §1). The band just above it, `4000:0001` through `7fff:ffff`, is reserved for IANA allocation ([RFC 4607] §4.3, [RFC 3307] §4.2) rather than forbidden as a destination. From `8000:0` up is the dynamic range of [RFC 3307] §4.3, which [RFC 10028] §3 partitions. Host SSM allocation sits at `f000:0` through `fcff:ffff`. None of these ranges is rejected.\n\nPermanently assigned addresses (T=0) with the P and R flags cleared are permitted. They face the same `ff04::/64` underlay reservation as any other address, and the all-zero group ID `ff0x::` is refused outright. [RFC 4291] §2.7.1 reserves it and never assigns it. A registered meaning is independent of scope ([RFC 4291] §2.7). `ff0e::101` and `ff05::fb` keep their registered meanings in the overlay.\n\n[RFC 3306]: https://www.rfc-editor.org/rfc/rfc3306.html [RFC 3307]: https://www.rfc-editor.org/rfc/rfc3307.html [RFC 3956]: https://www.rfc-editor.org/rfc/rfc3956.html [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html [RFC 4607]: https://www.rfc-editor.org/rfc/rfc4607.html [RFC 7371]: https://www.rfc-editor.org/rfc/rfc7371.html [RFC 10028]: https://www.rfc-editor.org/rfc/rfc10028.html",
+        "type": "string",
+        "format": "ipv6"
+      },
       "MulticastRoute": {
         "description": "Multicast route entry -> key, underlay group, and metadata.",
         "type": "object",
@@ -4083,8 +4093,11 @@
           },
           "underlay_group": {
             "description": "Underlay multicast group address within the `ff04::/64` subnet allocated by Omicron for rack-internal multicast traffic.\n\nOverlay multicast addresses are mapped 1:1 to these admin-local scope underlay addresses. OPTE's M2P (multicast-to-underlay) mapping translates an overlay group to this address for guest-originated traffic and uses it as the packet's outer IPv6 destination. The switch performs the same mapping for external ingress and replicates via its PRE (Packet Replication Engine) or similar.\n\nOmicron owns group creation, deletion, and NAT configuration, while ddmd programs underlay members on the switch from imported DDM subscriptions.",
-            "type": "string",
-            "format": "ipv6"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UnderlayMulticastIpv6"
+              }
+            ]
           },
           "updated": {
             "description": "Last updated timestamp.",
@@ -4137,18 +4150,23 @@
         "properties": {
           "group": {
             "description": "Multicast group address.",
-            "type": "string",
-            "format": "ipv4"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastAddrV4"
+              }
+            ]
           },
           "source": {
             "nullable": true,
             "description": "Source address (`None` for `(*,G)` routes).",
-            "type": "string",
-            "format": "ipv4"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UnicastAddrV4"
+              }
+            ]
           },
           "vni": {
             "description": "VNI (Virtual Network Identifier).",
-            "default": 77,
             "allOf": [
               {
                 "$ref": "#/components/schemas/Vni"
@@ -4157,7 +4175,8 @@
           }
         },
         "required": [
-          "group"
+          "group",
+          "vni"
         ]
       },
       "MulticastRouteKeyV6": {
@@ -4166,18 +4185,23 @@
         "properties": {
           "group": {
             "description": "Multicast group address.",
-            "type": "string",
-            "format": "ipv6"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastAddrV6"
+              }
+            ]
           },
           "source": {
             "nullable": true,
             "description": "Source address (`None` for `(*,G)` routes).",
-            "type": "string",
-            "format": "ipv6"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UnicastAddrV6"
+              }
+            ]
           },
           "vni": {
             "description": "VNI (Virtual Network Identifier).",
-            "default": 77,
             "allOf": [
               {
                 "$ref": "#/components/schemas/Vni"
@@ -4186,7 +4210,8 @@
           }
         },
         "required": [
-          "group"
+          "group",
+          "vni"
         ]
       },
       "MulticastSourceProtocol": {
@@ -5688,8 +5713,11 @@
           },
           "underlay_group": {
             "description": "Underlay multicast group address (`ff04::/64`).",
-            "type": "string",
-            "format": "ipv6"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UnderlayMulticastIpv6"
+              }
+            ]
           }
         },
         "required": [
@@ -5809,6 +5837,21 @@
             "minimum": 0
           }
         }
+      },
+      "UnderlayMulticastIpv6": {
+        "description": "A validated underlay multicast IPv6 address.\n\nUnderlay multicast addresses must be within the subnet allocated by Omicron for rack-internal multicast traffic (ff04::/64). This is a subset of the admin-local scope (ff04::/16) defined in RFC 4291.",
+        "type": "string",
+        "format": "ipv6"
+      },
+      "UnicastAddrV4": {
+        "description": "A validated IPv4 unicast address for multicast source fields.\n\nA source must be unicast and forwardable. IPv4 excludes loopback, broadcast (RFC 919 §7), the unspecified address, link-local (RFC 3927), `0.0.0.0/8` (RFC 1122 §3.2.1.3), and `240.0.0.0/4` (RFC 6890). Private ranges (RFC 1918) are allowed because overlay guests can use them.",
+        "type": "string",
+        "format": "ipv4"
+      },
+      "UnicastAddrV6": {
+        "description": "A validated IPv6 unicast address for multicast source fields.\n\nA source must be unicast and forwardable. IPv6 excludes loopback, the unspecified address, link-local (RFC 4291 §2.5.6), and the IPv4-mapped (RFC 4291 §2.5.5.2) and IPv4-compatible (RFC 4291 §2.5.5.1) forms. ULA (`fc00::/7`, RFC 4193) is allowed because overlay guests can use it.",
+        "type": "string",
+        "format": "ipv6"
       },
       "UnnumberedBgpPeerConfig": {
         "type": "object",
@@ -6213,7 +6256,7 @@
         ]
       },
       "Vni": {
-        "description": "A validated Geneve Virtual Network Identifier.\n\nWraps a 24-bit VNI, rejecting any value above [`Vni::MAX_VNI`] at construction and deserialization.",
+        "description": "A validated Geneve Virtual Network Identifier.\n\nA Geneve VNI is a 24-bit value used to identify virtual networks encapsulated using the Generic Network Virtualization Encapsulation (Geneve) protocol (RFC 8926). Any value above the 24-bit maximum of 16777215 is rejected at both construction and deserialization.",
         "type": "integer",
         "format": "uint32",
         "minimum": 0,

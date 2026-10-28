@@ -10,7 +10,7 @@ use dropshot::{
 };
 use mg_api_types::mrib::{
     MribAddStaticRequest, MribDeleteStaticRequest, MribQuery, MulticastRoute,
-    MulticastRouteKey, MulticastSourceProtocol,
+    MulticastSourceProtocol,
 };
 use rdb::{Db, MribTableExt};
 
@@ -29,27 +29,16 @@ fn get_mrib(
     db: &Db,
     query: MribQuery,
     table: MribTable,
-) -> Result<Vec<MulticastRoute>, HttpError> {
-    if let Some(group) = query.group {
-        let key = MulticastRouteKey::new(query.source, group, query.vni)
-            .map_err(Error::from)?;
-        let route = match table {
-            MribTable::Imported => db.get_mcast_route(&key),
-            MribTable::Selected => db.get_selected_mcast_route(&key),
-        };
-        return route.map(|r| vec![r]).ok_or_else(|| {
-            Error::NotFound(format!("multicast route {key}")).into()
-        });
-    }
-
+) -> Vec<MulticastRoute> {
     let routes = match table {
-        MribTable::Imported => db.full_mrib(query.address_family),
-        MribTable::Selected => db.loc_mrib(query.address_family),
+        MribTable::Imported => db.full_mrib(query.address_family()),
+        MribTable::Selected => db.loc_mrib(query.address_family()),
     };
-    Ok(routes
-        .filter_by_origin(query.route_origin)
+    routes
+        .filter_by_origin(query.route_origin())
         .into_values()
-        .collect())
+        .filter(|route| query.matches(&route.key))
+        .collect()
 }
 
 pub async fn get_mrib_imported(
@@ -57,7 +46,7 @@ pub async fn get_mrib_imported(
     query: Query<MribQuery>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let routes =
-        get_mrib(&rqctx.context().db, query.into_inner(), MribTable::Imported)?;
+        get_mrib(&rqctx.context().db, query.into_inner(), MribTable::Imported);
     Ok(HttpResponseOk(routes))
 }
 
@@ -66,7 +55,7 @@ pub async fn get_mrib_selected(
     query: Query<MribQuery>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let routes =
-        get_mrib(&rqctx.context().db, query.into_inner(), MribTable::Selected)?;
+        get_mrib(&rqctx.context().db, query.into_inner(), MribTable::Selected);
     Ok(HttpResponseOk(routes))
 }
 
@@ -117,34 +106,32 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use mg_api_types::mrib::{
-        MulticastAddr, RouteOriginFilter, StaticMulticastRoute,
-        UnderlayMulticastIpv6, Vni,
+        MulticastAddr, MulticastRouteKey, RouteOriginFilter,
+        StaticMulticastRoute, UnderlayMulticastIpv6, Vni,
     };
     use mg_api_types::rdb::rib::AddressFamily;
 
     use super::*;
-    use crate::test::{TestServer, raw_status, status, test_db};
+    use crate::test::{TestServer, raw_status, test_db};
 
     fn underlay_group() -> UnderlayMulticastIpv6 {
         UnderlayMulticastIpv6::new(Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1))
             .expect("valid test underlay address")
     }
 
+    fn vni() -> Vni {
+        Vni::new(77).expect("valid multicast test VNI")
+    }
+
     fn query(
         group: Option<MulticastAddr>,
         source: Option<IpAddr>,
+        vni: Option<Vni>,
     ) -> MribQuery {
-        MribQuery {
-            group,
-            source,
-            vni: Vni::DEFAULT_MULTICAST,
-            address_family: None,
-            route_origin: None,
-        }
+        MribQuery::new(group, source, vni, None, None).expect("valid query")
     }
 
-    fn add_any_source(db: &Db, group: MulticastAddr) -> MulticastRouteKey {
-        let key = MulticastRouteKey::any_source(group).expect("valid key");
+    fn add_route(db: &Db, key: MulticastRouteKey) -> MulticastRouteKey {
         db.add_static_mcast_routes(&[MulticastRoute::new(
             key,
             underlay_group(),
@@ -154,35 +141,120 @@ mod tests {
         key
     }
 
+    fn keys(db: &Db, q: MribQuery, table: MribTable) -> Vec<MulticastRouteKey> {
+        let mut keys: Vec<_> =
+            get_mrib(db, q, table).into_iter().map(|r| r.key).collect();
+        keys.sort();
+        keys
+    }
+
+    fn add_any_source(db: &Db, group: MulticastAddr) -> MulticastRouteKey {
+        add_route(
+            db,
+            MulticastRouteKey::any_source(group, vni()).expect("valid key"),
+        )
+    }
+
     #[test]
-    fn group_lookup_miss_is_not_found() {
+    fn group_filter_miss_is_empty() {
         let (db, _log) = test_db("mrib_admin_miss");
-        let group = MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
+        add_any_source(
+            &db,
+            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast"),
+        );
+        let other = MulticastAddr::new_v4(239, 9, 9, 9).expect("valid mcast");
 
         for table in [MribTable::Imported, MribTable::Selected] {
-            let err = get_mrib(&db, query(Some(group), None), table)
-                .expect_err("empty MRIB should miss");
-            assert_eq!(err.status_code, 404);
+            assert!(
+                keys(&db, query(Some(other), None, None), table).is_empty()
+            );
         }
     }
 
     #[test]
-    fn invalid_key_is_bad_request() {
-        let (db, _log) = test_db("mrib_admin_bad_key");
-        let asm = MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
-        let ssm = MulticastAddr::new_v4(232, 1, 1, 1).expect("valid mcast");
+    fn filters_match_independently() {
+        let (db, _log) = test_db("mrib_admin_filters_independent");
+        let group = MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
+        let other_group =
+            MulticastAddr::new_v4(239, 2, 2, 2).expect("valid mcast");
+        let other_vni = Vni::new(100).expect("valid VNI");
+        let source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+
+        let any_key = add_any_source(&db, group);
+        let other_vni_key = add_route(
+            &db,
+            MulticastRouteKey::any_source(group, other_vni).expect("key"),
+        );
+        let sg_key = add_route(
+            &db,
+            MulticastRouteKey::new(Some(source), other_group, vni())
+                .expect("key"),
+        );
+
+        let imported = |q| keys(&db, q, MribTable::Imported);
+        let sorted = |mut v: Vec<MulticastRouteKey>| {
+            v.sort();
+            v
+        };
+
+        assert_eq!(
+            imported(query(Some(group), None, None)),
+            sorted(vec![any_key, other_vni_key])
+        );
+        assert_eq!(
+            imported(query(Some(group), None, Some(vni()))),
+            vec![any_key]
+        );
+        assert_eq!(
+            imported(query(None, None, Some(other_vni))),
+            vec![other_vni_key]
+        );
+        assert_eq!(imported(query(None, Some(source), None)), vec![sg_key]);
+        assert!(imported(query(Some(group), Some(source), None)).is_empty());
+        assert_eq!(
+            imported(query(None, None, Some(vni()))),
+            sorted(vec![any_key, sg_key])
+        );
+    }
+
+    #[test]
+    fn query_rejects_impossible_combinations() {
+        let v4_group =
+            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
+        let v6_group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+            .expect("valid mcast");
+        let v4_source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         let v6_source =
             IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        let mcast_source = IpAddr::V4(Ipv4Addr::new(224, 0, 0, 5));
+        let v4 = Some(AddressFamily::Ipv4);
+        let v6 = Some(AddressFamily::Ipv6);
 
-        for q in [query(Some(asm), Some(v6_source)), query(Some(ssm), None)] {
-            let err = get_mrib(&db, q, MribTable::Imported)
-                .expect_err("invalid (S,G) should be rejected");
-            assert_eq!(err.status_code, 400);
+        for (group, source, af) in [
+            (Some(v6_group), None, v4),
+            (None, Some(v4_source), v6),
+            (Some(v4_group), Some(v6_source), None),
+            (None, Some(mcast_source), None),
+        ] {
+            assert!(
+                MribQuery::new(group, source, None, af, None).is_err(),
+                "({group:?}, {source:?}, {af:?}) should be rejected"
+            );
+        }
+        for (group, source, af) in [
+            (Some(v4_group), Some(v4_source), v4),
+            (None, Some(v6_source), v6),
+            (Some(v6_group), None, None),
+        ] {
+            assert!(
+                MribQuery::new(group, source, None, af, None).is_ok(),
+                "({group:?}, {source:?}, {af:?}) should be accepted"
+            );
         }
     }
 
     #[test]
-    fn group_lookup_reads_requested_table() {
+    fn group_filter_reads_requested_table() {
         let (db, _log) = test_db("mrib_admin_tables");
         let any_group =
             MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
@@ -191,12 +263,8 @@ mod tests {
         let sg_group =
             MulticastAddr::new_v4(239, 2, 2, 2).expect("valid mcast");
         let source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-        let sg_key = MulticastRouteKey::new(
-            Some(source),
-            sg_group,
-            Vni::DEFAULT_MULTICAST,
-        )
-        .expect("valid key");
+        let sg_key = MulticastRouteKey::new(Some(source), sg_group, vni())
+            .expect("valid key");
         db.add_static_mcast_routes(&[MulticastRoute::new(
             sg_key,
             underlay_group(),
@@ -205,23 +273,25 @@ mod tests {
         .expect("add route");
 
         for table in [MribTable::Imported, MribTable::Selected] {
-            let got = get_mrib(&db, query(Some(any_group), None), table)
-                .expect("route present");
-            assert_eq!(got.len(), 1);
-            assert_eq!(got[0].key, any_key);
+            assert_eq!(
+                keys(&db, query(Some(any_group), None, Some(vni())), table),
+                vec![any_key]
+            );
         }
 
-        let sg_query = || query(Some(sg_group), Some(source));
-        let got = get_mrib(&db, sg_query(), MribTable::Imported)
-            .expect("imported route present");
-        assert_eq!(got[0].key, sg_key);
-        let err = get_mrib(&db, sg_query(), MribTable::Selected)
-            .expect_err("unreachable source should not be selected");
-        assert_eq!(err.status_code, 404);
+        let sg_query = || query(Some(sg_group), Some(source), Some(vni()));
+        assert_eq!(keys(&db, sg_query(), MribTable::Imported), vec![sg_key]);
+        assert!(keys(&db, sg_query(), MribTable::Selected).is_empty());
 
-        let list = |table| {
-            get_mrib(&db, query(None, None), table).expect("list").len()
-        };
+        let by_source = || query(None, Some(source), None);
+        assert_eq!(keys(&db, by_source(), MribTable::Imported), vec![sg_key]);
+        assert!(keys(&db, by_source(), MribTable::Selected).is_empty());
+
+        let by_vni = || query(None, None, Some(vni()));
+        assert_eq!(keys(&db, by_vni(), MribTable::Imported).len(), 2);
+        assert_eq!(keys(&db, by_vni(), MribTable::Selected), vec![any_key]);
+
+        let list = |table| keys(&db, query(None, None, None), table).len();
         assert_eq!(list(MribTable::Imported), 2);
         assert_eq!(list(MribTable::Selected), 1);
     }
@@ -234,19 +304,24 @@ mod tests {
             MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast"),
         );
 
-        let list = |route_origin, address_family| {
-            let q = MribQuery {
-                route_origin,
-                address_family,
-                ..query(None, None)
+        for table in [MribTable::Imported, MribTable::Selected] {
+            let list = |route_origin, address_family| {
+                let q = MribQuery::new(
+                    None,
+                    None,
+                    None,
+                    address_family,
+                    route_origin,
+                )
+                .expect("valid query");
+                keys(&db, q, table).len()
             };
-            get_mrib(&db, q, MribTable::Imported).expect("list").len()
-        };
-        assert_eq!(list(None, None), 1);
-        assert_eq!(list(Some(RouteOriginFilter::Static), None), 1);
-        assert_eq!(list(Some(RouteOriginFilter::Dynamic), None), 0);
-        assert_eq!(list(None, Some(AddressFamily::Ipv4)), 1);
-        assert_eq!(list(None, Some(AddressFamily::Ipv6)), 0);
+            assert_eq!(list(None, None), 1);
+            assert_eq!(list(Some(RouteOriginFilter::Static), None), 1);
+            assert_eq!(list(Some(RouteOriginFilter::Dynamic), None), 0);
+            assert_eq!(list(None, Some(AddressFamily::Ipv4)), 1);
+            assert_eq!(list(None, Some(AddressFamily::Ipv6)), 0);
+        }
     }
 
     #[tokio::test]
@@ -255,16 +330,13 @@ mod tests {
         let client = &server.client;
         let any_group =
             MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
-        let any_key = MulticastRouteKey::any_source(any_group).expect("key");
+        let any_key =
+            MulticastRouteKey::any_source(any_group, vni()).expect("key");
         let sg_group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
             .expect("mcast");
         let source = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
-        let sg_key = MulticastRouteKey::new(
-            Some(source),
-            sg_group,
-            Vni::DEFAULT_MULTICAST,
-        )
-        .expect("key");
+        let sg_key =
+            MulticastRouteKey::new(Some(source), sg_group, vni()).expect("key");
 
         client
             .static_add_mcast_route(&MribAddStaticRequest {
@@ -291,18 +363,34 @@ mod tests {
         assert_eq!(keys, want);
 
         let got = client
-            .get_mrib_imported(None, Some(&sg_group), None, Some(&source), None)
+            .get_mrib_imported(
+                None,
+                Some(&sg_group),
+                None,
+                Some(&source),
+                Some(&vni()),
+            )
             .await
-            .expect("look up (S,G) with omitted vni")
+            .expect("filter (S,G)")
             .into_inner();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].key, sg_key);
 
-        let err = client
-            .get_mrib_selected(None, Some(&sg_group), None, Some(&source), None)
+        let selected = client
+            .get_mrib_selected(
+                None,
+                Some(&sg_group),
+                None,
+                Some(&source),
+                Some(&vni()),
+            )
             .await
-            .expect_err("unreachable source should not be selected");
-        assert_eq!(status(&err), Some(404));
+            .expect("filter selected (S,G)")
+            .into_inner();
+        assert!(
+            selected.is_empty(),
+            "unreachable source should not be selected"
+        );
 
         let selected = client
             .get_mrib_selected(None, None, None, None, None)
@@ -324,11 +412,12 @@ mod tests {
             .expect("list imported")
             .into_inner();
         assert!(imported.is_empty());
-        let err = client
+        let removed = client
             .get_mrib_imported(None, Some(&any_group), None, None, None)
             .await
-            .expect_err("removed route should miss");
-        assert_eq!(status(&err), Some(404));
+            .expect("filter removed group")
+            .into_inner();
+        assert!(removed.is_empty());
 
         server.shutdown().await;
     }
@@ -339,30 +428,41 @@ mod tests {
         let client = &server.client;
         let get = http::Method::GET;
 
-        for query in [
-            "group=10.0.0.1",
-            "group=ff04::1",
-            "group=232.1.1.1",
-            "group=239.1.1.1&source=2001:db8::1",
-            "group=239.1.1.1&vni=16777216",
+        for (query, want) in [
+            ("group=10.0.0.1", 400),
+            ("group=ff04::1", 400),
+            ("group=239.1.1.1&vni=16777216", 400),
+            ("group=239.1.1.1&source=2001:db8::1", 400),
+            ("address_family=Ipv4&group=ff0e::1", 400),
+            ("address_family=Ipv6&source=10.0.0.1", 400),
+            ("source=224.0.0.5", 400),
+            ("group=232.1.1.1", 200),
+            ("group=239.1.1.1", 200),
+            ("source=10.0.0.1", 200),
+            ("vni=77", 200),
+            ("address_family=Ipv4&group=239.1.1.1&source=10.0.0.1", 200),
         ] {
             let path = format!("/mrib/status/imported?{query}");
             assert_eq!(
                 raw_status(client, get.clone(), &path, None).await,
-                400,
+                want,
                 "{query}"
             );
         }
 
         let ssm_without_source = concat!(
-            r#"{"routes":[{"key":{"V4":{"group":"232.1.1.1","source":null}},"#,
-            r#""underlay_group":"ff04::1"}]}"#,
+            r#"{"routes":[{"key":{"V4":{"group":"232.1.1.1","source":null,"#,
+            r#""vni":77}},"underlay_group":"ff04::1"}]}"#,
         );
         let bad_underlay = concat!(
-            r#"{"routes":[{"key":{"V4":{"group":"239.1.1.1","source":null}},"#,
-            r#""underlay_group":"ff05::1"}]}"#,
+            r#"{"routes":[{"key":{"V4":{"group":"239.1.1.1","source":null,"#,
+            r#""vni":77}},"underlay_group":"ff05::1"}]}"#,
         );
-        for body in [ssm_without_source, bad_underlay] {
+        let missing_vni = concat!(
+            r#"{"routes":[{"key":{"V4":{"group":"239.1.1.1","source":null}},"#,
+            r#""underlay_group":"ff04::1"}]}"#,
+        );
+        for body in [ssm_without_source, bad_underlay, missing_vni] {
             assert_eq!(
                 raw_status(
                     client,
