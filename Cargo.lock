@@ -9663,7 +9663,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=levon%2Flift-env-var#66fd806907ae395a1fdcad44861261b9feba6229"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#6bfdb16bfe1b3202c9292d43b48b7f47d10873e3"
 dependencies = [
  "anyhow",
  "cargo_metadata",
