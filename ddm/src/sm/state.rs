@@ -469,7 +469,7 @@ impl Exchange {
                 (
                     r.route.destination,
                     r.route.path.clone(),
-                    r.multi_rack_join_addr,
+                    r.multi_rack_join_addr.clone(),
                 )
             },
         );
