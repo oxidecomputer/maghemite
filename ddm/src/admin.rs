@@ -720,15 +720,19 @@ impl DdmAdminApi for DdmAdminApiImpl {
         }
 
         for e in ctx.event_channels() {
-            if !withdraw.is_empty() {
-                e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
-                    withdraw.clone(),
-                ))))
-                .map_err(AdminError::from)?;
-            }
+            // Send Announce before Withdraw to avoid timing gaps where the
+            // peer has no path from us. If we are their only path, withdrawing
+            // first can cause a forwarding outage between the processing of the
+            // Withdraw and the processing of the Announce.
             if !announce.is_empty() {
                 e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Rack(
                     announce.clone(),
+                ))))
+                .map_err(AdminError::from)?;
+            }
+            if !withdraw.is_empty() {
+                e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                    withdraw.clone(),
                 ))))
                 .map_err(AdminError::from)?;
             }
