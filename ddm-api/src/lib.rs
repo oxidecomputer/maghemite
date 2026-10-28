@@ -49,8 +49,10 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
-    /// Get the routing session on each address object, keyed by address
-    /// object name, including sessions that have not discovered a peer.
+    /// Get the routing session on each address object.
+    ///
+    /// Keyed by address object name. Includes sessions that have not
+    /// discovered a peer.
     #[endpoint {
         method = GET,
         path = "/peers",
@@ -208,8 +210,9 @@ pub trait DdmAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
 
-    /// Get the rack prefixes originated by this router. Only supported on
-    /// transit routers.
+    /// Get the rack prefixes originated by this router.
+    ///
+    /// Only supported on transit routers.
     #[endpoint {
         method = GET,
         path = "/originated_rack_prefixes",
@@ -222,11 +225,12 @@ pub trait DdmAdminApi {
         HttpError,
     >;
 
-    /// Originate rack prefixes from this router, each with an optional
-    /// multi-rack join address. The body is keyed by prefix so a prefix
-    /// carries at most one join address. Advertising a prefix again replaces
-    /// its join address. Originated prefixes not in the body are left
-    /// unchanged. Only supported on transit routers.
+    /// Originate rack prefixes from this router.
+    ///
+    /// Each prefix has an optional multi-rack join address. The body is keyed
+    /// by prefix so a prefix carries at most one join address. Advertising a
+    /// prefix again replaces its join address. Originated prefixes not in the
+    /// body are left unchanged. Only supported on transit routers.
     #[endpoint {
         method = PUT,
         path = "/originated_rack_prefixes",
@@ -237,8 +241,9 @@ pub trait DdmAdminApi {
         request: TypedBody<HashMap<Ipv6Net, latest::net::RackPrefixInfo>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    /// Withdraw rack prefixes originated by this router. Only supported on
-    /// transit routers.
+    /// Withdraw rack prefixes originated by this router.
+    ///
+    /// Only supported on transit routers.
     #[endpoint {
         method = DELETE,
         path = "/originated_rack_prefixes",
@@ -249,9 +254,10 @@ pub trait DdmAdminApi {
         request: TypedBody<HashSet<Ipv6Net>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    /// Get the rack prefixes this router has learned from its peers, with the
-    /// distinct info carried by their paths, including paths that carry no
-    /// multi-rack join address.
+    /// Get the rack prefixes this router has learned from its peers.
+    ///
+    /// Each prefix maps to the distinct info carried by its paths, including
+    /// paths that carry no multi-rack join address.
     #[endpoint {
         method = GET,
         path = "/rack_prefixes",
@@ -264,8 +270,9 @@ pub trait DdmAdminApi {
         HttpError,
     >;
 
-    /// Get the counters of the routing session on each address object, keyed
-    /// by address object name.
+    /// Get the counters of the routing session on each address object.
+    ///
+    /// Keyed by address object name.
     #[endpoint {
         method = GET,
         path = "/stats/peers",

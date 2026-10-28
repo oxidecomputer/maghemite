@@ -128,8 +128,8 @@
     },
     "/originated_rack_prefixes": {
       "get": {
-        "summary": "Get the rack prefixes originated by this router. Only supported on",
-        "description": "transit routers.",
+        "summary": "Get the rack prefixes originated by this router.",
+        "description": "Only supported on transit routers.",
         "operationId": "get_originated_rack_prefixes",
         "responses": {
           "200": {
@@ -155,8 +155,8 @@
         }
       },
       "put": {
-        "summary": "Originate rack prefixes from this router, each with an optional",
-        "description": "multi-rack join address. The body is keyed by prefix so a prefix carries at most one join address. Advertising a prefix again replaces its join address. Originated prefixes not in the body are left unchanged. Only supported on transit routers.",
+        "summary": "Originate rack prefixes from this router.",
+        "description": "Each prefix has an optional multi-rack join address. The body is keyed by prefix so a prefix carries at most one join address. Advertising a prefix again replaces its join address. Originated prefixes not in the body are left unchanged. Only supported on transit routers.",
         "operationId": "advertise_rack_prefixes",
         "requestBody": {
           "content": {
@@ -185,8 +185,8 @@
         }
       },
       "delete": {
-        "summary": "Withdraw rack prefixes originated by this router. Only supported on",
-        "description": "transit routers.",
+        "summary": "Withdraw rack prefixes originated by this router.",
+        "description": "Only supported on transit routers.",
         "operationId": "withdraw_rack_prefixes",
         "requestBody": {
           "content": {
@@ -246,8 +246,8 @@
     },
     "/peers": {
       "get": {
-        "summary": "Get the routing session on each address object, keyed by address",
-        "description": "object name, including sessions that have not discovered a peer.",
+        "summary": "Get the routing session on each address object.",
+        "description": "Keyed by address object name. Includes sessions that have not discovered a peer.",
         "operationId": "get_peers",
         "responses": {
           "200": {
@@ -393,8 +393,8 @@
     },
     "/rack_prefixes": {
       "get": {
-        "summary": "Get the rack prefixes this router has learned from its peers, with the",
-        "description": "distinct info carried by their paths, including paths that carry no multi-rack join address.",
+        "summary": "Get the rack prefixes this router has learned from its peers.",
+        "description": "Each prefix maps to the distinct info carried by its paths, including paths that carry no multi-rack join address.",
         "operationId": "get_rack_prefixes",
         "responses": {
           "200": {
@@ -462,8 +462,8 @@
     },
     "/stats/peers": {
       "get": {
-        "summary": "Get the counters of the routing session on each address object, keyed",
-        "description": "by address object name.",
+        "summary": "Get the counters of the routing session on each address object.",
+        "description": "Keyed by address object name.",
         "operationId": "get_peers_stats",
         "responses": {
           "200": {
