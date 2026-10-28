@@ -354,7 +354,7 @@ impl Exchange {
         // compilation barrier. a new RIB table must be handled here.
         let RemovedRoutes {
             underlay: mut to_remove,
-            tunnel: to_remove_tnl,
+            tunnel: mut to_remove_tnl,
             rack: mut to_remove_rack,
         } = self.ctx.db.remove_nexthop_routes(self.peer.addr);
         self.ctx.stats.update_imported(&self.ctx.db, self.peer.addr);
@@ -400,24 +400,12 @@ impl Exchange {
 
         // Only send withdraws for expirations that result in a total loss
         // of reachability to a destination for the given path.
-        let imported = self.ctx.db.imported();
-        dbg!(self.log, self.ctx.config.if_name, "imported: {imported:#?}");
-        dbg!(
-            self.log,
-            self.ctx.config.if_name,
-            "to_remove: {to_remove:#?}"
+        self.retain_unreachable(
+            "underlay",
+            &mut to_remove,
+            self.ctx.db.imported(),
+            |r| (r.destination, r.path.clone()),
         );
-        to_remove.retain(|x| {
-            !imported
-                .iter()
-                .any(|y| y.destination == x.destination && y.path == x.path)
-        });
-        dbg!(
-            self.log,
-            self.ctx.config.if_name,
-            "to_remove (retained): {to_remove:#?}"
-        );
-
         let underlay = if to_remove.is_empty() {
             None
         } else {
@@ -436,6 +424,14 @@ impl Exchange {
             ))
         };
 
+        // Tunnel routes carry no path, so the same origin learned from
+        // another peer keeps it reachable.
+        self.retain_unreachable(
+            "tunnel",
+            &mut to_remove_tnl,
+            self.ctx.db.imported_tunnel(),
+            |r| r.origin,
+        );
         let tunnel = if to_remove_tnl.is_empty() {
             None
         } else {
@@ -444,32 +440,18 @@ impl Exchange {
             ))
         };
 
-        // Only send withdraws for expirations that result in a total loss
-        // of reachability to a destination for the given path.
-        let imported_rack = self.ctx.db.imported_rack();
-        dbg!(
-            self.log,
-            self.ctx.config.if_name,
-            "imported_rack: {imported_rack:#?}"
+        self.retain_unreachable(
+            "rack",
+            &mut to_remove_rack,
+            self.ctx.db.imported_rack(),
+            |r| {
+                (
+                    r.route.destination,
+                    r.route.path.clone(),
+                    r.multi_rack_join_addr,
+                )
+            },
         );
-        dbg!(
-            self.log,
-            self.ctx.config.if_name,
-            "to_remove_rack: {to_remove_rack:#?}"
-        );
-        to_remove_rack.retain(|x| {
-            !imported_rack.iter().any(|y| {
-                y.multi_rack_join_addr == x.multi_rack_join_addr
-                    && y.route.destination == x.route.destination
-                    && y.route.path == x.route.path
-            })
-        });
-        dbg!(
-            self.log,
-            self.ctx.config.if_name,
-            "to_remove_rack (retained): {to_remove_rack:#?}"
-        );
-
         let rack = if to_remove_rack.is_empty() {
             None
         } else {
@@ -497,6 +479,30 @@ impl Exchange {
         super::send(
             Event::Peer(PeerEvent::Push(push)),
             &mut self.ctx.event_channels,
+        );
+    }
+
+    /// Keep only the routes in `removed` that are now unreachable: those whose
+    /// `key` matches no route still in `imported`. A removed route that
+    /// another imported route still covers must not be withdrawn from peers.
+    fn retain_unreachable<T: std::fmt::Debug, K: Eq + std::hash::Hash>(
+        &self,
+        class: &str,
+        removed: &mut HashSet<T>,
+        imported: HashSet<T>,
+        key: impl Fn(&T) -> K,
+    ) {
+        let still_imported: HashSet<K> = imported.iter().map(&key).collect();
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "{class} routes removed: {removed:#?}"
+        );
+        removed.retain(|r| !still_imported.contains(&key(r)));
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "{class} routes unreachable: {removed:#?}"
         );
     }
 }
@@ -886,7 +892,7 @@ impl State for Exchange {
                     // push, and later ones reach the new peer through our
                     // Redistribute fan-out once it is registered.
                     let db = &self.ctx.db;
-                    let router_id = self.ctx.router_id.clone();
+                    let router_id = self.ctx.router_id.as_str();
                     let push = Update {
                         underlay: Some(
                             UnderlayUpdate::announce(
@@ -895,7 +901,7 @@ impl State for Exchange {
                                     .map(Into::into)
                                     .collect(),
                             )
-                            .with_path_element(router_id.clone()),
+                            .with_path_element(router_id),
                         ),
                         tunnel: Some(TunnelUpdate::announce(
                             db.imported_tunnel_from(self.peer.addr)
@@ -986,8 +992,11 @@ impl State for Exchange {
                         "redistributing update to {} peers",
                         self.ctx.event_channels.len()
                     );
-                    update.underlay = update.underlay.map(|u| {
-                        let sans_loops = u.break_loops(&self.ctx.router_id);
+
+                    let router_id = &self.ctx.router_id;
+
+                    if let Some(u) = update.underlay.as_mut() {
+                        let sans_loops = u.break_loops(router_id);
 
                         let announce_loop =
                             u.announce.difference(&sans_loops.announce);
@@ -1011,10 +1020,33 @@ impl State for Exchange {
                             )
                         }
 
-                        sans_loops.with_path_element(self.ctx.router_id.clone())
-                    });
-                    update.rack = update.rack.map(|r| {
-                        let sans_loops = r.break_loops(&self.ctx.router_id);
+                        *u = sans_loops.with_path_element(router_id);
+                    }
+
+                    // Tunnel routes don't carry a path vector, so they end up
+                    // behaving similar to distance vector:
+                    // - We advertise iff we have at least one valid path
+                    // - The advertisement doesn't carry path info (next-hop is
+                    //   the only means of determining overall path)
+                    //
+                    // So: Don't withdraw routes that are still in the DB.
+                    if let Some(t) = update.tunnel.as_mut() {
+                        let imported_tunnel: HashSet<TunnelOrigin> = self
+                            .ctx
+                            .db
+                            .imported_tunnel()
+                            .into_iter()
+                            .map(|r| r.origin)
+                            .collect();
+                        t.withdraw = t
+                            .withdraw
+                            .difference(&imported_tunnel)
+                            .copied()
+                            .collect();
+                    }
+
+                    if let Some(r) = update.rack.as_mut() {
+                        let sans_loops = r.break_loops(router_id);
                         for x in r.announce.difference(&sans_loops.announce) {
                             wrn!(
                                 self.log,
@@ -1023,12 +1055,14 @@ impl State for Exchange {
                                 x,
                             )
                         }
-                        sans_loops.with_path_element(self.ctx.router_id.clone())
-                    });
+                        *r = sans_loops.with_path_element(router_id);
+                    }
+
                     // Loop breaking can leave nothing to send.
                     if update.is_empty() {
                         continue;
                     }
+
                     super::send(
                         Event::Peer(PeerEvent::Push(update)),
                         &mut self.ctx.event_channels,

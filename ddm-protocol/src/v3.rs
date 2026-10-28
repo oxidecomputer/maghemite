@@ -87,10 +87,10 @@ impl RackUpdate {
         }
     }
     /// See [`UnderlayUpdate::with_path_element`].
-    pub fn with_path_element(&self, element: String) -> Self {
+    pub fn with_path_element(&self, element: &str) -> Self {
         let push = |x: &RackPrefix| {
             let mut rp = x.clone();
-            rp.path_vector.path.push(element.clone());
+            rp.path_vector.path.push(element.to_string());
             rp
         };
         Self {
@@ -99,12 +99,12 @@ impl RackUpdate {
         }
     }
     /// See [`UnderlayUpdate::break_loops`].
-    pub fn break_loops(&self, hostname: &String) -> Self {
+    pub fn break_loops(&self, hostname: &str) -> Self {
         Self {
             announce: self
                 .announce
                 .iter()
-                .filter(|x| !x.path_vector.path.contains(hostname))
+                .filter(|x| !x.path_vector.path.contains(&hostname.to_string()))
                 .cloned()
                 .collect(),
             withdraw: self.withdraw.clone(),
@@ -181,14 +181,14 @@ impl UnderlayUpdate {
             ..Default::default()
         }
     }
-    pub fn with_path_element(&self, element: String) -> Self {
+    pub fn with_path_element(&self, element: &str) -> Self {
         Self {
             announce: self
                 .announce
                 .iter()
                 .map(|x| {
                     let mut pv = x.clone();
-                    pv.path.push(element.clone());
+                    pv.path.push(element.to_string());
                     pv
                 })
                 .collect(),
@@ -197,7 +197,7 @@ impl UnderlayUpdate {
                 .iter()
                 .map(|x| {
                     let mut pv = x.clone();
-                    pv.path.push(element.clone());
+                    pv.path.push(element.to_string());
                     pv
                 })
                 .collect(),
