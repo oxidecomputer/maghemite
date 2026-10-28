@@ -11,7 +11,9 @@ use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
     SmContext, SmError, StateMachine,
 };
-use crate::db::RemovedRoutes;
+use crate::db::{
+    RemovedRoutes, TunnelForwardingChanges, tunnel_forwarding_changes,
+};
 use crate::sm::{PeerIdentity, RouteAdvertisementAllowances};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::net::TunnelOrigin;
@@ -351,6 +353,8 @@ impl Exchange {
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
 
+        let tunnel_before = self.ctx.db.imported_tunnel();
+
         // compilation barrier. a new RIB table must be handled here.
         let RemovedRoutes {
             underlay: mut to_remove,
@@ -378,16 +382,33 @@ impl Exchange {
             routes,
             &self.ctx.rt,
         );
+        // Tunnel forwarding entries carry no nexthop, so other peers may
+        // still provide what this peer did. Change only what the effective
+        // set of origins lost or gained.
+        let TunnelForwardingChanges { add, remove } = tunnel_forwarding_changes(
+            &tunnel_before,
+            &self.ctx.db.imported_tunnel(),
+        );
         if let Err(e) = crate::sys::remove_tunnel_routes(
             &self.log,
             &self.ctx.config.if_name,
-            &to_remove_tnl,
+            &remove,
         ) {
             err!(
                 self.log,
                 self.ctx.config.if_name,
-                "failed to remove tunnel routes: {:#?} {e}",
-                to_remove_tnl
+                "failed to remove tunnel routes: {remove:#?} {e}",
+            );
+        }
+        if let Err(e) = crate::sys::add_tunnel_routes(
+            &self.log,
+            &self.ctx.config.if_name,
+            &add,
+        ) {
+            err!(
+                self.log,
+                self.ctx.config.if_name,
+                "failed to add tunnel routes: {add:#?} {e}",
             );
         }
 

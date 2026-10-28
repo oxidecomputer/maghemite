@@ -584,6 +584,42 @@ pub fn effective_route_set(
     result
 }
 
+/// Tunnel forwarding entries to change after the imported tunnel table goes
+/// from `before` to `after`.
+pub struct TunnelForwardingChanges {
+    pub add: HashSet<TunnelRoute>,
+    pub remove: HashSet<TunnelRoute>,
+}
+
+/// Compare the effective tunnel routes of two imported tunnel tables by
+/// origin. Tunnel forwarding entries carry no nexthop, so an origin that any
+/// peer still provides must not be removed, and one that another peer already
+/// provided need not be added.
+pub fn tunnel_forwarding_changes(
+    before: &HashSet<TunnelRoute>,
+    after: &HashSet<TunnelRoute>,
+) -> TunnelForwardingChanges {
+    let by_origin = |s| -> HashMap<TunnelOrigin, TunnelRoute> {
+        effective_route_set(s)
+            .into_iter()
+            .map(|r| (r.origin, r))
+            .collect()
+    };
+    let (before, after) = (by_origin(before), by_origin(after));
+    let missing_from =
+        |a: &HashMap<TunnelOrigin, TunnelRoute>,
+         b: &HashMap<TunnelOrigin, TunnelRoute>| {
+            a.iter()
+                .filter(|(o, _)| !b.contains_key(o))
+                .map(|(_, r)| *r)
+                .collect()
+        };
+    TunnelForwardingChanges {
+        add: missing_from(&after, &before),
+        remove: missing_from(&before, &after),
+    }
+}
+
 trait DbKey: Sized {
     fn db_key(&self) -> Vec<u8>;
     fn from_db_key(v: &[u8]) -> Result<Self, Error>;
@@ -617,6 +653,54 @@ mod test {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
+
+    #[test]
+    fn tunnel_forwarding_kept_while_another_peer_provides_origin() {
+        let route = |boundary: &str, metric, nexthop: &str| TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
+                boundary_addr: boundary.parse().unwrap(),
+                vni: 99,
+                metric,
+            },
+            nexthop: nexthop.parse().unwrap(),
+        };
+        let a = route("fd00:a::1", 0, "fe80:a::1");
+        let b = route("fd00:a::1", 0, "fe80:b::1");
+        let other = route("fd00:b::1", 0, "fe80:b::1");
+
+        // Losing one of two peers providing an origin changes nothing, and
+        // a second peer providing an installed origin adds nothing.
+        let both: HashSet<_> = [a, b, other].into();
+        let only_b: HashSet<_> = [b, other].into();
+        let c = tunnel_forwarding_changes(&both, &only_b);
+        assert_eq!(c.remove, HashSet::new());
+        assert_eq!(c.add, HashSet::new());
+        let c = tunnel_forwarding_changes(&only_b, &both);
+        assert_eq!(c.add, HashSet::new());
+
+        // Losing the last peer providing an origin removes it.
+        let c = tunnel_forwarding_changes(&only_b, &[b].into());
+        assert_eq!(
+            c.remove
+                .iter()
+                .map(|r| r.origin.boundary_addr)
+                .collect::<Vec<_>>(),
+            vec!["fd00:b::1".parse::<Ipv6Addr>().unwrap()],
+        );
+
+        // An inactive origin becomes effective once the active one is gone.
+        let active = route("fd00:c::1", 100, "fe80:c::1");
+        let with_active: HashSet<_> = [active, b].into();
+        let c = tunnel_forwarding_changes(&with_active, &[b].into());
+        assert_eq!(
+            c.add
+                .iter()
+                .map(|r| r.origin.boundary_addr)
+                .collect::<Vec<_>>(),
+            vec!["fd00:a::1".parse::<Ipv6Addr>().unwrap()],
+        );
+    }
 
     #[test]
     fn test_effective_tunnel_route_set() {
