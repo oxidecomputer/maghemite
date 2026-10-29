@@ -21,6 +21,7 @@ use ddm_protocol::v3::{
     PathVector, RackPrefix, RackUpdate, TunnelUpdate, UnderlayUpdate, Update,
 };
 use libnet::get_ipaddr_info;
+use mg_common::lock;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
