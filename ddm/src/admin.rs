@@ -145,7 +145,10 @@ pub fn handler(
             dropshot::ClientSpecifiesVersionInHeader::new(
                 omicron_common::api::VERSION_HEADER,
                 ddm_api::latest_version(),
-            ),
+            )
+            // Reject requests for versions older than the oldest one that
+            // this server still supports.
+            .min_version(ddm_api::oldest_version()),
         )))
         .start()
         .map_err(|e| format!("admin: server start error: {e:?}"))?;
