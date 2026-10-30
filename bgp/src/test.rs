@@ -506,6 +506,64 @@ fn test_router_listener_shutdown_and_restart() {
     assert_eq!(Arc::strong_count(&dispatcher), 1);
 }
 
+#[test]
+#[serial_test::parallel]
+fn unknown_peers_do_not_restart_listener() {
+    use crate::{
+        IO_TIMEOUT, connection::ListenerAcceptError, dispatcher::AcceptLoopExit,
+    };
+    use std::io::Read;
+    use std::net::TcpStream;
+
+    let log = slog::Logger::root(slog::Discard, slog::o!());
+    let sessions = Arc::new(Mutex::new(SessionMap::new()));
+    let dispatcher = Arc::new(Dispatcher::<BgpConnectionTcp>::new(
+        sessions.clone(),
+        "127.0.0.1:0".into(),
+        log.clone(),
+        None,
+    ));
+    let listener =
+        BgpListenerTcp::bind(dispatcher.listen_addr(), log.clone(), None)
+            .unwrap();
+    let addr = listener.bind_addr();
+    let timeout = Duration::from_secs(5);
+
+    // Assert the actual error before handing this listener to the dispatcher.
+    // The empty session map makes the loopback client an unknown peer.
+    let probe = TcpStream::connect_timeout(&addr, timeout).unwrap();
+    match listener.accept(log, sessions, IO_TIMEOUT) {
+        Err(ListenerAcceptError::UnknownPeer(peer)) => {
+            assert_eq!(peer, PeerId::Ip(probe.local_addr().unwrap().ip()));
+        }
+        Err(e) => panic!("expected UnknownPeer, got {e:?}"),
+        Ok(_) => panic!("accepted an unknown peer"),
+    }
+    drop(probe);
+
+    // Serve the same listener: rejecting further peers must not request Rebind.
+    let d = dispatcher.clone();
+    let handle = std::thread::spawn(move || d.accept_loop(listener));
+    // Defer failures until after shutdown and join so no worker is left running.
+    let result = (|| -> anyhow::Result<()> {
+        for _ in 0..3 {
+            let mut conn = TcpStream::connect_timeout(&addr, timeout)?;
+            conn.set_read_timeout(Some(timeout))?;
+            let mut byte = [0];
+            // Wait for rejection to close the socket. The exit assertion below
+            // checks the dispatcher's decision after accept() returns.
+            anyhow::ensure!(
+                conn.read(&mut byte)? == 0,
+                "peer was not rejected"
+            );
+        }
+        Ok(())
+    })();
+    dispatcher.shutdown();
+    assert_eq!(handle.join().unwrap(), AcceptLoopExit::Shutdown);
+    result.unwrap();
+}
+
 // This test effectively does the following:
 // 1. Sets up a basic pair of routers, r1 and r2
 //    - r1 either uses active or passive tcp establishment
