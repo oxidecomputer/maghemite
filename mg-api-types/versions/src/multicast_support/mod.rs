@@ -6,5 +6,8 @@
 //!
 //! This introduces the MRIB (Multicast Routing Information Base) types. See
 //! [`mrib`] for the validated addresses, route keys, and routes.
+//!
+//! This version adds MRIB endpoints for static multicast route management and
+//! for querying imported and selected multicast routes.
 
 pub mod mrib;

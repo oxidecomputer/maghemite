@@ -57,11 +57,31 @@ progenitor::generate_api!(
         StaticRoute6 = mg_api_types_versions::latest::static_routes::StaticRoute6,
         StaticRoute6List = mg_api_types_versions::latest::static_routes::StaticRoute6List,
 
+        // MRIB shapes.
+        MribAddStaticRequest = mg_api_types_versions::latest::mrib::MribAddStaticRequest,
+        MribDeleteStaticRequest = mg_api_types_versions::latest::mrib::MribDeleteStaticRequest,
+        MulticastAddr = mg_api_types_versions::latest::mrib::MulticastAddr,
+        MulticastAddrV4 = mg_api_types_versions::latest::mrib::MulticastAddrV4,
+        MulticastAddrV6 = mg_api_types_versions::latest::mrib::MulticastAddrV6,
+        MulticastRoute = mg_api_types_versions::latest::mrib::MulticastRoute,
+        MulticastRouteKey = mg_api_types_versions::latest::mrib::MulticastRouteKey,
+        MulticastRouteKeyV4 = mg_api_types_versions::latest::mrib::MulticastRouteKeyV4,
+        MulticastRouteKeyV6 = mg_api_types_versions::latest::mrib::MulticastRouteKeyV6,
+        MulticastSourceProtocol = mg_api_types_versions::latest::mrib::MulticastSourceProtocol,
+        RouteOriginFilter = mg_api_types_versions::latest::mrib::RouteOriginFilter,
+        StaticMulticastRoute = mg_api_types_versions::latest::mrib::StaticMulticastRoute,
+        UnderlayMulticastIpv6 = mg_api_types_versions::latest::mrib::UnderlayMulticastIpv6,
+        UnicastAddrV4 = mg_api_types_versions::latest::mrib::UnicastAddrV4,
+        UnicastAddrV6 = mg_api_types_versions::latest::mrib::UnicastAddrV6,
+        Vni = mg_api_types_versions::latest::mrib::Vni,
+
         Duration = std::time::Duration,
    }
 );
 
 progenitor_extras::slog_hooks::impl_slog_client_hooks!(Client);
+
+pub use mg_api_types_versions::{latest::mrib, v14};
 
 use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;

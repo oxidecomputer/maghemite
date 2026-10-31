@@ -38,8 +38,8 @@ ndp.workspace = true
 network-interface.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
 proptest.workspace = true
+mg-admin-client.workspace = true
 
 [features]
 default = ["mg-lower"]

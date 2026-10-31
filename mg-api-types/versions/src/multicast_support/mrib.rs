@@ -34,6 +34,8 @@ use dpd_types_versions::v14::mcast::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::v1::rdb::rib::AddressFamily;
+
 pub use dpd_types_versions::v1::network::VniError;
 pub use dpd_types_versions::v8::mcast::{
     UnderlayMulticastError, UnderlayMulticastIpv6,
@@ -875,6 +877,223 @@ pub enum MulticastSourceProtocol {
     Static,
 }
 
+/// A static multicast route.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct StaticMulticastRoute {
+    /// The multicast route key `(S,G)` or `(*,G)`.
+    pub key: MulticastRouteKey,
+    /// Underlay multicast group address (`ff04::/64`).
+    pub underlay_group: UnderlayMulticastIpv6,
+}
+
+/// Request body for adding static multicast routes to the MRIB.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribAddStaticRequest {
+    /// List of static multicast routes to add.
+    pub routes: Vec<StaticMulticastRoute>,
+}
+
+/// Request body for deleting static multicast routes from the MRIB.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribDeleteStaticRequest {
+    /// List of route keys to delete.
+    pub keys: Vec<MulticastRouteKey>,
+}
+
+/// Filter for multicast route origin.
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq,
+)]
+pub enum RouteOriginFilter {
+    /// Static routes only (operator configured).
+    Static,
+    /// Dynamic routes only (learned via IGMP, MLD, etc.).
+    Dynamic,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MribQueryError {
+    #[error("Address {addr} is not in address family {address_family:?}")]
+    AddressFamilyMismatch {
+        addr: IpAddr,
+        address_family: AddressFamily,
+    },
+
+    #[error(transparent)]
+    Route(#[from] MulticastRouteError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "MribQueryShadow", into = "MribQueryShadow")]
+pub struct MribQuery {
+    address_family: Option<AddressFamily>,
+    group: Option<MulticastAddr>,
+    source: Option<IpAddr>,
+    vni: Option<Vni>,
+    route_origin: Option<RouteOriginFilter>,
+}
+
+impl MribQuery {
+    pub fn new(
+        group: Option<MulticastAddr>,
+        source: Option<IpAddr>,
+        vni: Option<Vni>,
+        address_family: Option<AddressFamily>,
+        route_origin: Option<RouteOriginFilter>,
+    ) -> Result<Self, MribQueryError> {
+        Self::try_from(MribQueryShadow {
+            group,
+            source,
+            vni,
+            address_family,
+            route_origin,
+        })
+    }
+
+    #[inline]
+    pub const fn address_family(&self) -> Option<AddressFamily> {
+        self.address_family
+    }
+
+    #[inline]
+    pub const fn group(&self) -> Option<MulticastAddr> {
+        self.group
+    }
+
+    #[inline]
+    pub const fn source(&self) -> Option<IpAddr> {
+        self.source
+    }
+
+    #[inline]
+    pub const fn vni(&self) -> Option<Vni> {
+        self.vni
+    }
+
+    #[inline]
+    pub const fn route_origin(&self) -> Option<RouteOriginFilter> {
+        self.route_origin
+    }
+
+    pub fn matches(&self, key: &MulticastRouteKey) -> bool {
+        self.group.is_none_or(|group| key.group() == group)
+            && self
+                .source
+                .is_none_or(|source| key.source() == Some(source))
+            && self.vni.is_none_or(|vni| key.vni() == vni)
+    }
+}
+
+/// Query parameters for MRIB routes.
+///
+/// When `group` is provided -> lookup a specific route.
+/// When `group` is not provided -> list all routes (with optional filters).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "MribQuery")]
+pub(crate) struct MribQueryShadow {
+    /// Multicast group address.
+    ///
+    /// If provided, the query returns a specific route.
+    /// If omitted, the query returns all routes matching the filters.
+    #[serde(default)]
+    pub group: Option<MulticastAddr>,
+    /// Source address (`None` for `(*,G)` routes).
+    ///
+    /// Only used when `group` is set.
+    #[serde(default)]
+    pub source: Option<IpAddr>,
+    /// VNI (defaults to the fleet-wide multicast VNI).
+    ///
+    /// Only used when `group` is set.
+    #[serde(default)]
+    pub vni: Option<Vni>,
+    /// Filter by address family.
+    ///
+    /// Only used when listing all routes.
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+    /// Filter by route origin ("Static" or "Dynamic").
+    ///
+    /// Only used when listing all routes.
+    #[serde(default)]
+    pub route_origin: Option<RouteOriginFilter>,
+}
+
+impl TryFrom<MribQueryShadow> for MribQuery {
+    type Error = MribQueryError;
+
+    fn try_from(query: MribQueryShadow) -> Result<Self, Self::Error> {
+        if let Some(address_family) = query.address_family {
+            let in_family = |addr: IpAddr| match address_family {
+                AddressFamily::Ipv4 => addr.is_ipv4(),
+                AddressFamily::Ipv6 => addr.is_ipv6(),
+            };
+            for addr in
+                query.group.map(|g| g.ip()).into_iter().chain(query.source)
+            {
+                if !in_family(addr) {
+                    return Err(MribQueryError::AddressFamilyMismatch {
+                        addr,
+                        address_family,
+                    });
+                }
+            }
+        }
+
+        if let Some(source) = query.source {
+            match source {
+                IpAddr::V4(s) => {
+                    UnicastAddrV4::new(s).map_err(MulticastRouteError::from)?;
+                }
+                IpAddr::V6(s) => {
+                    UnicastAddrV6::new(s).map_err(MulticastRouteError::from)?;
+                }
+            }
+            if let Some(group) = query.group
+                && group.ip().is_ipv4() != source.is_ipv4()
+            {
+                return Err(MulticastRouteError::SourceFamilyMismatch {
+                    source_ip: source,
+                    group: group.ip(),
+                }
+                .into());
+            }
+        }
+
+        Ok(Self {
+            address_family: query.address_family,
+            group: query.group,
+            source: query.source,
+            vni: query.vni,
+            route_origin: query.route_origin,
+        })
+    }
+}
+
+impl From<MribQuery> for MribQueryShadow {
+    fn from(query: MribQuery) -> Self {
+        Self {
+            group: query.group,
+            source: query.source,
+            vni: query.vni,
+            address_family: query.address_family,
+            route_origin: query.route_origin,
+        }
+    }
+}
+
+impl JsonSchema for MribQuery {
+    fn schema_name() -> String {
+        MribQueryShadow::schema_name()
+    }
+
+    fn json_schema(
+        generator: &mut schemars::r#gen::SchemaGenerator,
+    ) -> schemars::schema::Schema {
+        MribQueryShadow::json_schema(generator)
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 mod arbitrary_impls {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -978,7 +1197,7 @@ mod tests {
     use super::*;
 
     fn vni() -> Vni {
-        Vni::new(77).unwrap()
+        Vni::new(77).expect("valid multicast test VNI")
     }
 
     #[test]
@@ -1287,7 +1506,10 @@ mod tests {
             r#"{"V4":{"source":null,"group":"239.1.2.3","vni":77}}"#,
             r#"{"V4":{"source":"192.0.2.1","group":"232.1.2.3","vni":77}}"#,
             r#"{"V6":{"group":"ff0e::1","vni":77}}"#,
-            r#"{"V6":{"source":"2001:db8::1","group":"ff3e::4000:1","vni":77}}"#,
+            concat!(
+                r#"{"V6":{"source":"2001:db8::1","group":"ff3e::4000:1","#,
+                r#""vni":77}}"#,
+            ),
         ] {
             let key = serde_json::from_str::<MulticastRouteKey>(json)
                 .unwrap_or_else(|e| panic!("{json} should decode: {e}"));

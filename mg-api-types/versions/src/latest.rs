@@ -182,6 +182,10 @@ pub mod mrib {
     pub use crate::v14::mrib::EmbeddedIpv4;
     pub use crate::v14::mrib::InvalidEmbeddedRp;
     pub use crate::v14::mrib::InvalidMulticastSource;
+    pub use crate::v14::mrib::MribAddStaticRequest;
+    pub use crate::v14::mrib::MribDeleteStaticRequest;
+    pub use crate::v14::mrib::MribQuery;
+    pub use crate::v14::mrib::MribQueryError;
     pub use crate::v14::mrib::MulticastAddr;
     pub use crate::v14::mrib::MulticastAddrV4;
     pub use crate::v14::mrib::MulticastAddrV6;
@@ -193,6 +197,8 @@ pub mod mrib {
     pub use crate::v14::mrib::MulticastRouteKeyV6;
     pub use crate::v14::mrib::MulticastSourceError;
     pub use crate::v14::mrib::MulticastSourceProtocol;
+    pub use crate::v14::mrib::RouteOriginFilter;
+    pub use crate::v14::mrib::StaticMulticastRoute;
     pub use crate::v14::mrib::UnderlayMulticastError;
     pub use crate::v14::mrib::UnderlayMulticastIpv6;
     pub use crate::v14::mrib::UnicastAddrV4;
