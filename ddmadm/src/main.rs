@@ -332,22 +332,28 @@ async fn run() -> Result<()> {
         SubCommand::MulticastImported => {
             let msg = client.get_multicast_groups().await?;
             let mut routes: Vec<_> = msg.into_inner().into_iter().collect();
-            routes.sort_by_key(|route| {
-                (origin_sort_key(&route.origin), route.nexthop)
+            routes.sort_by_key(|imported| {
+                (
+                    origin_sort_key(&imported.route.origin),
+                    imported.route.nexthop,
+                    imported.if_name.clone(),
+                )
             });
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 "Overlay Group".dimmed(),
                 "Underlay Group".dimmed(),
                 "VNI".dimmed(),
                 "Metric".dimmed(),
                 "Source".dimmed(),
                 "Nexthop".dimmed(),
+                "Interface".dimmed(),
                 "Path".dimmed(),
             )?;
-            for route in &routes {
+            for imported in &routes {
+                let route = &imported.route;
                 let path: Vec<_> = route
                     .path
                     .iter()
@@ -356,13 +362,14 @@ async fn run() -> Result<()> {
                     .collect();
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     route.origin.overlay_group(),
                     route.origin.underlay_group(),
                     route.origin.vni(),
                     route.origin.metric(),
                     source_column(route.origin.source()),
                     route.nexthop,
+                    imported.if_name,
                     path.join(" "),
                 )?;
             }

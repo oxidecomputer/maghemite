@@ -15,6 +15,7 @@ progenitor::generate_api!(
         ExternalMulticastIp = ddm_api_types_versions::latest::net::OverlayMulticast,
         UnderlayMulticastIpv6 = ddm_api_types_versions::latest::net::UnderlayMulticastIpv6,
         MulticastRoute = ddm_api_types_versions::latest::db::MulticastRoute,
+        ImportedMulticastRoute = ddm_api_types_versions::latest::db::ImportedMulticastRoute,
         MulticastPathHop = ddm_api_types_versions::latest::exchange::MulticastPathHop,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
         PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,

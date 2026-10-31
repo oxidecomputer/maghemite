@@ -36,14 +36,16 @@ impl From<MulticastRoute> for MulticastOrigin {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::hash::{DefaultHasher, Hash, Hasher};
     use std::net::Ipv6Addr;
 
-    use crate::latest::db::MulticastRoute;
-    use crate::latest::exchange::MulticastPathHop;
-    use crate::latest::net::{
+    use crate::v4::db::MulticastRoute;
+    use crate::v4::exchange::MulticastPathHop;
+    use crate::v4::net::{
         MulticastOrigin, OverlayMulticast, UnderlayMulticastIpv6, Vni,
     };
+    use crate::v5::db::ImportedMulticastRoute;
 
     fn origin(overlay: &str) -> MulticastOrigin {
         MulticastOrigin::new(
@@ -53,6 +55,33 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn v4_conversion_drops_interface_ident() {
+        let route = MulticastRoute {
+            origin: origin("233.252.0.1"),
+            nexthop: "fe80::1".parse().unwrap(),
+            path: vec![MulticastPathHop::new(
+                "peer".into(),
+                "fe80::1".parse().unwrap(),
+            )],
+        };
+        let imported = HashSet::from([
+            ImportedMulticastRoute {
+                route: route.clone(),
+                if_name: "tfportrear0_0".into(),
+            },
+            ImportedMulticastRoute {
+                route: route.clone(),
+                if_name: "tfportrear1_0".into(),
+            },
+        ]);
+        assert_eq!(imported.len(), 2);
+
+        let prev: HashSet<crate::v4::db::MulticastRoute> =
+            imported.into_iter().map(Into::into).collect();
+        assert_eq!(prev, HashSet::from([route]));
     }
 
     /// Use the same initial hasher state for each route comparison.
