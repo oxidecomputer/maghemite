@@ -100,6 +100,16 @@
     "PullResponse": {
       "type": "object",
       "properties": {
+        "rack": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/RackPrefix"
+          },
+          "uniqueItems": true
+        },
         "tunnel": {
           "type": [
             "array",
@@ -117,6 +127,51 @@
           ],
           "items": {
             "$ref": "#/definitions/PathVector"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "RackPrefix": {
+      "type": "object",
+      "required": [
+        "path_vector"
+      ],
+      "properties": {
+        "multi_rack_join_addr": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-rust-type": {
+            "crate": "std",
+            "path": "std::net::SocketAddrV6",
+            "version": ">=1.0.0"
+          }
+        },
+        "path_vector": {
+          "$ref": "#/definitions/PathVector"
+        }
+      }
+    },
+    "RackUpdate": {
+      "type": "object",
+      "required": [
+        "announce",
+        "withdraw"
+      ],
+      "properties": {
+        "announce": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RackPrefix"
+          },
+          "uniqueItems": true
+        },
+        "withdraw": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RackPrefix"
           },
           "uniqueItems": true
         }
@@ -199,6 +254,16 @@
     "Update": {
       "type": "object",
       "properties": {
+        "rack": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RackUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tunnel": {
           "anyOf": [
             {

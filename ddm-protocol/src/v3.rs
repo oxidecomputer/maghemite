@@ -8,7 +8,7 @@
 
 use std::{collections::HashSet, net::Ipv6Addr};
 
-use oxnet::{IpNet, Ipv6Net};
+use oxnet::{IpNet, Ipv6Net, SocketAddrV6Json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -16,17 +16,33 @@ use serde::{Deserialize, Serialize};
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rack: Option<RackUpdate>,
 }
 
 impl Update {
-    /// Build an `Update` whose underlay/tunnel halves carry the announcements
-    /// from `pr`. Used by [`pull`] to project a pull response back into the
-    /// update event stream.
+    /// Build an `Update` whose underlay/tunnel/rack parts carry the
+    /// announcements from `pr`. Used by [`pull`] to project a pull response
+    /// back into the update event stream.
     pub fn announce(pr: PullResponse) -> Self {
         Self {
             underlay: pr.underlay.map(UnderlayUpdate::announce),
             tunnel: pr.tunnel.map(TunnelUpdate::announce),
+            rack: pr.rack.map(RackUpdate::announce),
         }
+    }
+
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        // compilation barrier. a new route class must be checked here.
+        let Self {
+            underlay,
+            tunnel,
+            rack,
+        } = self;
+        underlay.as_ref().is_none_or(UnderlayUpdate::is_empty)
+            && tunnel.as_ref().is_none_or(TunnelUpdate::is_empty)
+            && rack.as_ref().is_none_or(RackUpdate::is_empty)
     }
 }
 
@@ -34,6 +50,66 @@ impl Update {
 pub struct PullResponse {
     pub underlay: Option<HashSet<PathVector>>,
     pub tunnel: Option<HashSet<TunnelOrigin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rack: Option<HashSet<RackPrefix>>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
+pub struct RackPrefix {
+    pub path_vector: PathVector,
+    pub multi_rack_join_addr: Option<SocketAddrV6Json>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct RackUpdate {
+    pub announce: HashSet<RackPrefix>,
+    pub withdraw: HashSet<RackPrefix>,
+}
+
+impl RackUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
+    pub fn announce(prefixes: HashSet<RackPrefix>) -> Self {
+        Self {
+            announce: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn withdraw(prefixes: HashSet<RackPrefix>) -> Self {
+        Self {
+            withdraw: prefixes,
+            ..Default::default()
+        }
+    }
+    /// See [`UnderlayUpdate::with_path_element`].
+    pub fn with_path_element(&self, element: &str) -> Self {
+        let push = |x: &RackPrefix| {
+            let mut rp = x.clone();
+            rp.path_vector.path.push(element.to_string());
+            rp
+        };
+        Self {
+            announce: self.announce.iter().map(push).collect(),
+            withdraw: self.withdraw.iter().map(push).collect(),
+        }
+    }
+    /// See [`UnderlayUpdate::break_loops`].
+    pub fn break_loops(&self, hostname: &str) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .filter(|x| !x.path_vector.path.contains(&hostname.to_string()))
+                .cloned()
+                .collect(),
+            withdraw: self.withdraw.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
@@ -49,6 +125,11 @@ pub struct TunnelUpdate {
 }
 
 impl TunnelUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
     pub fn announce(prefixes: HashSet<TunnelOrigin>) -> Self {
         Self {
             announce: prefixes,
@@ -83,6 +164,11 @@ pub struct TunnelOrigin {
 }
 
 impl UnderlayUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
     pub fn announce(prefixes: HashSet<PathVector>) -> Self {
         Self {
             announce: prefixes,
@@ -95,14 +181,14 @@ impl UnderlayUpdate {
             ..Default::default()
         }
     }
-    pub fn with_path_element(&self, element: String) -> Self {
+    pub fn with_path_element(&self, element: &str) -> Self {
         Self {
             announce: self
                 .announce
                 .iter()
                 .map(|x| {
                     let mut pv = x.clone();
-                    pv.path.push(element.clone());
+                    pv.path.push(element.to_string());
                     pv
                 })
                 .collect(),
@@ -111,7 +197,7 @@ impl UnderlayUpdate {
                 .iter()
                 .map(|x| {
                     let mut pv = x.clone();
-                    pv.path.push(element.clone());
+                    pv.path.push(element.to_string());
                     pv
                 })
                 .collect(),
@@ -134,7 +220,7 @@ impl From<UnderlayUpdate> for Update {
     fn from(u: UnderlayUpdate) -> Self {
         Update {
             underlay: Some(u),
-            tunnel: None,
+            ..Default::default()
         }
     }
 }
@@ -142,8 +228,17 @@ impl From<UnderlayUpdate> for Update {
 impl From<TunnelUpdate> for Update {
     fn from(t: TunnelUpdate) -> Self {
         Update {
-            underlay: None,
             tunnel: Some(t),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<RackUpdate> for Update {
+    fn from(r: RackUpdate) -> Self {
+        Update {
+            rack: Some(r),
+            ..Default::default()
         }
     }
 }

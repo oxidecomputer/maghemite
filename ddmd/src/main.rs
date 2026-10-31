@@ -13,13 +13,15 @@ use ddm::defaults::{
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::sm::{DpdConfig, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
 use mg_common::lock;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use std::sync::mpsc::channel;
@@ -180,7 +182,10 @@ async fn run() {
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
+    let peers = sms
+        .iter()
+        .map(|x| (x.ctx.config.aobj_name.clone(), x.ctx.clone()))
+        .collect();
 
     let context = Arc::new(Mutex::new(HandlerContext {
         db,
@@ -266,7 +271,7 @@ fn start_state_machines(
     }
 
     let mut sms = Vec::new();
-    let mut event_channels = Vec::new();
+    let mut event_channels = BTreeMap::new();
 
     for name in &arg.addresses {
         let (tx, rx) = channel();
@@ -293,7 +298,7 @@ fn start_state_machines(
         let ctx = SmContext {
             config,
             db: db.clone(),
-            event_channels: Vec::new(),
+            event_channels: BTreeMap::new(),
             tx: tx.clone(),
             log: log.clone(),
             router_id: router_id.to_string(),
@@ -306,19 +311,15 @@ fn start_state_machines(
 
         let sm = StateMachine { ctx, rx: Some(rx) };
         sms.push(sm);
-        event_channels.push(tx);
+        event_channels.insert(name.clone(), tx);
     }
 
     // Add an event channel sender for each state machine to every other state
     // machine.
-    for (i, sm) in sms.iter_mut().enumerate() {
-        for (j, e) in event_channels.iter().enumerate() {
-            // dont give a state machine an event sender to itself.
-            if i == j {
-                continue;
-            }
-            sm.ctx.event_channels.push(e.clone());
-        }
+    for sm in &mut sms {
+        sm.ctx.event_channels = event_channels.clone();
+        // dont give a state machine an event sender to itself.
+        sm.ctx.event_channels.remove(&sm.ctx.config.aobj_name);
     }
 
     for sm in &mut sms {
@@ -360,9 +361,13 @@ fn termination_handler(
 
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
-            let imported = db.imported();
-            let routes: Vec<Route> =
-                imported.iter().map(|x| (x.clone()).into()).collect();
+            // delete underlay routes imported from both underlay/rack tables
+            let routes: Vec<Route> = db
+                .imported()
+                .into_iter()
+                .chain(db.imported_rack().into_iter().map(|y| y.route))
+                .map(Into::into)
+                .collect();
             ddm::sys::remove_underlay_routes(
                 &log,
                 "shutdown-all",
@@ -371,11 +376,11 @@ fn termination_handler(
                 &rt,
             );
 
-            let imported_tnl = db.imported_tunnel();
+            let imported_tunnel = db.imported_tunnel();
             if let Err(e) = ddm::sys::remove_tunnel_routes(
                 &log,
                 "shutdown-all",
-                &imported_tnl,
+                &imported_tunnel,
             ) {
                 error!(log, "shutdown tunnel routes: {e}");
             }

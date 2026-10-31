@@ -9,22 +9,21 @@
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
-use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::db::{PeerStats, PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::v3::RackPrefix;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::fmt::Display;
 use std::net::Ipv6Addr;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use uuid::Uuid;
-
-#[cfg(target_os = "illumos")]
-use std::collections::BTreeSet;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) mod state;
@@ -43,9 +42,13 @@ pub enum AdminEvent {
     /// Synchronize with active peers by pulling their prefixes.
     Sync,
 
-    /// A new external peer has been added to the router that can be reached
-    /// using the provided sender.
-    NewExternalPeer(Sender<Event>),
+    /// A new external peer has been added to the router. Its state machine,
+    /// identified by its address object name, can be reached using the
+    /// provided sender.
+    NewExternalPeer {
+        aobj_name: String,
+        tx: Sender<Event>,
+    },
 
     /// Shutdown on receipt of this event.
     Shutdown,
@@ -55,6 +58,7 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
+    Rack(HashSet<RackPrefix>),
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +77,8 @@ pub enum PeerEvent {
 #[derive(Debug, Clone)]
 pub enum NeighborEvent {
     /// An event sent from the discovery subsystem to the state machine letting
-    /// it know the link local ipv6 address of the peer and it's version.
-    Advertise((Ipv6Addr, Version)),
+    /// it know the identity of the peer.
+    Advertise(PeerIdentity),
 
     /// An event sent from the discovery subsystem to the state machine letting
     /// it know that solicitation has failed.
@@ -85,6 +89,9 @@ pub enum NeighborEvent {
     Expire,
 }
 
+// Peer events carry a full `Update` by value. Events are moved through
+// channels at a low rate, so the size difference is not worth boxing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Event {
     Neighbor(NeighborEvent),
@@ -211,6 +218,83 @@ pub struct PeerIdentity {
     pub addr: Ipv6Addr,
     pub hostname: String,
     pub kind: RouterKind,
+    pub version: Version,
+}
+
+impl Display for PeerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PeerIdentity {{ addr={}, hostname={}, kind={}, version={} }}",
+            self.addr, self.hostname, self.kind, self.version as u8,
+        )
+    }
+}
+
+/// Route advertisement allowances.
+///
+/// Indicates which route types may be advertised to a peer (true = allowed).
+/// Allowances are granted as a function of our RouterKind and that of the peer
+/// we're considering sending advertisements to.
+#[derive(Clone)]
+pub struct RouteAdvertisementAllowances {
+    underlay: bool,
+    tunnel: bool,
+    rack: bool,
+    redistributed: bool,
+}
+
+impl RouteAdvertisementAllowances {
+    /// Calculate and return RouteAdvertisementAllowances
+    pub fn new(my_kind: RouterKind, peer_kind: RouterKind) -> Self {
+        use RouterKind::*;
+
+        match (my_kind, peer_kind) {
+            // Server-to-*:
+            // Originate underlay and tunnel prefixes. Redistribute nothing.
+            // XXX: Should Servers be allowed to originate tunnel prefixes?
+            (Server, Server | Transit) => Self {
+                underlay: true,
+                tunnel: true,
+                rack: false,
+                redistributed: false,
+            },
+
+            // Transit-to-Server:
+            // Originate underlay and tunnel prefixes. Redistribute everything.
+            (Transit, Server) => Self {
+                underlay: true,
+                tunnel: true,
+                rack: false,
+                redistributed: true,
+            },
+
+            // Transit-to-Transit:
+            // Originate rack prefixes. Redistribute nothing.
+            (Transit, Transit) => Self {
+                underlay: false,
+                tunnel: false,
+                rack: true,
+                redistributed: false,
+            },
+        }
+    }
+
+    pub fn underlay(&self) -> bool {
+        self.underlay
+    }
+
+    pub fn tunnel(&self) -> bool {
+        self.tunnel
+    }
+
+    pub fn rack(&self) -> bool {
+        self.rack
+    }
+
+    pub fn redistributed(&self) -> bool {
+        self.redistributed
+    }
 }
 
 pub struct InterfaceState {
@@ -279,7 +363,64 @@ pub struct SessionStats {
     pub updates_received: AtomicU64,
     pub imported_underlay_prefixes: AtomicU64,
     pub imported_tunnel_endpoints: AtomicU64,
+    pub imported_rack_prefixes: AtomicU64,
     pub update_send_fail: AtomicU64,
+}
+
+impl SessionStats {
+    /// The current value of every counter.
+    pub fn snapshot(&self) -> PeerStats {
+        // compilation barrier. a new counter must be reported here.
+        let Self {
+            solicitations_sent,
+            solicitations_received,
+            advertisements_sent,
+            advertisements_received,
+            peer_expirations,
+            peer_address_changes,
+            peer_established,
+            updates_sent,
+            updates_received,
+            imported_underlay_prefixes,
+            imported_tunnel_endpoints,
+            imported_rack_prefixes,
+            update_send_fail,
+        } = self;
+        let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        PeerStats {
+            solicitations_sent: get(solicitations_sent),
+            solicitations_received: get(solicitations_received),
+            advertisements_sent: get(advertisements_sent),
+            advertisements_received: get(advertisements_received),
+            peer_expirations: get(peer_expirations),
+            peer_address_changes: get(peer_address_changes),
+            peer_established: get(peer_established),
+            updates_sent: get(updates_sent),
+            updates_received: get(updates_received),
+            update_send_fail: get(update_send_fail),
+            imported_underlay_prefixes: get(imported_underlay_prefixes),
+            imported_tunnel_endpoints: get(imported_tunnel_endpoints),
+            imported_rack_prefixes: get(imported_rack_prefixes),
+        }
+    }
+
+    /// Set the imported counts to the routes `db` holds from `peer`.
+    pub fn update_imported(&self, db: &Db, peer: Ipv6Addr) {
+        let set =
+            |c: &AtomicU64, n: usize| c.store(n as u64, Ordering::Relaxed);
+        set(
+            &self.imported_underlay_prefixes,
+            db.imported_from(peer).len(),
+        );
+        set(
+            &self.imported_tunnel_endpoints,
+            db.imported_tunnel_from(peer).len(),
+        );
+        set(
+            &self.imported_rack_prefixes,
+            db.imported_rack_from(peer).len(),
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -287,7 +428,7 @@ pub struct SmContext {
     pub config: Config,
     pub db: Db,
     pub tx: Sender<Event>,
-    pub event_channels: Vec<Sender<Event>>,
+    pub event_channels: BTreeMap<String, Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub router_id: String,
     pub iface: Arc<InterfaceState>,
@@ -309,22 +450,53 @@ impl StateMachine {
     }
 }
 
-/// Send an event to all channels in the list, removing any channels from the
-/// list that are dead.
+/// Send an event to all sibling channels, removing any channels that are dead.
 #[cfg(target_os = "illumos")]
-pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
-    // Ensure our indices are unique and ordered.
-    let mut dead_channels = BTreeSet::default();
-    for (i, c) in event_channels.iter().enumerate() {
-        if c.send(e.clone()).is_err() {
-            dead_channels.insert(i);
+pub(crate) fn send(
+    e: Event,
+    event_channels: &mut BTreeMap<String, Sender<Event>>,
+) {
+    event_channels.retain(|_, tx| tx.send(e.clone()).is_ok());
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use RouterKind::*;
+
+    /// (local kind, peer kind, [underlay, tunnel, rack, redistributed])
+    type Row = (RouterKind, RouterKind, [bool; 4]);
+
+    /// The policy matrix, written out by hand rather than derived from
+    /// `RouteAdvertisementAllowances::new`.
+    const EXPECTED_ROUTE_ALLOWANCES: [Row; 4] = [
+        // Servers originate their own prefixes and never redistribute.
+        (Server, Server, [true, true, false, false]),
+        (Server, Transit, [true, true, false, false]),
+        // Transits pass everything they know down to servers, except the
+        // rack aggregate, which only matters between racks.
+        (Transit, Server, [true, true, false, true]),
+        // Transits exchange only rack aggregates with each other.
+        (Transit, Transit, [false, false, true, false]),
+    ];
+
+    #[test]
+    fn route_advertisement_allowances() {
+        let kinds = [Server, Transit];
+        for local in kinds {
+            for peer in kinds {
+                let rows: Vec<_> = EXPECTED_ROUTE_ALLOWANCES
+                    .iter()
+                    .filter(|(l, p, _)| *l == local && *p == peer)
+                    .collect();
+                assert_eq!(rows.len(), 1, "{local} -> {peer}: expected 1 row");
+                let expected = rows[0].2;
+
+                let a = RouteAdvertisementAllowances::new(local, peer);
+                let actual =
+                    [a.underlay(), a.tunnel(), a.rack(), a.redistributed()];
+                assert_eq!(actual, expected, "{local} -> {peer}");
+            }
         }
-    }
-    // we need to remove in descending order, so we don't remove `i` and then
-    // try to remove `i+1` later which wlll be a _different_ item than we grabbed
-    // the index for. Removing from the top down causes no shifting for subsequent
-    // index removals.
-    for i in dead_channels.iter().rev() {
-        event_channels.remove(*i);
     }
 }

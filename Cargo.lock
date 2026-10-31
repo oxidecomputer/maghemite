@@ -1434,6 +1434,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
  "dropshot",
@@ -1500,6 +1501,7 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
+ "oxnet",
  "schemars 0.8.22",
  "serde",
  "serde_repr",

@@ -388,7 +388,7 @@ fn handle_advertisement(
             err!(
                 ctx.log,
                 ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
+                "unknown protocol version {}, known versions are: 2, 3",
                 x
             );
             return;
@@ -446,20 +446,15 @@ fn handle_advertisement(
         addr: *sender,
         hostname,
         kind,
+        version,
     };
-    let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
-        *info = Some(new_peer);
-        drop(info);
-        emit_nbr_update(ctx, sender, version);
+    if lock!(ctx.iface.peer_identity).as_ref() != Some(&new_peer) {
+        emit_nbr_update(ctx, new_peer);
     }
 }
 
-fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr, version: Version) {
-    if let Err(e) = ctx
-        .event
-        .send(NeighborEvent::Advertise((*addr, version)).into())
-    {
+fn emit_nbr_update(ctx: &HandlerContext, peer: PeerIdentity) {
+    if let Err(e) = ctx.event.send(NeighborEvent::Advertise(peer).into()) {
         err!(ctx.log, ctx.config.if_name, "send nbr event: {}", e);
     }
 }

@@ -152,7 +152,7 @@ impl Producer for Stats {
             ctx.stats.originated_tunnel_endpoints
         ));
 
-        for peer in &ctx.peers {
+        for peer in ctx.peers.values() {
             let if_name = lock!(peer.iface.if_name).clone();
             samples.push(ddm_session_counter!(
                 self.start_time,
