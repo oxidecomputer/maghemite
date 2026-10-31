@@ -22,7 +22,7 @@ mod scenario;
 mod topo;
 mod util;
 
-const DEFAULT_NPUVM_COMMIT: &str = "fd2c726815cdb03c2687e1bf2912a9184905557b";
+const DEFAULT_NPUVM_COMMIT: &str = "a6a878533f9eae542552ef66223a37443f931149";
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -67,7 +67,7 @@ struct RunOptions {
     no_diag_on_fail: bool,
     #[arg(long, default_value = DEFAULT_NPUVM_COMMIT)]
     npuvm_commit: String,
-    #[arg(long)]
+    #[arg(long, default_value = option_env!("DPD_CLIENT_COMMIT"))]
     dendrite_commit: Option<String>,
     #[arg(long)]
     sidecar_lite_commit: Option<String>,
