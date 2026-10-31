@@ -1425,6 +1425,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "camino",
+ "camino-tempfile",
  "chrono",
  "ddm-api",
  "ddm-api-types",
@@ -1449,6 +1450,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sled",
  "slog",
  "slog-error-chain",
@@ -1494,6 +1496,7 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
+ "dpd-types-versions",
  "schemars 0.8.22",
  "serde",
  "serde_repr",
@@ -4060,6 +4063,7 @@ dependencies = [
  "ddm-api-types-versions",
  "oxnet",
  "rand 0.10.3",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-envlogger",
