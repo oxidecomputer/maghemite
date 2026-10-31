@@ -5,9 +5,107 @@
 //! Protocol types for DDM.
 
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 pub mod v2;
 pub mod v3;
+pub mod v4;
+
+/// A DDM router identifier, transmitted in discovery messages and multicast
+/// path hops.
+///
+/// Defaults to the router's hostname and serializes as a string.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(transparent)]
+pub struct RouterId(String);
+
+impl RouterId {
+    /// Wrap `value` as a router identifier.
+    pub const fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Borrow the identifier as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RouterId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for RouterId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl From<RouterId> for String {
+    fn from(value: RouterId) -> Self {
+        value.0
+    }
+}
+
+impl std::str::FromStr for RouterId {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(value.into())
+    }
+}
+
+impl std::fmt::Display for RouterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl From<v3::Update> for v4::Update {
+    fn from(value: v3::Update) -> Self {
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+            // V3 has no multicast field.
+            multicast: None,
+        }
+    }
+}
+
+impl From<v4::Update> for v3::Update {
+    fn from(value: v4::Update) -> Self {
+        // The multicast field is not representable in the V3 form and is
+        // dropped outright.
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+        }
+    }
+}
+
+impl From<v3::PullResponse> for v4::PullResponse {
+    fn from(value: v3::PullResponse) -> Self {
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+            multicast: None,
+        }
+    }
+}
+
+impl From<v4::PullResponse> for v3::PullResponse {
+    fn from(value: v4::PullResponse) -> Self {
+        Self {
+            underlay: value.underlay,
+            tunnel: value.tunnel,
+        }
+    }
+}
 
 impl From<v2::Update> for v3::Update {
     fn from(value: v2::Update) -> Self {
