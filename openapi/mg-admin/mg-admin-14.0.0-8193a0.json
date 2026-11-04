@@ -1242,7 +1242,7 @@
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family.\n\nOnly used when listing all routes.",
+            "description": "Filter by address family.",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
@@ -1250,7 +1250,7 @@
           {
             "in": "query",
             "name": "group",
-            "description": "Multicast group address.\n\nIf provided, the query returns a specific route. If omitted, the query returns all routes matching the filters.",
+            "description": "Filter by multicast group address.",
             "schema": {
               "$ref": "#/components/schemas/MulticastAddr"
             }
@@ -1258,7 +1258,7 @@
           {
             "in": "query",
             "name": "route_origin",
-            "description": "Filter by route origin (\"Static\" or \"Dynamic\").\n\nOnly used when listing all routes.",
+            "description": "Filter by route origin (\"Static\" or \"Dynamic\").",
             "schema": {
               "$ref": "#/components/schemas/RouteOriginFilter"
             }
@@ -1266,7 +1266,7 @@
           {
             "in": "query",
             "name": "source",
-            "description": "Source address (`None` for `(*,G)` routes).\n\nOnly used when `group` is set.",
+            "description": "Filter by source address.\n\nUnset matches both `(*,G)` and `(S,G)` routes.",
             "schema": {
               "nullable": true,
               "type": "string",
@@ -1276,7 +1276,7 @@
           {
             "in": "query",
             "name": "vni",
-            "description": "VNI (defaults to the fleet-wide multicast VNI).\n\nOnly used when `group` is set.",
+            "description": "Filter by VNI.",
             "schema": {
               "$ref": "#/components/schemas/Vni"
             }
@@ -1314,7 +1314,7 @@
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family.\n\nOnly used when listing all routes.",
+            "description": "Filter by address family.",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
@@ -1322,7 +1322,7 @@
           {
             "in": "query",
             "name": "group",
-            "description": "Multicast group address.\n\nIf provided, the query returns a specific route. If omitted, the query returns all routes matching the filters.",
+            "description": "Filter by multicast group address.",
             "schema": {
               "$ref": "#/components/schemas/MulticastAddr"
             }
@@ -1330,7 +1330,7 @@
           {
             "in": "query",
             "name": "route_origin",
-            "description": "Filter by route origin (\"Static\" or \"Dynamic\").\n\nOnly used when listing all routes.",
+            "description": "Filter by route origin (\"Static\" or \"Dynamic\").",
             "schema": {
               "$ref": "#/components/schemas/RouteOriginFilter"
             }
@@ -1338,7 +1338,7 @@
           {
             "in": "query",
             "name": "source",
-            "description": "Source address (`None` for `(*,G)` routes).\n\nOnly used when `group` is set.",
+            "description": "Filter by source address.\n\nUnset matches both `(*,G)` and `(S,G)` routes.",
             "schema": {
               "nullable": true,
               "type": "string",
@@ -1348,7 +1348,7 @@
           {
             "in": "query",
             "name": "vni",
-            "description": "VNI (defaults to the fleet-wide multicast VNI).\n\nOnly used when `group` is set.",
+            "description": "Filter by VNI.",
             "schema": {
               "$ref": "#/components/schemas/Vni"
             }

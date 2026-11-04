@@ -984,37 +984,27 @@ impl MribQuery {
     }
 }
 
-/// Query parameters for MRIB routes.
+/// Filters for MRIB routes.
 ///
-/// When `group` is provided -> lookup a specific route.
-/// When `group` is not provided -> list all routes (with optional filters).
+/// Unset filters match all routes.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[schemars(rename = "MribQuery")]
 pub(crate) struct MribQueryShadow {
-    /// Multicast group address.
-    ///
-    /// If provided, the query returns a specific route.
-    /// If omitted, the query returns all routes matching the filters.
+    /// Filter by multicast group address.
     #[serde(default)]
     pub group: Option<MulticastAddr>,
-    /// Source address (`None` for `(*,G)` routes).
+    /// Filter by source address.
     ///
-    /// Only used when `group` is set.
+    /// Unset matches both `(*,G)` and `(S,G)` routes.
     #[serde(default)]
     pub source: Option<IpAddr>,
-    /// VNI (defaults to the fleet-wide multicast VNI).
-    ///
-    /// Only used when `group` is set.
+    /// Filter by VNI.
     #[serde(default)]
     pub vni: Option<Vni>,
     /// Filter by address family.
-    ///
-    /// Only used when listing all routes.
     #[serde(default)]
     pub address_family: Option<AddressFamily>,
     /// Filter by route origin ("Static" or "Dynamic").
-    ///
-    /// Only used when listing all routes.
     #[serde(default)]
     pub route_origin: Option<RouteOriginFilter>,
 }
