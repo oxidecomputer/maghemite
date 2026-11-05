@@ -90,12 +90,15 @@ pub enum MulticastRouteError {
 
 /// A validated IPv4 multicast address.
 ///
-/// IPv4 admits the whole multicast range apart from the base address of
-/// `224.0.0.0`, which RFC 1112 §4 guarantees is never assigned to a group,
-/// and the SSM null address of `232.0.0.0` (RFC 4607 §4.3).
+/// IPv4 admits the multicast range apart from the local network control
+/// block of `224.0.0.0/24` and the SSM null address of `232.0.0.0`
+/// (RFC 4607 §4.3). Routers do not forward the control block off link
+/// (RFC 5771 §4), and its base address of `224.0.0.0` is never assigned to a
+/// group (RFC 1112 §4).
 //
 // RFC 1112: https://www.rfc-editor.org/rfc/rfc1112.html
 // RFC 4607: https://www.rfc-editor.org/rfc/rfc4607.html
+// RFC 5771: https://www.rfc-editor.org/rfc/rfc5771.html
 #[derive(
     Debug,
     Copy,
@@ -1055,14 +1058,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_ipv4_local_network_control_block() {
-        for addr in [
-            "224.0.0.1",
-            "224.0.0.22",
-            "224.0.0.251",
-            "224.0.0.255",
-            "224.0.1.0",
-        ] {
+    fn rejects_ipv4_local_network_control_block() {
+        for addr in ["224.0.0.1", "224.0.0.22", "224.0.0.251", "224.0.0.255"] {
+            let ip: Ipv4Addr = addr.parse().unwrap();
+            assert_eq!(
+                MulticastAddrV4::new(ip),
+                Err(MulticastGroupError::LocalIpv4Scope(IpAddr::V4(ip))),
+            );
+        }
+        for addr in ["224.0.1.0", "224.0.1.255"] {
             let parsed = MulticastAddrV4::new(addr.parse().unwrap())
                 .unwrap_or_else(|e| panic!("{addr} should be accepted: {e}"));
             assert_eq!(parsed.ip(), addr.parse::<Ipv4Addr>().unwrap());
