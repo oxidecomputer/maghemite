@@ -109,12 +109,15 @@ run_test() {
 	RUST_LOG=debug pfexec ./falcon-lab run "${topology}" "${scenario}" --no-cleanup || status=$?
 	if (( status != 0 )); then
 		collect_falcon_artifacts "${test_name}"
+		failed=1
 	fi
 	pfexec ./falcon-lab cleanup "${topology}" "${scenario}" || true
-	return "${status}"
 }
 
+# Run every scenario, then fail the job if any of them failed.
+failed=0
 run_test mgd-duo bgp-unnumbered
 run_test interop bgp-unnumbered
 run_test interop bfd-static-routing
+exit "${failed}"
 # run_test interop-3-link bgp-md5
