@@ -75,7 +75,7 @@ impl Drop for Session {
 
 impl Session {
     pub(crate) fn new(
-        db: rdb::Db,
+        db: rdb::RouterDb,
         rq: AddPeerRequest,
         counters: Arc<SessionCounters>,
         src_port_iter: Arc<EgressSrcPortIter>,

@@ -923,7 +923,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -939,7 +939,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=c424a79e13db858de98a0539d7f056f26ef36ef1#c424a79e13db858de98a0539d7f056f26ef36ef1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1114,12 +1114,6 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "crc8"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b31d2174830f395fd7e413c2f8a119252de36356982f805f495269331e97559e"
 
 [[package]]
 name = "critical-section"
@@ -1410,9 +1404,10 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
- "dropshot",
+ "dropshot 0.17.1",
  "hostname 0.4.2",
  "http-body-util",
  "hyper",
@@ -1421,8 +1416,8 @@ dependencies = [
  "libnet",
  "mg-common",
  "omicron-common",
- "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
+ "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
+ "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -1459,7 +1454,7 @@ name = "ddm-api"
 version = "0.1.0"
 dependencies = [
  "ddm-api-types-versions",
- "dropshot",
+ "dropshot 0.17.1",
  "dropshot-api-manager-types",
  "oxnet",
 ]
@@ -1491,6 +1486,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -1511,6 +1507,7 @@ dependencies = [
  "slog-envlogger",
  "slog-term",
  "tabwriter",
+ "uuid",
 ]
 
 [[package]]
@@ -1708,16 +1705,16 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=c424a79e13db858de98a0539d7f056f26ef36ef1#c424a79e13db858de98a0539d7f056f26ef36ef1"
 dependencies = [
  "async-trait",
  "chrono",
  "common",
- "crc8",
  "futures",
  "http",
  "oxnet",
- "progenitor 0.14.0",
+ "progenitor 0.15.1",
+ "progenitor-extras 0.3.0",
  "regress 0.11.1",
  "reqwest 0.13.5",
  "schemars 0.8.22",
@@ -1732,7 +1729,7 @@ dependencies = [
 [[package]]
 name = "dpd-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=c424a79e13db858de98a0539d7f056f26ef36ef1#c424a79e13db858de98a0539d7f056f26ef36ef1"
 dependencies = [
  "dpd-types-versions",
 ]
@@ -1740,10 +1737,10 @@ dependencies = [
 [[package]]
 name = "dpd-types-versions"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=247502812015b409d33240b836d5bf242817453d#247502812015b409d33240b836d5bf242817453d"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=c424a79e13db858de98a0539d7f056f26ef36ef1#c424a79e13db858de98a0539d7f056f26ef36ef1"
 dependencies = [
  "chrono",
- "dropshot",
+ "dropshot 0.18.0",
  "omicron-common",
  "oxnet",
  "rand 0.9.5",
@@ -1781,7 +1778,7 @@ dependencies = [
  "camino",
  "chrono",
  "debug-ignore",
- "dropshot_endpoint",
+ "dropshot_endpoint 0.17.1",
  "form_urlencoded",
  "futures",
  "hostname 0.4.2",
@@ -1821,6 +1818,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "dropshot"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9e64e150bf661306cc9fa32c25996cb37025edebcbe55e80669750aa90b703"
+dependencies = [
+ "async-compression",
+ "async-stream",
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "camino",
+ "chrono",
+ "debug-ignore",
+ "dropshot_endpoint 0.18.0",
+ "form_urlencoded",
+ "futures",
+ "hostname 0.4.2",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "indexmap 2.14.0",
+ "multer",
+ "openapiv3",
+ "paste",
+ "percent-encoding",
+ "rustls",
+ "schemars 0.8.22",
+ "scopeguard",
+ "semver 1.0.28",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
+ "sha1 0.11.0",
+ "slog",
+ "slog-async",
+ "slog-bunyan",
+ "slog-json",
+ "slog-term",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "toml 1.1.4+spec-1.1.0",
+ "uuid",
+ "version_check",
+ "waitgroup",
+]
+
+[[package]]
 name = "dropshot-api-manager"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1832,7 +1880,7 @@ dependencies = [
  "clap",
  "debug-ignore",
  "drift",
- "dropshot",
+ "dropshot 0.17.1",
  "dropshot-api-manager-types",
  "fs-err",
  "git-stub",
@@ -1879,6 +1927,21 @@ dependencies = [
  "serde",
  "serde_tokenstream 0.2.3",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "dropshot_endpoint"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7dfe21674cd808e8b344cc9d3ea107108846effc782c535ddf0bd2753443226"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "semver 1.0.28",
+ "serde",
+ "serde_tokenstream 0.3.0",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1998,7 +2061,7 @@ name = "ereport-types"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#d6fba551d0d8756f87c1e45144b71812d71a661b"
 dependencies = [
- "dropshot",
+ "dropshot 0.17.1",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "schemars 0.8.22",
@@ -2014,7 +2077,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2049,6 +2112,7 @@ dependencies = [
  "slog",
  "strum 0.28.0",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2365,7 +2429,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#d6fba551d0d8756f87c1e45144b71812d71a661b"
 dependencies = [
  "daft",
- "dropshot",
+ "dropshot 0.17.1",
  "gateway-messages",
  "hex",
  "omicron-uuid-kinds",
@@ -3103,7 +3167,7 @@ dependencies = [
 [[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21#44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+source = "git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3#f89899b8d53279817e66e1c4975bee55707ef0e3"
 dependencies = [
  "bitflags 2.13.1",
 ]
@@ -3123,7 +3187,7 @@ dependencies = [
  "chrono",
  "crucible-smf",
  "debug-ignore",
- "dropshot",
+ "dropshot 0.17.1",
  "futures",
  "http",
  "iddqd 0.4.6",
@@ -3385,7 +3449,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3609,7 +3673,7 @@ dependencies = [
 [[package]]
 name = "kstat-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21#44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+source = "git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3#f89899b8d53279817e66e1c4975bee55707ef0e3"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -3934,7 +3998,7 @@ dependencies = [
 name = "mg-api"
 version = "0.1.0"
 dependencies = [
- "dropshot",
+ "dropshot 0.17.1",
  "dropshot-api-manager-types",
  "mg-api-types-versions",
  "oxnet",
@@ -4016,6 +4080,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "util",
+ "uuid",
 ]
 
 [[package]]
@@ -4082,7 +4147,7 @@ dependencies = [
  "chrono",
  "clap",
  "client-common",
- "dropshot",
+ "dropshot 0.17.1",
  "gateway-client",
  "hostname 0.4.2",
  "http",
@@ -4296,7 +4361,7 @@ dependencies = [
  "daft",
  "derive-where",
  "derive_more",
- "dropshot",
+ "dropshot 0.17.1",
  "either",
  "ereport-types",
  "futures",
@@ -4362,7 +4427,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "daft",
- "dropshot",
+ "dropshot 0.17.1",
  "http",
  "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=7696ee48d5ee29a917dea459e281fe2e8ff20513)",
  "omicron-common",
@@ -4599,7 +4664,7 @@ dependencies = [
  "camino",
  "chrono",
  "daft",
- "dropshot",
+ "dropshot 0.17.1",
  "futures",
  "hex",
  "http",
@@ -4813,14 +4878,14 @@ dependencies = [
 [[package]]
 name = "opte"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21#44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+source = "git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3#f89899b8d53279817e66e1c4975bee55707ef0e3"
 dependencies = [
  "bitflags 2.13.1",
  "dyn-clone",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
+ "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
  "ingot 0.2.1",
- "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
- "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
+ "kstat-macro 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
+ "opte-api 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
  "postcard",
  "ref-cast",
  "serde",
@@ -4845,11 +4910,12 @@ dependencies = [
 [[package]]
 name = "opte-api"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21#44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+source = "git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3#f89899b8d53279817e66e1c4975bee55707ef0e3"
 dependencies = [
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
+ "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
  "ingot 0.2.1",
  "ipnetwork",
+ "poptrie",
  "postcard",
  "serde",
  "smoltcp",
@@ -4872,12 +4938,12 @@ dependencies = [
 [[package]]
 name = "opte-ioctl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21#44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+source = "git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3#f89899b8d53279817e66e1c4975bee55707ef0e3"
 dependencies = [
  "libc",
  "libnet",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
+ "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
+ "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
  "postcard",
  "serde",
  "thiserror 2.0.21",
@@ -4918,12 +4984,12 @@ dependencies = [
 [[package]]
 name = "oxide-vpc"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21#44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+source = "git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3#f89899b8d53279817e66e1c4975bee55707ef0e3"
 dependencies = [
  "c8str",
  "cfg-if",
- "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
- "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=44052786cb63ad9ff32ec47bd8d65edb6a184e21)",
+ "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
+ "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=f89899b8d53279817e66e1c4975bee55707ef0e3)",
  "rand 0.10.3",
  "serde",
  "tabwriter",
@@ -4968,7 +5034,7 @@ dependencies = [
  "clickward",
  "const_format",
  "debug-ignore",
- "dropshot",
+ "dropshot 0.17.1",
  "futures",
  "gethostname",
  "highway",
@@ -5022,7 +5088,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#d6fba551d0d8756f87c1e45144b71812d71a661b"
 dependencies = [
  "chrono",
- "dropshot",
+ "dropshot 0.17.1",
  "either",
  "internal-dns-resolver",
  "internal-dns-types",
@@ -5046,7 +5112,7 @@ name = "oximeter-producer-api"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#d6fba551d0d8756f87c1e45144b71812d71a661b"
 dependencies = [
- "dropshot",
+ "dropshot 0.17.1",
  "omicron-workspace-hack",
  "oximeter-types-versions",
 ]
@@ -5420,6 +5486,12 @@ dependencies = [
  "opaque-debug",
  "universal-hash",
 ]
+
+[[package]]
+name = "poptrie"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ba316f62b8c533e3e40a318466a7aa4ac8be6beae5c358a564675d36a8d84c2"
 
 [[package]]
 name = "port-file"
@@ -6036,7 +6108,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6186,6 +6258,7 @@ dependencies = [
  "mg-api-types",
  "mg-api-types-versions",
  "mg-common",
+ "ndp",
  "oxnet",
  "proptest",
  "schemars 0.8.22",
@@ -6194,6 +6267,7 @@ dependencies = [
  "sled",
  "slog",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -6505,7 +6579,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6573,7 +6647,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7792,10 +7866,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7804,7 +7878,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7814,7 +7888,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9239,7 +9313,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

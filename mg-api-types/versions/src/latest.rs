@@ -178,6 +178,15 @@ pub mod rdb {
     pub use crate::impls::rdb::constants::DEFAULT_RIB_PRIORITY_STATIC;
 }
 
+pub mod router {
+    pub use crate::v14::router::BgpSpec;
+    pub use crate::v14::router::MultiRouterApplyRequest;
+    pub use crate::v14::router::RouterId;
+    pub use crate::v14::router::RouterInfo;
+    pub use crate::v14::router::RouterSelector;
+    pub use crate::v14::router::RouterSpec;
+}
+
 pub mod ndp {
     pub use crate::v5::ndp::NdpInterface;
     pub use crate::v5::ndp::NdpInterfaceSelector;

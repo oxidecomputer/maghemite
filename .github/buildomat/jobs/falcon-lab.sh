@@ -19,6 +19,11 @@ set -x
 set -e
 set -o pipefail
 
+# Pin the npuvm's dendrite and sidecar-lite to the commits the build job
+# passes (this job has no clone to read them from).
+DENDRITE_VERSION=$(cat /input/build/work/release/dendrite-commit)
+SIDECAR_LITE_VERSION=$(cat /input/build/work/release/sidecar-lite-commit)
+
 banner 'zpool'
 
 # pick the largest disk available
@@ -106,7 +111,9 @@ run_test() {
 	local status=0
 
 	clear_falcon_workspace_files
-	RUST_LOG=debug pfexec ./falcon-lab run "${topology}" "${scenario}" --no-cleanup || status=$?
+	RUST_LOG=debug pfexec ./falcon-lab run "${topology}" "${scenario}" --no-cleanup \
+		--dendrite-commit "${DENDRITE_VERSION}" \
+		--sidecar-lite-commit "${SIDECAR_LITE_VERSION}" || status=$?
 	if (( status != 0 )); then
 		collect_falcon_artifacts "${test_name}"
 	fi

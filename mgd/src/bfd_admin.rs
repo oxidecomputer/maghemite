@@ -67,29 +67,30 @@ pub(crate) async fn add_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<BfdPeerConfig>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    add_peer(ctx.context().clone(), request.into_inner())?;
+    let ctx = ctx.context();
+    let rdb = ctx.rdb()?;
+    add_peer(ctx.clone(), rdb, request.into_inner())?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
 pub(crate) fn add_peer(
     ctx: Arc<HandlerContext>,
+    rdb: rdb::RouterDb,
     rq: BfdPeerConfig,
 ) -> Result<(), HttpError> {
     let mut daemon = lock!(ctx.bfd.daemon);
-    daemon
-        .add_peer(ctx.db.clone(), rq.into())
-        .map_err(|err| match err {
-            AddPeerError::PeerExists(_) => HttpError::for_client_error(
-                None,
-                ClientErrorStatusCode::CONFLICT,
-                InlineErrorChain::new(&err).to_string(),
-            ),
-            AddPeerError::Bind { .. }
-            | AddPeerError::SetSocketNonBlocking(_)
-            | AddPeerError::StdToTokio(_) => HttpError::for_internal_error(
-                InlineErrorChain::new(&err).to_string(),
-            ),
-        })
+    daemon.add_peer(rdb, rq.into()).map_err(|err| match err {
+        AddPeerError::PeerExists(_) => HttpError::for_client_error(
+            None,
+            ClientErrorStatusCode::CONFLICT,
+            InlineErrorChain::new(&err).to_string(),
+        ),
+        AddPeerError::Bind { .. }
+        | AddPeerError::SetSocketNonBlocking(_)
+        | AddPeerError::StdToTokio(_) => HttpError::for_internal_error(
+            InlineErrorChain::new(&err).to_string(),
+        ),
+    })
 }
 
 /// Remove the specified peer from the daemon. The associated peer session will

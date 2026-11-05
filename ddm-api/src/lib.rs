@@ -26,6 +26,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (4, TUNNEL_ROUTER_ID),
     (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
     (1, INITIAL),
@@ -90,10 +91,32 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = GET,
         path = "/originated_tunnel_endpoints",
+        versions = VERSION_TUNNEL_ROUTER_ID..,
     }]
     async fn get_originated_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<latest::net::TunnelOrigin>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/originated_tunnel_endpoints",
+        versions = ..VERSION_TUNNEL_ROUTER_ID,
+    }]
+    async fn get_originated_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<v1::net::TunnelOrigin>>, HttpError> {
+        // Clients predating `TUNNEL_ROUTER_ID` only know the default router,
+        // so origins of other routers are left out rather than shown without
+        // their router id.
+        let resp = Self::get_originated_tunnel_endpoints(ctx).await?;
+        let converted: HashSet<v1::net::TunnelOrigin> = resp
+            .0
+            .into_iter()
+            .filter(|o| o.router_id.is_none())
+            .map(Into::into)
+            .collect();
+        Ok(HttpResponseOk(converted))
+    }
 
     #[endpoint {
         method = GET,
@@ -106,10 +129,30 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = GET,
         path = "/tunnel_endpoints",
+        versions = VERSION_TUNNEL_ROUTER_ID..,
     }]
     async fn get_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<latest::db::TunnelRoute>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/tunnel_endpoints",
+        versions = ..VERSION_TUNNEL_ROUTER_ID,
+    }]
+    async fn get_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<v1::db::TunnelRoute>>, HttpError> {
+        // As in `get_originated_tunnel_endpoints_v1`.
+        let resp = Self::get_tunnel_endpoints(ctx).await?;
+        let converted: HashSet<v1::db::TunnelRoute> = resp
+            .0
+            .into_iter()
+            .filter(|r| r.origin.router_id.is_none())
+            .map(Into::into)
+            .collect();
+        Ok(HttpResponseOk(converted))
+    }
 
     #[endpoint {
         method = PUT,
@@ -123,10 +166,23 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = PUT,
         path = "/tunnel_endpoint",
+        versions = VERSION_TUNNEL_ROUTER_ID..,
     }]
     async fn advertise_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Same as `advertise_tunnel_endpoints`, for clients predating
+    /// `TUNNEL_ROUTER_ID`: origins are advertised without a router id.
+    #[endpoint {
+        method = PUT,
+        path = "/tunnel_endpoint",
+        versions = ..VERSION_TUNNEL_ROUTER_ID,
+    }]
+    async fn advertise_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<v1::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
@@ -141,10 +197,23 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/tunnel_endpoint",
+        versions = VERSION_TUNNEL_ROUTER_ID..,
     }]
     async fn withdraw_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Same as `withdraw_tunnel_endpoints`, for clients predating
+    /// `TUNNEL_ROUTER_ID`: origins are matched without a router id.
+    #[endpoint {
+        method = DELETE,
+        path = "/tunnel_endpoint",
+        versions = ..VERSION_TUNNEL_ROUTER_ID,
+    }]
+    async fn withdraw_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<v1::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {

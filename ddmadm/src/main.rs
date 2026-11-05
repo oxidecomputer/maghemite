@@ -95,6 +95,10 @@ struct TunnelEndpoint {
 
     #[arg(short, long)]
     pub metric: u64,
+
+    /// Id of the router instance originating this endpoint.
+    #[arg(short, long)]
+    pub router_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Parser)]
@@ -262,6 +266,7 @@ async fn run() -> Result<()> {
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
+                    router_id: ep.router_id,
                 }])
                 .await?;
         }
@@ -272,6 +277,7 @@ async fn run() -> Result<()> {
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
+                    router_id: ep.router_id,
                 }])
                 .await?;
         }

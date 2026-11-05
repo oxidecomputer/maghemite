@@ -83,6 +83,56 @@ use switch_rib::SwitchRib;
 
 const UNIT_OXSTATS: &str = "oxstats";
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bgp_admin::tests::{
+        remove_reporting_sessions, reporting_routers, test_ctx,
+    };
+    use oximeter::types::FieldValue;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn bgp_metrics_respect_router_ownership() {
+        let ctx = test_ctx("bgp_metrics_respect_router_ownership");
+        let routers = reporting_routers(&ctx);
+        let mut stats = Stats {
+            hostname: "test".into(),
+            rack_id: Uuid::nil(),
+            sled_id: Uuid::nil(),
+            start_time: Utc::now(),
+            bfd: ctx.bfd.clone(),
+            bgp: ctx.bgp.clone(),
+            db: ctx.db.clone(),
+            mg_lower_stats: ctx.mg_lower_stats.clone(),
+            log: ctx.log.clone(),
+        };
+        let actual: BTreeSet<_> = stats
+            .bgp_stats()
+            .unwrap()
+            .into_iter()
+            .map(|sample| {
+                let fields = sample.sorted_target_fields();
+                let FieldValue::U32(asn) = fields["local_asn"].value else {
+                    panic!("wrong ASN field type")
+                };
+                let FieldValue::IpAddr(peer) = fields["peer"].value else {
+                    panic!("wrong peer field type")
+                };
+                (asn, peer)
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            BTreeSet::from([
+                (64512, "192.0.2.1".parse().unwrap()),
+                (64513, "192.0.2.2".parse().unwrap()),
+            ])
+        );
+        remove_reporting_sessions(&routers);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Stats {
     pub(crate) hostname: String,
@@ -281,10 +331,15 @@ impl Stats {
         let routers = lock!(self.bgp.router);
         let mut router_counters = BTreeMap::new();
         let mut session_count: usize = 0;
-        for (asn, r) in &*routers {
+        // Metrics cover the default router; per-router metrics are a
+        // follow-up.
+        for ((id, asn), r) in &*routers {
+            if *id != crate::admin::DEFAULT_ROUTER_ID {
+                continue;
+            }
             let mut session_counters = BTreeMap::new();
             let sessions = lock!(r.sessions);
-            for (key, session) in sessions.iter() {
+            for (key, session) in sessions.sessions_of(r) {
                 // Only include IP-based sessions in metrics (unnumbered sessions use interface names)
                 if let PeerId::Ip(addr) = key {
                     session_counters.insert(*addr, session.counters.clone());
@@ -686,7 +741,13 @@ impl Stats {
     fn static_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
-        match self.db.get_static4_count() {
+        // Stats are reported for the default router only (POC).
+        let rdb = self
+            .db
+            .router(crate::admin::DEFAULT_ROUTER_ID)
+            .expect("default router exists");
+
+        match rdb.get_static4_count() {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
@@ -701,7 +762,7 @@ impl Stats {
                 olog!(self.log, warn, "failed to produce static4 count: {e}");
             }
         }
-        match self.db.get_static_nexthop4_count() {
+        match rdb.get_static_nexthop4_count() {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
@@ -727,8 +788,14 @@ impl Stats {
     fn rib_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
+        // Stats are reported for the default router only (POC).
+        let rdb = self
+            .db
+            .router(crate::admin::DEFAULT_ROUTER_ID)
+            .expect("default router exists");
+
         let mut count = 0usize;
-        for paths in self.db.full_rib(None).values() {
+        for paths in rdb.full_rib(None).values() {
             count += paths.len();
         }
         samples.push(rib_quantity!(

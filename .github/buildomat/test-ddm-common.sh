@@ -4,7 +4,7 @@ source .github/buildomat/common.sh
 
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=77ba891f8b8c2288ac8d01d3c372892ad1111592
-export SIDECAR_LITE_VERSION=2e7bd9b52a90224fb227e72c27623beb5b827e57
+export SIDECAR_LITE_VERSION=70e2f889058c7ebb443a285360e1b382ac06630a
 export DENDRITE_VERSION=`grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p'`
 
 function cleanup {

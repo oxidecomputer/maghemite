@@ -22,14 +22,14 @@ use std::net::IpAddr;
 use tokio::sync::watch;
 
 /// Dependency injection trait for nexthop-shutdown updates. Production uses
-/// [`rdb::Db`]; tests can pass a different (fake) impl.
+/// [`rdb::RouterDb`]; tests can pass a different (fake) impl.
 trait NexthopSink: Clone + Send + 'static {
     fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool);
 }
 
-impl NexthopSink for rdb::Db {
+impl NexthopSink for rdb::RouterDb {
     fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
-        rdb::Db::set_nexthop_shutdown(self, nexthop, shutdown);
+        rdb::RouterDb::set_nexthop_shutdown(self, nexthop, shutdown);
     }
 }
 
@@ -46,7 +46,7 @@ impl RibTask {
         Self { nexthop, state_rx }
     }
 
-    pub(crate) async fn run(self, db: rdb::Db) {
+    pub(crate) async fn run(self, db: rdb::RouterDb) {
         self.run_impl(db).await
     }
 

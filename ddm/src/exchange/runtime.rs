@@ -7,13 +7,13 @@
 //! plumbing that drains received updates into the local DB and the
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
-use super::ExchangeError;
+use super::{ExchangeError, retry_version};
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
-use ddm_protocol::{v2, v3};
+use ddm_protocol::{v2, v3, v4};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -26,9 +26,11 @@ use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot::{ApiDescriptionRegisterError, endpoint};
 use http_body_util::BodyExt;
+use hyper::StatusCode;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use mg_common::lock;
 use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
@@ -49,56 +51,69 @@ pub struct HandlerContext {
 pub(crate) fn announce_underlay(
     ctx: &SmContext,
     config: Config,
-    prefixes: HashSet<v3::PathVector>,
+    prefixes: HashSet<v4::PathVector>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::UnderlayUpdate::announce(prefixes);
+    let update = v4::UnderlayUpdate::announce(prefixes);
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn announce_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<v3::TunnelOrigin>,
+    endpoints: HashSet<v4::TunnelOrigin>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
+    let update = v4::TunnelUpdate::announce(endpoints.into_iter().collect());
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_underlay(
     ctx: &SmContext,
     config: Config,
-    prefixes: HashSet<v3::PathVector>,
+    prefixes: HashSet<v4::PathVector>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::UnderlayUpdate::withdraw(prefixes);
+    let update = v4::UnderlayUpdate::withdraw(prefixes);
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<v3::TunnelOrigin>,
+    endpoints: HashSet<v4::TunnelOrigin>,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
+    let update = v4::TunnelUpdate::withdraw(endpoints.into_iter().collect());
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn do_pull(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<v4::PullResponse, ExchangeError> {
+    let uri = format!(
+        "http://[{}%{}]:{}/v4/pull",
+        addr, ctx.config.if_index, ctx.config.exchange_port,
+    );
+    let body = do_pull_common(uri, rt)?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
+pub(crate) fn do_pull_v3(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
@@ -139,12 +154,11 @@ fn do_pull_common(
     let resp = client.request(req);
 
     rt.block_on(async move {
-        let body = timeout(Duration::from_millis(250), resp)
-            .await??
-            .into_body()
-            .collect()
-            .await?
-            .to_bytes();
+        let resp = timeout(Duration::from_millis(250), resp).await??;
+        if !resp.status().is_success() {
+            return Err(ExchangeError::Status(resp.status()));
+        }
+        let body = resp.into_body().collect().await?.to_bytes();
         Ok(body)
     })
 }
@@ -156,16 +170,19 @@ pub(crate) fn pull(
     rt: Arc<tokio::runtime::Handle>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), ExchangeError> {
-    let pr: v3::PullResponse = match version {
-        Version::V2 => do_pull_v2(ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull(ctx, &addr, &rt)?,
+    let pr: v4::PullResponse = match version {
+        Version::V2 => {
+            v3::PullResponse::from(do_pull_v2(ctx, &addr, &rt)?).into()
+        }
+        Version::V3 => do_pull_v3(ctx, &addr, &rt)?.into(),
+        Version::V4 => do_pull(ctx, &addr, &rt)?,
     };
 
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
 
-    let update = v3::Update::announce(pr);
+    let update = v4::Update::announce(pr);
 
     handle_update(&update, ctx, addr);
 
@@ -175,18 +192,47 @@ pub(crate) fn pull(
 fn send_update(
     ctx: &SmContext,
     config: Config,
-    update: v3::Update,
+    update: v4::Update,
     addr: Ipv6Addr,
-    version: Version,
+    version: &std::sync::Mutex<Version>,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
-    match version {
-        Version::V2 => {
-            send_update_v2(ctx, config, update.into(), addr, rt, log)
+    if *lock!(version) == Version::V4 {
+        let result = send_update_v4(
+            ctx,
+            config.clone(),
+            update.clone(),
+            addr,
+            rt.clone(),
+            log.clone(),
+        );
+        match result {
+            Err(e) if retry_version(Version::V4, &e) == Version::V2 => {
+                wrn!(
+                    log,
+                    config.if_name,
+                    "peer has no v4 push, resending at v2"
+                );
+                *lock!(version) = Version::V2;
+            }
+            result => {
+                ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
+                return result;
+            }
         }
-        Version::V3 => send_update_v3(ctx, config, update, addr, rt, log),
+    }
+    let legacy: v3::Update = update.into();
+    // A named-only tunnel change has no representation on an old peer. Do
+    // not send an empty update for it.
+    if legacy.underlay.is_none() && legacy.tunnel.is_none() {
+        return Ok(());
+    }
+    ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
+    if *lock!(version) == Version::V3 {
+        send_update_v3(ctx, config, legacy, addr, rt, log)
+    } else {
+        send_update_v2(ctx, config, legacy.into(), addr, rt, log)
     }
 }
 
@@ -203,7 +249,7 @@ fn send_update_v2(
         "http://[{}%{}]:{}/v2/push",
         addr, config.if_index, config.exchange_port,
     );
-    send_update_common(ctx, uri, payload, config, rt, log)
+    send_update_common(ctx, uri, payload, config, rt, log, false)
 }
 
 fn send_update_v3(
@@ -219,7 +265,23 @@ fn send_update_v3(
         "http://[{}%{}]:{}/v3/push",
         addr, config.if_index, config.exchange_port,
     );
-    send_update_common(ctx, uri, payload, config, rt, log)
+    send_update_common(ctx, uri, payload, config, rt, log, false)
+}
+
+fn send_update_v4(
+    ctx: &SmContext,
+    config: Config,
+    update: v4::Update,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let payload = serde_json::to_string(&update)?;
+    let uri = format!(
+        "http://[{}%{}]:{}/v4/push",
+        addr, config.if_index, config.exchange_port,
+    );
+    send_update_common(ctx, uri, payload, config, rt, log, true)
 }
 
 fn send_update_common(
@@ -229,6 +291,7 @@ fn send_update_common(
     config: Config,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
+    not_found_is_error: bool,
 ) -> Result<(), ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
 
@@ -243,6 +306,15 @@ fn send_update_common(
 
     rt.block_on(async move {
         match timeout(config.exchange_timeout, resp).await {
+            // A 404 on a versioned push means the peer does not serve that
+            // version; the caller falls back. Otherwise any response counts
+            // as delivered.
+            Ok(Ok(resp))
+                if not_found_is_error
+                    && resp.status() == StatusCode::NOT_FOUND =>
+            {
+                Err(ExchangeError::Status(StatusCode::NOT_FOUND))
+            }
             Ok(_) => Ok(()),
             Err(e) => {
                 err!(
@@ -325,9 +397,11 @@ pub fn api_description() -> Result<
 > {
     let mut api = ApiDescription::new();
     api.register(push_handler_v2)?;
-    api.register(push_handler)?;
+    api.register(push_handler_v3)?;
+    api.register(push_handler_v4)?;
     api.register(pull_handler_v2)?;
-    api.register(pull_handler)?;
+    api.register(pull_handler_v3)?;
+    api.register(pull_handler_v4)?;
     Ok(api)
 }
 
@@ -340,7 +414,7 @@ async fn push_handler_v2(
     request: TypedBody<v2::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update_v2 = request.into_inner();
-    let update = v3::Update::from(update_v2);
+    let update = v4::Update::from(v3::Update::from(update_v2));
     push_handler_common(ctx, update).await
 }
 
@@ -348,17 +422,27 @@ async fn push_handler_v2(
     method = PUT,
     path = "/v3/push",
 }]
-async fn push_handler(
+async fn push_handler_v3(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<v3::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let update = request.into_inner();
-    push_handler_common(ctx, update).await
+    push_handler_common(ctx, request.into_inner().into()).await
+}
+
+#[endpoint {
+    method = PUT,
+    path = "/v4/push",
+}]
+async fn push_handler_v4(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<v4::Update>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    push_handler_common(ctx, request.into_inner()).await
 }
 
 async fn push_handler_common(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    update: v3::Update,
+    update: v4::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
@@ -380,82 +464,33 @@ async fn push_handler_common(
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
-
-    let mut underlay = HashSet::new();
-    let mut tunnel = HashSet::new();
-
-    // Only transit routers redistribute prefixes
-    if ctx.ctx.config.kind == RouterKind::Transit {
-        for route in &ctx.ctx.db.imported() {
-            // don't redistribute prefixes to their originators
-            if route.nexthop == ctx.peer {
-                continue;
-            }
-            let mut pv = v3::PathVector {
-                destination: route.destination,
-                path: route.path.clone(),
-            };
-            pv.path.push(ctx.ctx.router_id.clone());
-            underlay.insert(pv);
-        }
-        for route in &ctx.ctx.db.imported_tunnel() {
-            if route.nexthop == ctx.peer {
-                continue;
-            }
-            let tv = route.origin;
-            tunnel.insert(tv);
-        }
-    }
-    let originated = ctx
-        .ctx
-        .db
-        .originated()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    for prefix in &originated {
-        let pv = v3::PathVector {
-            destination: *prefix,
-            path: vec![ctx.ctx.router_id.clone()],
-        };
-        underlay.insert(pv);
-    }
-
-    let originated_tunnel = ctx
-        .ctx
-        .db
-        .originated_tunnel()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    for prefix in &originated_tunnel {
-        let tv = v3::TunnelOrigin {
-            overlay_prefix: prefix.overlay_prefix,
-            boundary_addr: prefix.boundary_addr,
-            vni: prefix.vni,
-            metric: prefix.metric,
-        };
-        tunnel.insert(tv);
-    }
-
-    Ok(HttpResponseOk(v2::PullResponse {
-        underlay: if underlay.is_empty() {
-            None
-        } else {
-            Some(underlay.into_iter().map(v2::PathVector::from).collect())
-        },
-        tunnel: if tunnel.is_empty() {
-            None
-        } else {
-            Some(tunnel.into_iter().map(v2::TunnelOrigin::from).collect())
-        },
-    }))
+    let current = pull_handler_common(ctx).await?;
+    Ok(HttpResponseOk(v3::PullResponse::from(current).into()))
 }
 
 #[endpoint {
     method = GET,
     path = "/v3/pull",
 }]
-async fn pull_handler(
+async fn pull_handler_v3(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
+    Ok(HttpResponseOk(pull_handler_common(ctx).await?.into()))
+}
+
+#[endpoint {
+    method = GET,
+    path = "/v4/pull",
+}]
+async fn pull_handler_v4(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<v4::PullResponse>, HttpError> {
+    Ok(HttpResponseOk(pull_handler_common(ctx).await?))
+}
+
+async fn pull_handler_common(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<v4::PullResponse, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
     let mut underlay = HashSet::new();
@@ -468,7 +503,7 @@ async fn pull_handler(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let mut pv = v3::PathVector {
+            let mut pv = v4::PathVector {
                 destination: route.destination,
                 path: route.path.clone(),
             };
@@ -489,7 +524,7 @@ async fn pull_handler(
         .originated()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated {
-        let pv = v3::PathVector {
+        let pv = v4::PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.router_id.clone()],
         };
@@ -502,16 +537,11 @@ async fn pull_handler(
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     for prefix in &originated_tunnel {
-        let tv = v3::TunnelOrigin {
-            overlay_prefix: prefix.overlay_prefix,
-            boundary_addr: prefix.boundary_addr,
-            vni: prefix.vni,
-            metric: prefix.metric,
-        };
+        let tv = *prefix;
         tunnel.insert(tv);
     }
 
-    Ok(HttpResponseOk(v3::PullResponse {
+    Ok(v4::PullResponse {
         underlay: if underlay.is_empty() {
             None
         } else {
@@ -522,10 +552,10 @@ async fn pull_handler(
         } else {
             Some(tunnel)
         },
-    }))
+    })
 }
 
-fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
+fn handle_update(update: &v4::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
     if let Some(underlay_update) = &update.underlay {
@@ -552,7 +582,7 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
 }
 
 fn handle_tunnel_update(
-    update: &v3::TunnelUpdate,
+    update: &v4::TunnelUpdate,
     ctx: &SmContext,
     peer_addr: Ipv6Addr,
 ) {
@@ -564,12 +594,7 @@ fn handle_tunnel_update(
 
     for x in &update.announce {
         import.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
+            origin: *x,
             nexthop: peer_addr,
         });
     }
@@ -577,12 +602,7 @@ fn handle_tunnel_update(
 
     for x in &update.withdraw {
         remove.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
+            origin: *x,
             nexthop: peer_addr,
         });
     }
@@ -621,7 +641,7 @@ fn handle_tunnel_update(
 }
 
 fn handle_underlay_update(
-    update: &v3::UnderlayUpdate,
+    update: &v4::UnderlayUpdate,
     ctx: &SmContext,
     peer_addr: Ipv6Addr,
 ) {
