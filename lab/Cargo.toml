@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
+libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "trey/propolis-12b00ba" }
 oxide-tokio-rt.workspace = true
 thiserror.workspace = true
 
