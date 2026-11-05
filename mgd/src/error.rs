@@ -41,6 +41,9 @@ impl From<Error> for HttpError {
                     ClientErrorStatusCode::CONFLICT,
                 )
             }
+            Error::Db(rdb::error::Error::NotFound(_)) => {
+                Self::for_not_found(None, value.to_string())
+            }
             Error::Db(_) => Self::for_internal_error(value.to_string()),
             Error::Conflict(_) => Self::for_client_error_with_status(
                 Some(value.to_string()),
@@ -48,7 +51,8 @@ impl From<Error> for HttpError {
             ),
             Error::NotFound(_) => Self::for_not_found(None, value.to_string()),
             Error::Bgp(ref err) => match err {
-                bgp::error::Error::PeerExists(_) => {
+                bgp::error::Error::PeerExists(_)
+                | bgp::error::Error::PeerOwnedByOtherRouter(_) => {
                     Self::for_client_error_with_status(
                         Some(err.to_string()),
                         ClientErrorStatusCode::CONFLICT,
@@ -98,5 +102,19 @@ impl From<Error> for HttpError {
                 Self::for_bad_request(None, value.to_string())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn peer_owned_by_other_router_is_conflict() {
+        let peer = "192.0.2.1".parse().unwrap();
+        let error =
+            super::Error::Bgp(bgp::error::Error::PeerOwnedByOtherRouter(
+                mg_api_types::bgp::peer::PeerId::Ip(peer),
+            ));
+        let response = dropshot::HttpError::from(error);
+        assert_eq!(response.status_code.as_u16(), 409);
     }
 }

@@ -104,11 +104,13 @@ mod runtime;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::handler;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Version {
     V2 = 2,
     V3 = 3,
+    /// Adds `TunnelOrigin::router_id` (multi-router attribution).
+    V4 = 4,
 }
 
 #[derive(Error, Debug)]

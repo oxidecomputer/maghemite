@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, rib_admin, router_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use camino::Utf8PathBuf;
@@ -28,6 +28,9 @@ use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
 };
+use mg_api_types::router::{
+    MultiRouterApplyRequest, RouterInfo, RouterSelector,
+};
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
     DeleteStaticRoute6Request,
@@ -40,24 +43,53 @@ use rdb::Db;
 use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
 use std::collections::HashMap;
-#[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-use std::net::Ipv6Addr;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
 const UNIT_API_SERVER: &str = "api_server";
 
+/// The router that endpoints predating the multi-router API operate on.
+pub use rdb::{DEFAULT_ROUTER, DEFAULT_ROUTER_ID};
+
 pub struct HandlerContext {
-    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
-    pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub bfd: BfdContext,
     pub log: Logger,
+    /// Global routing database: router table and switch slot. Route and
+    /// config state lives in per-router [`rdb::RouterDb`] handles.
     pub db: Db,
+    /// Per-router mg-lower thread registry.
+    pub lower: crate::lower::LowerContext,
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,
+    /// Serializes complete multi-router applies against one another. Held
+    /// across the whole request so two applies cannot interleave their
+    /// teardown, release and claim steps. Never taken by internal helpers;
+    /// only by the entry point.
+    ///
+    /// The scope is deliberately limited to the complete apply. The legacy
+    /// per-object BGP, BFD and static-route endpoints do **not** take this
+    /// lock: they write default-router state that the next complete apply
+    /// overwrites anyway, so guarding a surface we expect to remove is not
+    /// worth what it costs to read.
+    ///
+    /// Known limitation: a legacy mutation issued while a complete apply is
+    /// running can interleave with it, and the outcome is then whichever
+    /// order the two happened to take. The two are not intended to run
+    /// concurrently. In the POC sled-agent is the sole writer and issues
+    /// complete applies only; the legacy endpoints are operator and debug
+    /// tools.
+    pub apply_lock: tokio::sync::Mutex<()>,
+}
+
+impl HandlerContext {
+    /// The default router's RIB handle. Endpoints predating the multi-router
+    /// API operate on this router.
+    pub fn rdb(&self) -> Result<rdb::RouterDb, crate::error::Error> {
+        Ok(self.db.router(DEFAULT_ROUTER_ID)?)
+    }
 }
 
 pub fn start_server(
@@ -119,6 +151,44 @@ pub enum MgAdminApiImpl {}
 
 impl MgAdminApi for MgAdminApiImpl {
     type Context = Arc<HandlerContext>;
+
+    // Multi-router ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    async fn multi_router_apply(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<MultiRouterApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        router_admin::multi_router_apply(ctx, request).await
+    }
+
+    async fn list_routers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
+        router_admin::list_routers(ctx).await
+    }
+
+    async fn get_router_rib_imported(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        router_admin::get_router_rib_imported(ctx, path, request).await
+    }
+
+    async fn get_router_rib_selected(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        router_admin::get_router_rib_selected(ctx, path, request).await
+    }
+
+    async fn get_router_neighbors(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        router_admin::get_router_neighbors(ctx, path).await
+    }
 
     async fn get_bfd_peers(
         ctx: RequestContext<Self::Context>,

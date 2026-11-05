@@ -654,6 +654,7 @@ async fn run_trio_tests(
         boundary_addr: "fd00:1701::1".parse().unwrap(),
         vni: 47,
         metric: 0,
+        router_id: None,
     }])
     .await?;
 
@@ -671,6 +672,7 @@ async fn run_trio_tests(
         boundary_addr: "fd00:1701::1".parse().unwrap(),
         vni: 47,
         metric: 0,
+        router_id: None,
     }])
     .await?;
 
@@ -697,6 +699,7 @@ async fn run_trio_tests(
         boundary_addr: "fd00:1701::1".parse().unwrap(),
         vni: 47,
         metric: 0,
+        router_id: None,
     }])
     .await?;
 

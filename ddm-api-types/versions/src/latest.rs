@@ -12,10 +12,11 @@ pub mod admin {
 
 pub mod db {
     pub use crate::v1::db::RouterKind;
-    pub use crate::v1::db::TunnelRoute;
 
     pub use crate::v2::db::PeerInfo;
     pub use crate::v2::db::PeerStatus;
+
+    pub use crate::v4::db::TunnelRoute;
 }
 
 pub mod exchange {
@@ -23,7 +24,7 @@ pub mod exchange {
 }
 
 pub mod net {
-    pub use crate::v1::net::TunnelOrigin;
+    pub use crate::v4::net::TunnelOrigin;
 }
 
 pub mod external_peers {

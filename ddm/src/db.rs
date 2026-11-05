@@ -4,7 +4,7 @@
 
 use ddm_api_types::db::TunnelRoute;
 use ddm_api_types::net::TunnelOrigin;
-use ddm_protocol::v3::PathVector;
+use ddm_protocol::v4::PathVector;
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
@@ -426,6 +426,7 @@ mod test {
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:a::1".parse().unwrap(),
         });
@@ -435,6 +436,7 @@ mod test {
                 boundary_addr: "fd00:b::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:b::1".parse().unwrap(),
         });
@@ -447,6 +449,7 @@ mod test {
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:a::1".parse().unwrap(),
         });
@@ -456,6 +459,7 @@ mod test {
                 boundary_addr: "fd00:b::1".parse().unwrap(),
                 vni: 99,
                 metric: 100,
+                router_id: None,
             },
             nexthop: "fe80:b::1".parse().unwrap(),
         });
@@ -481,6 +485,7 @@ mod test {
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
+                router_id: None,
             },
             nexthop: "fe80:a::1".parse().unwrap(),
         });

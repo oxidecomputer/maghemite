@@ -81,3 +81,8 @@ do
 done
 
 cp target/release/falcon-lab /work/release/falcon-lab
+
+# The falcon job has no clone; pass it the dendrite commit mgd is built against
+# and the sidecar-lite commit the ddm tests pair with it.
+grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p' > /work/release/dendrite-commit
+sed -n 's/^export SIDECAR_LITE_VERSION=//p' .github/buildomat/test-ddm-common.sh > /work/release/sidecar-lite-commit

@@ -16,6 +16,7 @@ mod bfd;
 mod bgp;
 mod ndp;
 mod rib;
+mod router;
 mod static_routing;
 
 #[derive(Parser, Debug)]
@@ -60,6 +61,10 @@ enum Commands {
     /// Neighbor Discovery Protocol state for BGP unnumbered
     #[command(subcommand)]
     Ndp(ndp::Commands),
+
+    /// Logical router management commands.
+    #[command(subcommand)]
+    Router(router::Commands),
 }
 
 fn main() -> Result<()> {
@@ -91,6 +96,7 @@ async fn run() -> Result<()> {
         Commands::Bfd(command) => bfd::commands(command, client).await?,
         Commands::Rib(command) => rib::commands(command, client).await?,
         Commands::Ndp(command) => ndp::commands(command, client).await?,
+        Commands::Router(command) => router::commands(command, client).await?,
     }
     Ok(())
 }

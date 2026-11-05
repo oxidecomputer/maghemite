@@ -8,10 +8,13 @@
 
 #![allow(clippy::result_large_err)]
 use crate::dendrite::{
-    RouteHash, ensure_tep_addr, get_routes_for_prefix, update_dendrite,
+    RouteHash, ensure_router, get_routes_for_prefix, update_dendrite,
 };
 use crate::error::Error;
-use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
+use ddm::{
+    BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes,
+    withdraw_tep_underlay_origin,
+};
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use dendrite::link_is_up;
 use log::mgl_log;
@@ -19,11 +22,13 @@ use mg_common::stats::MgLowerStats as Stats;
 use oxnet::IpNet;
 use platform::{Ddm, Dpd, SwitchZone};
 use rdb::Rib;
-use rdb::{DEFAULT_ROUTE_PRIORITY, Db, PrefixChangeNotification};
+use rdb::types::RouterId;
+use rdb::{DEFAULT_ROUTE_PRIORITY, PrefixChangeNotification, RouterDb};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread::sleep;
 use std::time::Duration;
@@ -47,34 +52,50 @@ mod test;
 
 /// Tag used for managing both dpd and rdb elements.
 const MG_LOWER_TAG: &str = "mg-lower";
+
+/// The id stamped on this router's ddm tunnel origins. The default router
+/// advertises unscoped origins (`None`): they serialize byte-identically to
+/// the legacy pre-multi-router shape and are the only origins ddm forwards
+/// to pre-v4 peers. Non-default routers' origins carry the router's uuid and
+/// are invisible to old peers.
+fn tunnel_origin_id(db: &RouterDb) -> Option<uuid::Uuid> {
+    (db.id() != rdb::DEFAULT_ROUTER_ID).then(|| db.id().0)
+}
 const COMPONENT_MG_LOWER: &str = MG_LOWER_TAG;
 const MOD_SYNC: &str = "sync";
 const UNIT_EVENT_LOOP: &str = "event_loop";
 
-/// This is the primary entry point for the lower half. It loops forever,
-/// observing changes in the routing databse and synchronizing them to the
-/// underlying forwarding platform. The loop sets up a watcher to start
-/// receiving events, does an initial synchronization, then responds to changes
-/// moving foward. The loop runs on the calling thread, so callers are
-/// responsible for running this function in a separate thread if asynchronous
-/// execution is required.
+/// This is the primary entry point for the lower half. It loops until
+/// `shutdown` is set, observing changes in the routing databse and
+/// synchronizing them to the underlying forwarding platform. The loop sets up
+/// a watcher to start receiving events, does an initial synchronization, then
+/// responds to changes moving foward. When `shutdown` is set, all of this
+/// router's platform state (ASIC routes, ddm tunnel advertisements) is
+/// withdrawn before returning. The loop runs on the calling thread, so
+/// callers are responsible for running this function in a separate thread if
+/// asynchronous execution is required.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     tep: Ipv6Addr, //tunnel endpoint address
-    db: Db,
+    db: RouterDb,
     log: Logger,
     stats: Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
+    shutdown: Arc<AtomicBool>,
     dpd: &impl Dpd,
     ddm: &impl Ddm,
     sw: &impl SwitchZone,
 ) {
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            return withdraw_all(tep, &db, &log, dpd, ddm, &rt);
+        }
+
         let (tx, rx) = channel();
 
         // start the db watcher first so we catch any changes that may occur while
         // we're initializing
-        db.watch(MG_LOWER_TAG.into(), tx);
+        db.watch(format!("{MG_LOWER_TAG}/{}", db.name()), tx);
 
         if let Err(e) =
             full_sync(tep, &db, &log, dpd, ddm, sw, &stats, rt.clone())
@@ -91,6 +112,9 @@ pub fn run(
 
         // handle any changes that occur
         loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return withdraw_all(tep, &db, &log, dpd, ddm, &rt);
+            }
             match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(change) => {
                     if let Err(e) = handle_change(
@@ -149,11 +173,12 @@ pub fn run(
 }
 
 /// Synchronize the underlying platforms with a complete set of routes from the
-/// RIB.
+/// RIB. The router is created in dpd first, so this also recovers from a dpd
+/// restart.
 #[allow(clippy::too_many_arguments)]
 fn full_sync(
     tep: Ipv6Addr, // tunnel endpoint address
-    db: &Db,
+    db: &RouterDb,
     log: &Logger,
     dpd: &impl Dpd,
     ddm: &impl Ddm,
@@ -164,23 +189,83 @@ fn full_sync(
     let rib_in = db.full_rib(None);
     let rib_loc = db.loc_rib(None);
 
-    // Make sure our tunnel endpoint address is on the switch ASIC
-    ensure_tep_addr(tep, dpd, rt.clone(), log);
+    ensure_router(db.id(), tep, dpd, ddm, rt.clone(), log)?;
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for prefix in rib_in.keys() {
-        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?;
+        sync_prefix(
+            db.id(),
+            tunnel_origin_id(db),
+            tep,
+            &rib_loc,
+            prefix,
+            dpd,
+            ddm,
+            sw,
+            log,
+            &rt,
+        )?;
     }
 
     Ok(())
+}
+
+/// Withdraw all of this router's state from the underlying platforms: its
+/// tunnel advertisements and TEP underlay origin from ddm, and the router
+/// itself from dpd, which removes its routes and TEP address. Called when the
+/// router is being torn down. Failures are logged and skipped — teardown
+/// should always run to completion.
+fn withdraw_all(
+    tep: Ipv6Addr,
+    db: &RouterDb,
+    log: &Logger,
+    dpd: &impl Dpd,
+    ddm: &impl Ddm,
+    rt: &Arc<tokio::runtime::Handle>,
+) {
+    mgl_log!(log, info, "shutting down: withdrawing all platform state";);
+
+    // The default router is never stopped, so this only runs for others.
+
+    // Tunnel origins are scoped to this router by its origin id.
+    match rt.block_on(async { ddm.get_originated_tunnel_endpoints().await }) {
+        Ok(origins) => {
+            let ours: Vec<TunnelOrigin> = origins
+                .into_inner()
+                .into_iter()
+                .filter(|x| x.router_id == tunnel_origin_id(db))
+                .collect();
+            remove_tunnel_routes(ddm, ours.iter(), rt, log);
+        }
+        Err(e) => {
+            mgl_log!(log,
+                error,
+                "withdraw: failed to get ddm tunnel endpoints: {e}";
+                "error" => format!("{e}")
+            );
+        }
+    }
+
+    // The TEP's underlay /64 was originated into ddm when the router's first
+    // tunnel route landed (`ensure_tep_underlay_origin`); withdraw it so the
+    // departed TEP stops being advertised over the underlay.
+    withdraw_tep_underlay_origin(ddm, tep, rt, log);
+
+    if let Err(e) = rt.block_on(async { dpd.router_delete(db.id()).await }) {
+        mgl_log!(log,
+            error,
+            "withdraw: failed to delete router from dpd: {e}";
+            "error" => format!("{e}")
+        );
+    }
 }
 
 /// Synchronize a change set from the RIB to the underlying platform.
 #[allow(clippy::too_many_arguments)]
 fn handle_change(
     tep: Ipv6Addr, // tunnel endpoint address
-    db: &Db,
+    db: &RouterDb,
     notification: PrefixChangeNotification,
     log: &Logger,
     dpd: &impl Dpd,
@@ -191,7 +276,18 @@ fn handle_change(
     let rib_loc = db.loc_rib(None);
 
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?
+        sync_prefix(
+            db.id(),
+            tunnel_origin_id(db),
+            tep,
+            &rib_loc,
+            prefix,
+            dpd,
+            ddm,
+            sw,
+            log,
+            &rt,
+        )?
     }
 
     Ok(())
@@ -199,6 +295,8 @@ fn handle_change(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_prefix(
+    router: RouterId,
+    origin_id: Option<uuid::Uuid>,
     tep: Ipv6Addr,
     rib_loc: &Rib,
     prefix: &IpNet,
@@ -210,14 +308,17 @@ pub(crate) fn sync_prefix(
 ) -> Result<(), Error> {
     // The current routes that are on the ASIC.
     let dpd_current =
-        get_routes_for_prefix(dpd, prefix, rt.clone(), log.clone())?;
+        get_routes_for_prefix(router, dpd, prefix, rt.clone(), log.clone())?;
 
-    // The current tunnel routes in ddm
+    // The current tunnel routes in ddm, scoped to this router's origin id so
+    // that one router's sync never withdraws another router's origins for
+    // the same prefix. The default router (origin id None) also owns legacy
+    // unscoped origins.
     let ddm_current = rt
         .block_on(async { ddm.get_originated_tunnel_endpoints().await })?
         .into_inner()
         .into_iter()
-        .filter(|x| x.overlay_prefix == *prefix)
+        .filter(|x| x.overlay_prefix == *prefix && x.router_id == origin_id)
         .collect::<HashSet<_>>();
 
     // The best routes in the RIB
@@ -272,7 +373,7 @@ pub(crate) fn sync_prefix(
     let del: HashSet<RouteHash> =
         dpd_current.difference(&best).cloned().collect();
 
-    update_dendrite(add.iter(), del.iter(), dpd, rt.clone(), log)?;
+    update_dendrite(router, add.iter(), del.iter(), dpd, rt.clone(), log)?;
 
     //
     // Update the ddm tunnel advertisements
@@ -286,6 +387,7 @@ pub(crate) fn sync_prefix(
             overlay_prefix: x.cidr,
             metric: DEFAULT_ROUTE_PRIORITY,
             vni: BOUNDARY_SERVICES_VNI,
+            router_id: origin_id,
         })
         .collect::<HashSet<_>>();
 

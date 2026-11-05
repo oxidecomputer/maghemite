@@ -61,13 +61,13 @@ pub enum PrefixSet {
 pub enum PeerEvent {
     /// Upon reception of this event, a state machine is to push the update to
     /// its peer.
-    Push(ddm_protocol::v3::Update),
+    Push(ddm_protocol::v4::Update),
 
     /// Upon reception of this event, a state machine is to redistribute the
     /// update to it's sibling routers through it's event channels. The state
     /// machine is responsible for maintaining the path vector and performing
     /// loop breaking.
-    Redistribute(ddm_protocol::v3::Update),
+    Redistribute(ddm_protocol::v4::Update),
 }
 
 #[derive(Debug, Clone)]

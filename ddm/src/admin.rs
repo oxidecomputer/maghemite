@@ -316,35 +316,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        let ctx = lock!(ctx.context());
-        let endpoints = request.into_inner();
-        slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
-        ctx.db
-            .originate_tunnel(&endpoints)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        do_advertise_tunnel_endpoints(ctx, request.into_inner())
+    }
 
-        for e in ctx.event_channels() {
-            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
-
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunnel endpoints stat: {e}"
-                )
-            }
-        }
-        Ok(HttpResponseUpdatedNoContent())
+    async fn advertise_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<
+            HashSet<ddm_api_types_versions::v1::net::TunnelOrigin>,
+        >,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let endpoints =
+            request.into_inner().into_iter().map(Into::into).collect();
+        do_advertise_tunnel_endpoints(ctx, endpoints)
     }
 
     async fn withdraw_prefixes(
@@ -386,36 +369,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        let ctx = lock!(ctx.context());
-        let endpoints = request.into_inner();
-        slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
-        ctx.db
-            .withdraw_tunnel(&endpoints)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        do_withdraw_tunnel_endpoints(ctx, request.into_inner())
+    }
 
-        for e in ctx.event_channels() {
-            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
-                endpoints.clone(),
-            ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
-        }
-
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunel endpoints stat: {e}"
-                )
-            }
-        }
-
-        Ok(HttpResponseUpdatedNoContent())
+    async fn withdraw_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<
+            HashSet<ddm_api_types_versions::v1::net::TunnelOrigin>,
+        >,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let endpoints =
+            request.into_inner().into_iter().map(Into::into).collect();
+        do_withdraw_tunnel_endpoints(ctx, endpoints)
     }
 
     async fn sync(
@@ -604,8 +569,182 @@ impl DdmAdminApi for DdmAdminApiImpl {
     }
 }
 
+fn do_advertise_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    endpoints: HashSet<TunnelOrigin>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = lock!(ctx.context());
+    slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
+    ctx.db
+        .originate_tunnel(&endpoints)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    for e in ctx.event_channels() {
+        e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+            endpoints.clone(),
+        ))))
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
+    }
+
+    match ctx.db.originated_tunnel_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_tunnel_endpoints
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated tunnel endpoints stat: {e}"
+            )
+        }
+    }
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+fn do_withdraw_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    endpoints: HashSet<TunnelOrigin>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = lock!(ctx.context());
+    slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
+    ctx.db
+        .withdraw_tunnel(&endpoints)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    for e in ctx.event_channels() {
+        e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+            endpoints.clone(),
+        ))))
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
+    }
+
+    match ctx.db.originated_tunnel_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_tunnel_endpoints
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated tunel endpoints stat: {e}"
+            )
+        }
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
 pub fn api_description()
 -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, ApiDescriptionBuildErrors>
 {
     ddm_admin_api_mod::api_description::<DdmAdminApiImpl>()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use ddm_api_types_versions::v1;
+    use http_body_util::BodyExt;
+    use hyper::body::Bytes;
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+
+    async fn get<T: serde::de::DeserializeOwned>(
+        addr: SocketAddr,
+        path: &str,
+        version: impl std::fmt::Display,
+    ) -> T {
+        let client = Client::builder(TokioExecutor::new()).build_http();
+        let req = hyper::Request::builder()
+            .uri(format!("http://{addr}{path}"))
+            .header(omicron_common::api::VERSION_HEADER, version.to_string())
+            .body(http_body_util::Empty::<Bytes>::new())
+            .unwrap();
+        let resp = client.request(req).await.unwrap();
+        assert!(resp.status().is_success(), "{path} {version}: {resp:?}");
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    // Clients predating `TUNNEL_ROUTER_ID` see only the default router's
+    // tunnel origins; current clients see every router's, with its id.
+    #[tokio::test]
+    async fn old_clients_see_only_default_router_origins() {
+        let log = Logger::root(slog::Discard, o!());
+        let path = std::env::temp_dir()
+            .join(format!("ddm-admin-test-{}", std::process::id()));
+        let db = Db::new(path.to_str().unwrap(), log.clone()).unwrap();
+
+        let origin = |boundary_addr: &str, router_id| TunnelOrigin {
+            overlay_prefix: "0.0.0.0/0".parse().unwrap(),
+            boundary_addr: boundary_addr.parse().unwrap(),
+            vni: 99,
+            metric: 0,
+            router_id,
+        };
+        let route = |origin| TunnelRoute {
+            origin,
+            nexthop: "fe80::1".parse().unwrap(),
+        };
+        let default = origin("fd00:a::1", None);
+        let named = origin("fd00:b::1", Some(Uuid::new_v4()));
+        let origins = HashSet::from([default, named]);
+        let routes = HashSet::from([route(default), route(named)]);
+        db.originate_tunnel(&origins).unwrap();
+        db.import_tunnel(&routes);
+
+        let context = Arc::new(Mutex::new(HandlerContext {
+            db,
+            stats: Arc::default(),
+            peers: Vec::new(),
+            stats_handler: Arc::default(),
+            tunables: Tunables::default(),
+            router_kind: RouterKind::Server,
+            rack_id: None,
+            sled_id: None,
+            router_id: String::new(),
+            log: log.clone(),
+        }));
+        let server = dropshot::ServerBuilder::new(
+            api_description().unwrap(),
+            context,
+            log,
+        )
+        .config(ConfigDropshot {
+            bind_address: "[::1]:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
+            dropshot::ClientSpecifiesVersionInHeader::new(
+                omicron_common::api::VERSION_HEADER,
+                ddm_api::latest_version(),
+            ),
+        )))
+        .start()
+        .unwrap();
+        let addr = server.local_addr();
+
+        let old = ddm_api::VERSION_EXTERNAL_PEERS;
+        let got: HashSet<v1::net::TunnelOrigin> =
+            get(addr, "/originated_tunnel_endpoints", &old).await;
+        assert_eq!(got, HashSet::from([default.into()]));
+        let got: HashSet<v1::db::TunnelRoute> =
+            get(addr, "/tunnel_endpoints", &old).await;
+        assert_eq!(got, HashSet::from([route(default).into()]));
+
+        let latest = ddm_api::latest_version();
+        let got: HashSet<TunnelOrigin> =
+            get(addr, "/originated_tunnel_endpoints", &latest).await;
+        assert_eq!(got, origins);
+        let got: HashSet<TunnelRoute> =
+            get(addr, "/tunnel_endpoints", &latest).await;
+        assert_eq!(got, routes);
+
+        server.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(path);
+    }
 }
