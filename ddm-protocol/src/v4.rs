@@ -731,10 +731,6 @@ mod tests {
         let accept = [
             // IPv4 ASM group w/o a source.
             origin_json("233.252.0.1", "ff04::1", 77, None),
-            // 224.0.0.0/24 (local network control) is allowed. RFC 5771 §4
-            // mentions that routers don't forward it off link, not that it's
-            // invalid.
-            origin_json("224.0.0.1", "ff04::1", 77, None),
             // IPv4 SSM group w/ a source.
             origin_json("232.1.1.1", "ff04::1", 77, Some("10.0.0.1")),
             // IPv6 global-scope ASM group w/o a source.
@@ -791,6 +787,7 @@ mod tests {
             origin_json("fd00::1", "ff04::1", 77, None),
             // 224.0.0.0 is the reserved base address (RFC 1112 §4).
             origin_json("224.0.0.0", "ff04::1", 77, None),
+            origin_json("224.0.0.1", "ff04::1", 77, None),
             // 232.0.0.0 is the SSM null address (even w/ a source).
             origin_json("232.0.0.0", "ff04::1", 77, Some("10.0.0.1")),
             // Interface-local scope is never forwarded.
