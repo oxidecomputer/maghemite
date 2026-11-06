@@ -403,6 +403,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
         ctx.db.originate_tunnel(&endpoints);
@@ -447,6 +448,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
         ctx.db.withdraw_tunnel(&endpoints);
