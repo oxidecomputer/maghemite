@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "3.0.0"
+    "version": "4.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -126,6 +126,96 @@
         }
       }
     },
+    "/originated_rack_prefixes": {
+      "get": {
+        "summary": "Get the rack prefixes originated by this router.",
+        "description": "Only supported on transit routers.",
+        "operationId": "get_originated_rack_prefixes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_RackPrefixInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/RackPrefixInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Originate rack prefixes from this router.",
+        "description": "Each prefix has an optional multi-rack join address. The body is keyed by prefix so a prefix carries at most one join address. Advertising a prefix again replaces its join address. Originated prefixes not in the body are left unchanged. Only supported on transit routers.",
+        "operationId": "advertise_rack_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Map_of_RackPrefixInfo",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RackPrefixInfo"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Withdraw rack prefixes originated by this router.",
+        "description": "Only supported on transit routers.",
+        "operationId": "withdraw_rack_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_Ipv6Net",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Ipv6Net"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/originated_tunnel_endpoints": {
       "get": {
         "operationId": "get_originated_tunnel_endpoints",
@@ -156,6 +246,8 @@
     },
     "/peers": {
       "get": {
+        "summary": "Get the routing session on each address object.",
+        "description": "Keyed by address object name. Includes sessions that have not discovered a peer.",
         "operationId": "get_peers",
         "responses": {
           "200": {
@@ -285,6 +377,104 @@
                       "$ref": "#/components/schemas/PathVector"
                     },
                     "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rack_prefixes": {
+      "get": {
+        "summary": "Get the rack prefixes this router has learned from its peers.",
+        "description": "Each prefix maps to the distinct info carried by its paths, including paths that carry no multi-rack join address.",
+        "operationId": "get_rack_prefixes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Set_of_RackPrefixInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/RackPrefixInfo"
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/stats/peer/{aobj_name}": {
+      "get": {
+        "summary": "Get the counters of the routing session on one address object.",
+        "description": "Address object names contain a `/` (e.g. `tfportqsfp0_0/v6`), which must be percent-encoded as `%2F` in the path. Returns 404 if no session uses the address object.",
+        "operationId": "get_peer_stats",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "aobj_name",
+            "description": "Address object name of the routing session.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerStats"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/stats/peers": {
+      "get": {
+        "summary": "Get the counters of the routing session on each address object.",
+        "description": "Keyed by address object name.",
+        "operationId": "get_peers_stats",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerStats",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerStats"
                   }
                 }
               }
@@ -543,8 +733,8 @@
           "path"
         ]
       },
-      "PeerInfo": {
-        "description": "Information about a DDM peer.",
+      "Peer": {
+        "description": "A discovered DDM peer.",
         "type": "object",
         "properties": {
           "addr": {
@@ -556,16 +746,118 @@
           },
           "kind": {
             "$ref": "#/components/schemas/RouterKind"
+          }
+        },
+        "required": [
+          "addr",
+          "host",
+          "kind"
+        ]
+      },
+      "PeerInfo": {
+        "description": "The routing session on one address object, and its peer if one has been discovered.",
+        "type": "object",
+        "properties": {
+          "peer": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Peer"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/PeerStatus"
           }
         },
         "required": [
-          "addr",
-          "host",
-          "kind",
           "status"
+        ]
+      },
+      "PeerStats": {
+        "description": "Counters for the routing session on one address object. The imported counts are the routes currently imported from this session's peer.",
+        "type": "object",
+        "properties": {
+          "advertisements_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "advertisements_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_rack_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_tunnel_endpoints": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_underlay_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_address_changes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_send_fail": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "advertisements_received",
+          "advertisements_sent",
+          "imported_rack_prefixes",
+          "imported_tunnel_endpoints",
+          "imported_underlay_prefixes",
+          "peer_address_changes",
+          "peer_established",
+          "peer_expirations",
+          "solicitations_received",
+          "solicitations_sent",
+          "update_send_fail",
+          "updates_received",
+          "updates_sent"
         ]
       },
       "PeerStatus": {
@@ -644,6 +936,22 @@
             ]
           }
         ]
+      },
+      "RackPrefixInfo": {
+        "description": "What a transit router originates along with one of its rack prefixes.",
+        "type": "object",
+        "properties": {
+          "multi_rack_join_addr": {
+            "nullable": true,
+            "description": "The address other racks use to join this rack, if any.",
+            "x-rust-type": {
+              "crate": "std",
+              "path": "std::net::SocketAddrV6",
+              "version": ">=1.0.0"
+            },
+            "type": "string"
+          }
+        }
       },
       "RouterKind": {
         "type": "integer",

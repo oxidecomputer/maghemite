@@ -4,6 +4,7 @@
 
 use ddm_api_types_versions::latest;
 use ddm_api_types_versions::v1;
+use ddm_api_types_versions::v2;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -26,6 +27,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (4, RACK_PREFIXES),
     (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
     (1, INITIAL),
@@ -47,14 +49,31 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
+    /// Get the routing session on each address object.
+    ///
+    /// Keyed by address object name. Includes sessions that have not
+    /// discovered a peer.
     #[endpoint {
         method = GET,
         path = "/peers",
-        versions = VERSION_PEER_DURATIONS..,
+        versions = VERSION_RACK_PREFIXES..,
     }]
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<u32, latest::db::PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<String, latest::db::PeerInfo>>, HttpError>;
+
+    // Required rather than provided: older versions key sessions by interface
+    // index, which the latest response does not carry, so the server builds
+    // this from its live session table.
+    #[endpoint {
+        method = GET,
+        path = "/peers",
+        operation_id = "get_peers",
+        versions = VERSION_PEER_DURATIONS..VERSION_RACK_PREFIXES,
+    }]
+    async fn get_peers_v2(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v2::db::PeerInfo>>, HttpError>;
 
     #[endpoint {
         method = GET,
@@ -64,7 +83,7 @@ pub trait DdmAdminApi {
     async fn get_peers_v1(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, v1::db::PeerInfo>>, HttpError> {
-        let resp = Self::get_peers(ctx).await?;
+        let resp = Self::get_peers_v2(ctx).await?;
         let converted: HashMap<u32, v1::db::PeerInfo> =
             resp.0.into_iter().map(|(k, v)| (k, v.into())).collect();
         Ok(HttpResponseOk(converted))
@@ -190,4 +209,91 @@ pub trait DdmAdminApi {
     async fn get_external_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
+
+    /// Get the rack prefixes originated by this router.
+    ///
+    /// Only supported on transit routers.
+    #[endpoint {
+        method = GET,
+        path = "/originated_rack_prefixes",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn get_originated_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<Ipv6Net, latest::net::RackPrefixInfo>>,
+        HttpError,
+    >;
+
+    /// Originate rack prefixes from this router.
+    ///
+    /// Each prefix has an optional multi-rack join address. The body is keyed
+    /// by prefix so a prefix carries at most one join address. Advertising a
+    /// prefix again replaces its join address. Originated prefixes not in the
+    /// body are left unchanged. Only supported on transit routers.
+    #[endpoint {
+        method = PUT,
+        path = "/originated_rack_prefixes",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn advertise_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashMap<Ipv6Net, latest::net::RackPrefixInfo>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Withdraw rack prefixes originated by this router.
+    ///
+    /// Only supported on transit routers.
+    #[endpoint {
+        method = DELETE,
+        path = "/originated_rack_prefixes",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn withdraw_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<Ipv6Net>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Get the rack prefixes this router has learned from its peers.
+    ///
+    /// Each prefix maps to the distinct info carried by its paths, including
+    /// paths that carry no multi-rack join address.
+    #[endpoint {
+        method = GET,
+        path = "/rack_prefixes",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn get_rack_prefixes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<HashMap<Ipv6Net, HashSet<latest::net::RackPrefixInfo>>>,
+        HttpError,
+    >;
+
+    /// Get the counters of the routing session on each address object.
+    ///
+    /// Keyed by address object name.
+    #[endpoint {
+        method = GET,
+        path = "/stats/peers",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn get_peers_stats(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<String, latest::db::PeerStats>>, HttpError>;
+
+    /// Get the counters of the routing session on one address object.
+    ///
+    /// Address object names contain a `/` (e.g. `tfportqsfp0_0/v6`), which
+    /// must be percent-encoded as `%2F` in the path. Returns 404 if no
+    /// session uses the address object.
+    #[endpoint {
+        method = GET,
+        path = "/stats/peer/{aobj_name}",
+        versions = VERSION_RACK_PREFIXES..,
+    }]
+    async fn get_peer_stats(
+        ctx: RequestContext<Self::Context>,
+        params: Path<latest::admin::PeerStatsPathParams>,
+    ) -> Result<HttpResponseOk<latest::db::PeerStats>, HttpError>;
 }

@@ -5,12 +5,19 @@
 //! ALL TYPES IN THIS FILE ARE FOR DDM PROTOCOL VERSION 2. THEY SHALL NEVER
 //! CHANGE. THESE TYPES CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER
 //! EXIST BUT THEIR DEFINITIONS SHALL NEVER CHANGE.
+//!
+//! Exception: the optional `rack` fields of [`Update`] and [`PullResponse`]
+//! (and the [`RackUpdate`] and [`RackPrefix`] types they carry) were added
+//! after DDMv2 shipped. Older v2 peers ignore the unknown field, and the field
+//! is omitted from the payload when it is `None`. Rack prefixes are not
+//! configured until every router supports them.
 
 use std::{
     collections::HashSet,
     net::{Ipv4Addr, Ipv6Addr},
 };
 
+use oxnet::SocketAddrV6Json;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,13 +25,15 @@ use serde::{Deserialize, Serialize};
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rack: Option<RackUpdate>,
 }
 
 impl From<UnderlayUpdate> for Update {
     fn from(u: UnderlayUpdate) -> Self {
         Update {
             underlay: Some(u),
-            tunnel: None,
+            ..Default::default()
         }
     }
 }
@@ -32,8 +41,17 @@ impl From<UnderlayUpdate> for Update {
 impl From<TunnelUpdate> for Update {
     fn from(t: TunnelUpdate) -> Self {
         Update {
-            underlay: None,
             tunnel: Some(t),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<RackUpdate> for Update {
+    fn from(r: RackUpdate) -> Self {
+        Update {
+            rack: Some(r),
+            ..Default::default()
         }
     }
 }
@@ -48,13 +66,15 @@ pub struct TunnelUpdate {
 pub struct PullResponse {
     pub underlay: Option<HashSet<PathVector>>,
     pub tunnel: Option<HashSet<TunnelOrigin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rack: Option<HashSet<RackPrefix>>,
 }
 
 impl From<HashSet<PathVector>> for PullResponse {
     fn from(value: HashSet<PathVector>) -> Self {
         PullResponse {
             underlay: Some(value),
-            tunnel: None,
+            ..Default::default()
         }
     }
 }
@@ -63,6 +83,20 @@ impl From<HashSet<PathVector>> for PullResponse {
 pub struct UnderlayUpdate {
     pub announce: HashSet<PathVector>,
     pub withdraw: HashSet<PathVector>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct RackUpdate {
+    pub announce: HashSet<RackPrefix>,
+    pub withdraw: HashSet<RackPrefix>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
+pub struct RackPrefix {
+    pub path_vector: PathVector,
+    pub multi_rack_join_addr: Option<SocketAddrV6Json>,
 }
 
 #[derive(

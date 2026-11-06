@@ -11,10 +11,17 @@ use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
     SmContext, SmError, StateMachine,
 };
+use crate::db::{
+    RemovedRoutes, TunnelForwardingChanges, tunnel_forwarding_changes,
+};
+use crate::sm::{PeerIdentity, RouteAdvertisementAllowances};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
-use ddm_api_types::db::RouterKind;
-use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
+use ddm_api_types::net::TunnelOrigin;
+use ddm_protocol::v3::{
+    PathVector, RackPrefix, RackUpdate, TunnelUpdate, UnderlayUpdate, Update,
+};
 use libnet::get_ipaddr_info;
+use mg_common::lock;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -23,10 +30,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::thread::{JoinHandle, sleep, spawn};
 use std::time::Duration;
-
-use crate::discovery::Version;
-use ddm_api_types::net::TunnelOrigin;
-use std::net::Ipv6Addr;
 
 impl StateMachine {
     pub fn run(&mut self) -> Result<(), SmError> {
@@ -80,8 +83,11 @@ impl State for Init {
                     Event::Admin(AdminEvent::Shutdown) => {
                         return (None, event);
                     }
-                    Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
-                        self.ctx.event_channels.push(tx);
+                    Event::Admin(AdminEvent::NewExternalPeer {
+                        aobj_name,
+                        tx,
+                    }) => {
+                        self.ctx.event_channels.insert(aobj_name, tx);
                     }
                     _ => {
                         wrn!(
@@ -198,7 +204,7 @@ impl State for Solicit {
                 }
             };
             match e {
-                Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
+                Event::Neighbor(NeighborEvent::Advertise(peer)) => {
                     dbg!(
                         self.log,
                         self.ctx.config.if_name,
@@ -207,8 +213,7 @@ impl State for Solicit {
                     return (
                         Some(Box::new(Exchange::new(
                             self.ctx.clone(),
-                            addr,
-                            version,
+                            peer,
                             self.log.clone(),
                         ))),
                         event,
@@ -237,8 +242,8 @@ impl State for Solicit {
                         e
                     );
                 }
-                Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
-                    self.ctx.event_channels.push(tx);
+                Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
+                    self.ctx.event_channels.insert(aobj_name, tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {
@@ -260,30 +265,26 @@ impl State for Solicit {
 }
 
 struct Exchange {
-    peer: Ipv6Addr,
-    version: Version,
+    peer: PeerIdentity,
+    peer_allowances: RouteAdvertisementAllowances,
     ctx: SmContext,
     log: Logger,
 }
 
 impl Exchange {
-    fn new(
-        ctx: SmContext,
-        peer: Ipv6Addr,
-        version: Version,
-        log: Logger,
-    ) -> Self {
+    fn new(ctx: SmContext, peer: PeerIdentity, log: Logger) -> Self {
+        let peer_allowances =
+            RouteAdvertisementAllowances::new(ctx.config.kind, peer.kind);
         Self {
             ctx,
             peer,
-            version,
+            peer_allowances,
             log,
         }
     }
 
     fn initial_pull(&mut self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
-        let peer = self.peer;
-        let version = self.version;
+        let peer = self.peer.clone();
         let rt = self.ctx.rt.clone();
         let log = self.log.clone();
         let interval = self.ctx.config.solicit_interval;
@@ -291,13 +292,9 @@ impl Exchange {
         let ctx = self.ctx.clone();
 
         spawn(move || {
-            while let Err(e) = crate::exchange::pull(
-                &ctx,
-                peer,
-                version,
-                rt.clone(),
-                stop.clone(),
-            ) {
+            while let Err(e) =
+                crate::exchange::pull(&ctx, &peer, rt.clone(), stop.clone())
+            {
                 sleep(interval);
                 wrn!(log, if_name, "exchange pull: {}", e);
                 if stop.load(Ordering::Relaxed) {
@@ -317,7 +314,7 @@ impl Exchange {
         loop {
             match exchange::do_pull(
                 &self.ctx,
-                &self.ctx.config.addr,
+                self.ctx.config.addr,
                 &self.ctx.rt,
             ) {
                 Ok(_) => break,
@@ -356,10 +353,25 @@ impl Exchange {
 
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
-        let (mut to_remove, to_remove_tnl) =
-            self.ctx.db.remove_nexthop_routes(self.peer);
+
+        let tunnel_before = self.ctx.db.imported_tunnel();
+
+        // compilation barrier. a new RIB table must be handled here.
+        let RemovedRoutes {
+            underlay: mut to_remove,
+            tunnel: mut to_remove_tnl,
+            rack: mut to_remove_rack,
+        } = self.ctx.db.remove_nexthop_routes(self.peer.addr);
+        self.ctx.stats.update_imported(&self.ctx.db, self.peer.addr);
+
+        // Underlay and rack routes share the underlay forwarding table. Every
+        // route via this peer is now gone from both RIB tables, so all of
+        // their forwarding entries go.
         let mut routes: Vec<crate::sys::Route> = Vec::new();
-        for x in &to_remove {
+        for x in to_remove
+            .iter()
+            .chain(to_remove_rack.iter().map(|r| &r.route))
+        {
             let mut r: crate::sys::Route = x.clone().into();
             r.ifname.clone_from(&self.ctx.config.if_name);
             routes.push(r);
@@ -371,80 +383,149 @@ impl Exchange {
             routes,
             &self.ctx.rt,
         );
+        // Tunnel forwarding entries carry no nexthop, so other peers may
+        // still provide what this peer did. Change only what the effective
+        // set of origins lost or gained.
+        let TunnelForwardingChanges { add, remove } = tunnel_forwarding_changes(
+            &tunnel_before,
+            &self.ctx.db.imported_tunnel(),
+        );
         if let Err(e) = crate::sys::remove_tunnel_routes(
             &self.log,
             &self.ctx.config.if_name,
-            &to_remove_tnl,
+            &remove,
         ) {
             err!(
                 self.log,
                 self.ctx.config.if_name,
-                "failed to remove tunnel routes: {:#?} {e}",
-                to_remove_tnl
+                "failed to remove tunnel routes: {remove:#?} {e}",
             );
         }
-        // if we're a transit router propagate withdraws for the
-        // expired peer.
-        if self.ctx.config.kind == RouterKind::Transit {
-            dbg!(
+        if let Err(e) = crate::sys::add_tunnel_routes(
+            &self.log,
+            &self.ctx.config.if_name,
+            &add,
+        ) {
+            err!(
                 self.log,
                 self.ctx.config.if_name,
-                "redistributing expire to {} peers",
-                self.ctx.event_channels.len()
-            );
-
-            // Only send withdraws for expirations that result in a total loss
-            // of reachability to a destination for the given path.
-            let imported = self.ctx.db.imported();
-            dbg!(self.log, self.ctx.config.if_name, "imported: {imported:#?}");
-            dbg!(
-                self.log,
-                self.ctx.config.if_name,
-                "to_remove: {to_remove:#?}"
-            );
-            to_remove.retain(|x| {
-                !imported
-                    .iter()
-                    .any(|y| y.destination == x.destination && y.path == x.path)
-            });
-            dbg!(
-                self.log,
-                self.ctx.config.if_name,
-                "to_remove (retained): {to_remove:#?}"
-            );
-
-            let underlay = if to_remove.is_empty() {
-                None
-            } else {
-                Some(UnderlayUpdate::withdraw(
-                    to_remove
-                        .iter()
-                        .map(|x| PathVector {
-                            destination: x.destination,
-                            path: {
-                                let mut ps = x.path.clone();
-                                ps.push(self.ctx.router_id.clone());
-                                ps
-                            },
-                        })
-                        .collect(),
-                ))
-            };
-
-            let tunnel = if to_remove_tnl.is_empty() {
-                None
-            } else {
-                Some(TunnelUpdate::withdraw(
-                    to_remove_tnl.iter().cloned().map(Into::into).collect(),
-                ))
-            };
-
-            let push = Update { underlay, tunnel };
-            super::send(
-                Event::Peer(PeerEvent::Push(push.clone())),
-                &mut self.ctx.event_channels,
+                "failed to add tunnel routes: {add:#?} {e}",
             );
         }
+
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "redistributing expire to {} peers",
+            self.ctx.event_channels.len()
+        );
+
+        // Only send withdraws for expirations that result in a total loss
+        // of reachability to a destination for the given path.
+        self.retain_unreachable(
+            "underlay",
+            &mut to_remove,
+            self.ctx.db.imported(),
+            |r| (r.destination, r.path.clone()),
+        );
+        let underlay = if to_remove.is_empty() {
+            None
+        } else {
+            Some(UnderlayUpdate::withdraw(
+                to_remove
+                    .into_iter()
+                    .map(|x| PathVector {
+                        destination: x.destination,
+                        path: {
+                            let mut ps = x.path;
+                            ps.push(self.ctx.router_id.clone());
+                            ps
+                        },
+                    })
+                    .collect(),
+            ))
+        };
+
+        // Tunnel routes carry no path, so the same origin learned from
+        // another peer keeps it reachable.
+        self.retain_unreachable(
+            "tunnel",
+            &mut to_remove_tnl,
+            self.ctx.db.imported_tunnel(),
+            |r| r.origin,
+        );
+        let tunnel = if to_remove_tnl.is_empty() {
+            None
+        } else {
+            Some(TunnelUpdate::withdraw(
+                to_remove_tnl.into_iter().map(Into::into).collect(),
+            ))
+        };
+
+        self.retain_unreachable(
+            "rack",
+            &mut to_remove_rack,
+            self.ctx.db.imported_rack(),
+            |r| {
+                (
+                    r.route.destination,
+                    r.route.path.clone(),
+                    r.multi_rack_join_addr.clone(),
+                )
+            },
+        );
+        let rack = if to_remove_rack.is_empty() {
+            None
+        } else {
+            Some(RackUpdate::withdraw(
+                to_remove_rack
+                    .into_iter()
+                    .map(|x| {
+                        let mut rp = RackPrefix::from(x);
+                        rp.path_vector.path.push(self.ctx.router_id.clone());
+                        rp
+                    })
+                    .collect(),
+            ))
+        };
+
+        let push = Update {
+            underlay,
+            tunnel,
+            rack,
+        };
+        if push.is_empty() {
+            return;
+        }
+
+        super::send(
+            Event::Peer(PeerEvent::Push(push)),
+            &mut self.ctx.event_channels,
+        );
+    }
+
+    /// Keep only the routes in `removed` that are now unreachable: those whose
+    /// `key` matches no route still in `imported`. A removed route that
+    /// another imported route still covers must not be withdrawn from peers.
+    fn retain_unreachable<T: std::fmt::Debug, K: Eq + std::hash::Hash>(
+        &self,
+        class: &str,
+        removed: &mut HashSet<T>,
+        imported: HashSet<T>,
+        key: impl Fn(&T) -> K,
+    ) {
+        let still_imported: HashSet<K> = imported.iter().map(&key).collect();
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "{class} routes removed: {removed:#?}"
+        );
+        removed.retain(|r| !still_imported.contains(&key(r)));
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "{class} routes unreachable: {removed:#?}"
+        );
     }
 }
 
@@ -454,11 +535,14 @@ impl State for Exchange {
         event: Receiver<Event>,
     ) -> (Option<Box<dyn State>>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Exchange);
+        *lock!(self.ctx.iface.peer_identity) = Some(self.peer.clone());
+
         let exchange_thread = loop {
             match exchange::handler(
                 self.ctx.clone(),
                 self.ctx.config.addr,
-                self.peer,
+                self.peer.clone(),
+                self.peer_allowances.clone(),
                 self.log.clone(),
             ) {
                 Ok(handle) => break handle,
@@ -487,7 +571,10 @@ impl State for Exchange {
         if self.ctx.iface.external && self.ctx.first_run {
             self.ctx.first_run = false;
             crate::sm::send(
-                Event::Admin(AdminEvent::NewExternalPeer(self.ctx.tx.clone())),
+                Event::Admin(AdminEvent::NewExternalPeer {
+                    aobj_name: self.ctx.config.aobj_name.clone(),
+                    tx: self.ctx.tx.clone(),
+                }),
                 &mut self.ctx.event_channels,
             );
         }
@@ -509,6 +596,11 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                     prefixes,
                 ))) => {
+                    // skip if we aren't allowed to transmit underlay prefixes
+                    if !self.peer_allowances.underlay() {
+                        continue;
+                    }
+
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -516,83 +608,136 @@ impl State for Exchange {
                             path: vec![self.ctx.router_id.clone()],
                         })
                         .collect();
-                    if let Err(e) = crate::exchange::announce_underlay(
+                    let Err(e) = crate::exchange::announce_underlay(
                         &self.ctx,
                         self.ctx.config.clone(),
                         pv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    ) {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "announce: {}",
-                            e,
-                        );
-                        wrn!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "expiring peer {} due to failed announce",
-                            self.peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
-                    }
+                    ) else {
+                        continue;
+                    };
+
+                    err!(self.log, self.ctx.config.if_name, "announce: {}", e,);
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed announce",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
                 Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
+                    // skip if we aren't allowed to transmit tunnel prefixes
+                    if !self.peer_allowances.tunnel() {
+                        continue;
+                    }
+
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
-                    if let Err(e) = crate::exchange::announce_tunnel(
+                    let Err(e) = crate::exchange::announce_tunnel(
                         &self.ctx,
                         self.ctx.config.clone(),
                         tv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    ) {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "announce tunnel: {}",
-                            e,
-                        );
-                        wrn!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "expiring peer {} due to failed tunnel announce",
-                            self.peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
+                    ) else {
+                        continue;
+                    };
+
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "announce tunnel: {}",
+                        e,
+                    );
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed tunnel announce",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
+                Event::Admin(AdminEvent::Announce(PrefixSet::Rack(
+                    prefixes,
+                ))) => {
+                    // skip if we aren't allowed to transmit rack prefixes
+                    if !self.peer_allowances.rack() {
+                        continue;
                     }
+
+                    let Err(e) = crate::exchange::announce_rack(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        prefixes,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "rack prefix announce: {e}",
+                    );
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed rack prefix announce",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                     prefixes,
                 ))) => {
+                    // skip if we aren't allowed to transmit underlay prefixes
+                    if !self.peer_allowances.underlay() {
+                        continue;
+                    }
+
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -600,108 +745,154 @@ impl State for Exchange {
                             path: vec![self.ctx.router_id.clone()],
                         })
                         .collect();
-                    if let Err(e) = crate::exchange::withdraw_underlay(
+                    let Err(e) = crate::exchange::withdraw_underlay(
                         &self.ctx,
                         self.ctx.config.clone(),
                         pv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    ) {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "withdraw: {}",
-                            e,
-                        );
-                        wrn!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "expiring peer {} due to failed withdraw",
-                            self.peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
-                    }
+                    ) else {
+                        continue;
+                    };
+
+                    err!(self.log, self.ctx.config.if_name, "withdraw: {}", e,);
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed withdraw",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
+                    // skip if we aren't allowed to transmit tunnel prefixes
+                    if !self.peer_allowances.tunnel() {
+                        continue;
+                    }
+
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
-                    if let Err(e) = crate::exchange::withdraw_tunnel(
+
+                    let Err(e) = crate::exchange::withdraw_tunnel(
                         &self.ctx,
                         self.ctx.config.clone(),
                         tv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    ) {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "withdraw tunnel: {}",
-                            e,
-                        );
-                        wrn!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "expiring peer {} due to failed tunnel withdraw",
-                            self.peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
+                    ) else {
+                        continue;
+                    };
+
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "withdraw tunnel: {}",
+                        e,
+                    );
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed tunnel withdraw",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
+                Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                    prefixes,
+                ))) => {
+                    // skip if we aren't allowed to transmit rack prefixes
+                    if !self.peer_allowances.rack() {
+                        continue;
                     }
+
+                    let Err(e) = crate::exchange::withdraw_rack(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        prefixes,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(self.log, self.ctx.config.if_name, "withdraw: {}", e,);
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed withdraw",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
                 Event::Admin(AdminEvent::Expire(peer)) => {
-                    if self.peer == peer {
-                        inf!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "administratively expiring peer {}",
-                            peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
+                    if self.peer.addr != peer {
+                        continue;
                     }
+
+                    inf!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "administratively expiring peer {}",
+                        peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
                 Event::Admin(AdminEvent::Sync) => {
                     let rt = self.ctx.rt.clone();
                     if let Err(e) = crate::exchange::pull(
                         &self.ctx,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         rt,
                         pull_stop.clone(),
                     ) {
@@ -713,28 +904,52 @@ impl State for Exchange {
                         );
                     }
                 }
-                Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
-                    if tx
-                        .send(Event::Peer(PeerEvent::Push(Update {
-                            underlay: Some(
-                                UnderlayUpdate {
-                                    announce: self
-                                        .ctx
-                                        .db
-                                        .imported()
-                                        .into_iter()
-                                        .map(Into::into)
-                                        .collect(),
-                                    withdraw: HashSet::default(),
-                                }
-                                .with_path_element(self.ctx.router_id.clone()),
-                            ),
-                            tunnel: None,
-                        })))
-                        .is_ok()
-                    {
-                        self.ctx.event_channels.push(tx.clone());
+                Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
+                    // Send the new peer only the routes learned from our own
+                    // peer. Every sibling does the same, so together they send
+                    // one copy of the imported tables rather than one each.
+                    // Every route class is included; the new peer's Push
+                    // handler filters by its own advertisement allowances.
+                    //
+                    // Sending and registering in this one step keeps our share
+                    // consistent: routes we imported before now are in this
+                    // push, and later ones reach the new peer through our
+                    // Redistribute fan-out once it is registered.
+                    let db = &self.ctx.db;
+                    let router_id = self.ctx.router_id.as_str();
+                    let push = Update {
+                        underlay: Some(
+                            UnderlayUpdate::announce(
+                                db.imported_from(self.peer.addr)
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                            )
+                            .with_path_element(router_id),
+                        ),
+                        tunnel: Some(TunnelUpdate::announce(
+                            db.imported_tunnel_from(self.peer.addr)
+                                .into_iter()
+                                .map(Into::into)
+                                .collect(),
+                        )),
+                        rack: Some(
+                            RackUpdate::announce(
+                                db.imported_rack_from(self.peer.addr)
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                            )
+                            .with_path_element(router_id),
+                        ),
+                    };
+                    if !push.is_empty() {
+                        let _ = tx.send(Event::Peer(PeerEvent::Push(push)));
                     }
+                    // Register unconditionally, as Init and Solicit do. A
+                    // channel whose peer has already shut down is pruned the
+                    // first time a fan-out to it fails.
+                    self.ctx.event_channels.insert(aobj_name, tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {
@@ -748,6 +963,12 @@ impl State for Exchange {
                     return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
+                    // A Push carries only learned routes, so the redistribution
+                    // allowance decides whether this peer gets any of it.
+                    if !self.peer_allowances.redistributed() {
+                        continue;
+                    }
+
                     inf!(
                         self.log,
                         self.ctx.config.if_name,
@@ -755,81 +976,39 @@ impl State for Exchange {
                         self.peer,
                         update,
                     );
-                    if let Some(push) = update.underlay {
-                        if !push.announce.is_empty()
-                            && let Err(e) = crate::exchange::announce_underlay(
-                                &self.ctx,
-                                self.ctx.config.clone(),
-                                push.announce,
-                                self.peer,
-                                self.version,
-                                self.ctx.rt.clone(),
-                                self.log.clone(),
-                            )
-                        {
-                            err!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "announce: {}",
-                                e,
-                            );
-                            wrn!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "expiring peer {} due to failed announce",
-                                self.peer,
-                            );
-                            self.expire_peer(
-                                &exchange_thread,
-                                &pull_stop,
-                                initial_pull,
-                            );
-                            return (
-                                Some(Box::new(Solicit::new(
-                                    self.ctx.clone(),
-                                    self.log.clone(),
-                                ))),
-                                event,
-                            );
-                        }
-                        if !push.withdraw.is_empty()
-                            && let Err(e) = crate::exchange::withdraw_underlay(
-                                &self.ctx,
-                                self.ctx.config.clone(),
-                                push.withdraw,
-                                self.peer,
-                                self.version,
-                                self.ctx.rt.clone(),
-                                self.log.clone(),
-                            )
-                        {
-                            err!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "withdraw: {}",
-                                e,
-                            );
-                            wrn!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "expiring peer {} due to failed withdraw",
-                                self.peer,
-                            );
-                            self.expire_peer(
-                                &exchange_thread,
-                                &pull_stop,
-                                initial_pull,
-                            );
-                            return (
-                                Some(Box::new(Solicit::new(
-                                    self.ctx.clone(),
-                                    self.log.clone(),
-                                ))),
-                                event,
-                            );
-                        }
-                    }
+
+                    let Err(e) = crate::exchange::send_update(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        update,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(self.log, self.ctx.config.if_name, "push: {e}");
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed push",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
+
                 Event::Peer(PeerEvent::Redistribute(mut update)) => {
                     dbg!(
                         self.log,
@@ -837,8 +1016,11 @@ impl State for Exchange {
                         "redistributing update to {} peers",
                         self.ctx.event_channels.len()
                     );
-                    update.underlay = update.underlay.map(|u| {
-                        let sans_loops = u.break_loops(&self.ctx.router_id);
+
+                    let router_id = &self.ctx.router_id;
+
+                    if let Some(u) = update.underlay.as_mut() {
+                        let sans_loops = u.break_loops(router_id);
 
                         let announce_loop =
                             u.announce.difference(&sans_loops.announce);
@@ -862,8 +1044,49 @@ impl State for Exchange {
                             )
                         }
 
-                        sans_loops.with_path_element(self.ctx.router_id.clone())
-                    });
+                        *u = sans_loops.with_path_element(router_id);
+                    }
+
+                    // Tunnel routes don't carry a path vector, so they end up
+                    // behaving similar to distance vector:
+                    // - We advertise iff we have at least one valid path
+                    // - The advertisement doesn't carry path info (next-hop is
+                    //   the only means of determining overall path)
+                    //
+                    // So: Don't withdraw routes that are still in the DB.
+                    if let Some(t) = update.tunnel.as_mut() {
+                        let imported_tunnel: HashSet<TunnelOrigin> = self
+                            .ctx
+                            .db
+                            .imported_tunnel()
+                            .into_iter()
+                            .map(|r| r.origin)
+                            .collect();
+                        t.withdraw = t
+                            .withdraw
+                            .difference(&imported_tunnel)
+                            .copied()
+                            .collect();
+                    }
+
+                    if let Some(r) = update.rack.as_mut() {
+                        let sans_loops = r.break_loops(router_id);
+                        for x in r.announce.difference(&sans_loops.announce) {
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "loop detected: dropping rack announcement: {:?}",
+                                x,
+                            )
+                        }
+                        *r = sans_loops.with_path_element(router_id);
+                    }
+
+                    // Loop breaking can leave nothing to send.
+                    if update.is_empty() {
+                        continue;
+                    }
+
                     super::send(
                         Event::Peer(PeerEvent::Push(update)),
                         &mut self.ctx.event_channels,
@@ -909,9 +1132,32 @@ impl State for Exchange {
                         event,
                     );
                 }
-                Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
-                    self.peer = addr;
-                    self.version = version;
+                Event::Neighbor(NeighborEvent::Advertise(peer)) => {
+                    if self.peer != peer {
+                        // The peer has changed out from under us. We can't just
+                        // overwrite our state and pretend nothing happened,
+                        // otherwise we'd be running with partially stale state.
+                        // Expire the old peer, then re-enter Exchange with the
+                        // new peer and version info.
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "discovered new peer {peer}; restarting Exchange",
+                        );
+                        self.expire_peer(
+                            &exchange_thread,
+                            &pull_stop,
+                            initial_pull,
+                        );
+                        return (
+                            Some(Box::new(Exchange::new(
+                                self.ctx.clone(),
+                                peer,
+                                self.log.clone(),
+                            ))),
+                            event,
+                        );
+                    }
                 }
             }
         }
