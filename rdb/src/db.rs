@@ -2231,7 +2231,8 @@ mod test {
             IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
             "192.0.2.0/24".parse::<Ipv4Net>().unwrap(),
             IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
-            MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
+            MulticastAddr::new("225.1.1.1".parse().unwrap())
+                .expect("valid mcast"),
         );
 
         // IPv6
@@ -2240,7 +2241,7 @@ mod test {
             IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)),
             "2001:db8::/32".parse::<Ipv6Net>().unwrap(),
             IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
-            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+            MulticastAddr::new("ff0e::1".parse().unwrap())
                 .expect("valid mcast"),
         );
     }
@@ -2374,7 +2375,8 @@ mod test {
 
         let key = MulticastRouteKey::new(
             Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
-            MulticastAddr::new_v4(225, 1, 1, 2).expect("valid mcast"),
+            MulticastAddr::new("225.1.1.2".parse().unwrap())
+                .expect("valid mcast"),
             vni(),
         )
         .expect("valid unicast source in the group's address family");
@@ -2403,14 +2405,11 @@ mod test {
         let (tx, rx) = mpsc::channel();
         db.watch_mrib("test".to_string(), tx);
 
-        let mut replay = MulticastRoute::new(
+        let replay = MulticastRoute::new(
             key,
             underlay_group(),
             MulticastSourceProtocol::Static,
         );
-        let past = chrono::DateTime::UNIX_EPOCH;
-        replay.created = past;
-        replay.updated = past;
         db.add_static_mcast_routes(&[replay]).unwrap();
         assert!(
             rx.try_recv().is_err(),
@@ -2418,14 +2417,7 @@ mod test {
         );
 
         let after = db.get_mcast_route(&key).expect("route in mrib_in");
-        assert_eq!(
-            after.created, before.created,
-            "idempotent upsert changed mrib_in.created"
-        );
-        assert_eq!(
-            after.updated, before.updated,
-            "idempotent upsert changed mrib_in.updated"
-        );
+        assert_eq!(after, before, "idempotent upsert changed mrib_in");
 
         let persisted = db
             .get_static_mcast_routes()
@@ -2435,12 +2427,8 @@ mod test {
             .expect("route persisted");
 
         assert_eq!(
-            persisted.created, persisted_before.created,
-            "idempotent upsert changed persisted created timestamp"
-        );
-        assert_eq!(
-            persisted.updated, persisted_before.updated,
-            "idempotent upsert changed persisted updated timestamp"
+            persisted, persisted_before,
+            "idempotent upsert changed persisted route"
         );
 
         db.remove_static_routes(&[static_route]).unwrap();
@@ -2463,19 +2451,16 @@ mod test {
 
         let key = MulticastRouteKey::new(
             Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
-            MulticastAddr::new_v4(225, 1, 1, 2).expect("valid mcast"),
+            MulticastAddr::new("225.1.1.2".parse().unwrap())
+                .expect("valid mcast"),
             vni(),
         )
         .expect("valid unicast source in the group address family");
-        let route = MulticastRoute {
-            created: chrono::DateTime::UNIX_EPOCH,
-            updated: chrono::DateTime::UNIX_EPOCH,
-            ..MulticastRoute::new(
-                key,
-                underlay_group(),
-                MulticastSourceProtocol::Static,
-            )
-        };
+        let route = MulticastRoute::new(
+            key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
         db.add_static_mcast_routes(std::slice::from_ref(&route))
             .unwrap();
         assert_eq!(db.get_selected_mcast_route(&key), Some(route.clone()));
@@ -2483,24 +2468,18 @@ mod test {
         let (tx, rx) = mpsc::channel();
         db.watch_mrib("test".to_string(), tx);
 
-        let timestamp =
-            chrono::DateTime::UNIX_EPOCH + chrono::Duration::seconds(1);
         let replacement = MulticastRoute {
             underlay_group: UnderlayMulticastIpv6::new(Ipv6Addr::new(
                 0xff04, 0, 0, 0, 0, 0, 0, 2,
             ))
             .expect("valid underlay group"),
-            created: timestamp,
-            updated: timestamp,
             ..route.clone()
         };
         db.add_static_mcast_routes(std::slice::from_ref(&replacement))
             .unwrap();
 
         let after = db.get_mcast_route(&key).expect("route in mrib_in");
-        assert_eq!(after.underlay_group, replacement.underlay_group);
-        assert_eq!(after.created, route.created);
-        assert!(after.updated > replacement.updated);
+        assert_eq!(after, replacement);
         assert_eq!(db.get_selected_mcast_route(&key), Some(after.clone()));
         assert_eq!(db.get_static_mcast_routes().unwrap(), vec![after]);
 
@@ -2522,8 +2501,8 @@ mod test {
         let db =
             crate::test::get_test_db("mrib_asm_ssm", log).expect("create db");
 
-        let asm_group =
-            MulticastAddr::new_v4(225, 5, 5, 5).expect("valid mcast");
+        let asm_group = MulticastAddr::new("225.5.5.5".parse().unwrap())
+            .expect("valid mcast");
         let star_g_key =
             MulticastRouteKey::any_source(asm_group, vni()).expect("ASM group");
         let star_g_route = MulticastRoute::new(
@@ -2566,9 +2545,8 @@ mod test {
             "(S,G) should NOT be in mrib_loc without unicast route"
         );
 
-        let v6_group =
-            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 0x5555])
-                .expect("valid mcast");
+        let v6_group = MulticastAddr::new("ff0e::5555".parse().unwrap())
+            .expect("valid mcast");
         let v6_star_g_key =
             MulticastRouteKey::any_source(v6_group, vni()).expect("ASM group");
         let v6_star_g_route = MulticastRoute::new(
@@ -2629,7 +2607,8 @@ mod test {
             format!("/tmp/mrib_persist_test_{}.db", std::process::id());
         let _ = std::fs::remove_dir_all(&db_path);
 
-        let group = MulticastAddr::new_v4(225, 2, 2, 2).expect("valid mcast");
+        let group = MulticastAddr::new("225.2.2.2".parse().unwrap())
+            .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
@@ -2690,7 +2669,8 @@ mod test {
             format!("/tmp/mrib_load_skip_test_{}.db", std::process::id());
         let _ = std::fs::remove_dir_all(&db_path);
 
-        let group = MulticastAddr::new_v4(225, 3, 3, 3).expect("valid mcast");
+        let group = MulticastAddr::new("225.3.3.3".parse().unwrap())
+            .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
@@ -2699,13 +2679,13 @@ mod test {
             MulticastSourceProtocol::Static,
         );
 
-        let other_group =
-            MulticastAddr::new_v4(225, 4, 4, 4).expect("valid mcast");
+        let other_group = MulticastAddr::new("225.4.4.4".parse().unwrap())
+            .expect("valid mcast");
         let other_key = MulticastRouteKey::any_source(other_group, vni())
             .expect("ASM group");
 
-        let bad_json_group =
-            MulticastAddr::new_v4(225, 5, 5, 5).expect("valid mcast");
+        let bad_json_group = MulticastAddr::new("225.5.5.5".parse().unwrap())
+            .expect("valid mcast");
         let bad_json_key = MulticastRouteKey::any_source(bad_json_group, vni())
             .expect("ASM group");
 
@@ -2719,14 +2699,9 @@ mod test {
             let store = lock!(db.static_mcast_store);
             let tree = store.tree();
             tree.insert(b"garbage-key", b"garbage-value").unwrap();
-            let corrupt_route = MulticastRoute {
-                created: chrono::DateTime::UNIX_EPOCH,
-                updated: chrono::DateTime::UNIX_EPOCH,
-                ..route
-            };
             tree.insert(
                 serde_json::to_vec(&other_key).unwrap(),
-                serde_json::to_vec(&corrupt_route).unwrap(),
+                serde_json::to_vec(&route).unwrap(),
             )
             .unwrap();
             tree.insert(serde_json::to_vec(&bad_json_key).unwrap(), b"{")
@@ -2749,15 +2724,11 @@ mod test {
             assert!(db.get_mcast_route(&bad_json_key).is_none());
 
             for replaced in [other_key, bad_json_key] {
-                let mut replacement = MulticastRoute::new(
+                let replacement = MulticastRoute::new(
                     replaced,
                     underlay_group(),
                     MulticastSourceProtocol::Static,
                 );
-                let timestamp =
-                    chrono::DateTime::UNIX_EPOCH + chrono::Duration::seconds(1);
-                replacement.created = timestamp;
-                replacement.updated = timestamp;
                 db.add_static_mcast_routes(std::slice::from_ref(&replacement))
                     .unwrap();
 
@@ -2917,7 +2888,8 @@ mod test {
         db.watch_mrib("test".to_string(), tx);
 
         let any_source = MulticastRouteKey::any_source(
-            MulticastAddr::new_v4(225, 9, 9, 9).expect("valid mcast"),
+            MulticastAddr::new("225.9.9.9".parse().unwrap())
+                .expect("valid mcast"),
             vni(),
         )
         .expect("ASM group");

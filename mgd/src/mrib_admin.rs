@@ -160,9 +160,11 @@ mod tests {
         let (db, _log) = test_db("mrib_admin_miss");
         add_any_source(
             &db,
-            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast"),
+            MulticastAddr::new("239.1.1.1".parse().unwrap())
+                .expect("valid mcast"),
         );
-        let other = MulticastAddr::new_v4(239, 9, 9, 9).expect("valid mcast");
+        let other = MulticastAddr::new("239.9.9.9".parse().unwrap())
+            .expect("valid mcast");
 
         for table in [MribTable::Imported, MribTable::Selected] {
             assert!(
@@ -174,9 +176,10 @@ mod tests {
     #[test]
     fn filters_match_independently() {
         let (db, _log) = test_db("mrib_admin_filters_independent");
-        let group = MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
-        let other_group =
-            MulticastAddr::new_v4(239, 2, 2, 2).expect("valid mcast");
+        let group = MulticastAddr::new("239.1.1.1".parse().unwrap())
+            .expect("valid mcast");
+        let other_group = MulticastAddr::new("239.2.2.2".parse().unwrap())
+            .expect("valid mcast");
         let other_vni = Vni::new(100).expect("valid VNI");
         let source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 
@@ -219,9 +222,9 @@ mod tests {
 
     #[test]
     fn query_rejects_impossible_combinations() {
-        let v4_group =
-            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
-        let v6_group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+        let v4_group = MulticastAddr::new("239.1.1.1".parse().unwrap())
+            .expect("valid mcast");
+        let v6_group = MulticastAddr::new("ff0e::1".parse().unwrap())
             .expect("valid mcast");
         let v4_source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         let v6_source =
@@ -256,12 +259,12 @@ mod tests {
     #[test]
     fn group_filter_reads_requested_table() {
         let (db, _log) = test_db("mrib_admin_tables");
-        let any_group =
-            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
+        let any_group = MulticastAddr::new("239.1.1.1".parse().unwrap())
+            .expect("valid mcast");
         let any_key = add_any_source(&db, any_group);
 
-        let sg_group =
-            MulticastAddr::new_v4(239, 2, 2, 2).expect("valid mcast");
+        let sg_group = MulticastAddr::new("239.2.2.2".parse().unwrap())
+            .expect("valid mcast");
         let source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         let sg_key = MulticastRouteKey::new(Some(source), sg_group, vni())
             .expect("valid key");
@@ -301,7 +304,8 @@ mod tests {
         let (db, _log) = test_db("mrib_admin_filters");
         add_any_source(
             &db,
-            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast"),
+            MulticastAddr::new("239.1.1.1".parse().unwrap())
+                .expect("valid mcast"),
         );
 
         for table in [MribTable::Imported, MribTable::Selected] {
@@ -328,12 +332,12 @@ mod tests {
     async fn http_static_route_lifecycle() {
         let server = TestServer::start("mrib_admin_http_lifecycle");
         let client = &server.client;
-        let any_group =
-            MulticastAddr::new_v4(239, 1, 1, 1).expect("valid mcast");
+        let any_group = MulticastAddr::new("239.1.1.1".parse().unwrap())
+            .expect("valid mcast");
         let any_key =
             MulticastRouteKey::any_source(any_group, vni()).expect("key");
-        let sg_group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
-            .expect("mcast");
+        let sg_group =
+            MulticastAddr::new("ff0e::1".parse().unwrap()).expect("mcast");
         let source = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
         let sg_key =
             MulticastRouteKey::new(Some(source), sg_group, vni()).expect("key");
