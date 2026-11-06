@@ -4,6 +4,7 @@
 
 use ddm_api_types_versions::latest;
 use ddm_api_types_versions::v1;
+use ddm_api_types_versions::v2;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -26,6 +27,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (4, PEER_STATS),
     (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
     (1, INITIAL),
@@ -47,14 +49,26 @@ api_versions!([
 pub trait DdmAdminApi {
     type Context;
 
+    /// Get the routing session on each address object, keyed by address
+    /// object name, including sessions that have not discovered a peer.
     #[endpoint {
         method = GET,
         path = "/peers",
-        versions = VERSION_PEER_DURATIONS..,
+        versions = VERSION_PEER_STATS..,
     }]
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<u32, latest::db::PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<String, latest::db::PeerInfo>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/peers",
+        operation_id = "get_peers",
+        versions = VERSION_PEER_DURATIONS..VERSION_PEER_STATS,
+    }]
+    async fn get_peers_v2(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v2::db::PeerInfo>>, HttpError>;
 
     #[endpoint {
         method = GET,
@@ -64,7 +78,7 @@ pub trait DdmAdminApi {
     async fn get_peers_v1(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, v1::db::PeerInfo>>, HttpError> {
-        let resp = Self::get_peers(ctx).await?;
+        let resp = Self::get_peers_v2(ctx).await?;
         let converted: HashMap<u32, v1::db::PeerInfo> =
             resp.0.into_iter().map(|(k, v)| (k, v.into())).collect();
         Ok(HttpResponseOk(converted))
@@ -190,4 +204,30 @@ pub trait DdmAdminApi {
     async fn get_external_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
+
+    /// Get the counters of the routing session on each address object, keyed
+    /// by address object name.
+    #[endpoint {
+        method = GET,
+        path = "/stats/peers",
+        versions = VERSION_PEER_STATS..,
+    }]
+    async fn get_peers_stats(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<String, latest::db::PeerStats>>, HttpError>;
+
+    /// Get the counters of the routing session on one address object.
+    ///
+    /// Address object names contain a `/` (e.g. `tfportqsfp0_0/v6`), which
+    /// must be percent-encoded as `%2F` in the path. Returns 404 if no
+    /// session uses the address object.
+    #[endpoint {
+        method = GET,
+        path = "/stats/peer/{aobj_name}",
+        versions = VERSION_PEER_STATS..,
+    }]
+    async fn get_peer_stats(
+        ctx: RequestContext<Self::Context>,
+        params: Path<latest::admin::PeerStatsPathParams>,
+    ) -> Result<HttpResponseOk<latest::db::PeerStats>, HttpError>;
 }

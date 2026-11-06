@@ -343,6 +343,7 @@ impl Exchange {
         self.ctx.iface.clear_peer();
         let (mut to_remove, to_remove_tnl) =
             self.ctx.db.remove_nexthop_routes(self.peer.addr);
+        self.ctx.stats.update_imported(&self.ctx.db, self.peer.addr);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
