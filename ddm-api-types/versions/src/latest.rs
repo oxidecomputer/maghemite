@@ -8,14 +8,19 @@ pub mod admin {
     pub use crate::v1::admin::EnableStatsRequest;
     pub use crate::v1::admin::ExpirePathParams;
     pub use crate::v1::admin::PrefixMap;
+
+    pub use crate::v5::admin::PeerStatsPathParams;
 }
 
 pub mod db {
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
 
-    pub use crate::v4::db::PeerInfo;
     pub use crate::v4::db::PeerStatus;
+
+    pub use crate::v5::db::Peer;
+    pub use crate::v5::db::PeerInfo;
+    pub use crate::v5::db::PeerStats;
 }
 
 pub mod exchange {
