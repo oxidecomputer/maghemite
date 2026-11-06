@@ -168,7 +168,7 @@ fn unindex(
 fn install(mrib_loc: &mut MribTable, route: &MulticastRoute) -> bool {
     match mrib_loc.entry(route.key) {
         Entry::Occupied(mut e) => {
-            let changed = !e.get().eq_ignore_timestamps(route);
+            let changed = e.get() != route;
             if changed {
                 e.insert(route.clone());
             }
@@ -355,17 +355,15 @@ impl Mrib {
     /// for selecting the route into `mrib_loc`.
     ///
     /// Returns `true` if `mrib_in` was modified.
-    pub(crate) fn add_route(&self, mut route: MulticastRoute) -> bool {
+    pub(crate) fn add_route(&self, route: MulticastRoute) -> bool {
         let mut state = lock!(self.state);
         let MribState {
             mrib_in, sources, ..
         } = &mut *state;
         match mrib_in.entry(route.key) {
             Entry::Occupied(mut e) => {
-                let existing = e.get();
-                let changed = !existing.eq_ignore_timestamps(&route);
+                let changed = *e.get() != route;
                 if changed {
-                    route.created = existing.created;
                     e.insert(route);
                 }
                 changed
@@ -475,7 +473,8 @@ mod tests {
         let (tx, rx) = channel();
         mrib.watch("test-watcher".to_string(), tx);
 
-        let group = MulticastAddr::new_v4(225, 3, 3, 3).expect("valid mcast");
+        let group = MulticastAddr::new("225.3.3.3".parse().unwrap())
+            .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
@@ -508,7 +507,8 @@ mod tests {
         mrib.watch("same-tag".to_string(), live_tx);
         assert_eq!(read_lock!(mrib.watchers).len(), 1);
 
-        let group = MulticastAddr::new_v4(225, 6, 6, 6).expect("valid mcast");
+        let group = MulticastAddr::new("225.6.6.6".parse().unwrap())
+            .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
 
@@ -533,7 +533,8 @@ mod tests {
         mrib.watch("live".to_string(), live_tx);
         assert_eq!(read_lock!(mrib.watchers).len(), 2);
 
-        let group = MulticastAddr::new_v4(225, 7, 7, 7).expect("valid mcast");
+        let group = MulticastAddr::new("225.7.7.7".parse().unwrap())
+            .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
 
@@ -550,7 +551,8 @@ mod tests {
         let log = init_file_logger("mrib_in_loc_test.log");
         let mrib = Mrib::new(log);
 
-        let group = MulticastAddr::new_v4(225, 4, 4, 4).expect("valid mcast");
+        let group = MulticastAddr::new("225.4.4.4".parse().unwrap())
+            .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
         let route = MulticastRoute::new(
@@ -620,7 +622,8 @@ mod tests {
             ));
         }
         let any_source = MulticastRouteKey::any_source(
-            MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
+            MulticastAddr::new("225.1.1.1".parse().unwrap())
+                .expect("valid mcast"),
             vni(),
         )
         .expect("ASM group");
@@ -730,7 +733,7 @@ mod tests {
         let mrib = Mrib::new(log);
 
         // IPv6 any-source multicast route (*,G)
-        let group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+        let group = MulticastAddr::new("ff0e::1".parse().unwrap())
             .expect("valid mcast");
         let key =
             MulticastRouteKey::any_source(group, vni()).expect("ASM group");
@@ -768,7 +771,8 @@ mod tests {
         assert!(mrib.loc_mrib(None).is_empty());
 
         let v4_key = MulticastRouteKey::any_source(
-            MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
+            MulticastAddr::new("225.1.1.1".parse().unwrap())
+                .expect("valid mcast"),
             vni(),
         )
         .expect("ASM group");
