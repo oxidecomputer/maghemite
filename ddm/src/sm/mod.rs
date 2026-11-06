@@ -9,7 +9,7 @@
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
-use ddm_api_types::db::{PeerStatus, RouterKind};
+use ddm_api_types::db::{PeerStats, PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
 use iddqd::{IdOrdItem, id_upcast};
 use oxnet::Ipv6Net;
@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -320,8 +320,6 @@ pub struct SessionStats {
     // Exchange
     pub updates_sent: AtomicU64,
     pub updates_received: AtomicU64,
-    pub imported_underlay_prefixes: AtomicU64,
-    pub imported_tunnel_endpoints: AtomicU64,
     pub update_send_fail: AtomicU64,
 }
 
@@ -338,6 +336,43 @@ pub struct SmContext {
     pub log: Logger,
     pub discovery_stop: Option<Arc<AtomicBool>>,
     pub first_run: bool,
+}
+
+impl SmContext {
+    /// This session's statistics.
+    pub fn peer_stats(&self) -> PeerStats {
+        let SessionStats {
+            solicitations_sent,
+            solicitations_received,
+            advertisements_sent,
+            advertisements_received,
+            peer_expirations,
+            peer_address_changes,
+            peer_established,
+            updates_sent,
+            updates_received,
+            update_send_fail,
+        } = self.stats.as_ref();
+        let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let peer = self.iface.snapshot().peer().map(|(_, p)| p.addr);
+        let imported = |count: fn(&Db, Ipv6Addr) -> usize| {
+            peer.map_or(0, |addr| count(&self.db, addr) as u64)
+        };
+        PeerStats {
+            solicitations_sent: get(solicitations_sent),
+            solicitations_received: get(solicitations_received),
+            advertisements_sent: get(advertisements_sent),
+            advertisements_received: get(advertisements_received),
+            peer_expirations: get(peer_expirations),
+            peer_address_changes: get(peer_address_changes),
+            peer_established: get(peer_established),
+            updates_sent: get(updates_sent),
+            updates_received: get(updates_received),
+            update_send_fail: get(update_send_fail),
+            imported_underlay_prefixes: imported(Db::imported_count_from),
+            imported_tunnel_endpoints: imported(Db::imported_tunnel_count_from),
+        }
+    }
 }
 
 impl IdOrdItem for SmContext {

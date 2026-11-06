@@ -92,9 +92,7 @@ macro_rules! ddm_session_quantity {
                 sled_id: $sled_id,
                 interface: $interface,
             },
-            &$kind {
-                datum: $value.load(Ordering::Relaxed),
-            },
+            &$kind { datum: $value },
         )?
     };
 }
@@ -154,6 +152,7 @@ impl Producer for Stats {
 
         for peer in ctx.peers.iter() {
             let if_name = peer.iface.snapshot().if_name;
+            let stats = peer.peer_stats();
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
@@ -250,7 +249,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 ImportedUnderlayPrefixes,
-                peer.stats.imported_underlay_prefixes
+                stats.imported_underlay_prefixes
             ));
             samples.push(ddm_session_quantity!(
                 self.hostname.clone().into(),
@@ -258,7 +257,7 @@ impl Producer for Stats {
                 self.sled_id,
                 if_name.clone().into(),
                 ImportedTunnelEndpoints,
-                peer.stats.imported_tunnel_endpoints
+                stats.imported_tunnel_endpoints
             ));
         }
 
