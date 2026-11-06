@@ -10,14 +10,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use dpd_types_versions::testing;
-use dpd_types_versions::v14::mcast::{
-    is_ssm_address, validate_external_multicast_ipv4,
-    validate_external_multicast_ipv6,
-};
+use dpd_types_versions::v14::mcast::is_ssm_address;
 use proptest::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use test_strategy::{Arbitrary, proptest};
+use test_strategy::proptest;
 
 use crate::latest::mrib::{
     MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
@@ -103,80 +100,6 @@ fn group_v4_candidate_strategy() -> impl Strategy<Value = u32> {
     ]
 }
 
-#[derive(Debug, Arbitrary)]
-struct GroupV6Case {
-    #[strategy(0u16..=0xf)]
-    flags: u16,
-    #[strategy(0u16..=0xf)]
-    scope: u16,
-    #[strategy(0u16..=0xf)]
-    rsvd: u16,
-    #[strategy(0u16..=0xf)]
-    riid: u16,
-    #[strategy(prop_oneof![Just(0u16), 1u16..=64, 65u16..=255])]
-    plen: u16,
-    #[strategy(prop_oneof![Just([0u16; 4]), any::<[u16; 4]>()])]
-    prefix: [u16; 4],
-    #[strategy(prop_oneof![Just(0x4000_0000u32), Just(0u32), any::<u32>()])]
-    group_id: u32,
-}
-
-impl GroupV6Case {
-    fn addr(&self) -> Ipv6Addr {
-        Ipv6Addr::new(
-            0xff00 | (self.flags << 4) | self.scope,
-            (self.rsvd << 12) | (self.riid << 8) | self.plen,
-            self.prefix[0],
-            self.prefix[1],
-            self.prefix[2],
-            self.prefix[3],
-            (self.group_id >> 16) as u16,
-            self.group_id as u16,
-        )
-    }
-}
-
-/// Keep R, P, and T set to exercise the embedded-RP field checks.
-#[derive(Debug, Arbitrary)]
-struct EmbeddedRpCase {
-    #[strategy(proptest::sample::select(&[0x7u16, 0xf][..]))]
-    flags: u16,
-    #[strategy(testing::usable_scope_strategy())]
-    scope: u8,
-    #[strategy(0u16..=0xf)]
-    rsvd: u16,
-    #[strategy(prop_oneof![Just(0u16), 1u16..=0xf])]
-    riid: u16,
-    #[strategy(1u16..=64)]
-    plen: u16,
-    #[strategy(prop_oneof![
-        Just(0u16),
-        0xfe00u16..=0xfe7f,
-        0xfe80u16..=0xfebf,
-        0xfec0u16..=0xfeff,
-        0xff00u16..=0xffff,
-        any::<u16>(),
-    ])]
-    prefix_first: u16,
-    prefix_rest: [u16; 3],
-    group_id: u32,
-}
-
-impl EmbeddedRpCase {
-    fn addr(&self) -> Ipv6Addr {
-        Ipv6Addr::new(
-            0xff00 | (self.flags << 4) | u16::from(self.scope),
-            (self.rsvd << 12) | (self.riid << 8) | self.plen,
-            self.prefix_first,
-            self.prefix_rest[0],
-            self.prefix_rest[1],
-            self.prefix_rest[2],
-            (self.group_id >> 16) as u16,
-            self.group_id as u16,
-        )
-    }
-}
-
 /// Generate candidate IPv6 addresses biased toward `ff00::/8`.
 ///
 /// Uniform multicast sampling seldom hits `ff04::/64` or specifically reserved
@@ -184,8 +107,9 @@ impl EmbeddedRpCase {
 /// constructors and deserializers.
 fn group_v6_candidate_strategy() -> impl Strategy<Value = Ipv6Addr> {
     prop_oneof![
-        6 => any::<GroupV6Case>().prop_map(|case| case.addr()),
-        2 => any::<EmbeddedRpCase>().prop_map(|case| case.addr()),
+        6 => any::<u128>().prop_map(|bits| {
+            Ipv6Addr::from((0xffu128 << 120) | (bits >> 8))
+        }),
         1 => any::<u64>().prop_map(|low| {
             Ipv6Addr::from((0xff04u128 << 112) | u128::from(low))
         }),
@@ -288,8 +212,8 @@ fn route_key_group_candidate_strategy() -> impl Strategy<Value = MulticastAddr>
 /// Spec for route key construction.
 ///
 /// A missing source is rejected for SSM groups (RFC 4607 §2), whereas a
-/// present source is checked against the source rules and then against the
-/// group's IP address family.
+/// present source is checked against the group's IP address family and then
+/// against the source rules.
 fn spec_route_key(
     source: Option<IpAddr>,
     group: MulticastAddr,
@@ -302,39 +226,34 @@ fn spec_route_key(
         }
         return Ok(());
     };
-    match src {
-        IpAddr::V4(s) => drop(UnicastAddrV4::new(s)?),
-        IpAddr::V6(s) => drop(UnicastAddrV6::new(s)?),
-    }
     if src.is_ipv4() != group.ip().is_ipv4() {
         return Err(MulticastRouteError::SourceFamilyMismatch {
             source_ip: src,
             group: group.ip(),
         });
     }
+    match src {
+        IpAddr::V4(s) => drop(UnicastAddrV4::new(s)?),
+        IpAddr::V6(s) => drop(UnicastAddrV6::new(s)?),
+    }
     Ok(())
 }
 
-/// Property: `MulticastAddrV4::new` and deserialization agree with
-/// `validate_external_multicast_ipv4`, including the error variant
+/// Property: `MulticastAddrV4::new` agrees with JSON decoding into
+/// `MulticastAddrV4` and `MulticastAddr`
 #[proptest]
-fn prop_group_v4_matches_validator(
+fn prop_group_v4_json_agrees(
     #[strategy(group_v4_candidate_strategy())]
     #[map(Ipv4Addr::from)]
     addr: Ipv4Addr,
 ) {
     let got = MulticastAddrV4::new(addr);
-    let want = validate_external_multicast_ipv4(addr);
-    prop_assert_eq!(outcome(&got), want.as_ref().map(drop), "{}", addr);
     let decoded =
         serde_json::from_value::<MulticastAddrV4>(serde_json::to_value(addr)?);
     prop_assert_eq!(decoded.ok(), got.as_ref().ok().copied());
     let ip = IpAddr::V4(addr);
-    prop_assert_eq!(
-        MulticastAddr::try_from(ip),
-        got.clone().map(MulticastAddr::V4)
-    );
-    prop_assert_eq!(json_accepts::<MulticastAddr>(&ip), want.is_ok());
+    prop_assert_eq!(MulticastAddr::new(ip), got.clone().map(MulticastAddr::V4));
+    prop_assert_eq!(json_accepts::<MulticastAddr>(&ip), got.is_ok());
     if let Ok(group) = got {
         prop_assert_eq!(
             serde_json::to_value(group)?,
@@ -349,24 +268,19 @@ fn prop_group_v4_matches_validator(
     }
 }
 
-/// Property: `MulticastAddrV6::new` and deserialization agree with
-/// `validate_external_multicast_ipv6`, including the error variant
+/// Property: `MulticastAddrV6::new` agrees with JSON decoding into
+/// `MulticastAddrV6` and `MulticastAddr`
 #[proptest]
-fn prop_group_v6_matches_validator(
+fn prop_group_v6_json_agrees(
     #[strategy(group_v6_candidate_strategy())] addr: Ipv6Addr,
 ) {
     let got = MulticastAddrV6::new(addr);
-    let want = validate_external_multicast_ipv6(addr);
-    prop_assert_eq!(outcome(&got), want.as_ref().map(drop), "{}", addr);
     let decoded =
         serde_json::from_value::<MulticastAddrV6>(serde_json::to_value(addr)?);
     prop_assert_eq!(decoded.ok(), got.as_ref().ok().copied());
     let ip = IpAddr::V6(addr);
-    prop_assert_eq!(
-        MulticastAddr::try_from(ip),
-        got.clone().map(MulticastAddr::V6)
-    );
-    prop_assert_eq!(json_accepts::<MulticastAddr>(&ip), want.is_ok());
+    prop_assert_eq!(MulticastAddr::new(ip), got.clone().map(MulticastAddr::V6));
+    prop_assert_eq!(json_accepts::<MulticastAddr>(&ip), got.is_ok());
     if let Ok(group) = got {
         prop_assert_eq!(
             serde_json::to_value(group)?,

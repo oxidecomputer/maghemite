@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 
-use chrono::Utc;
 use sled::Tree;
 use slog::Logger;
 
@@ -84,34 +83,9 @@ impl StaticMcastStore {
         &self.tree
     }
 
-    fn get(
-        &self,
-        key: &MulticastRouteKey,
-    ) -> Result<Option<MulticastRoute>, Error> {
-        Ok(self.tree.get(encode_key(key)?)?.and_then(|v| {
-            decode_route(key, &v)
-                .inspect_err(|e| {
-                    rdb_log!(
-                        self,
-                        error,
-                        "undecodable persisted static multicast route {}, \
-                         resetting timestamps: {e}",
-                        key;
-                        "unit" => UNIT_PERSISTENT
-                    );
-                })
-                .ok()
-        }))
-    }
-
     /// Persist `routes`.
     ///
     /// If a key appears more than once, the last route wins.
-    ///
-    /// A route already on disk keeps its `created` time. Its `updated` time
-    /// moves to now only if something other than the timestamps changed. If
-    /// the stored entry cannot be decoded, the new route's timestamps are
-    /// used.
     ///
     /// The write consists of a sled transaction followed by a flush.
     ///
@@ -125,22 +99,8 @@ impl StaticMcastStore {
             .map(|route| (route.key, route))
             .collect::<BTreeMap<_, _>>()
             .into_values()
-            .map(|route| {
-                let Some(prev) = self.get(&route.key)? else {
-                    return Ok(route.clone());
-                };
-                let updated = if prev.eq_ignore_timestamps(route) {
-                    prev.updated
-                } else {
-                    Utc::now()
-                };
-                Ok(MulticastRoute {
-                    created: prev.created,
-                    updated,
-                    ..*route
-                })
-            })
-            .collect::<Result<_, Error>>()?;
+            .cloned()
+            .collect();
 
         let entries: Vec<(Vec<u8>, String)> = normalized
             .iter()

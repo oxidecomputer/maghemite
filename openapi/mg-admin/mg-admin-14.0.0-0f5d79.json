@@ -4057,24 +4057,19 @@
         ]
       },
       "MulticastAddrV4": {
-        "description": "A validated IPv4 multicast address.\n\nIPv4 admits the whole multicast range apart from the base address of `224.0.0.0`, which [RFC 1112] §4 guarantees is never assigned to a group, and the SSM null address of `232.0.0.0` ([RFC 4607] §4.3).\n\n[RFC 1112]: https://www.rfc-editor.org/rfc/rfc1112.html [RFC 4607]: https://www.rfc-editor.org/rfc/rfc4607.html",
+        "description": "A validated IPv4 multicast address.\n\nIPv4 admits the multicast range apart from the local network control block of `224.0.0.0/24` and the SSM null address of `232.0.0.0` (RFC 4607 §4.3). Routers do not forward the control block off link (RFC 5771 §4), and its base address of `224.0.0.0` is never assigned to a group (RFC 1112 §4).",
         "type": "string",
         "format": "ipv4"
       },
       "MulticastAddrV6": {
-        "description": "A validated IPv6 multicast address.\n\nAll IPv6 scopes are admitted except for the reserved scope of `0x0` and the interface-local `0x1` and link-local `0x2` ones, which a router must not forward past ([RFC 4291] §2.7). Scope `0xf` is retained because [RFC 4291] §2.7 treats it as global when it is sent or received. Addresses on the `ff04::/64` underlay subnet are rejected.\n\nThe four flag bits above the scope nibble are `|X|R|P|T|` ([RFC 7371] §4.2.1): T marks a transient address, P a prefix-based one, R an embedded rendezvous point, and X may be either zero or one. [RFC 7371] §4.1.1 names the same field `|X|Y|P|T|`, where Y is the bit that [RFC 3956] defines as the R flag.\n\nPrefix-based addresses require only that the P flag implies the T flag ([RFC 7371] §4.1.1, which replaces that passage of [RFC 3306] §4). The replacement drops the \"reserved field MUST be zero\" rule. The `ff2` and `rsvd` nibbles are sent as zero and ignored on receipt instead, per [RFC 7371] §4.1.1 and [RFC 3956] §3. Neither is validated here. The prefix length is otherwise unbounded. The `plen` ceiling of 64 comes from [RFC 3956] §4 and applies to embedded rendezvous point (RP) addresses only. [RFC 3306] §4 notes the same 64-bit ceiling on the network prefix without requiring it.\n\nEmbedded RP addresses require the R, P, and T flags ([RFC 7371] §4.2.2 and §4.2.3), a prefix length from 1 through 64, a nonzero RP interface ID ([RFC 3956] §6.3), and a derived RP address outside `::/16`, link-local space, and the multicast range. [RFC 3956] §4 states those exclusions as requirements, and §10 repeats them as a security consideration.\n\nSSM classification is described on [`is_ssm_address`]. The only SSM address rejected is the reserved null address of `ff3x::4000:0` from [RFC 4607] §4.3. The network prefix is unchecked otherwise: [RFC 3306] §6 applies to the node that's forming the address, and [RFC 4607] §1 has a system treat all of the `ff3x::/32` block as SSM.\n\nGroup IDs below `4000:0` are assigned with flags P=T=0 ([RFC 3307] §4.1), making them invalid SSM addresses that routers may drop ([RFC 4607] §1). The band just above it, `4000:0001` through `7fff:ffff`, is reserved for IANA allocation ([RFC 4607] §4.3, [RFC 3307] §4.2) rather than forbidden as a destination. From `8000:0` up is the dynamic range of [RFC 3307] §4.3, which [RFC 10028] §3 partitions. Host SSM allocation sits at `f000:0` through `fcff:ffff`. None of these ranges is rejected.\n\nPermanently assigned addresses (T=0) with the P and R flags cleared are permitted. They face the same `ff04::/64` underlay reservation as any other address, and the all-zero group ID `ff0x::` is refused outright. [RFC 4291] §2.7.1 reserves it and never assigns it. A registered meaning is independent of scope ([RFC 4291] §2.7). `ff0e::101` and `ff05::fb` keep their registered meanings in the overlay.\n\n[RFC 3306]: https://www.rfc-editor.org/rfc/rfc3306.html [RFC 3307]: https://www.rfc-editor.org/rfc/rfc3307.html [RFC 3956]: https://www.rfc-editor.org/rfc/rfc3956.html [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291.html [RFC 4607]: https://www.rfc-editor.org/rfc/rfc4607.html [RFC 7371]: https://www.rfc-editor.org/rfc/rfc7371.html [RFC 10028]: https://www.rfc-editor.org/rfc/rfc10028.html",
+        "description": "A validated IPv6 multicast address.\n\nScopes `0x0`, `0x1`, and `0x2` are rejected (RFC 4291 §2.7), as are the `ff04::/64` underlay subnet and the reserved `ff0x::` group ID (RFC 4291 §2.7.1). For SSM, only the null address `ff3x::4000:0` is rejected (RFC 4607 §4.3). Prefix-based and embedded-RP addresses must carry valid flags and fields (RFC 7371, RFC 3956).",
         "type": "string",
         "format": "ipv6"
       },
       "MulticastRoute": {
-        "description": "Multicast route entry -> key, underlay group, and metadata.",
+        "description": "Multicast route entry, consisting of a key, underlay group, and metadata.",
         "type": "object",
         "properties": {
-          "created": {
-            "description": "Creation timestamp.",
-            "type": "string",
-            "format": "date-time"
-          },
           "key": {
             "description": "The multicast route key `(S,G)` or `(*,G)`.",
             "allOf": [
@@ -4092,29 +4087,22 @@
             ]
           },
           "underlay_group": {
-            "description": "Underlay multicast group address within the `ff04::/64` subnet allocated by Omicron for rack-internal multicast traffic.\n\nOverlay multicast addresses are mapped 1:1 to these admin-local scope underlay addresses. OPTE's M2P (multicast-to-underlay) mapping translates an overlay group to this address for guest-originated traffic and uses it as the packet's outer IPv6 destination. The switch performs the same mapping for external ingress and replicates via its PRE (Packet Replication Engine) or similar.\n\nOmicron owns group creation, deletion, and NAT configuration, while ddmd programs underlay members on the switch from imported DDM subscriptions.",
+            "description": "Underlay multicast group address within the `ff04::/64` subnet allocated by Omicron for rack-internal multicast traffic.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/UnderlayMulticastIpv6"
               }
             ]
-          },
-          "updated": {
-            "description": "Last updated timestamp.",
-            "type": "string",
-            "format": "date-time"
           }
         },
         "required": [
-          "created",
           "key",
           "source",
-          "underlay_group",
-          "updated"
+          "underlay_group"
         ]
       },
       "MulticastRouteKey": {
-        "description": "Multicast route key: (Source, Group) when a source is set, or (*, Group) without one (i.e., any-source multicast).\n\nUses type-enforced IP address family matching: IPv4 sources can only be paired with IPv4 groups, and IPv6 sources with IPv6 groups.",
+        "description": "Multicast route key: (Source, Group) when a source is set, or (*, Group) without one (i.e., any-source multicast).\n\nThe source and group must share an IP address family.",
         "oneOf": [
           {
             "description": "An IPv4 route key.",
@@ -4145,7 +4133,7 @@
         ]
       },
       "MulticastRouteKeyV4": {
-        "description": "IPv4 multicast route key with type-enforced IP address family matching.",
+        "description": "IPv4 multicast route key.\n\nSSM groups require a source.",
         "type": "object",
         "properties": {
           "group": {
@@ -4158,7 +4146,7 @@
           },
           "source": {
             "nullable": true,
-            "description": "Source address (`None` for `(*,G)` routes).",
+            "description": "Source address (null or omitted for `(*,G)` routes).",
             "allOf": [
               {
                 "$ref": "#/components/schemas/UnicastAddrV4"
@@ -4180,7 +4168,7 @@
         ]
       },
       "MulticastRouteKeyV6": {
-        "description": "IPv6 multicast route key with type-enforced IP address family matching.",
+        "description": "IPv6 multicast route key.\n\nSSM groups require a source.",
         "type": "object",
         "properties": {
           "group": {
@@ -4193,7 +4181,7 @@
           },
           "source": {
             "nullable": true,
-            "description": "Source address (`None` for `(*,G)` routes).",
+            "description": "Source address (null or omitted for `(*,G)` routes).",
             "allOf": [
               {
                 "$ref": "#/components/schemas/UnicastAddrV6"
@@ -6282,7 +6270,7 @@
         ]
       },
       "MulticastAddr": {
-        "description": "A validated multicast group address (IPv4 or IPv6), one of [`MulticastAddrV4`] or [`MulticastAddrV6`].",
+        "description": "A validated IPv4 or IPv6 multicast group address.",
         "type": "string",
         "format": "ip"
       },
