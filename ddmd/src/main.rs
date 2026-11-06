@@ -378,7 +378,8 @@ fn termination_handler(
 
             // Tunnel routes are programmed into OPTE only on servers.
             if kind == RouterKind::Server {
-                let imported_tnl = db.imported_tunnel();
+                let imported_tnl =
+                    db.imported_tunnel().iter().map(|r| r.origin).collect();
                 if let Err(e) = ddm::sys::remove_tunnel_routes(
                     &log,
                     "shutdown-all",

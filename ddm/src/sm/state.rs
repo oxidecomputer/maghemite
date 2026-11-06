@@ -11,6 +11,7 @@ use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
     SmContext, SmError, StateMachine,
 };
+use crate::db::{TunnelForwardingChanges, tunnel_forwarding_changes};
 use crate::sm::PeerIdentity;
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
@@ -341,9 +342,13 @@ impl Exchange {
 
         exchange_thread.abort();
         self.ctx.iface.clear_peer();
+
+        let tunnel_before = self.ctx.db.imported_tunnel();
         let (mut to_remove, to_remove_tnl) =
             self.ctx.db.remove_nexthop_routes(self.peer.addr);
+
         self.ctx.stats.update_imported(&self.ctx.db, self.peer.addr);
+
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
@@ -357,21 +362,47 @@ impl Exchange {
             routes,
             &self.ctx.rt,
         );
+
         // Tunnel routes are programmed into OPTE, which only servers have.
-        if self.ctx.config.kind == RouterKind::Server
-            && let Err(e) = crate::sys::remove_tunnel_routes(
-                &self.log,
-                &self.ctx.config.if_name,
-                &to_remove_tnl,
-            )
-        {
-            err!(
-                self.log,
-                self.ctx.config.if_name,
-                "failed to remove tunnel routes: {:#?} {e}",
-                to_remove_tnl
-            );
+        if self.ctx.config.kind == RouterKind::Server {
+            // Tunnel forwarding entries carry no nexthop, so other peers may
+            // still provide what this peer did. Change only what the
+            // effective set of origins lost or gained. Add before removing,
+            // so a prefix whose backup becomes effective is never left
+            // without a TEP.
+            let TunnelForwardingChanges { add, remove } =
+                tunnel_forwarding_changes(
+                    &tunnel_before,
+                    &self.ctx.db.imported_tunnel(),
+                );
+            if !add.is_empty()
+                && let Err(e) = crate::sys::add_tunnel_routes(
+                    &self.log,
+                    &self.ctx.config.if_name,
+                    &add,
+                )
+            {
+                err!(
+                    self.log,
+                    self.ctx.config.if_name,
+                    "failed to add tunnel routes: {add:#?} {e}",
+                );
+            }
+            if !remove.is_empty()
+                && let Err(e) = crate::sys::remove_tunnel_routes(
+                    &self.log,
+                    &self.ctx.config.if_name,
+                    &remove,
+                )
+            {
+                err!(
+                    self.log,
+                    self.ctx.config.if_name,
+                    "failed to remove tunnel routes: {remove:#?} {e}",
+                );
+            }
         }
+
         if self.ctx.config.kind != RouterKind::Transit {
             return;
         }
