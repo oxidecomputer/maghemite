@@ -57,6 +57,14 @@ impl Update {
             tunnel: tunnel.into_option(),
         }
     }
+
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        // compilation barrier. a new route class must be checked here.
+        let Self { underlay, tunnel } = self;
+        underlay.as_ref().is_none_or(UnderlayUpdate::is_empty)
+            && tunnel.as_ref().is_none_or(TunnelUpdate::is_empty)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
