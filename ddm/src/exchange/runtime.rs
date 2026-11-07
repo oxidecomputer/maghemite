@@ -502,9 +502,10 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
 
     ctx.stats.update_imported(&ctx.db, peer.addr);
 
-    // distribute updates
+    // distribute updates, unless there is nothing to distribute
 
     if ctx.config.kind == RouterKind::Transit
+        && (update.underlay.is_some() || update.tunnel.is_some())
         && let Err(e) = ctx
             .tx
             .send(Event::Peer(PeerEvent::Redistribute(update.clone())))
