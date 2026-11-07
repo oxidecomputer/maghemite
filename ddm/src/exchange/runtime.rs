@@ -526,6 +526,12 @@ fn handle_tunnel_update(
     }
     db.delete_import_tunnel(&remove);
 
+    // Tunnel routes are programmed into OPTE, which only servers have.
+    // Transits keep them in the RIB for redistribution.
+    if ctx.config.kind != RouterKind::Server {
+        return;
+    }
+
     let after = effective_route_set(&db.imported_tunnel());
 
     let to_add = after.difference(&before).copied().collect();
