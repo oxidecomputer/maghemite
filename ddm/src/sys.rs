@@ -4,7 +4,7 @@
 
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use ddm_api_types::db::TunnelRoute;
+use ddm_api_types::net::TunnelOrigin;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use dpd_client::types;
@@ -252,14 +252,14 @@ pub fn add_routes_dendrite(
 
 #[cfg(target_os = "illumos")]
 fn tunnel_route_update_map(
-    routes: &HashSet<TunnelRoute>,
+    origins: &HashSet<TunnelOrigin>,
 ) -> HashMap<IpNet, Vec<TunnelEndpoint>> {
     let mut m: HashMap<IpNet, Vec<TunnelEndpoint>> = HashMap::new();
-    for r in routes {
-        let pfx = r.origin.overlay_prefix;
+    for o in origins {
+        let pfx = o.overlay_prefix;
         let tep = TunnelEndpoint {
-            ip: r.origin.boundary_addr.into(),
-            vni: oxide_vpc::api::Vni::new(r.origin.vni).unwrap(),
+            ip: o.boundary_addr.into(),
+            vni: oxide_vpc::api::Vni::new(o.vni).unwrap(),
         };
         match m.get_mut(&pfx) {
             Some(entry) => {
@@ -277,7 +277,7 @@ fn tunnel_route_update_map(
 pub fn add_tunnel_routes(
     _log: &Logger,
     _ifname: &str,
-    _routes: &HashSet<TunnelRoute>,
+    _origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     todo!();
 }
@@ -286,7 +286,7 @@ pub fn add_tunnel_routes(
 pub fn add_tunnel_routes(
     log: &Logger,
     ifname: &str,
-    routes: &HashSet<TunnelRoute>,
+    origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
         IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
@@ -294,7 +294,7 @@ pub fn add_tunnel_routes(
     };
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
 
-    for (pfx, tep) in tunnel_route_update_map(routes) {
+    for (pfx, tep) in tunnel_route_update_map(origins) {
         for t in &tep {
             inf!(
                 log,
@@ -328,7 +328,7 @@ pub fn add_tunnel_routes(
 pub fn remove_tunnel_routes(
     _log: &Logger,
     _ifname: &str,
-    _routes: &HashSet<TunnelRoute>,
+    _origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     todo!()
 }
@@ -337,14 +337,14 @@ pub fn remove_tunnel_routes(
 pub fn remove_tunnel_routes(
     log: &Logger,
     ifname: &str,
-    routes: &HashSet<TunnelRoute>,
+    origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
         ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
         Ipv6PrefixLen,
     };
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
-    for (pfx, tep) in tunnel_route_update_map(routes) {
+    for (pfx, tep) in tunnel_route_update_map(origins) {
         for t in &tep {
             inf!(
                 log,
