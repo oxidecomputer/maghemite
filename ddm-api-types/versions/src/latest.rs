@@ -18,6 +18,8 @@ pub mod db {
 
     pub use crate::v4::db::MulticastRoute;
     pub use crate::v4::db::PeerInfo;
+
+    pub use crate::v5::db::ImportedMulticastRoute;
 }
 
 pub mod exchange {

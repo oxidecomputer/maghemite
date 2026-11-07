@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::sm::{Config, DpdConfig};
-use crate::{dbg, err, inf, wrn};
+use crate::{DDM_TAG, dbg, err, inf, wrn};
 use ddm_api_types::db::TunnelRoute;
 use dpd_client::Client;
 use dpd_client::ClientState;
@@ -23,8 +23,6 @@ use ::{
     opte_ioctl::OpteHdl, oxide_vpc::api::TunnelEndpoint,
     std::collections::HashMap,
 };
-
-const DDM_DPD_TAG: &str = "ddmd";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
@@ -145,7 +143,7 @@ pub fn add_routes_dendrite(
     dbg!(log, ifname, "sending to dpd host={} port={}", host, port);
 
     let client_state = ClientState {
-        tag: DDM_DPD_TAG.into(),
+        tag: DDM_TAG.into(),
         log: log.clone(),
     };
     let client = Client::new(&format!("http://{host}:{port}"), client_state);
@@ -183,43 +181,14 @@ pub fn add_routes_dendrite(
             }
         };
 
-        // TODO this is gross, use link type properties rather than futzing
-        // around with strings.
-
-        let port_id = {
-            if let Some(egress_port_num) = ifname
-                .strip_prefix("tfportrear")
-                .and_then(|x| x.strip_suffix("_0"))
-                .map(|x| x.trim())
-                .and_then(|x| x.parse::<u8>().ok())
-            {
-                let port_name = format!("rear{}", egress_port_num);
-                match types::Rear::try_from(port_name.as_str()) {
-                    Ok(rear) => PortId::Rear(rear),
-                    Err(e) => {
-                        err!(log, ifname, "bad port name ({port_name}): {e}");
-                        continue;
-                    }
+        let (port_id, link_id) =
+            match mg_common::tfport::port_link_from_untagged_ifname(ifname) {
+                Ok(port_link) => port_link,
+                Err(e) => {
+                    err!(log, ifname, "{e}");
+                    continue;
                 }
-            } else if let Some(egress_port_num) = ifname
-                .strip_prefix("tfportqsfp")
-                .and_then(|x| x.strip_suffix("_0"))
-                .map(|x| x.trim())
-                .and_then(|x| x.parse::<u8>().ok())
-            {
-                let port_name = format!("qsfp{}", egress_port_num);
-                match types::Qsfp::try_from(port_name.as_str()) {
-                    Ok(qsfp) => PortId::Qsfp(qsfp),
-                    Err(e) => {
-                        err!(log, ifname, "bad port name ({port_name}): {e}");
-                        continue;
-                    }
-                }
-            } else {
-                err!(log, ifname, "expected tfportrear or tfportqsfp");
-                continue;
-            }
-        };
+            };
 
         inf!(
             log,
@@ -228,14 +197,11 @@ pub fn add_routes_dendrite(
             r.dest,
             r.gw,
             port_id,
-            0,
+            link_id.0,
         );
 
-        // TODO breakout considerations
-        let link_id = types::LinkId(0);
-
         let target = types::Ipv6Route {
-            tag: DDM_DPD_TAG.into(),
+            tag: DDM_TAG.into(),
             port_id,
             link_id,
             tgt_ip: gw,
@@ -428,7 +394,7 @@ pub fn remove_routes_dendrite(
     log: &Logger,
 ) {
     let client_state = ClientState {
-        tag: DDM_DPD_TAG.into(),
+        tag: DDM_TAG.into(),
         log: log.clone(),
     };
     let client = Client::new(&format!("http://{host}:{port}"), client_state);
@@ -477,7 +443,7 @@ pub fn get_routes_dendrite(
     log: Logger,
 ) -> Result<Vec<Route>, String> {
     let client_state = ClientState {
-        tag: DDM_DPD_TAG.into(),
+        tag: DDM_TAG.into(),
         log: log.clone(),
     };
     let client = Client::new(&format!("http://{host}:{port}"), client_state);

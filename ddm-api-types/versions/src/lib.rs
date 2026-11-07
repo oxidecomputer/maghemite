@@ -39,3 +39,5 @@ pub mod v2;
 pub mod v3;
 #[path = "multicast_support/mod.rs"]
 pub mod v4;
+#[path = "multicast_interfaces/mod.rs"]
+pub mod v5;
