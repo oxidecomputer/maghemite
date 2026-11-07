@@ -90,16 +90,21 @@ impl Db {
         self.imported_matching(|r| r.nexthop == nexthop)
     }
 
-    pub fn imported_count(&self) -> usize {
-        lock!(self.data).imported.len()
-    }
-
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
         lock!(self.data).imported_tunnel.clone()
     }
 
-    pub fn imported_tunnel_count(&self) -> usize {
-        lock!(self.data).imported_tunnel.len()
+    /// Imported tunnel routes learned from the peer at `nexthop`.
+    pub fn imported_tunnel_from(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> HashSet<TunnelRoute> {
+        lock!(self.data)
+            .imported_tunnel
+            .iter()
+            .filter(|r| r.nexthop == nexthop)
+            .copied()
+            .collect()
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
