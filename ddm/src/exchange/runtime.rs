@@ -160,9 +160,7 @@ pub(crate) fn pull(
         return Ok(());
     }
 
-    let update = v3::Update::announce(pr);
-
-    handle_update(&update, ctx, peer);
+    handle_pull_response(pr, ctx, peer);
 
     Ok(())
 }
@@ -459,6 +457,36 @@ async fn pull_handler_common(
             Some(tunnel)
         },
     }))
+}
+
+/// Handle a PullResponse we received from the peer (in response to our Pull).
+///
+/// A PullResponse holds the peer's entire set of routes, not an incremental
+/// update. That means we need to _replace_ the set of routes learned from them
+/// with the set they stuffed into the PullResponse.
+fn handle_pull_response(
+    pr: v3::PullResponse,
+    ctx: &SmContext,
+    peer: &PeerIdentity,
+) {
+    // Convert what we hold from this peer into wire types for the diff.
+    let held_underlay: HashSet<v3::PathVector> = ctx
+        .db
+        .imported_from(peer.addr)
+        .into_iter()
+        .map(v3::PathVector::from)
+        .collect();
+    let held_tunnel: HashSet<v3::TunnelOrigin> = ctx
+        .db
+        .imported_tunnel_from(peer.addr)
+        .into_iter()
+        .map(|r| r.origin)
+        .collect();
+
+    let update =
+        v3::Update::from_pull_response(pr, &held_underlay, &held_tunnel);
+
+    handle_update(&update, ctx, peer);
 }
 
 fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
