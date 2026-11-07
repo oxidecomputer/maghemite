@@ -374,73 +374,9 @@ async fn push_handler_common(
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
-
-    let mut underlay = HashSet::new();
-    let mut tunnel = HashSet::new();
-
-    // Only transit routers redistribute prefixes
-    if ctx.ctx.config.kind == RouterKind::Transit {
-        for route in &ctx.ctx.db.imported() {
-            // don't redistribute prefixes to their originators
-            if route.nexthop == ctx.peer.addr {
-                continue;
-            }
-            let mut pv = v3::PathVector {
-                destination: route.destination,
-                path: route.path.clone(),
-            };
-            pv.path.push(ctx.ctx.router_id.clone());
-            underlay.insert(pv);
-        }
-        for route in &ctx.ctx.db.imported_tunnel() {
-            if route.nexthop == ctx.peer.addr {
-                continue;
-            }
-            let tv = route.origin;
-            tunnel.insert(tv);
-        }
-    }
-    let originated = ctx
-        .ctx
-        .db
-        .originated()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    for prefix in &originated {
-        let pv = v3::PathVector {
-            destination: *prefix,
-            path: vec![ctx.ctx.router_id.clone()],
-        };
-        underlay.insert(pv);
-    }
-
-    let originated_tunnel = ctx
-        .ctx
-        .db
-        .originated_tunnel()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    for prefix in &originated_tunnel {
-        let tv = v3::TunnelOrigin {
-            overlay_prefix: prefix.overlay_prefix,
-            boundary_addr: prefix.boundary_addr,
-            vni: prefix.vni,
-            metric: prefix.metric,
-        };
-        tunnel.insert(tv);
-    }
-
-    Ok(HttpResponseOk(v2::PullResponse {
-        underlay: if underlay.is_empty() {
-            None
-        } else {
-            Some(underlay.into_iter().map(v2::PathVector::from).collect())
-        },
-        tunnel: if tunnel.is_empty() {
-            None
-        } else {
-            Some(tunnel.into_iter().map(v2::TunnelOrigin::from).collect())
-        },
-    }))
+    pull_handler_common(ctx)
+        .await
+        .map(|res| res.map(Into::into))
 }
 
 #[endpoint {
@@ -448,6 +384,12 @@ async fn pull_handler_v2(
     path = "/v3/pull",
 }]
 async fn pull_handler(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
+    pull_handler_common(ctx).await
+}
+
+async fn pull_handler_common(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
