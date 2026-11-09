@@ -170,3 +170,34 @@ impl StaticMcastStore {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::types::{MulticastSourceProtocol, UnderlayMulticastIpv6};
+
+    proptest! {
+        #[test]
+        fn prop_persisted_route_roundtrip(
+            key in any::<MulticastRouteKey>(),
+            underlay in any::<UnderlayMulticastIpv6>(),
+        ) {
+            let bytes = encode_key(&key).expect("encode key");
+            prop_assert_eq!(decode_key(&bytes).expect("decode key"), key);
+
+            let route = MulticastRoute::new(
+                key,
+                underlay,
+                MulticastSourceProtocol::Static,
+            );
+            let value = serde_json::to_string::<PersistedMcastRoute>(&route)
+                .expect("encode route");
+            prop_assert_eq!(
+                decode_route(&key, value.as_bytes()).expect("decode route"),
+                route
+            );
+        }
+    }
+}
