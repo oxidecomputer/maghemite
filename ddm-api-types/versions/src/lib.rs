@@ -36,3 +36,5 @@ pub mod v1;
 pub mod v2;
 #[path = "external_peers/mod.rs"]
 pub mod v3;
+#[path = "peer_stats/mod.rs"]
+pub mod v4;

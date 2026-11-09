@@ -472,6 +472,8 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
         handle_tunnel_update(tunnel_update, ctx, peer);
     }
 
+    ctx.stats.update_imported(&ctx.db, peer.addr);
+
     // distribute updates
 
     if ctx.config.kind == RouterKind::Transit
@@ -550,10 +552,6 @@ fn handle_tunnel_update(
             import,
         )
     }
-
-    ctx.stats
-        .imported_underlay_prefixes
-        .store(ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
 fn handle_underlay_update(
@@ -626,8 +624,4 @@ fn handle_underlay_update(
         del,
         &ctx.rt,
     );
-
-    ctx.stats
-        .imported_underlay_prefixes
-        .store(ctx.db.imported_count() as u64, Ordering::Relaxed);
 }
