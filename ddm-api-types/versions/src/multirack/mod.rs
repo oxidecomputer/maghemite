@@ -4,6 +4,8 @@
 
 //! Version `MULTIRACK` of the DDM Admin API.
 //!
-//! Imported tunnel routes report the path they were advertised along.
+//! Imported tunnel routes report the path they were advertised along, and
+//! transit routers can originate a rack prefix.
 
+pub mod admin;
 pub mod db;
