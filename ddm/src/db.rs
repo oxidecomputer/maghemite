@@ -2,9 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types::db::TunnelRoute;
 use ddm_api_types::net::TunnelOrigin;
-use ddm_protocol::v3::PathVector;
+use ddm_protocol::v3::{self, PathVector};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
@@ -88,7 +87,7 @@ impl Db {
             .imported_tunnel
             .iter()
             .filter(|r| r.nexthop == nexthop)
-            .copied()
+            .cloned()
             .collect()
     }
 
@@ -188,7 +187,7 @@ impl Db {
         let mut tnl_removed = HashSet::new();
         for x in &data.imported_tunnel {
             if x.nexthop == nexthop {
-                tnl_removed.insert(*x);
+                tnl_removed.insert(x.clone());
             }
         }
         for x in &tnl_removed {
@@ -233,6 +232,55 @@ impl From<Route> for PathVector {
     }
 }
 
+/// A tunnel route imported from a peer.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TunnelRoute {
+    pub origin: TunnelOrigin,
+
+    /// The routers the route was advertised through, starting with its
+    /// originator and ending with the peer it was learned from.
+    pub path: Vec<String>,
+
+    // The nexthop is only used to associate the route with a peer allowing us
+    // to remove the route if the peer expires. It does not influence what goes
+    // into the underlaying underlay routing platform. Tunnel routes only
+    // influence the state of the underlying encapsulation service.
+    pub nexthop: Ipv6Addr,
+}
+
+impl TunnelRoute {
+    /// The route `origin` as received from the peer at `nexthop`.
+    pub fn received(origin: &v3::TunnelOrigin, nexthop: Ipv6Addr) -> Self {
+        Self {
+            origin: origin.into(),
+            path: origin.path.clone(),
+            nexthop,
+        }
+    }
+}
+
+/// An imported route as its peer advertised it.
+impl From<TunnelRoute> for v3::TunnelOrigin {
+    fn from(val: TunnelRoute) -> Self {
+        val.origin.to_wire(val.path)
+    }
+}
+
+impl From<TunnelRoute> for ddm_api_types::db::TunnelRoute {
+    fn from(val: TunnelRoute) -> Self {
+        let TunnelRoute {
+            origin,
+            path,
+            nexthop,
+        } = val;
+        Self {
+            origin,
+            path,
+            nexthop,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum EffectiveTunnelRouteSet {
     /// The routes in the contained set are active with priority greater than
@@ -268,11 +316,11 @@ pub fn effective_route_set(
                 if x.origin.metric > 0 {
                     match set {
                         EffectiveTunnelRouteSet::Active(s) => {
-                            s.insert(*x);
+                            s.insert(x.clone());
                         }
                         EffectiveTunnelRouteSet::Inactive(_) => {
                             let mut value = HashSet::new();
-                            value.insert(*x);
+                            value.insert(x.clone());
                             sets.insert(
                                 x.origin.overlay_prefix,
                                 EffectiveTunnelRouteSet::Active(value),
@@ -285,14 +333,14 @@ pub fn effective_route_set(
                             //Nothing to do here, the active set takes priority
                         }
                         EffectiveTunnelRouteSet::Inactive(s) => {
-                            s.insert(*x);
+                            s.insert(x.clone());
                         }
                     }
                 }
             }
             None => {
                 let mut value = HashSet::new();
-                value.insert(*x);
+                value.insert(x.clone());
                 if x.origin.metric > 0 {
                     sets.insert(
                         x.origin.overlay_prefix,
@@ -310,7 +358,7 @@ pub fn effective_route_set(
     let mut result = HashSet::new();
     for xs in sets.values() {
         for x in xs.values() {
-            let mut v = *x;
+            let mut v = x.clone();
             //NOTE the point of this function is to determine an effective set
             //     of routes based on the metric value to send to a data plane.
             //     So from the data plane's perspective all routes returned
@@ -340,6 +388,7 @@ mod test {
                 vni: 99,
                 metric: 0,
             },
+            path: Vec::new(),
             nexthop: "fe80:a::1".parse().unwrap(),
         });
         before.insert(TunnelRoute {
@@ -349,6 +398,7 @@ mod test {
                 vni: 99,
                 metric: 0,
             },
+            path: Vec::new(),
             nexthop: "fe80:b::1".parse().unwrap(),
         });
         let effective_before = effective_route_set(&before);
@@ -361,6 +411,7 @@ mod test {
                 vni: 99,
                 metric: 0,
             },
+            path: Vec::new(),
             nexthop: "fe80:a::1".parse().unwrap(),
         });
         after.insert(TunnelRoute {
@@ -370,13 +421,14 @@ mod test {
                 vni: 99,
                 metric: 100,
             },
+            path: Vec::new(),
             nexthop: "fe80:b::1".parse().unwrap(),
         });
         let effective_after = effective_route_set(&after);
 
         let to_add: HashSet<TunnelRoute> = effective_after
             .difference(&effective_before)
-            .copied()
+            .cloned()
             .collect();
 
         let expected_add = HashSet::<TunnelRoute>::new();
@@ -384,7 +436,7 @@ mod test {
 
         let to_del: HashSet<TunnelRoute> = effective_before
             .difference(&effective_after)
-            .copied()
+            .cloned()
             .collect();
 
         let mut expected_del = HashSet::<TunnelRoute>::new();
@@ -395,6 +447,7 @@ mod test {
                 vni: 99,
                 metric: 0,
             },
+            path: Vec::new(),
             nexthop: "fe80:a::1".parse().unwrap(),
         });
         assert_eq!(to_del, expected_del);
