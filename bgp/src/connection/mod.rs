@@ -32,7 +32,10 @@ pub(crate) use mg_api_types::bgp::session::{
 pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
 
 #[cfg(target_os = "linux")]
-const _: () = assert!(Md5AuthString::MAX_LEN <= MAX_MD5SIG_KEYLEN);
+const _: () = assert!(
+    Md5AuthString::MAX_LEN == MAX_MD5SIG_KEYLEN,
+    "padded key must fill tcpm_key exactly",
+);
 
 #[cfg(target_os = "illumos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;

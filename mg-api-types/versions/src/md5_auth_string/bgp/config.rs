@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+/// A TCP MD5 signature key (RFC 2385) for a BGP session.
+///
+/// Must be 1 to 80 bytes of printable ASCII (0x20 through 0x7e). RFC 2385
+/// section 4.5 recommends that implementations support at least keys of
+/// this form, and limiting keys to printable ASCII lets them round-trip
+/// through JSON.
 #[derive(Clone, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Md5AuthString(
@@ -20,9 +26,21 @@ pub struct Md5AuthString(
 );
 
 impl Md5AuthString {
-    /// Maximum key length in bytes.
+    /// Maximum key length in bytes, per [RFC 2385 §4.5].
+    ///
+    /// [RFC 2385 §4.5]: https://www.rfc-editor.org/rfc/rfc2385#section-4.5
     pub const MAX_LEN: usize = 80;
 
+    /// Validates `source` and wraps it as an MD5 key.
+    ///
+    /// Deserialization also goes through this constructor, so every
+    /// `Md5AuthString` upholds these invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Md5AuthStringError`] if `source` is empty, is longer
+    /// than [`Self::MAX_LEN`] bytes, or contains a character outside
+    /// printable ASCII.
     pub fn new(source: String) -> Result<Self, Md5AuthStringError> {
         if source.is_empty() {
             return Err(Md5AuthStringError::Empty);
@@ -39,16 +57,38 @@ impl Md5AuthString {
         Ok(Self(source))
     }
 
+    /// Returns the key as a byte slice.
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
 
+    /// Returns the key as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Consumes `self` and returns the key as a [`String`].
     pub fn into_inner(self) -> String {
         self.0
+    }
+
+    /// Returns the key zero-padded to [`Self::MAX_LEN`] bytes.
+    ///
+    /// This is for interfaces such as Linux's `struct tcp_md5sig`, which carry
+    /// the key in a fixed-size buffer next to a separate length field. Only the
+    /// first [`Self::byte_len`] bytes are the key. Passing [`Self::byte_len`]
+    /// alongside the buffer gives a two-part buffer/len representation.
+    pub fn to_padded_bytes(&self) -> [u8; Self::MAX_LEN] {
+        let mut keyval = [0u8; Self::MAX_LEN];
+        let key = self.as_bytes();
+        // Cannot panic: `new` guarantees `key.len() <= Self::MAX_LEN`.
+        keyval[..key.len()].copy_from_slice(key);
+        keyval
+    }
+
+    /// Returns the length of the key in bytes, from 1 to [`Self::MAX_LEN`].
+    pub fn byte_len(&self) -> usize {
+        self.as_bytes().len()
     }
 }
 
@@ -66,6 +106,7 @@ impl From<Md5AuthString> for String {
     }
 }
 
+/// Redacts the key so it never appears in logs.
 impl std::fmt::Debug for Md5AuthString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Md5AuthString(<redacted>)")
@@ -74,10 +115,18 @@ impl std::fmt::Debug for Md5AuthString {
 
 impl std::error::Error for Md5AuthStringError {}
 
+/// Why [`Md5AuthString::new`] rejected a string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Md5AuthStringError {
+    /// The string was empty.
     Empty,
-    TooLong { len: usize },
+    /// The string was longer than [`Md5AuthString::MAX_LEN`] bytes.
+    TooLong {
+        /// Length of the rejected string, in bytes.
+        len: usize,
+    },
+    /// The string contained a character outside printable ASCII
+    /// (0x20 through 0x7e).
     NotPrintableAscii,
 }
 
