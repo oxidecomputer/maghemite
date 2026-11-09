@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "13.0.0"
+    "version": "14.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1726,14 +1726,14 @@
             "description": "Internet protocol version 4",
             "type": "string",
             "enum": [
-              "Ipv4"
+              "ipv4"
             ]
           },
           {
             "description": "Internet protocol version 6",
             "type": "string",
             "enum": [
-              "Ipv6"
+              "ipv6"
             ]
           }
         ]
@@ -1993,28 +1993,28 @@
             "description": "A stable down state. Non-responsive to incoming messages.",
             "type": "string",
             "enum": [
-              "AdminDown"
+              "admin_down"
             ]
           },
           {
             "description": "The initial state.",
             "type": "string",
             "enum": [
-              "Down"
+              "down"
             ]
           },
           {
             "description": "The peer has detected a remote peer in the down state.",
             "type": "string",
             "enum": [
-              "Init"
+              "init"
             ]
           },
           {
             "description": "The peer has detected a remote peer in the up or init state while in the init state.",
             "type": "string",
             "enum": [
-              "Up"
+              "up"
             ]
           }
         ]
@@ -2022,41 +2022,67 @@
       "BgpCapability": {
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "RouteRefresh"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "multiprotocol_extensions"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/AfiSafi"
+              }
+            },
+            "required": [
+              "type",
+              "value"
             ]
           },
           {
             "type": "object",
             "properties": {
-              "MultiprotocolExtensions": {
-                "$ref": "#/components/schemas/AfiSafi"
+              "type": {
+                "type": "string",
+                "enum": [
+                  "route_refresh"
+                ]
               }
             },
             "required": [
-              "MultiprotocolExtensions"
-            ],
-            "additionalProperties": false
+              "type"
+            ]
           },
           {
             "type": "object",
             "properties": {
-              "FourOctetAsn": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "four_octet_asn"
+                ]
+              },
+              "value": {
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
               }
             },
             "required": [
-              "FourOctetAsn"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "type": "object",
             "properties": {
-              "AddPath": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "add_path"
+                ]
+              },
+              "value": {
                 "type": "object",
                 "properties": {
                   "elements": {
@@ -2072,23 +2098,29 @@
               }
             },
             "required": [
-              "AddPath"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "type": "object",
             "properties": {
-              "Unknown": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "unknown"
+                ]
+              },
+              "value": {
                 "type": "integer",
                 "format": "uint8",
                 "minimum": 0
               }
             },
             "required": [
-              "Unknown"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -2098,38 +2130,38 @@
           {
             "type": "object",
             "properties": {
-              "Ipv4": {
+              "ipv4": {
                 "type": "string",
                 "format": "ipv4"
               }
             },
             "required": [
-              "Ipv4"
+              "ipv4"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Ipv6Single": {
+              "ipv6_single": {
                 "type": "string",
                 "format": "ipv6"
               }
             },
             "required": [
-              "Ipv6Single"
+              "ipv6_single"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Ipv6Double": {
+              "ipv6_double": {
                 "$ref": "#/components/schemas/Ipv6DoubleNexthop"
               }
             },
             "required": [
-              "Ipv6Double"
+              "ipv6_double"
             ],
             "additionalProperties": false
           }
@@ -2804,46 +2836,84 @@
         "oneOf": [
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
-            "type": "string",
-            "enum": [
-              "no_export"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "no_export"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to other BGP peers.",
-            "type": "string",
-            "enum": [
-              "no_advertise"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "no_advertise"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to external BGP peers (this includes peers in other members autonomous systems inside a BGP confederation).",
-            "type": "string",
-            "enum": [
-              "no_export_sub_confed"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "no_export_sub_confed"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "All routes received carrying a communities attribute containing this value must set the local preference for the received routes to a low value, preferably zero.",
-            "type": "string",
-            "enum": [
-              "graceful_shutdown"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "graceful_shutdown"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "A user defined community",
             "type": "object",
             "properties": {
-              "user_defined": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user_defined"
+                ]
+              },
+              "value": {
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
               }
             },
             "required": [
-              "user_defined"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -3079,10 +3149,10 @@
         "description": "Category of FSM event for filtering and display purposes",
         "type": "string",
         "enum": [
-          "Admin",
-          "Connection",
-          "Session",
-          "StateTransition"
+          "admin",
+          "connection",
+          "session",
+          "state_transition"
         ]
       },
       "FsmEventRecord": {
@@ -3204,56 +3274,56 @@
             "description": "Initial state. Refuse all incomming BGP connections. No resources allocated to peer.",
             "type": "string",
             "enum": [
-              "Idle"
+              "idle"
             ]
           },
           {
             "description": "Waiting for the TCP connection to be completed.",
             "type": "string",
             "enum": [
-              "Connect"
+              "connect"
             ]
           },
           {
             "description": "Trying to acquire peer by listening for and accepting a TCP connection.",
             "type": "string",
             "enum": [
-              "Active"
+              "active"
             ]
           },
           {
             "description": "Waiting for open message from peer.",
             "type": "string",
             "enum": [
-              "OpenSent"
+              "open_sent"
             ]
           },
           {
             "description": "Waiting for keepalive or notification from peer.",
             "type": "string",
             "enum": [
-              "OpenConfirm"
+              "open_confirm"
             ]
           },
           {
             "description": "Handler for Connection Collisions (RFC 4271 6.8)",
             "type": "string",
             "enum": [
-              "ConnectionCollision"
+              "connection_collision"
             ]
           },
           {
             "description": "Sync up with peers.",
             "type": "string",
             "enum": [
-              "SessionSetup"
+              "session_setup"
             ]
           },
           {
             "description": "Able to exchange update, notification and keepliave messages with peers.",
             "type": "string",
             "enum": [
-              "Established"
+              "established"
             ]
           }
         ]
@@ -3291,15 +3361,29 @@
         "description": "Import/Export policy for IPv4 prefixes only.",
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "NoFiltering"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "no_filtering"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "type": "object",
             "properties": {
-              "Allow": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "allow"
+                ]
+              },
+              "value": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Ipv4Net"
@@ -3308,9 +3392,9 @@
               }
             },
             "required": [
-              "Allow"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -3318,15 +3402,29 @@
         "description": "Import/Export policy for IPv6 prefixes only.",
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "NoFiltering"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "no_filtering"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "type": "object",
             "properties": {
-              "Allow": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "allow"
+                ]
+              },
+              "value": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Ipv6Net"
@@ -3335,9 +3433,9 @@
               }
             },
             "required": [
-              "Allow"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -4152,16 +4250,30 @@
         "oneOf": [
           {
             "description": "Hard reset - closes TCP connection and restarts session",
-            "type": "string",
-            "enum": [
-              "Hard"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hard"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "Soft inbound reset - sends route refresh for specified AF(s) None means all negotiated AFs",
             "type": "object",
             "properties": {
-              "SoftInbound": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "soft_inbound"
+                ]
+              },
+              "value": {
                 "nullable": true,
                 "allOf": [
                   {
@@ -4171,15 +4283,21 @@
               }
             },
             "required": [
-              "SoftInbound"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "Soft outbound reset - re-advertises routes for specified AF(s) None means all negotiated AFs",
             "type": "object",
             "properties": {
-              "SoftOutbound": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "soft_outbound"
+                ]
+              },
+              "value": {
                 "nullable": true,
                 "allOf": [
                   {
@@ -4189,9 +4307,9 @@
               }
             },
             "required": [
-              "SoftOutbound"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -4580,20 +4698,32 @@
             "description": "The type of origin associated with a path",
             "type": "object",
             "properties": {
-              "origin": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "origin"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/PathOrigin"
               }
             },
             "required": [
-              "origin"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "The AS set associated with a path",
             "type": "object",
             "properties": {
-              "as_path": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "as_path"
+                ]
+              },
+              "value": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/As4PathSegment"
@@ -4601,72 +4731,102 @@
               }
             },
             "required": [
-              "as_path"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "The nexthop associated with a path (IPv4 only for traditional BGP)",
             "type": "object",
             "properties": {
-              "next_hop": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "next_hop"
+                ]
+              },
+              "value": {
                 "type": "string",
                 "format": "ipv4"
               }
             },
             "required": [
-              "next_hop"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "A metric used for external (inter-AS) links to discriminate among multiple entry or exit points.",
             "type": "object",
             "properties": {
-              "multi_exit_disc": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "multi_exit_disc"
+                ]
+              },
+              "value": {
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
               }
             },
             "required": [
-              "multi_exit_disc"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "Local pref is included in update messages sent to internal peers and indicates a degree of preference.",
             "type": "object",
             "properties": {
-              "local_pref": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "local_pref"
+                ]
+              },
+              "value": {
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
               }
             },
             "required": [
-              "local_pref"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (2-octet ASN)",
             "type": "object",
             "properties": {
-              "aggregator": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "aggregator"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/Aggregator"
               }
             },
             "required": [
-              "aggregator"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "Indicates communities associated with a path.",
             "type": "object",
             "properties": {
-              "communities": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "communities"
+                ]
+              },
+              "value": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Community"
@@ -4674,22 +4834,36 @@
               }
             },
             "required": [
-              "communities"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "Indicates this route was formed via aggregation (RFC 4271 §5.1.7)",
-            "type": "string",
-            "enum": [
-              "atomic_aggregate"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "atomic_aggregate"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "The 4-byte encoded AS set associated with a path",
             "type": "object",
             "properties": {
-              "as4_path": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "as4_path"
+                ]
+              },
+              "value": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/As4PathSegment"
@@ -4697,48 +4871,66 @@
               }
             },
             "required": [
-              "as4_path"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "AS4_AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (4-octet ASN)",
             "type": "object",
             "properties": {
-              "as4_aggregator": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "as4_aggregator"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/As4Aggregator"
               }
             },
             "required": [
-              "as4_aggregator"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "Carries reachable MP-BGP NLRI and Next-hop (advertisement).",
             "type": "object",
             "properties": {
-              "mp_reach_nlri": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "mp_reach_nlri"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/MpReachNlri"
               }
             },
             "required": [
-              "mp_reach_nlri"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "description": "Carries unreachable MP-BGP NLRI (withdrawal).",
             "type": "object",
             "properties": {
-              "mp_unreach_nlri": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "mp_unreach_nlri"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/MpUnreachNlri"
               }
             },
             "required": [
-              "mp_unreach_nlri"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -5041,13 +5233,13 @@
             "description": "Numbered peer identified by IP address\n\nUsed for traditional BGP sessions where peers are configured with explicit IP addresses (either IPv4 or IPv6 global unicast).",
             "type": "object",
             "properties": {
-              "Ip": {
+              "ip": {
                 "type": "string",
                 "format": "ip"
               }
             },
             "required": [
-              "Ip"
+              "ip"
             ],
             "additionalProperties": false
           },
@@ -5055,12 +5247,12 @@
             "description": "Unnumbered peer identified by interface name\n\nUsed for unnumbered BGP sessions where peers are discovered via NDP on a specific interface. The interface name (e.g., \"eth0\") provides stable identification even though the peer's link-local address may be dynamic or shared with other interfaces.",
             "type": "object",
             "properties": {
-              "Interface": {
+              "interface": {
                 "type": "string"
               }
             },
             "required": [
-              "Interface"
+              "interface"
             ],
             "additionalProperties": false
           }
@@ -5254,8 +5446,8 @@
       "SessionMode": {
         "type": "string",
         "enum": [
-          "SingleHop",
-          "MultiHop"
+          "single_hop",
+          "multi_hop"
         ]
       },
       "ShaperSource": {
@@ -5797,14 +5989,14 @@
             "description": "Internet Protocol Version 4 (IPv4)",
             "type": "string",
             "enum": [
-              "Ipv4"
+              "ipv4"
             ]
           },
           {
             "description": "Internet Protocol Version 6 (IPv6)",
             "type": "string",
             "enum": [
-              "Ipv6"
+              "ipv6"
             ]
           }
         ]
@@ -5815,14 +6007,14 @@
             "description": "BGP routes only",
             "type": "string",
             "enum": [
-              "Bgp"
+              "bgp"
             ]
           },
           {
             "description": "Static routes only",
             "type": "string",
             "enum": [
-              "Static"
+              "static"
             ]
           }
         ]
