@@ -224,6 +224,43 @@ pub trait DdmAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
 
+    /// Get the rack prefix this router originates.
+    ///
+    /// Returns 404 if none is set. Only supported on transit routers.
+    #[endpoint {
+        method = GET,
+        path = "/rack_prefix",
+        versions = VERSION_MULTIRACK..,
+    }]
+    async fn get_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<latest::admin::RackPrefix>, HttpError>;
+
+    /// Set the rack prefix this router originates.
+    ///
+    /// Replaces any previous rack prefix. Only supported on transit routers.
+    #[endpoint {
+        method = PUT,
+        path = "/rack_prefix",
+        versions = VERSION_MULTIRACK..,
+    }]
+    async fn set_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::admin::RackPrefix>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Stop originating a rack prefix.
+    ///
+    /// Succeeds if none is set. Only supported on transit routers.
+    #[endpoint {
+        method = DELETE,
+        path = "/rack_prefix",
+        versions = VERSION_MULTIRACK..,
+    }]
+    async fn clear_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
     /// Get the counters of the routing session on each address object, keyed
     /// by address object name.
     #[endpoint {

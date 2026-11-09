@@ -452,6 +452,19 @@ async fn pull_handler_common(
         }
     }
 
+    if ctx.tx_allowances.rack
+        && let Some(prefix) = ctx
+            .ctx
+            .db
+            .rack_prefix()
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?
+    {
+        underlay.insert(v3::PathVector {
+            destination: prefix,
+            path: vec![ctx.ctx.router_id.clone()],
+        });
+    }
+
     if ctx.tx_allowances.tunnel {
         let originated_tunnel = ctx
             .ctx

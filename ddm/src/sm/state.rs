@@ -283,6 +283,28 @@ impl Exchange {
         }
     }
 
+    /// The underlay routes we originate for the prefixes in `set`, or None
+    /// if this peer may not receive them.
+    fn originated_underlay(
+        &self,
+        set: PrefixSet,
+    ) -> Option<HashSet<PathVector>> {
+        let prefixes = match set {
+            PrefixSet::Underlay(p) if self.tx_allowances.underlay => p,
+            PrefixSet::Rack(p) if self.tx_allowances.rack => HashSet::from([p]),
+            _ => return None,
+        };
+        Some(
+            prefixes
+                .into_iter()
+                .map(|destination| PathVector {
+                    destination,
+                    path: vec![self.ctx.router_id.clone()],
+                })
+                .collect(),
+        )
+    }
+
     fn initial_pull(&mut self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
         let peer = self.peer.clone();
         let rt = self.ctx.rt.clone();
@@ -563,19 +585,12 @@ impl State for Exchange {
                 }
             };
             match e {
-                Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
-                    prefixes,
-                ))) => {
-                    if !self.tx_allowances.underlay {
+                Event::Admin(AdminEvent::Announce(
+                    set @ (PrefixSet::Underlay(_) | PrefixSet::Rack(_)),
+                )) => {
+                    let Some(pv) = self.originated_underlay(set) else {
                         continue;
-                    }
-                    let pv: HashSet<PathVector> = prefixes
-                        .iter()
-                        .map(|x| PathVector {
-                            destination: *x,
-                            path: vec![self.ctx.router_id.clone()],
-                        })
-                        .collect();
+                    };
                     let Err(e) = crate::exchange::announce_underlay(
                         &self.ctx,
                         self.ctx.config.clone(),
@@ -652,19 +667,12 @@ impl State for Exchange {
                         event,
                     );
                 }
-                Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
-                    prefixes,
-                ))) => {
-                    if !self.tx_allowances.underlay {
+                Event::Admin(AdminEvent::Withdraw(
+                    set @ (PrefixSet::Underlay(_) | PrefixSet::Rack(_)),
+                )) => {
+                    let Some(pv) = self.originated_underlay(set) else {
                         continue;
-                    }
-                    let pv: HashSet<PathVector> = prefixes
-                        .iter()
-                        .map(|x| PathVector {
-                            destination: *x,
-                            path: vec![self.ctx.router_id.clone()],
-                        })
-                        .collect();
+                    };
                     let Err(e) = crate::exchange::withdraw_underlay(
                         &self.ctx,
                         self.ctx.config.clone(),

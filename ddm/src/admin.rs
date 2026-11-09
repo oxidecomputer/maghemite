@@ -16,6 +16,7 @@ use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{
     EnableStatsRequest, ExpirePathParams, PeerStatsPathParams, PrefixMap,
+    RackPrefix,
 };
 use ddm_api_types::db::{Peer, PeerInfo, PeerStats, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
@@ -100,6 +101,9 @@ enum AdminError {
     #[error("no routing session on address object {0}")]
     UnknownAddressObject(String),
 
+    #[error("no rack prefix is set")]
+    NoRackPrefix,
+
     #[error(transparent)]
     Db(crate::db::Error),
 
@@ -126,7 +130,7 @@ impl From<AdminError> for HttpError {
             | AdminError::AddressObjectInUse(_) => {
                 Self::for_bad_request(None, msg)
             }
-            AdminError::UnknownAddressObject(_) => {
+            AdminError::UnknownAddressObject(_) | AdminError::NoRackPrefix => {
                 // Unlike for_not_found, this sends the message to the
                 // client, so it learns which name was not found.
                 Self::for_client_error(
@@ -680,6 +684,71 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseOk(ExternalPeers {
             address_objects: ctx.db.get_external_peers(),
         }))
+    }
+
+    async fn get_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<RackPrefix>, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+        let prefix = ctx
+            .db
+            .rack_prefix()
+            .map_err(AdminError::Db)?
+            .ok_or(AdminError::NoRackPrefix)?;
+        Ok(HttpResponseOk(RackPrefix { prefix }))
+    }
+
+    async fn set_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<RackPrefix>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+        let RackPrefix { prefix } = request.into_inner();
+
+        let old = ctx.db.rack_prefix().map_err(AdminError::Db)?;
+        if old == Some(prefix) {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+        ctx.db
+            .set_rack_prefix(Some(prefix))
+            .map_err(AdminError::Db)?;
+        info!(ctx.log, "set rack prefix"; "prefix" => %prefix, "old" => ?old);
+
+        // Announce the new prefix before withdrawing the old one, so peers
+        // are never left without a route to the rack.
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Rack(prefix))))
+                .map_err(AdminError::from)?;
+            if let Some(old) = old {
+                e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                    old,
+                ))))
+                .map_err(AdminError::from)?;
+            }
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn clear_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+        let Some(old) = ctx.db.rack_prefix().map_err(AdminError::Db)? else {
+            return Ok(HttpResponseUpdatedNoContent());
+        };
+        ctx.db.set_rack_prefix(None).map_err(AdminError::Db)?;
+        info!(ctx.log, "clear rack prefix"; "old" => %old);
+
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(old))))
+                .map_err(AdminError::from)?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
     }
 }
 

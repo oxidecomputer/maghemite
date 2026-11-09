@@ -301,6 +301,73 @@
         }
       }
     },
+    "/rack_prefix": {
+      "get": {
+        "summary": "Get the rack prefix this router originates.",
+        "description": "Returns 404 if none is set. Only supported on transit routers.",
+        "operationId": "get_rack_prefix",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RackPrefix"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Set the rack prefix this router originates.",
+        "description": "Replaces any previous rack prefix. Only supported on transit routers.",
+        "operationId": "set_rack_prefix",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RackPrefix"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Stop originating a rack prefix.",
+        "description": "Succeeds if none is set. Only supported on transit routers.",
+        "operationId": "clear_rack_prefix",
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/stats/peer/{aobj_name}": {
       "get": {
         "summary": "Get the counters of the routing session on one address object.",
@@ -808,6 +875,18 @@
               "type"
             ]
           }
+        ]
+      },
+      "RackPrefix": {
+        "description": "The prefix a transit router originates on behalf of its whole rack.\n\nIt is advertised to transit peers as an underlay route, so routers in other racks learn it as an ordinary underlay prefix.",
+        "type": "object",
+        "properties": {
+          "prefix": {
+            "$ref": "#/components/schemas/Ipv6Net"
+          }
+        },
+        "required": [
+          "prefix"
         ]
       },
       "RouterKind": {

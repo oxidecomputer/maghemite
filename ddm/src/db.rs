@@ -21,6 +21,10 @@ const ORIGINATE: &str = "originate";
 /// tunnel endpoints.
 const TUNNEL_ORIGINATE: &str = "tunnel_originate";
 
+/// The handle used to open a persistent key-value tree for the originated
+/// rack prefix. It holds at most one prefix.
+const RACK_PREFIX: &str = "rack_prefix";
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("datastore error")]
@@ -168,6 +172,20 @@ impl Db {
         origins: &HashSet<TunnelOrigin>,
     ) -> Result<(), Error> {
         self.update_persisted(TUNNEL_ORIGINATE, [], origins)
+    }
+
+    /// The originated rack prefix, if one is set.
+    pub fn rack_prefix(&self) -> Result<Option<Ipv6Net>, Error> {
+        Ok(self.persisted(RACK_PREFIX)?.into_iter().next())
+    }
+
+    /// Set or clear the originated rack prefix, replacing any it holds.
+    pub fn set_rack_prefix(
+        &self,
+        prefix: Option<Ipv6Net>,
+    ) -> Result<(), Error> {
+        let held: HashSet<Ipv6Net> = self.persisted(RACK_PREFIX)?;
+        self.update_persisted(RACK_PREFIX, &prefix, &held)
     }
 
     /// The set of values persisted in `tree`. Entries that cannot be read
@@ -727,6 +745,36 @@ mod test {
         assert_eq!(keys(&tunnel), vec![origin_key.into_bytes()]);
 
         drop(db);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rack_prefix_is_replaced_cleared_and_persisted() {
+        let dir = std::env::temp_dir()
+            .join(format!("ddm-rack-prefix-test-{}", std::process::id()));
+        let path = dir.to_str().unwrap();
+        let open =
+            || Db::new(path, Logger::root(slog::Discard, slog::o!())).unwrap();
+        let a: Ipv6Net = "fd00:a::/56".parse().unwrap();
+        let b: Ipv6Net = "fd00:b::/48".parse().unwrap();
+
+        let db = open();
+        assert_eq!(db.rack_prefix().unwrap(), None);
+        db.set_rack_prefix(Some(a)).unwrap();
+        db.set_rack_prefix(Some(b)).unwrap();
+        drop(db);
+
+        // b replaced a rather than joining it.
+        let db = open();
+        assert_eq!(
+            db.persisted::<Ipv6Net>(RACK_PREFIX).unwrap(),
+            HashSet::from([b])
+        );
+        assert_eq!(db.rack_prefix().unwrap(), Some(b));
+        db.set_rack_prefix(None).unwrap();
+        assert_eq!(db.rack_prefix().unwrap(), None);
+        drop(db);
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
