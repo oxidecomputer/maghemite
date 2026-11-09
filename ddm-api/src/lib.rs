@@ -27,6 +27,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (5, MULTIRACK),
     (4, PEER_STATS),
     (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
@@ -117,13 +118,31 @@ pub trait DdmAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::admin::PrefixMap>, HttpError>;
 
+    /// Get the tunnel routes imported from peers.
+    ///
+    /// Each route carries the path it was advertised along.
     #[endpoint {
         method = GET,
         path = "/tunnel_endpoints",
+        versions = VERSION_MULTIRACK..,
     }]
     async fn get_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<latest::db::TunnelRoute>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/tunnel_endpoints",
+        operation_id = "get_tunnel_endpoints",
+        versions = ..VERSION_MULTIRACK,
+    }]
+    async fn get_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<v1::db::TunnelRoute>>, HttpError> {
+        // Routes that differ only in their path become one route here.
+        let resp = Self::get_tunnel_endpoints(ctx).await?;
+        Ok(HttpResponseOk(resp.0.into_iter().map(Into::into).collect()))
+    }
 
     #[endpoint {
         method = PUT,

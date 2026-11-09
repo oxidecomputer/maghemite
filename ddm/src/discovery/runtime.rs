@@ -50,7 +50,7 @@ struct DiscoveryPacket {
 impl DiscoveryPacket {
     fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::V3 as u8,
             flags: SOLICIT,
             hostname,
             kind,
@@ -58,7 +58,7 @@ impl DiscoveryPacket {
     }
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: Version::V2 as u8,
+            version: Version::V3 as u8,
             flags: ADVERTISE,
             hostname,
             kind,

@@ -16,7 +16,10 @@ use crate::sm::PeerIdentity;
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_api_types::net::TunnelOrigin;
-use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
+use ddm_protocol::v3::{
+    PathVector, TunnelOrigin as WireTunnelOrigin, TunnelUpdate, UnderlayUpdate,
+    Update,
+};
 use libnet::get_ipaddr_info;
 use mg_common::lock;
 use slog::Logger;
@@ -454,12 +457,27 @@ impl Exchange {
             ))
         };
 
-        let tunnel = if to_remove_tnl.is_empty() {
+        // Withdraw only the paths that no other peer still provides. A path
+        // that another peer provides is still reachable through us.
+        let still_imported: HashSet<_> = self
+            .ctx
+            .db
+            .imported_tunnel()
+            .into_iter()
+            .map(WireTunnelOrigin::from)
+            .collect();
+        let to_withdraw_tnl: HashSet<WireTunnelOrigin> = to_remove_tnl
+            .into_iter()
+            .map(WireTunnelOrigin::from)
+            .filter(|x| !still_imported.contains(x))
+            .collect();
+        let tunnel = if to_withdraw_tnl.is_empty() {
             None
         } else {
-            Some(TunnelUpdate::withdraw(
-                to_remove_tnl.iter().map(|x| x.origin.into()).collect(),
-            ))
+            Some(
+                TunnelUpdate::withdraw(to_withdraw_tnl)
+                    .with_path_element(&self.ctx.router_id),
+            )
         };
 
         let push = Update { underlay, tunnel };
@@ -878,6 +896,20 @@ impl State for Exchange {
                     update.underlay = update.underlay.map(|u| {
                         u.with_path_element(self.ctx.router_id.clone())
                     });
+
+                    if let Some(t) = update.tunnel.as_mut() {
+                        // A path withdrawn by this peer that another peer
+                        // still provides remains reachable through us.
+                        let still_imported: HashSet<_> = self
+                            .ctx
+                            .db
+                            .imported_tunnel()
+                            .into_iter()
+                            .map(WireTunnelOrigin::from)
+                            .collect();
+                        t.withdraw.retain(|x| !still_imported.contains(x));
+                        *t = t.with_path_element(&self.ctx.router_id);
+                    }
                     super::send(
                         Event::Peer(PeerEvent::Push(update)),
                         &mut self.ctx.event_channels,

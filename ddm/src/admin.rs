@@ -379,7 +379,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashSet<TunnelRoute>>, HttpError> {
         let ctx = lock!(ctx.context());
         let imported = ctx.db.imported_tunnel();
-        Ok(HttpResponseOk(imported))
+        Ok(HttpResponseOk(
+            imported.into_iter().map(Into::into).collect(),
+        ))
     }
 
     async fn advertise_prefixes(

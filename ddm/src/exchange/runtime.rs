@@ -8,11 +8,13 @@
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
 use super::ExchangeError;
-use crate::db::{Route, TunnelForwardingChanges, tunnel_forwarding_changes};
+use crate::db::{
+    Route, TunnelForwardingChanges, TunnelRoute, tunnel_forwarding_changes,
+};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, PeerIdentity, SmContext};
 use crate::{err, inf, wrn};
-use ddm_api_types::db::{RouterKind, TunnelRoute};
+use ddm_api_types::db::RouterKind;
 use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
@@ -68,7 +70,10 @@ pub(crate) fn announce_tunnel(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::announce(
-        endpoints.into_iter().map(Into::into).collect(),
+        endpoints
+            .into_iter()
+            .map(|x| x.to_wire(vec![ctx.router_id.clone()]))
+            .collect(),
     );
     send_update(ctx, config, update.into(), peer, rt, log)
 }
@@ -94,7 +99,10 @@ pub(crate) fn withdraw_tunnel(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::TunnelUpdate::withdraw(
-        endpoints.into_iter().map(Into::into).collect(),
+        endpoints
+            .into_iter()
+            .map(|x| x.to_wire(vec![ctx.router_id.clone()]))
+            .collect(),
     );
     send_update(ctx, config, update.into(), peer, rt, log)
 }
@@ -157,7 +165,10 @@ pub(crate) fn pull(
     stop: Arc<AtomicBool>,
 ) -> Result<(), ExchangeError> {
     let pr: v3::PullResponse = match peer.version {
-        Version::V2 => do_pull_v2(ctx, peer.addr, &rt)?.into(),
+        Version::V2 => v3::PullResponse::from_v2(
+            do_pull_v2(ctx, peer.addr, &rt)?,
+            &peer.hostname,
+        ),
         Version::V3 => do_pull(ctx, peer.addr, &rt)?,
     };
 
@@ -334,8 +345,8 @@ async fn push_handler_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<v2::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let update_v2 = request.into_inner();
-    let update = v3::Update::from(update_v2);
+    let peer = &ctx.context().peer.hostname;
+    let update = v3::Update::from_v2(request.into_inner(), peer);
     push_handler_common(ctx, update).await
 }
 
@@ -412,11 +423,13 @@ async fn pull_handler_common(
             pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
-        for route in &ctx.ctx.db.imported_tunnel() {
+        for route in ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer.addr {
                 continue;
             }
-            tunnel.insert(route.origin.into());
+            let mut tv = v3::TunnelOrigin::from(route);
+            tv.path.push(ctx.ctx.router_id.clone());
+            tunnel.insert(tv);
         }
     }
     let originated = ctx
@@ -437,7 +450,11 @@ async fn pull_handler_common(
         .db
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    tunnel.extend(originated_tunnel.into_iter().map(v3::TunnelOrigin::from));
+    tunnel.extend(
+        originated_tunnel
+            .into_iter()
+            .map(|x| x.to_wire(vec![ctx.ctx.router_id.clone()])),
+    );
 
     Ok(HttpResponseOk(v3::PullResponse {
         underlay: if underlay.is_empty() {
@@ -474,7 +491,7 @@ fn handle_pull_response(
         .db
         .imported_tunnel_from(peer.addr)
         .into_iter()
-        .map(|r| r.origin.into())
+        .map(v3::TunnelOrigin::from)
         .collect();
 
     let update =
@@ -495,6 +512,15 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
                 ctx.log,
                 ctx.config.if_name,
                 "loop detected: dropping announcement: {x:?}"
+            );
+        }
+    }
+    if let (Some(t), Some(s)) = (&update.tunnel, &sans_loops.tunnel) {
+        for x in t.announce.difference(&s.announce) {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "loop detected: dropping tunnel announcement: {x:?}"
             );
         }
     }
@@ -538,18 +564,12 @@ fn handle_tunnel_update(
     let before = db.imported_tunnel();
 
     for x in &update.announce {
-        import.insert(TunnelRoute {
-            origin: x.into(),
-            nexthop: peer.addr,
-        });
+        import.insert(TunnelRoute::received(x, peer.addr));
     }
     db.import_tunnel(&import);
 
     for x in &update.withdraw {
-        remove.insert(TunnelRoute {
-            origin: x.into(),
-            nexthop: peer.addr,
-        });
+        remove.insert(TunnelRoute::received(x, peer.addr));
     }
     db.delete_import_tunnel(&remove);
 

@@ -26,8 +26,7 @@ impl Update {
         let Self { underlay, tunnel } = self;
         Self {
             underlay: underlay.as_ref().map(|u| u.break_loops(router_id)),
-            // Tunnel routes carry no path.
-            tunnel: tunnel.clone(),
+            tunnel: tunnel.as_ref().map(|t| t.break_loops(router_id)),
         }
     }
 
@@ -56,8 +55,8 @@ impl Update {
                 .collect(),
         };
         let tunnel = TunnelUpdate {
-            announce: pulled_tunnel.difference(held_tunnel).copied().collect(),
-            withdraw: held_tunnel.difference(&pulled_tunnel).copied().collect(),
+            announce: pulled_tunnel.difference(held_tunnel).cloned().collect(),
+            withdraw: held_tunnel.difference(&pulled_tunnel).cloned().collect(),
         };
 
         // Leave out halves with no changes, so that handle_update doesn't run
@@ -104,6 +103,36 @@ impl TunnelUpdate {
             ..Default::default()
         }
     }
+
+    /// This update with `element` appended to the path of every announced
+    /// and withdrawn route. A router appends its own ID before it advertises
+    /// routes it learned.
+    pub fn with_path_element(&self, element: &str) -> Self {
+        let push = |x: &TunnelOrigin| {
+            let mut t = x.clone();
+            t.path.push(element.to_owned());
+            t
+        };
+        Self {
+            announce: self.announce.iter().map(push).collect(),
+            withdraw: self.withdraw.iter().map(push).collect(),
+        }
+    }
+
+    /// This update without the announcements that have `hostname` in their
+    /// path, because they have already gone through that router. Withdrawals
+    /// are kept as they are.
+    pub fn break_loops(&self, hostname: &str) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .filter(|x| !x.path.iter().any(|h| h == hostname))
+                .cloned()
+                .collect(),
+            withdraw: self.withdraw.clone(),
+        }
+    }
 }
 
 #[derive(
@@ -115,7 +144,7 @@ pub struct PathVector {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelOrigin {
     pub overlay_prefix: IpNet,
@@ -123,6 +152,9 @@ pub struct TunnelOrigin {
     pub vni: u32,
     #[serde(default)]
     pub metric: u64,
+    /// The routers this route was advertised through, starting with its
+    /// originator. Each router appends itself before advertising the route.
+    pub path: Vec<String>,
 }
 
 impl UnderlayUpdate {
@@ -226,7 +258,32 @@ mod test {
             boundary_addr: "fd00:a::1".parse().unwrap(),
             vni: 99,
             metric,
+            path: vec!["peer".to_string()],
         }
+    }
+
+    // A received update loses the announcements that already passed through
+    // this router, and redistribution appends the router to the rest.
+    // Withdrawals are passed on as they are, since a router never imported a
+    // route whose path contains itself.
+    #[test]
+    fn tunnel_update_breaks_loops_then_extends_paths() {
+        let mut looped = tunnel_origin(0);
+        looped.path =
+            vec!["t0".to_string(), "me".to_string(), "t1".to_string()];
+        let mut fresh = tunnel_origin(0);
+        fresh.path = vec!["t0".to_string(), "me2".to_string()];
+        let update = TunnelUpdate {
+            announce: HashSet::from([looped.clone(), fresh.clone()]),
+            withdraw: HashSet::from([looped.clone()]),
+        };
+
+        let sent = update.break_loops("me").with_path_element("me");
+
+        fresh.path.push("me".to_string());
+        looped.path.push("me".to_string());
+        assert_eq!(sent.announce, HashSet::from([fresh]));
+        assert_eq!(sent.withdraw, HashSet::from([looped]));
     }
 
     // https://github.com/oxidecomputer/maghemite/issues/993: routes we hold
@@ -248,7 +305,7 @@ mod test {
         let update = Update::from_pull_response(
             pr,
             &HashSet::from([x.clone(), y]),
-            &HashSet::from([t]),
+            &HashSet::from([t.clone()]),
         );
 
         let underlay = update.underlay.expect("underlay changes");
@@ -270,13 +327,13 @@ mod test {
         let new_metric = tunnel_origin(100);
         let pr = PullResponse {
             underlay: Some(HashSet::from([new_path.clone()])),
-            tunnel: Some(HashSet::from([new_metric])),
+            tunnel: Some(HashSet::from([new_metric.clone()])),
         };
 
         let update = Update::from_pull_response(
             pr,
             &HashSet::from([old_path.clone()]),
-            &HashSet::from([old_metric]),
+            &HashSet::from([old_metric.clone()]),
         );
 
         let underlay = update.underlay.expect("underlay changes");
@@ -297,7 +354,7 @@ mod test {
         let t = tunnel_origin(100);
         let pr = PullResponse {
             underlay: Some(HashSet::from([pv.clone()])),
-            tunnel: Some(HashSet::from([t])),
+            tunnel: Some(HashSet::from([t.clone()])),
         };
 
         let update = Update::from_pull_response(
