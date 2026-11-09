@@ -8,7 +8,7 @@
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
 use super::ExchangeError;
-use crate::db::{Route, effective_route_set};
+use crate::db::{Route, TunnelForwardingChanges, tunnel_forwarding_changes};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, PeerIdentity, SmContext};
 use crate::{err, inf, wrn};
@@ -498,7 +498,7 @@ fn handle_tunnel_update(
     let mut remove = HashSet::new();
     let db = &ctx.db;
 
-    let before = effective_route_set(&db.imported_tunnel());
+    let before = db.imported_tunnel();
 
     for x in &update.announce {
         import.insert(TunnelRoute {
@@ -532,13 +532,11 @@ fn handle_tunnel_update(
         return;
     }
 
-    let after = effective_route_set(&db.imported_tunnel());
-
-    let to_add = after.difference(&before).copied().collect();
-    let to_del = before.difference(&after).copied().collect();
+    let TunnelForwardingChanges { add, remove } =
+        tunnel_forwarding_changes(&before, &db.imported_tunnel());
 
     if let Err(e) =
-        crate::sys::add_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_add)
+        crate::sys::add_tunnel_routes(&ctx.log, &ctx.config.if_name, &add)
     {
         err!(
             ctx.log,
@@ -549,7 +547,7 @@ fn handle_tunnel_update(
     }
 
     if let Err(e) =
-        crate::sys::remove_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_del)
+        crate::sys::remove_tunnel_routes(&ctx.log, &ctx.config.if_name, &remove)
     {
         err!(
             ctx.log,

@@ -399,6 +399,36 @@ pub fn effective_route_set(
     result
 }
 
+/// Tunnel forwarding entries to change after the imported tunnel table goes
+/// from `before` to `after`.
+pub struct TunnelForwardingChanges {
+    pub add: HashSet<TunnelOrigin>,
+    pub remove: HashSet<TunnelOrigin>,
+}
+
+/// Compare the effective tunnel routes of two imported tunnel tables by
+/// origin. Tunnel forwarding entries carry no nexthop, so an origin that any
+/// peer still provides must not be removed, and one that another peer already
+/// provided need not be added.
+pub fn tunnel_forwarding_changes(
+    before: &HashSet<TunnelRoute>,
+    after: &HashSet<TunnelRoute>,
+) -> TunnelForwardingChanges {
+    let before: HashSet<TunnelOrigin> = effective_route_set(before)
+        .iter()
+        .map(|r| r.origin)
+        .collect();
+    let after: HashSet<TunnelOrigin> = effective_route_set(after)
+        .iter()
+        .map(|r| r.origin)
+        .collect();
+
+    TunnelForwardingChanges {
+        add: after.difference(&before).copied().collect(),
+        remove: before.difference(&after).copied().collect(),
+    }
+}
+
 trait DbKey: Sized {
     fn db_key(&self) -> Vec<u8>;
     fn from_db_key(v: &[u8]) -> Result<Self, Error>;
@@ -432,6 +462,103 @@ mod test {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
+
+    fn tunnel_route(boundary: &str, metric: u64, nexthop: &str) -> TunnelRoute {
+        TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
+                boundary_addr: boundary.parse().unwrap(),
+                vni: 99,
+                metric,
+            },
+            nexthop: nexthop.parse().unwrap(),
+        }
+    }
+
+    /// Check the boundary addresses added and removed when the imported
+    /// tunnel table goes from `before` to `after`.
+    fn assert_tunnel_changes(
+        before: &[TunnelRoute],
+        after: &[TunnelRoute],
+        add: &[&str],
+        remove: &[&str],
+    ) {
+        let addrs = |s: HashSet<TunnelOrigin>| -> BTreeSet<Ipv6Addr> {
+            s.iter().map(|o| o.boundary_addr).collect()
+        };
+        let expected = |xs: &[&str]| -> BTreeSet<Ipv6Addr> {
+            xs.iter().map(|x| x.parse().unwrap()).collect()
+        };
+        let c = tunnel_forwarding_changes(
+            &before.iter().copied().collect(),
+            &after.iter().copied().collect(),
+        );
+        assert_eq!(
+            (addrs(c.add), addrs(c.remove)),
+            (expected(add), expected(remove)),
+        );
+    }
+
+    #[test]
+    fn tunnel_forwarding_kept_while_another_peer_provides_origin() {
+        let a = tunnel_route("fd00:a::1", 0, "fe80:a::1");
+        let b = tunnel_route("fd00:a::1", 0, "fe80:b::1");
+        assert_tunnel_changes(&[a, b], &[b], &[], &[]);
+    }
+
+    #[test]
+    fn tunnel_forwarding_unchanged_when_another_peer_provides_installed_origin()
+    {
+        let a = tunnel_route("fd00:a::1", 0, "fe80:a::1");
+        let b = tunnel_route("fd00:a::1", 0, "fe80:b::1");
+        assert_tunnel_changes(&[b], &[a, b], &[], &[]);
+    }
+
+    #[test]
+    fn tunnel_forwarding_removed_with_last_peer_providing_origin() {
+        let b = tunnel_route("fd00:a::1", 0, "fe80:b::1");
+        let other = tunnel_route("fd00:b::1", 0, "fe80:b::1");
+        assert_tunnel_changes(&[b, other], &[b], &[], &["fd00:b::1"]);
+    }
+
+    #[test]
+    fn tunnel_forwarding_switches_to_inactive_origin_when_active_lost() {
+        let active = tunnel_route("fd00:c::1", 100, "fe80:c::1");
+        let inactive = tunnel_route("fd00:a::1", 0, "fe80:b::1");
+        assert_tunnel_changes(
+            &[active, inactive],
+            &[inactive],
+            &["fd00:a::1"],
+            &["fd00:c::1"],
+        );
+    }
+
+    #[test]
+    fn tunnel_forwarding_unchanged_when_inactive_origin_withdrawn() {
+        // The inactive origin was never installed, so nothing is removed.
+        let active = tunnel_route("fd00:c::1", 100, "fe80:c::1");
+        let inactive = tunnel_route("fd00:a::1", 0, "fe80:b::1");
+        assert_tunnel_changes(&[active, inactive], &[active], &[], &[]);
+    }
+
+    #[test]
+    fn tunnel_forwarding_ignores_differing_nonzero_metrics() {
+        // Metrics only choose between active and inactive origins, so the
+        // same TEP at different non-zero metrics is one forwarding entry.
+        let a = tunnel_route("fd00:a::1", 100, "fe80:a::1");
+        let b = tunnel_route("fd00:a::1", 5, "fe80:b::1");
+        assert_tunnel_changes(&[a, b], &[b], &[], &[]);
+    }
+
+    #[test]
+    fn tunnel_forwarding_unchanged_when_origin_becomes_active() {
+        // The peer changes the origin's metric from 0 to non-zero. The OPTE
+        // entry has no metric, so adding the new origin and removing the old
+        // one would clear the entry that was just set.
+        let inactive = tunnel_route("fd00:a::1", 0, "fe80:a::1");
+        let active = tunnel_route("fd00:a::1", 100, "fe80:a::1");
+        assert_tunnel_changes(&[inactive], &[active], &[], &[]);
+    }
 
     #[test]
     fn test_effective_tunnel_route_set() {
