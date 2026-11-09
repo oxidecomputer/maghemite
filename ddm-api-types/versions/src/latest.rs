@@ -14,13 +14,14 @@ pub mod admin {
 
 pub mod db {
     pub use crate::v1::db::RouterKind;
-    pub use crate::v1::db::TunnelRoute;
 
     pub use crate::v4::db::PeerStatus;
 
     pub use crate::v5::db::Peer;
     pub use crate::v5::db::PeerInfo;
     pub use crate::v5::db::PeerStats;
+
+    pub use crate::v6::db::TunnelRoute;
 }
 
 pub mod exchange {
