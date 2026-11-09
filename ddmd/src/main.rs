@@ -179,7 +179,13 @@ async fn run() {
 
     let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
 
-    termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
+    termination_handler(
+        db.clone(),
+        dpd.clone(),
+        arg.kind,
+        rt.clone(),
+        log.clone(),
+    );
 
     let router_stats = Arc::new(RouterStats::default());
     let peers = sms.iter().map(|x| x.ctx.clone()).collect();
@@ -347,6 +353,7 @@ fn start_state_machines(
 fn termination_handler(
     db: Db,
     dendrite: Option<DpdConfig>,
+    kind: RouterKind,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) {
@@ -369,17 +376,20 @@ fn termination_handler(
                 &rt,
             );
 
-            let imported_tnl = db.imported_tunnel();
-            if let Err(e) = ddm::sys::remove_tunnel_routes(
-                &log,
-                "shutdown-all",
-                &imported_tnl,
-            ) {
-                error!(log, "shutdown tunnel routes: {e}");
+            // Tunnel routes are programmed into OPTE only on servers.
+            if kind == RouterKind::Server {
+                let imported_tnl = db.imported_tunnel();
+                if let Err(e) = ddm::sys::remove_tunnel_routes(
+                    &log,
+                    "shutdown-all",
+                    &imported_tnl,
+                ) {
+                    error!(log, "shutdown tunnel routes: {e}");
+                }
             }
         }
         #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-        let _ = (db, dendrite, rt, log);
+        let _ = (db, dendrite, kind, rt, log);
 
         std::process::exit(SIGTERM_EXIT);
     });

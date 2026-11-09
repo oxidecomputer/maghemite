@@ -357,11 +357,14 @@ impl Exchange {
             routes,
             &self.ctx.rt,
         );
-        if let Err(e) = crate::sys::remove_tunnel_routes(
-            &self.log,
-            &self.ctx.config.if_name,
-            &to_remove_tnl,
-        ) {
+        // Tunnel routes are programmed into OPTE, which only servers have.
+        if self.ctx.config.kind == RouterKind::Server
+            && let Err(e) = crate::sys::remove_tunnel_routes(
+                &self.log,
+                &self.ctx.config.if_name,
+                &to_remove_tnl,
+            )
+        {
             err!(
                 self.log,
                 self.ctx.config.if_name,
