@@ -30,11 +30,12 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use iddqd::IdOrdMap;
 use mg_common::lock;
 use oxnet::Ipv6Net;
-use slog::{Logger, debug, error, info, o};
+use slog::{Logger, error, info, o};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -59,7 +60,7 @@ pub struct RouterStats {
 pub struct HandlerContext {
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
+    pub peers: IdOrdMap<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
     pub router_kind: RouterKind,
@@ -233,7 +234,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
-        for sm in &ctx.peers {
+        for sm in ctx.peers.iter() {
             // Compute status first so peer_status() never runs while we hold
             // any of the InterfaceState mutexes below.
             let status = sm.iface.peer_status();
@@ -588,32 +589,18 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
             sm.run().unwrap();
 
-            ctx.peers.push(sm_ctx.clone());
+            ctx.peers.insert_overwrite(sm_ctx);
         }
-
-        // Ensure our indices are unique and ordered.
-        let mut remove_idx = BTreeSet::default();
 
         for aobj in to_remove.into_iter() {
-            for (i, p) in ctx.peers.iter().enumerate() {
-                if p.iface.external {
-                    if &p.config.aobj_name == aobj {
-                        let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
-                        remove_idx.insert(i);
-                        info!(
-                            ctx.log,
-                            "removing external peeer for address object {aobj}"
-                        );
-                    } else {
-                        debug!(ctx.log, "{aobj} != {}", p.config.aobj_name);
-                    }
-                }
-            }
-        }
-        // remove peers back to front so we don't shift the order out from under
-        // ourselves for the indexes we just gathered.
-        for i in remove_idx.iter().rev() {
-            ctx.peers.remove(*i);
+            let Some(p) =
+                ctx.peers.get(aobj.as_str()).filter(|p| p.iface.external)
+            else {
+                continue;
+            };
+            let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+            info!(ctx.log, "removing external peer for address object {aobj}");
+            ctx.peers.remove(aobj.as_str());
         }
 
         Ok(HttpResponseUpdatedNoContent())
