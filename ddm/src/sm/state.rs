@@ -489,8 +489,11 @@ impl Exchange {
         };
 
         let push = Update { underlay, tunnel };
+        if push.is_empty() {
+            return;
+        }
         super::send(
-            Event::Peer(PeerEvent::Push(push.clone())),
+            Event::Peer(PeerEvent::Push(push)),
             &mut self.ctx.event_channels,
         );
     }
@@ -782,33 +785,40 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
                     // Send the new peer only the routes learned from our own
                     // peer. Every sibling does the same, so together they send
-                    // one copy of the imported table rather than one each.
+                    // one copy of the imported tables rather than one each.
                     //
                     // Sending and registering in this one step keeps our share
                     // consistent: routes we imported before now are in this
                     // push, and later ones reach the new peer through our
                     // Redistribute fan-out once it is registered.
-                    if tx
-                        .send(Event::Peer(PeerEvent::Push(Update {
-                            underlay: Some(
-                                UnderlayUpdate {
-                                    announce: self
-                                        .ctx
-                                        .db
-                                        .imported_from(self.peer.addr)
-                                        .into_iter()
-                                        .map(Into::into)
-                                        .collect(),
-                                    withdraw: HashSet::default(),
-                                }
-                                .with_path_element(self.ctx.router_id.clone()),
-                            ),
-                            tunnel: None,
-                        })))
-                        .is_ok()
-                    {
-                        self.ctx.event_channels.insert(aobj_name, tx);
+                    let db = &self.ctx.db;
+                    let push = Update {
+                        underlay: Some(
+                            UnderlayUpdate::announce(
+                                db.imported_from(self.peer.addr)
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                            )
+                            .with_path_element(self.ctx.router_id.clone()),
+                        ),
+                        tunnel: Some(
+                            TunnelUpdate::announce(
+                                db.imported_tunnel_from(self.peer.addr)
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                            )
+                            .with_path_element(&self.ctx.router_id),
+                        ),
+                    };
+                    if !push.is_empty() {
+                        let _ = tx.send(Event::Peer(PeerEvent::Push(push)));
                     }
+                    // Register unconditionally, as Init and Solicit do. A
+                    // channel whose peer has already shut down is pruned the
+                    // first time a fan-out to it fails.
+                    self.ctx.event_channels.insert(aobj_name, tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {
@@ -833,80 +843,36 @@ impl State for Exchange {
                         update,
                     );
 
-                    let Some(push) = update.underlay else {
+                    let Err(e) = crate::exchange::send_update(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        update,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
                         continue;
                     };
 
-                    if !push.announce.is_empty()
-                        && let Err(e) = crate::exchange::announce_underlay(
-                            &self.ctx,
-                            self.ctx.config.clone(),
-                            push.announce,
-                            &self.peer,
-                            self.ctx.rt.clone(),
+                    err!(self.log, self.ctx.config.if_name, "push: {e}");
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed push",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
                             self.log.clone(),
-                        )
-                    {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "announce: {}",
-                            e,
-                        );
-                        wrn!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "expiring peer {} due to failed announce",
-                            self.peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
-                    }
-                    if !push.withdraw.is_empty()
-                        && let Err(e) = crate::exchange::withdraw_underlay(
-                            &self.ctx,
-                            self.ctx.config.clone(),
-                            push.withdraw,
-                            &self.peer,
-                            self.ctx.rt.clone(),
-                            self.log.clone(),
-                        )
-                    {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "withdraw: {}",
-                            e,
-                        );
-                        wrn!(
-                            self.log,
-                            self.ctx.config.if_name,
-                            "expiring peer {} due to failed withdraw",
-                            self.peer,
-                        );
-                        self.expire_peer(
-                            &exchange_thread,
-                            &pull_stop,
-                            initial_pull,
-                        );
-                        return (
-                            Some(Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            ))),
-                            event,
-                        );
-                    }
+                        ))),
+                        event,
+                    );
                 }
                 Event::Peer(PeerEvent::Redistribute(mut update)) => {
                     dbg!(
@@ -933,6 +899,10 @@ impl State for Exchange {
                             .collect();
                         t.withdraw.retain(|x| !still_imported.contains(x));
                         *t = t.with_path_element(&self.ctx.router_id);
+                    }
+
+                    if update.is_empty() {
+                        continue;
                     }
                     super::send(
                         Event::Peer(PeerEvent::Push(update)),

@@ -185,7 +185,7 @@ pub(crate) fn pull(
     Ok(())
 }
 
-fn send_update(
+pub(crate) fn send_update(
     ctx: &SmContext,
     config: Config,
     update: v3::Update,

@@ -70,6 +70,14 @@ impl Update {
         }
         update
     }
+
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        // compilation barrier. a new route class must be checked here.
+        let Self { underlay, tunnel } = self;
+        underlay.as_ref().is_none_or(UnderlayUpdate::is_empty)
+            && tunnel.as_ref().is_none_or(TunnelUpdate::is_empty)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
@@ -91,6 +99,11 @@ pub struct TunnelUpdate {
 }
 
 impl TunnelUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
     pub fn announce(prefixes: HashSet<TunnelOrigin>) -> Self {
         Self {
             announce: prefixes,
@@ -158,6 +171,11 @@ pub struct TunnelOrigin {
 }
 
 impl UnderlayUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
     pub fn announce(prefixes: HashSet<PathVector>) -> Self {
         Self {
             announce: prefixes,
