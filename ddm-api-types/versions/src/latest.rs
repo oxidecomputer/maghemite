@@ -25,3 +25,7 @@ pub mod exchange {
 pub mod net {
     pub use crate::v1::net::TunnelOrigin;
 }
+
+pub mod external_peers {
+    pub use crate::v3::external_peers::ExternalPeers;
+}

@@ -11,7 +11,7 @@ use super::ExchangeError;
 use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
-use crate::{dbg, err, inf, wrn};
+use crate::{err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
@@ -33,7 +33,7 @@ use slog::{Logger, o};
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
@@ -44,7 +44,6 @@ const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
 pub struct HandlerContext {
     ctx: SmContext,
     peer: Ipv6Addr,
-    log: Logger,
 }
 
 pub(crate) fn announce_underlay(
@@ -151,25 +150,24 @@ fn do_pull_common(
 }
 
 pub(crate) fn pull(
-    ctx: SmContext,
+    ctx: &SmContext,
     addr: Ipv6Addr,
     version: Version,
     rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), ExchangeError> {
     let pr: v3::PullResponse = match version {
-        Version::V2 => do_pull_v2(&ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull(&ctx, &addr, &rt)?,
+        Version::V2 => do_pull_v2(ctx, &addr, &rt)?.into(),
+        Version::V3 => do_pull(ctx, &addr, &rt)?,
     };
+
+    if stop.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     let update = v3::Update::announce(pr);
 
-    let hctx = HandlerContext {
-        ctx,
-        peer: addr,
-        log: log.clone(),
-    };
-    handle_update(&update, &hctx);
+    handle_update(&update, ctx, addr);
 
     Ok(())
 }
@@ -244,9 +242,7 @@ fn send_update_common(
     let resp = client.request(req);
 
     rt.block_on(async move {
-        match timeout(Duration::from_millis(config.exchange_timeout), resp)
-            .await
-        {
+        match timeout(config.exchange_timeout, resp).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 err!(
@@ -271,7 +267,6 @@ pub fn handler(
 ) -> Result<tokio::task::JoinHandle<()>, String> {
     let context = Arc::new(Mutex::new(HandlerContext {
         ctx: ctx.clone(),
-        log: log.clone(),
         peer,
     }));
 
@@ -366,8 +361,9 @@ async fn push_handler_common(
     update: v3::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().await.clone();
+
     tokio::task::spawn_blocking(move || {
-        handle_update(&update, &ctx);
+        handle_update(&update, &ctx.ctx, ctx.peer);
     })
     .await
     .map_err(|e| {
@@ -400,7 +396,7 @@ async fn pull_handler_v2(
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
+            pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
@@ -419,7 +415,7 @@ async fn pull_handler_v2(
     for prefix in &originated {
         let pv = v3::PathVector {
             destination: *prefix,
-            path: vec![ctx.ctx.hostname.clone()],
+            path: vec![ctx.ctx.router_id.clone()],
         };
         underlay.insert(pv);
     }
@@ -476,7 +472,7 @@ async fn pull_handler(
                 destination: route.destination,
                 path: route.path.clone(),
             };
-            pv.path.push(ctx.ctx.hostname.clone());
+            pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
         for route in &ctx.ctx.db.imported_tunnel() {
@@ -495,7 +491,7 @@ async fn pull_handler(
     for prefix in &originated {
         let pv = v3::PathVector {
             destination: *prefix,
-            path: vec![ctx.ctx.hostname.clone()],
+            path: vec![ctx.ctx.router_id.clone()],
         };
         underlay.insert(pv);
     }
@@ -529,50 +525,40 @@ async fn pull_handler(
     }))
 }
 
-fn handle_update(update: &v3::Update, ctx: &HandlerContext) {
-    ctx.ctx
-        .stats
-        .updates_received
-        .fetch_add(1, Ordering::Relaxed);
+fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
+    ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
     if let Some(underlay_update) = &update.underlay {
-        handle_underlay_update(underlay_update, ctx);
+        handle_underlay_update(underlay_update, ctx, peer_addr);
     }
 
     if let Some(tunnel_update) = &update.tunnel {
-        handle_tunnel_update(tunnel_update, ctx);
+        handle_tunnel_update(tunnel_update, ctx, peer_addr);
     }
 
     // distribute updates
 
-    if ctx.ctx.config.kind == RouterKind::Transit {
-        dbg!(
+    if ctx.config.kind == RouterKind::Transit
+        && let Err(e) = ctx
+            .tx
+            .send(Event::Peer(PeerEvent::Redistribute(update.clone())))
+    {
+        wrn!(
             ctx.log,
-            ctx.ctx.config.if_name,
-            "redistributing update to {} peers",
-            ctx.ctx.event_channels.len()
+            ctx.config.if_name,
+            "failed to send update to SM: {e:?}"
         );
-
-        let underlay = update
-            .underlay
-            .as_ref()
-            .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
-
-        let push = v3::Update {
-            underlay,
-            tunnel: update.tunnel.clone(),
-        };
-
-        for ec in &ctx.ctx.event_channels {
-            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
-        }
     }
 }
 
-fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
+fn handle_tunnel_update(
+    update: &v3::TunnelUpdate,
+    ctx: &SmContext,
+    peer_addr: Ipv6Addr,
+) {
     let mut import = HashSet::new();
     let mut remove = HashSet::new();
-    let db = &ctx.ctx.db;
+    let db = &ctx.db;
 
     let before = effective_route_set(&db.imported_tunnel());
 
@@ -584,7 +570,7 @@ fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
                 vni: x.vni,
                 metric: x.metric,
             },
-            nexthop: ctx.peer,
+            nexthop: peer_addr,
         });
     }
     db.import_tunnel(&import);
@@ -597,7 +583,7 @@ fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
                 vni: x.vni,
                 metric: x.metric,
             },
-            nexthop: ctx.peer,
+            nexthop: peer_addr,
         });
     }
     db.delete_import_tunnel(&remove);
@@ -607,72 +593,71 @@ fn handle_tunnel_update(update: &v3::TunnelUpdate, ctx: &HandlerContext) {
     let to_add = after.difference(&before).copied().collect();
     let to_del = before.difference(&after).copied().collect();
 
-    if let Err(e) = crate::sys::add_tunnel_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &to_add,
-    ) {
+    if let Err(e) =
+        crate::sys::add_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_add)
+    {
         err!(
             ctx.log,
-            ctx.ctx.config.if_name,
+            ctx.config.if_name,
             "add tunnel routes: {e}: {:#?}",
             import,
         )
     }
 
-    if let Err(e) = crate::sys::remove_tunnel_routes(
-        &ctx.log,
-        &ctx.ctx.config.if_name,
-        &to_del,
-    ) {
+    if let Err(e) =
+        crate::sys::remove_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_del)
+    {
         err!(
             ctx.log,
-            ctx.ctx.config.if_name,
+            ctx.config.if_name,
             "remove tunnel routes: {e}: {:#?}",
             import,
         )
     }
 
-    ctx.ctx
-        .stats
+    ctx.stats
         .imported_underlay_prefixes
-        .store(ctx.ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
+        .store(ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
-fn handle_underlay_update(update: &v3::UnderlayUpdate, ctx: &HandlerContext) {
+fn handle_underlay_update(
+    update: &v3::UnderlayUpdate,
+    ctx: &SmContext,
+    peer_addr: Ipv6Addr,
+) {
     let mut import = HashSet::new();
     let mut add = Vec::new();
-    let db = &ctx.ctx.db;
+    let db = &ctx.db;
 
     for prefix in &update.announce {
+        // Skip announcements with ourselves in the path e.g. path vector
+        // loop breaking.
+        if prefix.path.contains(&ctx.router_id) {
+            continue;
+        }
         import.insert(Route {
             destination: prefix.destination,
-            nexthop: ctx.peer,
-            ifname: ctx.ctx.config.if_name.clone(),
+            nexthop: peer_addr,
+            ifname: ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
         let mut r = crate::sys::Route::new(
             prefix.destination.addr().into(),
             prefix.destination.width(),
-            ctx.peer.into(),
+            peer_addr.into(),
         );
-        r.ifname.clone_from(&ctx.ctx.config.if_name);
+        r.ifname.clone_from(&ctx.config.if_name);
         add.push(r);
     }
     db.import(&import);
-    crate::sys::add_underlay_routes(
-        &ctx.log,
-        &ctx.ctx.config,
-        add,
-        &ctx.ctx.rt,
-    );
+    crate::sys::add_underlay_routes(&ctx.log, &ctx.config, add, &ctx.rt);
 
     let mut withdraw = HashSet::new();
     for prefix in &update.withdraw {
         withdraw.insert(Route {
             destination: prefix.destination,
-            nexthop: ctx.peer,
-            ifname: ctx.ctx.config.if_name.clone(),
+            nexthop: peer_addr,
+            ifname: ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
     }
@@ -694,20 +679,19 @@ fn handle_underlay_update(update: &v3::UnderlayUpdate, ctx: &HandlerContext) {
                 w.destination.width(),
                 w.nexthop.into(),
             );
-            r.ifname.clone_from(&ctx.ctx.config.if_name);
+            r.ifname.clone_from(&ctx.config.if_name);
             del.push(r);
         }
     }
     crate::sys::remove_underlay_routes(
         &ctx.log,
-        &ctx.ctx.config.if_name,
-        &ctx.ctx.config.dpd,
+        &ctx.config.if_name,
+        &ctx.config.dpd,
         del,
-        &ctx.ctx.rt,
+        &ctx.rt,
     );
 
-    ctx.ctx
-        .stats
+    ctx.stats
         .imported_underlay_prefixes
-        .store(ctx.ctx.db.imported_count() as u64, Ordering::Relaxed);
+        .store(ctx.db.imported_count() as u64, Ordering::Relaxed);
 }

@@ -48,14 +48,14 @@ pub mod bgp {
         pub use crate::v11::bgp::config::Origin4;
         pub use crate::v11::bgp::config::PeerInfo;
 
-        pub use crate::v13::bgp::config::ApplyRequest;
-        pub use crate::v13::bgp::config::BgpPeerConfig;
-        pub use crate::v13::bgp::config::BgpPeerParameters;
-        pub use crate::v13::bgp::config::Md5AuthString;
-        pub use crate::v13::bgp::config::Md5AuthStringError;
-        pub use crate::v13::bgp::config::Neighbor;
-        pub use crate::v13::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v13::bgp::config::UnnumberedNeighbor;
+        pub use crate::v14::bgp::config::ApplyRequest;
+        pub use crate::v14::bgp::config::BgpPeerConfig;
+        pub use crate::v14::bgp::config::BgpPeerParameters;
+        pub use crate::v14::bgp::config::Md5AuthString;
+        pub use crate::v14::bgp::config::Md5AuthStringError;
+        pub use crate::v14::bgp::config::Neighbor;
+        pub use crate::v14::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v14::bgp::config::UnnumberedNeighbor;
     }
 
     pub mod peer {
@@ -68,10 +68,11 @@ pub mod bgp {
     }
 
     pub mod history {
-        pub use crate::v2::bgp::history::FsmEventBuffer;
         pub use crate::v2::bgp::history::MessageDirection;
 
         pub use crate::v11::bgp::history::Origin6;
+
+        pub use crate::v13::bgp::history::HistoryBufferSelector;
     }
 
     pub mod error {
@@ -143,14 +144,15 @@ pub mod bgp {
         pub use crate::v2::bgp::session::FsmStateKind;
 
         pub use crate::v5::bgp::session::ExportedSelector;
-        pub use crate::v5::bgp::session::FsmHistoryRequest;
         pub use crate::v5::bgp::session::FsmHistoryResponse;
-        pub use crate::v5::bgp::session::MessageHistoryRequest;
 
         pub use crate::v11::bgp::session::MAX_MESSAGE_HISTORY;
         pub use crate::v11::bgp::session::MessageHistory;
         pub use crate::v11::bgp::session::MessageHistoryEntry;
         pub use crate::v11::bgp::session::MessageHistoryResponse;
+
+        pub use crate::v13::bgp::session::FsmHistoryRequest;
+        pub use crate::v13::bgp::session::MessageHistoryRequest;
     }
 }
 
@@ -161,9 +163,9 @@ pub mod rdb {
     }
 
     pub mod neighbor {
-        pub use crate::v13::rdb::neighbor::BgpNeighborInfo;
-        pub use crate::v13::rdb::neighbor::BgpNeighborParameters;
-        pub use crate::v13::rdb::neighbor::BgpUnnumberedNeighborInfo;
+        pub use crate::v14::rdb::neighbor::BgpNeighborInfo;
+        pub use crate::v14::rdb::neighbor::BgpNeighborParameters;
+        pub use crate::v14::rdb::neighbor::BgpUnnumberedNeighborInfo;
     }
 
     pub mod path {

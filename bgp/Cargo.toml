@@ -11,6 +11,7 @@ mg-api-types-versions.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true
+slog-error-chain.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
@@ -22,7 +23,6 @@ socket2.workspace = true
 rhai.workspace = true
 itertools.workspace = true
 oxnet.workspace = true
-uuid.workspace = true
 rand.workspace = true
 iddqd.workspace = true
 clap = { workspace = true, optional = true }
@@ -36,6 +36,7 @@ pretty_assertions.workspace = true
 lazy_static.workspace = true
 proptest.workspace = true
 serial_test.workspace = true
+strum.workspace = true
 
 [features]
 default = ["libnet"]

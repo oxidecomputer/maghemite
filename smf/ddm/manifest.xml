@@ -29,6 +29,7 @@
      <propval name='dns_servers' type='astring' value='unknown' />
      <propval name='rack_uuid' type='astring' value='unknown' />
      <propval name='sled_uuid' type='astring' value='unknown' />
+     <propval name='router_id' type='astring' value='unknown' />
      <property name='interfaces' type='astring'>
      </property>
    </property_group>

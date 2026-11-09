@@ -146,6 +146,10 @@ pub enum HistoryCmd {
         #[clap(long, default_value = "both")]
         direction: String,
 
+        /// Which buffer to display: 'major' (default, excludes keepalives) or 'all'.
+        #[clap(long, default_value = "major")]
+        buffer: String,
+
         /// Number of records to display. Use 'all' or '0' to show everything.
         #[clap(long, default_value = "20")]
         limit: String,
@@ -955,14 +959,17 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 asn,
                 peer,
                 direction,
+                buffer,
                 limit,
                 wide,
             } => {
                 let asn = asn.ok_or_else(|| {
                     anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
                 })?;
-                get_message_history(c, asn, peer, &direction, &limit, wide)
-                    .await?
+                get_message_history(
+                    c, asn, peer, &direction, &buffer, &limit, wide,
+                )
+                .await?
             }
         },
 
@@ -1595,8 +1602,8 @@ async fn get_fsm_history(
 ) -> Result<()> {
     // Parse buffer type for server-side filtering
     let buffer_type = match buffer {
-        "all" => Some(mg_api_types::bgp::history::FsmEventBuffer::All),
-        _ => Some(mg_api_types::bgp::history::FsmEventBuffer::Major), // Default to major
+        "all" => Some(mg_api_types::bgp::history::HistoryBufferSelector::All),
+        _ => Some(mg_api_types::bgp::history::HistoryBufferSelector::Major), // Default to major
     };
 
     let buffer_name = match buffer {
@@ -1727,6 +1734,7 @@ async fn get_message_history(
     asn: u32,
     peer: String,
     direction: &str,
+    buffer: &str,
     limit_str: &str,
     wide: bool,
 ) -> Result<()> {
@@ -1737,6 +1745,18 @@ async fn get_message_history(
             Some(mg_api_types::bgp::history::MessageDirection::Received)
         }
         _ => None, // "both" or any other value means no filter
+    };
+
+    // Parse buffer type for server-side filtering
+    let (buffer_type, buffer_name) = match buffer {
+        "all" => (
+            mg_api_types::bgp::history::HistoryBufferSelector::All,
+            "All Messages",
+        ),
+        _ => (
+            mg_api_types::bgp::history::HistoryBufferSelector::Major,
+            "Major Messages",
+        ), // Default to major
     };
 
     // Parse limit ("all" or "0" means unlimited)
@@ -1761,6 +1781,7 @@ async fn get_message_history(
             asn,
             peer: Some(peer_id),
             direction: dir,
+            buffer: Some(buffer_type),
         })
         .await?
         .into_inner();
@@ -1811,7 +1832,8 @@ async fn get_message_history(
 
     println_nopipe!(
         "\n{}",
-        format!("BGP Message History - Peer: {}", peer).dimmed()
+        format!("BGP Message History - Peer: {} - {}", peer, buffer_name)
+            .dimmed()
     );
     println_nopipe!("{}", "=".repeat(80).dimmed());
     println_nopipe!(

@@ -18,12 +18,12 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::mem::MaybeUninit;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, Shutdown, SocketAddrV6};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread::{sleep, spawn};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
@@ -98,7 +98,7 @@ pub(crate) fn handler(
     iface: Arc<InterfaceState>,
     stats: Arc<SessionStats>,
     log: Logger,
-) -> Result<(), DiscoveryError> {
+) -> Result<Arc<AtomicBool>, DiscoveryError> {
     // listening on 2 sockets, solicitations are sent to DDM_MADDR, but
     // advertisements are sent to the unicast source addresses of a
     // solicitation. Binding to a link-scoped multicast address is required for
@@ -116,16 +116,12 @@ pub(crate) fn handler(
     mc.bind(&mc_sa)?;
     mc.join_multicast_v6(&DDM_MADDR, config.if_index)?;
     mc.set_multicast_loop_v6(false)?;
-    mc.set_read_timeout(Some(Duration::from_millis(
-        config.discovery_read_timeout,
-    )))?;
+    mc.set_read_timeout(Some(config.discovery_read_timeout))?;
 
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
     uc.bind(&uc_sa)?;
-    uc.set_read_timeout(Some(Duration::from_millis(
-        config.discovery_read_timeout,
-    )))?;
+    uc.set_read_timeout(Some(config.discovery_read_timeout))?;
 
     let ctx = HandlerContext {
         mc_socket: Arc::new(mc),
@@ -153,9 +149,9 @@ pub(crate) fn handler(
         stop.clone(),
         stats.clone(),
     )?;
-    expire(ctx, stop, stats.clone())?;
+    expire(ctx, stop.clone(), stats.clone())?;
 
-    Ok(())
+    Ok(stop)
 }
 
 fn send_solicitations(
@@ -165,13 +161,17 @@ fn send_solicitations(
 ) {
     spawn(move || {
         loop {
+            if stop.load(Ordering::Relaxed) {
+                inf!(ctx.log, ctx.config.if_name, "stopping solicitor");
+                break;
+            }
             if let Err(e) = solicit(&ctx) {
                 err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
                 stop.store(true, Ordering::Relaxed);
                 break;
             }
             stats.solicitations_sent.fetch_add(1, Ordering::Relaxed);
-            sleep(Duration::from_millis(ctx.config.solicit_interval));
+            sleep(ctx.config.solicit_interval);
         }
     });
 }
@@ -197,7 +197,7 @@ fn expire(
             };
             if let Some(nbr) = &*guard {
                 let dt = Instant::now().duration_since(nbr.last_seen);
-                if dt.as_millis() > u128::from(ctx.config.expire_threshold) {
+                if dt > ctx.config.expire_threshold {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
@@ -212,9 +212,7 @@ fn expire(
                         ctx.log.clone(),
                         &ctx.config.if_name,
                     );
-                } else if dt.as_millis()
-                    > u128::from(ctx.config.solicit_interval)
-                {
+                } else if dt > ctx.config.solicit_interval {
                     wrn!(
                         &ctx.log,
                         ctx.config.if_name,
@@ -230,17 +228,22 @@ fn expire(
             // sockets by trying to listen on a unicast address that a socket
             // waiting to be dropped is already listening on.
             if stop.load(Ordering::Relaxed) {
+                inf!(
+                    &ctx.log,
+                    ctx.config.if_name,
+                    "stopping discovery expiration thread",
+                );
                 let event = ctx.event.clone();
                 let log = ctx.log.clone();
                 let if_name = ctx.config.if_name.clone();
                 let wait = ctx.config.discovery_read_timeout;
                 drop(ctx);
                 // Ensure read handlers have registered the stop event.
-                sleep(Duration::from_millis(wait));
+                sleep(wait);
                 emit_solicit_fail(event, log, &if_name);
                 break;
             }
-            sleep(Duration::from_millis(ctx.config.solicit_interval));
+            sleep(ctx.config.solicit_interval);
         }
     });
     Ok(())
@@ -258,6 +261,18 @@ fn listen(
                 handle_msg(&ctx, msg, &addr, &stats);
             };
             if stop.load(Ordering::Relaxed) {
+                inf!(
+                    &ctx.log,
+                    ctx.config.if_name,
+                    "stopping discovery handler"
+                );
+                if let Err(e) = s.shutdown(Shutdown::Both) {
+                    wrn!(
+                        &ctx.log,
+                        ctx.config.if_name,
+                        "failed to shut down discovery socket {e:?}",
+                    );
+                }
                 break;
             }
         }

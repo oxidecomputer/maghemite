@@ -64,7 +64,10 @@ impl FrrNode {
 
     pub async fn start_frr(&self, d: &Runner) -> Result<()> {
         info!(d.log, "{}: starting frr", self.name(d));
-        d.exec(self.0, "systemctl start frr").await?;
+        // Scenarios intentionally cycle FRR often enough to exhaust systemd's
+        // start limit before its interval resets.
+        d.exec(self.0, "systemctl reset-failed frr && systemctl start frr")
+            .await?;
         // XXX do better than arbitrary wait
         sleep(Duration::from_secs(5)).await;
         Ok(())
@@ -101,15 +104,21 @@ impl FrrNode {
         Ok(())
     }
 
-    /// Query FRR for the local status of a BFD session to `peer`. Returns
-    /// `true` iff bfdd reports the session as `up`.
-    pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {
+    /// Query FRR for the local status of multiple BFD sessions. Returns `true`
+    /// iff bfdd reports every requested session as `up`.
+    pub async fn bfd_peers_up(
+        &self,
+        d: &Runner,
+        wanted: &[IpAddr],
+    ) -> Result<bool> {
         let output = self.shell(d, "show bfd peers json").await?;
         let peers: Vec<FrrBfdPeer> = serde_json::from_str(&output)
             .context("parse frr bfd peers json")?;
-        Ok(peers
-            .iter()
-            .any(|p| p.peer == peer && p.status.eq_ignore_ascii_case("up")))
+        Ok(wanted.iter().all(|wanted| {
+            peers.iter().any(|peer| {
+                peer.peer == *wanted && peer.status.eq_ignore_ascii_case("up")
+            })
+        }))
     }
 
     /// Capture protocol-specific FRR state via vtysh, plus Linux network state.

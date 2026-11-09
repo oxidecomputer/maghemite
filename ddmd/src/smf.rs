@@ -60,14 +60,16 @@ fn refresh_stats_server(
         }
     };
 
-    let context = lock!(ctx);
-    let mut handler = lock!(context.stats_handler);
+    let (handler, log) = {
+        let ctx = lock!(ctx);
+        (ctx.stats_handler.clone(), ctx.log.clone())
+    };
+    let mut handler = lock!(handler);
     if handler.is_none() {
         info!(log, "starting stats server on smf refresh");
         match ddm::oxstats::start_server(
             DDM_STATS_PORT,
-            context.peers.clone(),
-            context.stats.clone(),
+            ctx.clone(),
             hostname,
             props.rack_uuid,
             props.sled_uuid,

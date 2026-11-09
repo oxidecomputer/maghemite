@@ -90,7 +90,10 @@ pub fn start_server(
             dropshot::ClientSpecifiesVersionInHeader::new(
                 omicron_common::api::VERSION_HEADER,
                 mg_api::latest_version(),
-            ),
+            )
+            // Reject requests for versions older than the oldest one that
+            // this server still supports.
+            .min_version(mg_api::oldest_version()),
         )))
         .start()
         .map_err(|e| format!("admin: server start error: {e:?}"))?;

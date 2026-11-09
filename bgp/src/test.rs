@@ -5,14 +5,16 @@
 use crate::{
     BGP_PORT,
     config::{PeerConfig, RouterConfig},
-    connection::{BgpConnection, BgpListener},
-    connection_channel::{BgpConnectionChannel, BgpListenerChannel},
-    connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
+    connection::{
+        BgpConnection, BgpListener,
+        channel::{BgpConnectionChannel, BgpListenerChannel},
+        tcp::{BgpConnectionTcp, BgpListenerTcp},
+    },
     dispatcher::Dispatcher,
     router::{EnsureSessionResult, Router, SessionMap},
     session::{
-        AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
-        SessionInfo, SessionRunner,
+        AdminEvent, ConnectionKind, FsmDriver, FsmEvent, FsmStateKind,
+        NeighborInfo, PeerId, SessionInfo, SessionRunner, ShutdownState,
     },
     unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
@@ -35,9 +37,9 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
-        mpsc::channel,
+        mpsc::{Receiver, channel},
     },
-    thread::{Builder, sleep},
+    thread::{Builder, JoinHandle, sleep},
     time::{Duration, Instant},
 };
 
@@ -119,21 +121,32 @@ fn ensure_loop_ips(addresses: &[IpAddr]) -> IpAllocation {
 struct TestRouter<Cnx: BgpConnection + 'static> {
     router: Arc<Router<Cnx>>,
     dispatcher: Arc<Dispatcher<Cnx>>,
+    listener: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
     fn shutdown(&self) {
         self.router.shutdown();
-        self.dispatcher.shutdown();
+        let mut listener = lock!(self.listener);
+        if let Some(handle) = listener.take() {
+            self.dispatcher.shutdown();
+            if let Err(panic) = handle.join()
+                && !std::thread::panicking()
+            {
+                std::panic::resume_unwind(panic);
+            }
+        }
     }
 
     fn run<Listener: BgpListener<Cnx> + 'static>(&self) {
+        let mut listener = lock!(self.listener);
+        assert!(listener.is_none(), "listener is already running");
         self.router.run();
         let d = self.dispatcher.clone();
         let listen_addr = self.dispatcher.listen_addr().to_string();
         let listen_addr_for_log = listen_addr.clone();
         eprintln_nopipe!("Spawning Dispatcher thread for {}", listen_addr);
-        Builder::new()
+        let handle = Builder::new()
             .name(format!("bgp-listener-{}", listen_addr))
             .spawn(move || {
                 d.run::<Listener>();
@@ -143,13 +156,20 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
                 );
             })
             .expect("failed to spawn dispatcher thread");
+        *listener = Some(handle);
+    }
+}
+
+impl<Cnx: BgpConnection + 'static> Drop for TestRouter<Cnx> {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
 /// Test-specific enum describing which route address families are exchanged
 /// in a BGP session. This is independent of the TCP/IP connection address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RouteExchange {
+pub(crate) enum RouteExchange {
     Ipv4 {
         nexthop: Option<IpAddr>,
     },
@@ -185,7 +205,7 @@ struct NeighborConfig {
 /// * `local_addr` - Local bind address for this session
 /// * `remote_addr` - Remote peer address (for nexthop defaults)
 /// * `passive` - Whether to use passive TCP establishment
-fn create_test_session_info(
+pub(crate) fn create_test_session_info(
     route_exchange: RouteExchange,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
@@ -283,6 +303,31 @@ fn create_test_session_info(
     }
 }
 
+/// Create an unregistered session without starting its FSM or clock thread,
+/// leaving the event receiver for tests to inject or inspect events directly.
+pub(crate) fn create_test_session<Cnx: BgpConnection + 'static>(
+    router: &Arc<Router<Cnx>>,
+    name: &str,
+    peer_addr: SocketAddr,
+    config: SessionInfo,
+) -> (Arc<SessionRunner<Cnx>>, Receiver<FsmEvent<Cnx>>) {
+    let (tx, rx) = channel();
+    let session = Arc::new(SessionRunner::new_without_clock_thread(
+        Arc::new(Mutex::new(config)),
+        tx,
+        NeighborInfo {
+            name: Arc::new(Mutex::new(name.to_string())),
+            peer_group: String::new(),
+            peer: PeerId::Ip(peer_addr.ip()),
+            port: NonZeroU16::new(peer_addr.port())
+                .expect("test peer port is non-zero"),
+        },
+        router.clone(),
+        None,
+    ));
+    (session, rx)
+}
+
 fn test_setup<Cnx, Listener>(
     test_name: &str,
     routers: &[LogicalRouter],
@@ -352,22 +397,12 @@ where
             sessions.clone(),
         ));
 
-        // Start router and dispatcher
-        router.run();
-        let d = dispatcher.clone();
-        let listen_addr = dispatcher.listen_addr().to_string();
-        let listen_addr_for_log = listen_addr.clone();
-        eprintln_nopipe!("Spawning Dispatcher thread for {}", listen_addr);
-        Builder::new()
-            .name(format!("bgp-listener-{}", listen_addr))
-            .spawn(move || {
-                d.run::<Listener>();
-                eprintln_nopipe!(
-                    "Dispatcher thread for {} exiting",
-                    listen_addr_for_log
-                );
-            })
-            .expect("failed to spawn dispatcher thread");
+        let test_router = TestRouter {
+            router: router.clone(),
+            dispatcher,
+            listener: Mutex::new(None),
+        };
+        test_router.run::<Listener>();
 
         // Set up all peer sessions for this router
         for neighbor in &logical_router.neighbors {
@@ -426,10 +461,7 @@ where
         }
 
         // Store components
-        test_routers.push(TestRouter {
-            router: router.clone(),
-            dispatcher,
-        });
+        test_routers.push(test_router);
     }
 
     // Start all sessions
@@ -440,6 +472,96 @@ where
     }
 
     (test_routers, ip_guard)
+}
+
+#[test]
+#[serial_test::parallel]
+fn test_router_listener_shutdown_and_restart() {
+    let (routers, _guard) =
+        test_setup::<BgpConnectionChannel, BgpListenerChannel>(
+            "listener_restart",
+            &[LogicalRouter {
+                name: "listener_restart".into(),
+                asn: Asn::FourOctet(64512),
+                id: 1,
+                listen_addr: "192.0.2.250:10179".parse().unwrap(),
+                bind_addr: None,
+                neighbors: vec![],
+            }],
+        );
+    let router = &routers[0];
+    for _ in 0..3 {
+        router.shutdown();
+        assert_eq!(
+            Arc::strong_count(&router.dispatcher),
+            1,
+            "shutdown returned before the listener released its dispatcher",
+        );
+        // Repeated shutdown must not leave a request for the next listener.
+        router.shutdown();
+        router.run::<BgpListenerChannel>();
+    }
+    let dispatcher = router.dispatcher.clone();
+    drop(routers);
+    assert_eq!(Arc::strong_count(&dispatcher), 1);
+}
+
+#[test]
+#[serial_test::parallel]
+fn unknown_peers_do_not_restart_listener() {
+    use crate::{
+        IO_TIMEOUT, connection::ListenerAcceptError, dispatcher::AcceptLoopExit,
+    };
+    use std::io::Read;
+    use std::net::TcpStream;
+
+    let log = slog::Logger::root(slog::Discard, slog::o!());
+    let sessions = Arc::new(Mutex::new(SessionMap::new()));
+    let dispatcher = Arc::new(Dispatcher::<BgpConnectionTcp>::new(
+        sessions.clone(),
+        "127.0.0.1:0".into(),
+        log.clone(),
+        None,
+    ));
+    let listener =
+        BgpListenerTcp::bind(dispatcher.listen_addr(), log.clone(), None)
+            .unwrap();
+    let addr = listener.bind_addr();
+    let timeout = Duration::from_secs(5);
+
+    // Assert the actual error before handing this listener to the dispatcher.
+    // The empty session map makes the loopback client an unknown peer.
+    let probe = TcpStream::connect_timeout(&addr, timeout).unwrap();
+    match listener.accept(log, sessions, IO_TIMEOUT) {
+        Err(ListenerAcceptError::UnknownPeer(peer)) => {
+            assert_eq!(peer, PeerId::Ip(probe.local_addr().unwrap().ip()));
+        }
+        Err(e) => panic!("expected UnknownPeer, got {e:?}"),
+        Ok(_) => panic!("accepted an unknown peer"),
+    }
+    drop(probe);
+
+    // Serve the same listener: rejecting further peers must not request Rebind.
+    let d = dispatcher.clone();
+    let handle = std::thread::spawn(move || d.accept_loop(listener));
+    // Defer failures until after shutdown and join so no worker is left running.
+    let result = (|| -> anyhow::Result<()> {
+        for _ in 0..3 {
+            let mut conn = TcpStream::connect_timeout(&addr, timeout)?;
+            conn.set_read_timeout(Some(timeout))?;
+            let mut byte = [0];
+            // Wait for rejection to close the socket. The exit assertion below
+            // checks the dispatcher's decision after accept() returns.
+            anyhow::ensure!(
+                conn.read(&mut byte)? == 0,
+                "peer was not rejected"
+            );
+        }
+        Ok(())
+    })();
+    dispatcher.shutdown();
+    assert_eq!(handle.join().unwrap(), AcceptLoopExit::Shutdown);
+    result.unwrap();
 }
 
 // This test effectively does the following:
@@ -1224,6 +1346,13 @@ fn test_three_router_chain_tcp_ipv6() {
     )
 }
 
+fn print_thread_stacks() {
+    match mg_common::test::dump_thread_stacks() {
+        Ok(stacks) => eprintln_nopipe!("=== Thread stack traces ===\n{stacks}"),
+        Err(e) => eprintln_nopipe!("Could not dump thread stacks: {e}"),
+    }
+}
+
 /// Test that threads are properly cleaned up throughout the neighbor lifecycle.
 /// This test verifies that no threads leak when:
 /// 1. A neighbor is created and established
@@ -1245,6 +1374,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     // This handles the case where previous tests' threads are still being cleaned up by the OS.
     // We count only threads with names starting with "bgp-" to exclude
     // dependency threads (slog-async, rdb reapers, etc.)
+    let mut baseline_stacks_printed = false;
     wait_for!(
         {
             let count = mg_common::test::count_threads_with_prefix("bgp-")
@@ -1253,6 +1383,9 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
                 eprintln_nopipe!(
                     "Waiting for baseline to stabilize (current: {count})"
                 );
+                if !std::mem::replace(&mut baseline_stacks_printed, true) {
+                    print_thread_stacks();
+                }
             }
             count == 0
         },
@@ -1385,17 +1518,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
                 eprintln_nopipe!(
                     "BGP thread count after shutdown ({after_shutdown} != baseline {baseline})"
                 );
-
-                // Dump detailed thread stacks
-                match mg_common::test::dump_thread_stacks() {
-                    Ok(stacks) => {
-                        eprintln_nopipe!("=== Thread stack traces ===");
-                        eprintln_nopipe!("{stacks}");
-                    }
-                    Err(e) => {
-                        eprintln_nopipe!("Could not dump thread stacks: {e}");
-                    }
-                }
+                print_thread_stacks();
             }
             after_shutdown == baseline
         },
@@ -4237,4 +4360,445 @@ fn test_unnumbered_interface_lifecycle() {
     router2.shutdown();
     disp1.shutdown();
     disp2.shutdown();
+}
+
+#[test]
+#[serial_test::parallel]
+fn router_teardown_leaves_other_routers_sessions_alone() {
+    let test_name = "router_teardown_leaves_other_routers_sessions_alone";
+    let log = init_file_logger(&format!("{test_name}.log"));
+
+    // Create a database and single (shared) session map for both routers.
+    let db = rdb::test::get_test_db(test_name, log.clone())
+        .expect("created test db");
+    let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+
+    let router_a = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64512),
+            id: 1,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+    let router_b = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64513),
+            id: 2,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    let bind_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::1]:{TEST_BGP_PORT}"));
+    let peer_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::2]:{TEST_BGP_PORT}"));
+    let (event_tx, event_rx) = channel();
+
+    let result = router_b
+        .ensure_session(
+            PeerConfig {
+                name: "peer-b".to_string(),
+                group: String::new(),
+                id: PeerId::Ip(peer_addr.ip()),
+                port: NonZeroU16::new(peer_addr.port()).unwrap_or(BGP_PORT),
+                hold_time: TEST_HOLD_TIME_SECS,
+                idle_hold_time: 0,
+                delay_open: 0,
+                connect_retry: TEST_CONNECT_RETRY_SECS,
+                keepalive: 3,
+                resolution: 100,
+            },
+            Some(bind_addr),
+            event_tx,
+            event_rx,
+            create_test_session_info(
+                RouteExchange::Ipv6 { nexthop: None },
+                bind_addr,
+                peer_addr,
+                // passive = true so the connector thread doesn't run.
+                //
+                // What happens if we set passive = false? The big risk would be
+                // the connector thread perturbing other tests. But as of this
+                // writing, bind_addr and peer_addr have scope ID 0, and the
+                // other tests bind against fe80::1/2 with a non-zero scope ID.
+                // (The BgpConnectionChannel `NET` static keys endpoints by
+                // exact SocketAddr, including scope_id.) So the worst that can
+                // happen is that the connector would fail forever, spamming the
+                // log and the process-global CONNECTION_ATTEMPTS list. But
+                // passive also stays robust if a future test ever binds these
+                // exact endpoints with scope ID 0.
+                true,
+            ),
+            None,
+        )
+        .expect("created session on router b");
+
+    let session_b = match result {
+        EnsureSessionResult::New(s) => s,
+        EnsureSessionResult::Updated(s) => s,
+    };
+    let peer_b = session_b.peer_id();
+
+    let assert_b_intact = |after: &str| {
+        let state = session_b.shutdown_state();
+        let unaltered = match state {
+            ShutdownState::NotRequested => true,
+            ShutdownState::Requested | ShutdownState::Complete => false,
+        };
+        assert!(
+            unaltered,
+            "{after} shouldn't alter router b's session (shutdown state {state:?})"
+        );
+        assert!(
+            lock!(sessions).contains_key(&peer_b),
+            "{after} shouldn't remove router b's session from the shared map"
+        );
+    };
+
+    assert_b_intact("creating router b's session");
+
+    // run() reports the spawn count.
+    assert_eq!(
+        router_a.run(),
+        0,
+        "router a's run() shouldn't spawn threads for sessions it does not own"
+    );
+    assert_b_intact("router a's run()");
+
+    router_a.shutdown();
+    assert_b_intact("router a's shutdown");
+
+    drop(router_a);
+    assert_b_intact("dropping router a");
+
+    // Delete the session -- don't just shut it down. delete_session both
+    // removes the map entry (breaking the router Arc cycle) and requests FSM
+    // shutdown, so that once the FSM thread exits and this test's own Arc
+    // drops, nothing keeps the runner (and via it, the clock thread) alive.
+    router_b.delete_session(peer_b);
+}
+
+#[test]
+#[serial_test::parallel]
+fn recreated_router_does_not_claim_predecessors_sessions() {
+    let test_name = "recreated_router_does_not_claim_predecessors_sessions";
+    let log = init_file_logger(&format!("{test_name}.log"));
+
+    let db = rdb::test::get_test_db(test_name, log.clone())
+        .expect("created test db");
+    let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+
+    // Ensure that multiple routers with the same config aren't confused with
+    // each other (that is, we use RouterInstanceId to distinguish between
+    // them).
+    let config = RouterConfig {
+        asn: Asn::FourOctet(64514),
+        id: 3,
+    };
+
+    let old_router = Arc::new(Router::new(
+        config,
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    let bind_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::3]:{TEST_BGP_PORT}"));
+    let peer_addr: SocketAddr =
+        sockaddr!(&format!("[fe80::4]:{TEST_BGP_PORT}"));
+    // Register without starting an FSM: run() below must be its only start.
+    let (session_old, event_rx) = create_test_session(
+        &old_router,
+        "peer-old",
+        peer_addr,
+        create_test_session_info(
+            RouteExchange::Ipv6 { nexthop: None },
+            bind_addr,
+            peer_addr,
+            true,
+        ),
+    );
+    let driver = Arc::new(FsmDriver::new(session_old.clone(), event_rx));
+    assert!(lock!(sessions).insert_overwrite(driver.clone()).is_none());
+    let peer_old = session_old.peer_id();
+
+    // Recreate the router with an identical config, sharing the map. This
+    // mirrors mgd's delete-and-recreate flow, where a stale handle to the old
+    // instance can outlive creation of the new one.
+    let new_router = Arc::new(Router::new(
+        config,
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    assert_eq!(
+        new_router.run(),
+        0,
+        "recreated router's run() shouldn't spawn threads for the old \
+         instance's sessions"
+    );
+
+    new_router.shutdown();
+    let state = session_old.shutdown_state();
+    let unaltered = match state {
+        ShutdownState::NotRequested => true,
+        ShutdownState::Requested | ShutdownState::Complete => false,
+    };
+    assert!(
+        unaltered,
+        "recreated router's shutdown shouldn't stop the old instance's \
+         session (shutdown state {state:?})"
+    );
+    assert!(
+        lock!(sessions).contains_key(&peer_old),
+        "recreated router's shutdown shouldn't remove the old instance's \
+         session from the shared map"
+    );
+
+    // Ensure that the owning instance's run() and shutdown() do reach
+    // its own session.
+    assert_eq!(
+        old_router.run(),
+        1,
+        "owning router's run() should spawn a thread for its session"
+    );
+    old_router.shutdown();
+    let state = session_old.shutdown_state();
+    let stopped = match state {
+        ShutdownState::NotRequested => false,
+        ShutdownState::Requested | ShutdownState::Complete => true,
+    };
+    assert!(
+        stopped,
+        "owning router's shutdown should stop its session \
+         (shutdown state {state:?})"
+    );
+    assert!(
+        lock!(sessions).contains_key(&peer_old),
+        "shutdown stops sessions but shouldn't remove them from the map"
+    );
+
+    // See router_teardown_leaves_other_routers_sessions_alone for why
+    // deletion (not just shutdown) is needed for cleanup.
+    old_router.delete_session(peer_old);
+    // The map entry is gone; only this test and the FSM worker can own driver.
+    wait_for_eq!(
+        Arc::strong_count(&driver),
+        1,
+        "old router's FSM worker should exit before the test returns"
+    );
+}
+
+#[test]
+#[serial_test::parallel]
+fn admin_events_do_not_reach_other_routers_sessions() {
+    let test_name = "admin_events_do_not_reach_other_routers_sessions";
+    let log = init_file_logger(&format!("{test_name}.log"));
+
+    let db = rdb::test::get_test_db(test_name, log.clone())
+        .expect("created test db");
+
+    let sessions: Arc<Mutex<SessionMap<BgpConnectionChannel>>> =
+        Arc::new(Mutex::new(SessionMap::new()));
+
+    let router_a = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64512),
+            id: 1,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+    let router_b = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64513),
+            id: 2,
+        },
+        log.clone(),
+        db.db().clone(),
+        sessions.clone(),
+    ));
+
+    // This is built directly rather than via ensure_session, so that no FSM
+    // thread is spawned to drain the probe channel.
+    fn install_test_session(
+        sessions: &Arc<Mutex<SessionMap<BgpConnectionChannel>>>,
+        router: &Arc<Router<BgpConnectionChannel>>,
+        name: &str,
+        bind_addr: SocketAddr,
+        peer_addr: SocketAddr,
+    ) -> (
+        Arc<SessionRunner<BgpConnectionChannel>>,
+        std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+    ) {
+        let (session, probe_rx) = create_test_session(
+            router,
+            name,
+            peer_addr,
+            create_test_session_info(
+                RouteExchange::Ipv6 { nexthop: None },
+                bind_addr,
+                peer_addr,
+                true,
+            ),
+        );
+        // FsmDriver::new needs a receiver -- ordinarily, `probe_rx` would be
+        // provided here. But we deliberately do not pass that in so that the
+        // test can receive events from it instead.
+        let (_driver_tx, driver_rx) = channel();
+        let displaced = lock!(sessions).insert_overwrite(Arc::new(
+            FsmDriver::new(session.clone(), driver_rx),
+        ));
+        assert!(
+            displaced.is_none(),
+            "inserting {name} displaced another session; each test session \
+             must use a distinct peer address"
+        );
+        (session, probe_rx)
+    }
+
+    // Set up two sessions for router_a and one for router_b. Two sessions show
+    // that admin event delivery happens to both.
+    let (session_a1, probe_a1_rx) = install_test_session(
+        &sessions,
+        &router_a,
+        "peer-a1",
+        sockaddr!(&format!("[fe80::10]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[fe80::11]:{TEST_BGP_PORT}")),
+    );
+    let (session_a2, probe_a2_rx) = install_test_session(
+        &sessions,
+        &router_a,
+        "peer-a2",
+        sockaddr!(&format!("[fe80::12]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[fe80::13]:{TEST_BGP_PORT}")),
+    );
+    let (session_b, probe_b_rx) = install_test_session(
+        &sessions,
+        &router_b,
+        "peer-b",
+        sockaddr!(&format!("[fe80::14]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[fe80::15]:{TEST_BGP_PORT}")),
+    );
+
+    // Note that the clock threads hold clones of the probe senders, but their
+    // timers stay disabled while the FSM isn't running, so nothing but
+    // send_admin_event can reach either probe channel.
+    fn admin_events_delivered(
+        rx: &std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+    ) -> Vec<AdminEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            // (This is an exhaustive match so that new variants result in
+            // compile errors.)
+            match event {
+                FsmEvent::Admin(admin) => events.push(admin),
+                FsmEvent::Connection(_) | FsmEvent::Session(_) => {
+                    panic!("unexpected {} on the probe channel", event.title())
+                }
+            }
+        }
+        events
+    }
+
+    #[track_caller]
+    fn assert_one_manual_start(
+        rx: &std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+        context: &str,
+    ) {
+        let events = admin_events_delivered(rx);
+        match events.as_slice() {
+            [AdminEvent::ManualStart] => {}
+            other => panic!(
+                "{context}: expected exactly one ManualStart, got {other:?}"
+            ),
+        }
+    }
+
+    #[track_caller]
+    fn assert_no_admin_events(
+        rx: &std::sync::mpsc::Receiver<FsmEvent<BgpConnectionChannel>>,
+        context: &str,
+    ) {
+        let events = admin_events_delivered(rx);
+        assert!(
+            events.is_empty(),
+            "{context}: expected no admin events, got {events:?}"
+        );
+    }
+
+    router_a
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("router a sent its admin event");
+
+    assert_one_manual_start(
+        &probe_a1_rx,
+        "router a's admin event did not reach its session a1",
+    );
+    assert_one_manual_start(
+        &probe_a2_rx,
+        "router a's admin event did not reach its session a2",
+    );
+    assert_no_admin_events(
+        &probe_b_rx,
+        "router a's admin event reached router b's session",
+    );
+
+    router_b
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("router b sent its admin event");
+    assert_one_manual_start(
+        &probe_b_rx,
+        "router b's admin event did not reach its own session",
+    );
+    assert_no_admin_events(
+        &probe_a1_rx,
+        "router b's admin event reached router a's session a1",
+    );
+    assert_no_admin_events(
+        &probe_a2_rx,
+        "router b's admin event reached router a's session a2",
+    );
+
+    drop(probe_b_rx);
+    router_a
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("router a's send is unaffected by router b's dead channel");
+    assert_one_manual_start(
+        &probe_a1_rx,
+        "router a's admin event did not reach its session a1",
+    );
+    assert_one_manual_start(
+        &probe_a2_rx,
+        "router a's admin event did not reach its session a2",
+    );
+
+    // Once shutdown has occurred, remaining events are dropped.
+    router_a.shutdown();
+    router_a
+        .send_admin_event(AdminEvent::ManualStart)
+        .expect("send_admin_event returned Ok on a shut-down router");
+    assert_no_admin_events(
+        &probe_a1_rx,
+        "admin event was delivered to a shut-down router's session a1",
+    );
+    assert_no_admin_events(
+        &probe_a2_rx,
+        "admin event was delivered to a shut-down router's session a2",
+    );
+
+    // See router_teardown_leaves_other_routers_sessions_alone for why
+    // deletion (not just shutdown) is needed for cleanup.
+    router_a.delete_session(session_a1.peer_id());
+    router_a.delete_session(session_a2.peer_id());
+    router_b.delete_session(session_b.peer_id());
 }

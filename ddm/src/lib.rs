@@ -4,6 +4,7 @@
 
 pub mod admin;
 pub mod db;
+pub mod defaults;
 pub mod discovery;
 pub mod exchange;
 pub mod oxstats;

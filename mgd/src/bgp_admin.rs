@@ -13,8 +13,7 @@ use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
     config::{PeerConfig, RouterConfig},
-    connection::BgpConnection,
-    connection_tcp::BgpConnectionTcp,
+    connection::{BgpConnection, tcp::BgpConnectionTcp},
     policy::{PolicyKind, PolicySource},
     router::{LoadPolicyError, Router, SessionMap},
     session::{
@@ -32,7 +31,9 @@ use mg_api_types::bgp::config::{
     UnnumberedNeighbor, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
-use mg_api_types::bgp::history::{FsmEventBuffer, MessageDirection, Origin6};
+use mg_api_types::bgp::history::{
+    HistoryBufferSelector, MessageDirection, Origin6,
+};
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
@@ -1474,6 +1475,7 @@ fn get_message_history_filtered(
     asn: u32,
     peer: Option<PeerId>,
     direction: Option<MessageDirection>,
+    buffer: Option<HistoryBufferSelector>,
 ) -> Result<HashMap<String, MessageHistory>, HttpError> {
     let mut result = HashMap::new();
 
@@ -1496,7 +1498,14 @@ fn get_message_history_filtered(
         if let Some(session) =
             lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
         {
-            let mut history = lock!(session.message_history).clone();
+            let mut history = {
+                let buffers = lock!(session.message_history);
+                if matches!(buffer, Some(HistoryBufferSelector::All)) {
+                    buffers.all.clone()
+                } else {
+                    buffers.major.clone()
+                }
+            };
 
             // Apply direction filter if specified
             if let Some(dir) = direction {
@@ -1531,7 +1540,7 @@ pub async fn message_history_v1(
     for (key, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
         // Only include IP-based sessions in the history
         if let PeerId::Ip(addr) = key {
-            let mh = lock!(session.message_history).clone();
+            let mh = lock!(session.message_history).all.clone();
             result.insert(
                 *addr,
                 v1::bgp::session::MessageHistory::from(
@@ -1559,8 +1568,13 @@ pub async fn message_history_v4(
 
     // Convert IpAddr filter to PeerId and call unified helper
     let peer_id = rq.peer.map(PeerId::Ip);
-    let by_peer_string =
-        get_message_history_filtered(ctx, rq.asn, peer_id, rq.direction)?;
+    let by_peer_string = get_message_history_filtered(
+        ctx,
+        rq.asn,
+        peer_id,
+        rq.direction,
+        Some(HistoryBufferSelector::All),
+    )?;
 
     // Convert String keys back to IpAddr (filters out unnumbered peers)
     let by_peer = by_peer_string
@@ -1589,8 +1603,13 @@ pub async fn message_history_v2(
 
     // Convert IpAddr filter to PeerId and call unified helper
     let peer_id = rq.peer.map(PeerId::Ip);
-    let by_peer_string =
-        get_message_history_filtered(ctx, rq.asn, peer_id, rq.direction)?;
+    let by_peer_string = get_message_history_filtered(
+        ctx,
+        rq.asn,
+        peer_id,
+        rq.direction,
+        Some(HistoryBufferSelector::All),
+    )?;
 
     // Convert String keys back to IpAddr (filters out unnumbered peers)
     let by_peer = by_peer_string
@@ -1621,8 +1640,13 @@ pub async fn message_history(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let by_peer =
-        get_message_history_filtered(ctx, rq.asn, rq.peer, rq.direction)?;
+    let by_peer = get_message_history_filtered(
+        ctx,
+        rq.asn,
+        rq.peer,
+        rq.direction,
+        rq.buffer,
+    )?;
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
 }
 
@@ -1632,10 +1656,10 @@ fn get_fsm_history_filtered(
     ctx: &Arc<HandlerContext>,
     asn: u32,
     peer: Option<PeerId>,
-    buffer: Option<FsmEventBuffer>,
+    buffer: Option<HistoryBufferSelector>,
 ) -> Result<HashMap<String, Vec<FsmEventRecord>>, HttpError> {
     let mut result = HashMap::new();
-    let use_all_buffer = matches!(buffer, Some(FsmEventBuffer::All));
+    let use_all_buffer = matches!(buffer, Some(HistoryBufferSelector::All));
 
     if let Some(peer_id) = peer {
         if let Some(session) =
@@ -1676,8 +1700,12 @@ pub async fn fsm_history_v2(
 
     // Convert IpAddr filter to PeerId and call unified helper
     let peer_id = rq.peer.map(PeerId::Ip);
-    let by_peer_string =
-        get_fsm_history_filtered(ctx, rq.asn, peer_id, rq.buffer)?;
+    let by_peer_string = get_fsm_history_filtered(
+        ctx,
+        rq.asn,
+        peer_id,
+        rq.buffer.map(HistoryBufferSelector::from),
+    )?;
 
     // Convert String keys back to IpAddr (filters out unnumbered peers)
     let by_peer = by_peer_string
@@ -1939,6 +1967,9 @@ pub(crate) mod helpers {
                 ),
             };
 
+        // XXX Note that if this fails, we'll have an orphaned session that's
+        // live without a DB row. This should either use a prepare-and-commit
+        // pattern or rollbacks.
         ctx.db.add_bgp_neighbor(
             mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,

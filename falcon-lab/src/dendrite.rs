@@ -197,6 +197,7 @@ pub async fn softnpu_link_create(c: &Client, name: &str) -> Result<()> {
             lane: Some(link),
             speed: PortSpeed::Speed100G,
             tx_eq: None,
+            allow_ddm_traffic: false,
         },
     )
     .await?;

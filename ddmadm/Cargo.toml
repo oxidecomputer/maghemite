@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 mg-common = { path = "../mg-common" }
+client-common = { path = "../client-common" }
 ddm-admin-client = { path = "../ddm-admin-client" }
 ddm-api-types-versions.workspace = true
 anyhow.workspace = true

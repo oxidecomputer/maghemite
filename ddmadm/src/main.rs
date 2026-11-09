@@ -4,9 +4,11 @@
 
 use anyhow::Result;
 use clap::Parser;
+use client_common::println_nopipe;
 use colored::*;
 use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::db::PeerStatus;
+use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net as types;
 use mg_common::cli::oxide_cli_style;
 use mg_common::format_duration_human;
@@ -65,6 +67,14 @@ enum SubCommand {
 
     /// Sync prefix information from peers.
     Sync,
+
+    /// Set external peers as a list of address objects.
+    SetExternalPeers {
+        addr_obj: Vec<String>,
+    },
+
+    // Get external peers
+    GetExternalPeers,
 }
 
 #[derive(Debug, Parser)]
@@ -170,13 +180,16 @@ async fn run() -> Result<()> {
                 for pv in &mut destinations {
                     // show path from perspective of this node, e.g. nearest node
                     // first
-                    pv.path.reverse();
-                    let strpath = pv.path.join(" ");
-                    writeln!(
-                        &mut tw,
-                        "{}\t{}\t{}",
-                        pv.destination, nexthop, strpath,
-                    )?;
+                    if let Some(p) = pv.path.pop() {
+                        writeln!(
+                            &mut tw,
+                            "{}\t{}\t{}",
+                            pv.destination, nexthop, p,
+                        )?;
+                    }
+                    for p in &pv.path {
+                        writeln!(&mut tw, "\t\t{}", p,)?;
+                    }
                 }
             }
             tw.flush()?;
@@ -264,6 +277,19 @@ async fn run() -> Result<()> {
         }
         SubCommand::Sync => {
             client.sync().await?;
+        }
+        SubCommand::SetExternalPeers { addr_obj } => {
+            client
+                .set_external_peers(&ExternalPeers {
+                    address_objects: addr_obj.iter().cloned().collect(),
+                })
+                .await?;
+        }
+        SubCommand::GetExternalPeers => {
+            let peers = client.get_external_peers().await?.into_inner();
+            for p in peers.address_objects {
+                println_nopipe!("{p}");
+            }
         }
     }
 

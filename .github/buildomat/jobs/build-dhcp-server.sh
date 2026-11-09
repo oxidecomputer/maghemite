@@ -2,7 +2,7 @@
 #:
 #: name = "build-dhcp-server"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = "stable"
 #: skip_clone = true
 #: output_rules = [
@@ -19,7 +19,7 @@ set -o pipefail
 if [[ ${CI:-} == true ]]; then
 	WORK=/work
 
-	pfexec pkg install protobuf git
+	PKG_SUCCESS_ON_NOP=1 pfexec pkg install protobuf git
 else
 	if [[ -z ${WORK} || ! -d ${WORK} ]]; then
 		printf 'ERROR: set WORK when running manually\n' >&2

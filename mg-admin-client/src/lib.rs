@@ -5,16 +5,7 @@
 progenitor::generate_api!(
     spec = "../openapi/mg-admin/mg-admin-latest.json",
     inner_type = slog::Logger,
-    pre_hook = (|log: &slog::Logger, request: &reqwest::Request| {
-        slog::trace!(log, "client request";
-            "method" => %request.method(),
-            "uri" => %request.url(),
-            "body" => ?&request.body(),
-        );
-    }),
-    post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
-        slog::trace!(log, "client response"; "result" => ?result);
-    }),
+    hooks = Expected,
     derives = [schemars::JsonSchema],
     crates = {
         "oxnet" = "0.1.6",
@@ -33,7 +24,7 @@ progenitor::generate_api!(
         // BGP admin shapes.
         CheckerSource = mg_api_types_versions::latest::bgp::config::CheckerSource,
         ExportedSelector = mg_api_types_versions::latest::bgp::session::ExportedSelector,
-        FsmEventBuffer = mg_api_types_versions::latest::bgp::history::FsmEventBuffer,
+        HistoryBufferSelector = mg_api_types_versions::latest::bgp::history::HistoryBufferSelector,
         Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv4UnicastConfig,
         Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv6UnicastConfig,
         JitterRange = mg_api_types_versions::latest::bgp::config::JitterRange,
@@ -52,6 +43,7 @@ progenitor::generate_api!(
 
         // BGP wire-message shapes.
         Afi = mg_api_types_versions::latest::bgp::messages::Afi,
+        Capability = mg_api_types_versions::latest::bgp::messages::Capability,
 
         // RIB shapes.
         BestpathFanoutRequest = mg_api_types_versions::latest::rib::BestpathFanoutRequest,
@@ -69,6 +61,8 @@ progenitor::generate_api!(
         Duration = std::time::Duration,
    }
 );
+
+progenitor_extras::slog_hooks::impl_slog_client_hooks!(Client);
 
 use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;

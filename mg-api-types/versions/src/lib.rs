@@ -39,8 +39,10 @@ pub mod v10;
 pub mod v11;
 #[path = "bfd_nonzero_detect_mult/mod.rs"]
 pub mod v12;
-#[path = "md5_auth_string/mod.rs"]
+#[path = "history_buffer/mod.rs"]
 pub mod v13;
+#[path = "md5_auth_string/mod.rs"]
+pub mod v14;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

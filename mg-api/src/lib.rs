@@ -29,7 +29,8 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (13, MD5_AUTH_STRING),
+    (14, MD5_AUTH_STRING),
+    (13, HISTORY_BUFFER),
     (12, BFD_NONZERO_DETECT_MULT),
     (11, PREFIX_TO_OXNET),
     (10, V4_OVER_V6_STATIC_ROUTES),
@@ -1338,7 +1339,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/history/message",
-        versions = VERSION_PREFIX_TO_OXNET..,
+        versions = VERSION_HISTORY_BUFFER..,
     }]
     async fn message_history(
         rqctx: RequestContext<Self::Context>,
@@ -1352,16 +1353,32 @@ pub trait MgAdminApi {
         method = GET,
         path = "/bgp/history/message",
         operation_id = "message_history",
+        versions = VERSION_PREFIX_TO_OXNET..VERSION_HISTORY_BUFFER,
+    }]
+    async fn message_history_v11(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v5::bgp::session::MessageHistoryRequest>,
+    ) -> Result<
+        HttpResponseOk<v11::bgp::session::MessageHistoryResponse>,
+        HttpError,
+    > {
+        Self::message_history(rqctx, request.map(Into::into)).await
+    }
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/history/message",
+        operation_id = "message_history",
         versions = VERSION_UNNUMBERED..VERSION_PREFIX_TO_OXNET,
     }]
     async fn message_history_v5(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::bgp::session::MessageHistoryRequest>,
+        request: TypedBody<v5::bgp::session::MessageHistoryRequest>,
     ) -> Result<
         HttpResponseOk<v5::bgp::session::MessageHistoryResponse>,
         HttpError,
     > {
-        Ok(Self::message_history(rqctx, request)
+        Ok(Self::message_history(rqctx, request.map(Into::into))
             .await?
             .map(v5::bgp::session::MessageHistoryResponse::from))
     }
@@ -1417,7 +1434,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/history/fsm",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_HISTORY_BUFFER..,
     }]
     async fn fsm_history(
         rqctx: RequestContext<Self::Context>,
@@ -1426,6 +1443,20 @@ pub trait MgAdminApi {
         HttpResponseOk<latest::bgp::session::FsmHistoryResponse>,
         HttpError,
     >;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/history/fsm",
+        operation_id = "fsm_history",
+        versions = VERSION_UNNUMBERED..VERSION_HISTORY_BUFFER,
+    }]
+    async fn fsm_history_v5(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<v5::bgp::session::FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<v5::bgp::session::FsmHistoryResponse>, HttpError>
+    {
+        Self::fsm_history(rqctx, request.map(Into::into)).await
+    }
 
     #[endpoint {
         method = GET,

@@ -128,35 +128,36 @@ impl EosNode {
         Ok(())
     }
 
-    /// Query ceos for the local status of a BFD session to `peer`. Returns
-    /// `true` iff EOS reports any per-interface peerStats entry under this
-    /// peer with status `up`. The nested shape is:
+    /// Query ceos for the local status of multiple BFD sessions. Returns
+    /// `true` iff EOS reports every requested session as `up`. The nested
+    /// shape is:
     ///   vrfs.<vrf>.ipv4Neighbors.<peer>.peers.<iface>.types.normal.peerStats.<local>.status
-    pub async fn bfd_peer_up(&self, d: &Runner, peer: IpAddr) -> Result<bool> {
+    pub async fn bfd_peers_up(
+        &self,
+        d: &Runner,
+        wanted: &[IpAddr],
+    ) -> Result<bool> {
         let output = self.shell(d, "show bfd peers | json").await?;
         let resp: EosBfdResponse = serde_json::from_str(&output)
             .context("parse eos bfd peers json")?;
-        let key = peer.to_string();
-        for vrf in resp.vrfs.values() {
-            let neighbors = match peer {
-                IpAddr::V4(_) => &vrf.ipv4_neighbors,
-                IpAddr::V6(_) => &vrf.ipv6_neighbors,
-            };
-            let Some(neighbor) = neighbors.get(&key) else {
-                continue;
-            };
-            for if_peer in neighbor.peers.values() {
-                let Some(normal) = if_peer.types.normal.as_ref() else {
-                    continue;
+        Ok(wanted.iter().all(|wanted| {
+            let key = wanted.to_string();
+            resp.vrfs.values().any(|vrf| {
+                let neighbors = match wanted {
+                    IpAddr::V4(_) => &vrf.ipv4_neighbors,
+                    IpAddr::V6(_) => &vrf.ipv6_neighbors,
                 };
-                for stats in normal.peer_stats.values() {
-                    if stats.status.eq_ignore_ascii_case("up") {
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-        Ok(false)
+                neighbors.get(&key).is_some_and(|neighbor| {
+                    neighbor.peers.values().any(|peer| {
+                        peer.types.normal.as_ref().is_some_and(|normal| {
+                            normal.peer_stats.values().any(|stats| {
+                                stats.status.eq_ignore_ascii_case("up")
+                            })
+                        })
+                    })
+                })
+            })
+        }))
     }
 
     /// Get BGP IPv4 imported prefixes from EOS.

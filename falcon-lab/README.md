@@ -1,8 +1,42 @@
 # Falcon lab
 
-`falcon-lab` runs Maghemite integration topologies under Falcon. The
-topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS, and
-Junos/cRPD nodes, plus a per-run `cargo-bay/` 9p share for binaries and runtime
+`falcon-lab` runs Maghemite integration topologies under Falcon. A topology
+defines the VM graph, while a scenario configures and tests that topology. The
+topologies use prebuilt Falcon base images for Helios, Debian/FRR, cEOS,
+Junos/cRPD, and BIRD 2 nodes, plus a per-run `cargo-bay/` 9p share for binaries
+and runtime configuration.
+
+## Topologies and scenarios
+
+Supported topology/scenario pairs are:
+
+```text
+mgd-duo  bare
+mgd-duo  bgp-unnumbered
+interop  bare
+interop  bgp-unnumbered
+interop  bfd-static-routing
+interop-3-link  bare
+interop-3-link  bgp-md5
+```
+
+`mgd-duo` connects two Maghemite nodes. `interop` connects a Maghemite DUT to
+FRR, Arista EOS, Juniper cRPD, BIRD 2, and a second Maghemite node.
+`interop-3-link` uses the same peers with three links per peer.
+
+- `bgp-unnumbered` checks dual-stack route exchange and interop ECMP.
+- `bgp-md5` checks authenticated numbered and unnumbered sessions, stability,
+  and multipath route exchange.
+- `bfd-static-routing` checks dual-stack BFD and static-route failover/recovery.
+
+Run and cleanup commands both take a topology and scenario:
+
+```sh
+pfexec target/release/falcon-lab run interop bgp-unnumbered --no-cleanup
+pfexec target/release/falcon-lab cleanup interop bgp-unnumbered
+```
+
+The `bare` scenarios launch their topology without applying protocol
 configuration.
 
 ## Runtime cargo-bay contents
@@ -11,7 +45,7 @@ Before running any topology, `cargo-bay/` must contain:
 
 - `mgd` and `ddmd`, staged by local test setup or the Buildomat job.
 
-Junos topologies additionally require:
+The interop topology additionally requires:
 
 - `falcon-juniper-license.key`, a Juniper license file. This file is a secret:
   do not commit it, print it, include it in diagnostics, or pass its contents in
@@ -23,10 +57,10 @@ Junos CLI input file: it starts with `configure`, contains `set ...` commands,
 and ends with `commit`.
 
 Junos topology config is per-run state. `falcon-lab` removes stale
-`cargo-bay/*-junos.set` files before launching a quartet topology so the
-guest-side apply service cannot consume configuration left behind by an earlier
-topology. Do not put persistent hand-written Junos config in files matching
-that pattern.
+`cargo-bay/*-junos.set` files before launching or cleaning up an interop
+topology so the guest-side apply service cannot consume configuration left by
+an earlier topology. Do not put persistent hand-written Junos config in files
+matching that pattern.
 
 ## Junos license source and connectivity assumptions
 
@@ -65,12 +99,7 @@ chmod 0600 cargo-bay/falcon-juniper-license.key
 
 The Falcon image named `junos-23.2` is expected to be built by the experimental
 `voxel-image` tooling from the
-[`oxidecomputer/voxel`](https://github.com/oxidecomputer/voxel) repository. The
-portable artifact is uploaded alongside other Falcon assets as:
-
-```text
-https://oxide-falcon-assets.s3.us-west-2.amazonaws.com/junos-23.2_0.raw.xz
-```
+[`oxidecomputer/voxel`](https://github.com/oxidecomputer/voxel) repository.
 
 The image must already contain Docker and the Juniper cRPD image. It must not
 contain a license or topology-specific routing config.
@@ -127,12 +156,20 @@ base-image dataset destroyed/replaced so the new image is used.
 
 ## Running with diagnostics disabled
 
-Failure diagnostics are enabled by default. For faster local iteration while
-preserving the failed topology, use:
+Failure diagnostics are enabled by default. Before collecting them, falcon-lab
+attempts to start FRR and BIRD and unpause cEOS and cRPD so their normal CLI
+and API paths are available. `--no-cleanup` preserves the topology after the
+run, but does not prevent this diagnostic recovery.
+
+To preserve the exact failure state for manual inspection, including peers
+that the scenario left paused or stopped, disable diagnostics as well as
+cleanup:
 
 ```sh
-pfexec ./falcon-lab run --no-cleanup --no-diag-on-fail quartet-bfd-static-routing
+pfexec target/release/falcon-lab run interop bfd-static-routing \
+  --no-cleanup --no-diag-on-fail
 ```
 
-Even with `--no-diag-on-fail`, quartet tests make a best-effort attempt to resume
-FRR's `bfdd` and unpause cEOS/cRPD before returning the failure.
+Use this combination when automated recovery would disturb the state being
+investigated, such as when inspecting one node while its peer remains paused.
+Without `--no-cleanup`, disabling diagnostics does not preserve the topology.
