@@ -58,6 +58,9 @@ pub enum AdminEvent {
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
+    /// The rack prefix, advertised as an underlay route to the peers allowed
+    /// to receive it.
+    Rack(Ipv6Net),
 }
 
 #[derive(Debug, Clone)]

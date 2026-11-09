@@ -10,6 +10,8 @@ pub mod admin {
     pub use crate::v1::admin::PrefixMap;
 
     pub use crate::v5::admin::PeerStatsPathParams;
+
+    pub use crate::v6::admin::RackPrefix;
 }
 
 pub mod db {

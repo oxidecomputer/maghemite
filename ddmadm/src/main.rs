@@ -7,6 +7,7 @@ use clap::Parser;
 use client_common::println_nopipe;
 use colored::*;
 use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::admin::RackPrefix;
 use ddm_api_types_versions::latest::db::{PeerStats, PeerStatus, RouterKind};
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net as types;
@@ -82,6 +83,17 @@ enum SubCommand {
 
     // Get external peers
     GetExternalPeers,
+
+    /// Get the rack prefix a transit router originates.
+    GetRackPrefix,
+
+    /// Set the rack prefix a transit router originates.
+    SetRackPrefix {
+        prefix: Ipv6Net,
+    },
+
+    /// Stop originating a rack prefix from a transit router.
+    ClearRackPrefix,
 }
 
 #[derive(Debug, Parser)]
@@ -336,6 +348,31 @@ async fn run() -> Result<()> {
             for p in peers.address_objects {
                 println_nopipe!("{p}");
             }
+        }
+        SubCommand::GetRackPrefix => {
+            // The API returns 404 when no rack prefix is set. Show that as
+            // an empty list, as get-originated does for no prefixes.
+            let prefix = match client.get_rack_prefix().await {
+                Ok(rack) => Some(rack.into_inner().prefix),
+                Err(ddm_admin_client::Error::ErrorResponse(rv))
+                    if rv.status() == 404 =>
+                {
+                    None
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let mut tw = TabWriter::new(stdout());
+            writeln!(&mut tw, "{}", "Prefix".dimmed())?;
+            if let Some(prefix) = prefix {
+                writeln!(&mut tw, "{}", prefix)?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::SetRackPrefix { prefix } => {
+            client.set_rack_prefix(&RackPrefix { prefix }).await?;
+        }
+        SubCommand::ClearRackPrefix => {
+            client.clear_rack_prefix().await?;
         }
     }
 
