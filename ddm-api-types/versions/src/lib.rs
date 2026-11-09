@@ -41,3 +41,5 @@ pub mod v3;
 pub mod v4;
 #[path = "peer_stats/mod.rs"]
 pub mod v5;
+#[path = "multirack/mod.rs"]
+pub mod v6;

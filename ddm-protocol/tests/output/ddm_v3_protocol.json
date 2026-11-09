@@ -116,6 +116,7 @@
       "required": [
         "boundary_addr",
         "overlay_prefix",
+        "path",
         "vni"
       ],
       "properties": {
@@ -131,6 +132,13 @@
         },
         "overlay_prefix": {
           "$ref": "#/definitions/IpNet"
+        },
+        "path": {
+          "description": "The routers this route was advertised through, starting with its originator. Each router appends itself before advertising the route.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "vni": {
           "type": "integer",

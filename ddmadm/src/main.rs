@@ -250,21 +250,31 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 "Overlay Prefix".dimmed(),
                 "Boundary Address".dimmed(),
                 "VNI".dimmed(),
                 "Metric".dimmed(),
+                "Next Hop".dimmed(),
+                "Path".dimmed(),
             )?;
             for endpoint in msg.into_inner() {
+                // show path from perspective of this node, e.g. nearest node
+                // first, one node per line as get-prefixes does
+                let mut path = endpoint.path.iter().rev();
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}",
                     endpoint.origin.overlay_prefix,
                     endpoint.origin.boundary_addr,
                     endpoint.origin.vni,
                     endpoint.origin.metric,
+                    endpoint.nexthop,
+                    path.next().map_or("", String::as_str),
                 )?;
+                for p in path {
+                    writeln!(&mut tw, "\t\t\t\t\t{}", p)?;
+                }
             }
             tw.flush()?;
         }
