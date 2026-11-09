@@ -233,6 +233,86 @@ impl Display for PeerIdentity {
     }
 }
 
+/// The route types that are allowed to be advertised to a DDM peer.
+///
+/// This is computed once when a DDM moves into Exchange state, using the local
+/// and remote RouterKind to determine the set of route types that should be
+/// propagated to the peer. If the peer expires, RouteAdvertisementAllowances is
+/// dropped since the next peer may come up with a different RouterKind which
+/// would warrant a new evaluation of their RouteAdvertisementAllowances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteAdvertisementAllowances {
+    /// Originated underlay prefixes.
+    pub underlay: bool,
+    /// Originated tunnel endpoints.
+    pub tunnel: bool,
+    /// The originated rack prefix.
+    pub rack: bool,
+    /// Routes learned from other peers.
+    pub redistributed: bool,
+}
+
+impl RouteAdvertisementAllowances {
+    /// What a router of kind `local` may send to a peer of kind `peer`.
+    pub fn tx(local: RouterKind, peer: RouterKind) -> Self {
+        use RouterKind::*;
+        match (local, peer) {
+            // Server routers originate just underlay routes. All other route
+            // types are disallowed from being sent to peers.
+            //
+            // This upholds the valley-free routing invariant for Servers.
+            // i.e.
+            // Servers generate or terminate packets, but never transit them.
+            // Transit -> Server -> Transit can never happen.
+            (Server, _) => Self {
+                underlay: true,
+                tunnel: false,
+                rack: false,
+                redistributed: false,
+            },
+
+            // Transit routers originate Tunnel routes and a Rack prefix when
+            // peering with another Transit router. This ensures other racks
+            // learn about our rack address space via a single aggregate /56,
+            // and that they know about our external connectivity in case they
+            // do not have their own (either due to network design or failures).
+            (Transit, Transit) => Self {
+                underlay: false,
+                tunnel: true,
+                rack: true,
+                redistributed: false,
+            },
+
+            // Transit routers are allowed to originate underlay and tunnel
+            // routes to Server routers, but not rack prefixes. They may
+            // redistribute any route they have received to a Server router.
+            //
+            // This ensures that:
+            // 1) Underlay routes from Servers are redistributed across a rack,
+            //    so Server -> Transit -> Server flows work as expected.
+            // 2) Tunnel routes learned from mgd are originated to Servers.
+            //    This allows Servers to use our connection to the External net.
+            // 3) Tunnel routes learned from other racks are redistributed to
+            //    Servers. This allows them to use other racks' connections to
+            //    the External network even if our rack has none (either due to
+            //    failure conditions or network design).
+            // 4) Rack prefixes may NOT be originated to Servers. This avoids
+            //    situations where Server 1 loses a /64 route to Server 2 but
+            //    continues to send traffic to Server 2 via a less specific /56.
+            //    If the /64 has legitimately been withdrawn from the topology,
+            //    then dropping earlier is better.
+            // 5) Rack prefixes learned from other racks are redistributed to
+            //    Servers. This allows Servers to learn routes to other racks.
+            (Transit, Server) => Self {
+                underlay: true,
+                tunnel: true,
+                rack: false,
+                redistributed: true,
+            },
+        }
+    }
+}
+
 pub struct InterfaceState {
     pub if_index: Mutex<u32>,
     pub if_name: Mutex<String>,
@@ -396,4 +476,33 @@ pub(crate) fn send(
     event_channels: &mut BTreeMap<String, Sender<Event>>,
 ) {
     event_channels.retain(|_, tx| tx.send(e.clone()).is_ok());
+}
+
+#[cfg(test)]
+mod test {
+    use super::RouteAdvertisementAllowances as Allow;
+    use ddm_api_types::db::RouterKind::{Server, Transit};
+
+    #[test]
+    fn tx_route_advertisement_allowances() {
+        // Written out by hand rather than derived from Allow::tx.
+        let expected = [
+            (Server, Server, [true, false, false, false]),
+            (Server, Transit, [true, false, false, false]),
+            (Transit, Server, [true, true, false, true]),
+            (Transit, Transit, [false, true, true, false]),
+        ];
+        for (local, peer, [underlay, tunnel, rack, redistributed]) in expected {
+            assert_eq!(
+                Allow::tx(local, peer),
+                Allow {
+                    underlay,
+                    tunnel,
+                    rack,
+                    redistributed
+                },
+                "{local} -> {peer}",
+            );
+        }
+    }
 }
