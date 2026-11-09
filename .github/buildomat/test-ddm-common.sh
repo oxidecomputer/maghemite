@@ -3,8 +3,8 @@
 source .github/buildomat/common.sh
 
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
-export SOFTNPU_VERSION=a6a878533f9eae542552ef66223a37443f931149
-export SIDECAR_LITE_VERSION=be3c09fe9a7e9c6bc5f5c6d184ad203b62b1eb32
+export SOFTNPU_VERSION=63687602f0d26add71d4dae4ac62d46563ba23f5
+export SIDECAR_LITE_VERSION=5f1d8eb2c7b3cd550c37e6a2118b91c95b49b6de
 export DENDRITE_VERSION=`grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p'`
 
 function cleanup {
