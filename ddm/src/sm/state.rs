@@ -458,7 +458,7 @@ impl Exchange {
             None
         } else {
             Some(TunnelUpdate::withdraw(
-                to_remove_tnl.iter().cloned().map(Into::into).collect(),
+                to_remove_tnl.iter().map(|x| x.origin.into()).collect(),
             ))
         };
 

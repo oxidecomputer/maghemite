@@ -13,6 +13,7 @@ use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, PeerIdentity, SmContext};
 use crate::{err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
+use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -61,12 +62,14 @@ pub(crate) fn announce_underlay(
 pub(crate) fn announce_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<v3::TunnelOrigin>,
+    endpoints: HashSet<TunnelOrigin>,
     peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
+    let update = v3::TunnelUpdate::announce(
+        endpoints.into_iter().map(Into::into).collect(),
+    );
     send_update(ctx, config, update.into(), peer, rt, log)
 }
 
@@ -85,12 +88,14 @@ pub(crate) fn withdraw_underlay(
 pub(crate) fn withdraw_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<v3::TunnelOrigin>,
+    endpoints: HashSet<TunnelOrigin>,
     peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
+    let update = v3::TunnelUpdate::withdraw(
+        endpoints.into_iter().map(Into::into).collect(),
+    );
     send_update(ctx, config, update.into(), peer, rt, log)
 }
 
@@ -411,8 +416,7 @@ async fn pull_handler_common(
             if route.nexthop == ctx.peer.addr {
                 continue;
             }
-            let tv = route.origin;
-            tunnel.insert(tv);
+            tunnel.insert(route.origin.into());
         }
     }
     let originated = ctx
@@ -433,15 +437,7 @@ async fn pull_handler_common(
         .db
         .originated_tunnel()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    for prefix in &originated_tunnel {
-        let tv = v3::TunnelOrigin {
-            overlay_prefix: prefix.overlay_prefix,
-            boundary_addr: prefix.boundary_addr,
-            vni: prefix.vni,
-            metric: prefix.metric,
-        };
-        tunnel.insert(tv);
-    }
+    tunnel.extend(originated_tunnel.into_iter().map(v3::TunnelOrigin::from));
 
     Ok(HttpResponseOk(v3::PullResponse {
         underlay: if underlay.is_empty() {
@@ -478,7 +474,7 @@ fn handle_pull_response(
         .db
         .imported_tunnel_from(peer.addr)
         .into_iter()
-        .map(|r| r.origin)
+        .map(|r| r.origin.into())
         .collect();
 
     let update =
@@ -529,12 +525,7 @@ fn handle_tunnel_update(
 
     for x in &update.announce {
         import.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
+            origin: x.into(),
             nexthop: peer.addr,
         });
     }
@@ -542,12 +533,7 @@ fn handle_tunnel_update(
 
     for x in &update.withdraw {
         remove.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
+            origin: x.into(),
             nexthop: peer.addr,
         });
     }
