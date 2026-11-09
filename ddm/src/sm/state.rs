@@ -9,7 +9,7 @@
 
 use super::{
     AdminEvent, DiscoveryEvent, Event, FsmState, PeerEvent, PeerIdentity,
-    PrefixSet, SmContext, SmError, StateMachine,
+    PrefixSet, RouteAdvertisementAllowances, SmContext, SmError, StateMachine,
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
@@ -263,11 +263,19 @@ struct Exchange {
     peer: PeerIdentity,
     ctx: SmContext,
     log: Logger,
+    tx_allowances: RouteAdvertisementAllowances,
 }
 
 impl Exchange {
     fn new(ctx: SmContext, peer: PeerIdentity, log: Logger) -> Self {
-        Self { ctx, peer, log }
+        let tx_allowances =
+            RouteAdvertisementAllowances::tx(ctx.config.kind, peer.kind);
+        Self {
+            ctx,
+            peer,
+            log,
+            tx_allowances,
+        }
     }
 
     fn initial_pull(&mut self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
@@ -465,6 +473,7 @@ impl State for Exchange {
                 self.ctx.clone(),
                 self.ctx.config.addr,
                 self.peer.clone(),
+                self.tx_allowances,
                 self.log.clone(),
             ) {
                 Ok(handle) => break handle,
@@ -518,6 +527,9 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                     prefixes,
                 ))) => {
+                    if !self.tx_allowances.underlay {
+                        continue;
+                    }
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -560,6 +572,9 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
+                    if !self.tx_allowances.tunnel {
+                        continue;
+                    }
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
                     let Err(e) = crate::exchange::announce_tunnel(
                         &self.ctx,
@@ -601,6 +616,9 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                     prefixes,
                 ))) => {
+                    if !self.tx_allowances.underlay {
+                        continue;
+                    }
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -643,6 +661,9 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
+                    if !self.tx_allowances.tunnel {
+                        continue;
+                    }
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
 
                     let Err(e) = crate::exchange::withdraw_tunnel(
@@ -765,6 +786,9 @@ impl State for Exchange {
                     return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
+                    if !self.tx_allowances.redistributed {
+                        continue;
+                    }
                     inf!(
                         self.log,
                         self.ctx.config.if_name,

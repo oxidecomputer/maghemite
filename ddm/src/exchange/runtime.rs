@@ -10,7 +10,10 @@
 use super::ExchangeError;
 use crate::db::{Route, TunnelRoute, effective_route_set};
 use crate::discovery::Version;
-use crate::sm::{Config, Event, PeerEvent, PeerIdentity, SmContext};
+use crate::sm::{
+    Config, Event, PeerEvent, PeerIdentity, RouteAdvertisementAllowances,
+    SmContext,
+};
 use crate::{err, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_api_types::net::TunnelOrigin;
@@ -45,6 +48,7 @@ const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
 pub struct ExchangeHandlerContext {
     ctx: SmContext,
     peer: PeerIdentity,
+    tx_allowances: RouteAdvertisementAllowances,
 }
 
 pub(crate) fn announce_underlay(
@@ -269,11 +273,13 @@ pub fn handler(
     ctx: SmContext,
     addr: Ipv6Addr,
     peer: PeerIdentity,
+    tx_allowances: RouteAdvertisementAllowances,
     log: Logger,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
     let context = Arc::new(ExchangeHandlerContext {
         ctx: ctx.clone(),
         peer,
+        tx_allowances,
     });
 
     let sa = SocketAddrV6::new(addr, ctx.config.exchange_port, 0, 0);
@@ -409,8 +415,7 @@ async fn pull_handler_common(
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
 
-    // Only transit routers redistribute prefixes
-    if ctx.ctx.config.kind == RouterKind::Transit {
+    if ctx.tx_allowances.redistributed {
         for route in &ctx.ctx.db.imported() {
             // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer.addr {
@@ -432,21 +437,25 @@ async fn pull_handler_common(
             tunnel.insert(tv);
         }
     }
-    let originated = ctx.ctx.db.originated();
-    for prefix in &originated {
-        let pv = v3::PathVector {
-            destination: *prefix,
-            path: vec![ctx.ctx.router_id.clone()],
-        };
-        underlay.insert(pv);
+    if ctx.tx_allowances.underlay {
+        let originated = ctx.ctx.db.originated();
+        for prefix in &originated {
+            let pv = v3::PathVector {
+                destination: *prefix,
+                path: vec![ctx.ctx.router_id.clone()],
+            };
+            underlay.insert(pv);
+        }
     }
 
-    let originated_tunnel = ctx.ctx.db.originated_tunnel();
-    tunnel.extend(
-        originated_tunnel
-            .into_iter()
-            .map(|x| x.to_wire(vec![ctx.ctx.router_id.clone()])),
-    );
+    if ctx.tx_allowances.tunnel {
+        let originated_tunnel = ctx.ctx.db.originated_tunnel();
+        tunnel.extend(
+            originated_tunnel
+                .into_iter()
+                .map(|x| x.to_wire(vec![ctx.ctx.router_id.clone()])),
+        );
+    }
 
     Ok(HttpResponseOk(v3::PullResponse {
         underlay: if underlay.is_empty() {
