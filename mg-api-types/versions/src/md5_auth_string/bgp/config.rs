@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{v1, v4, v11};
+use crate::{v1, v4, v14};
 use oxnet::{IpNet, SocketAddrJson};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -169,9 +169,9 @@ pub struct BgpPeerParameters {
     pub enforce_first_as: bool,
     pub vlan_id: Option<u16>,
     /// IPv4 Unicast address family configuration (None = disabled)
-    pub ipv4_unicast: Option<v11::bgp::config::Ipv4UnicastConfig>,
+    pub ipv4_unicast: Option<v14::bgp::config::Ipv4UnicastConfig>,
     /// IPv6 Unicast address family configuration (None = disabled)
-    pub ipv6_unicast: Option<v11::bgp::config::Ipv6UnicastConfig>,
+    pub ipv6_unicast: Option<v14::bgp::config::Ipv6UnicastConfig>,
     /// Enable deterministic collision resolution in Established state.
     /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
     /// resolution even when one connection is already in Established state.
@@ -250,23 +250,23 @@ pub struct ApplyRequest {
     pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
-fn md5_auth_key_from_v11(
+fn md5_auth_key_from_v14(
     key: Option<String>,
 ) -> Result<Option<Md5AuthString>, Md5AuthStringError> {
     key.map(Md5AuthString::new).transpose()
 }
 
-fn md5_auth_key_to_v11(key: Option<Md5AuthString>) -> Option<String> {
+fn md5_auth_key_to_v14(key: Option<Md5AuthString>) -> Option<String> {
     key.map(String::from)
 }
 
-impl TryFrom<v11::bgp::config::BgpPeerParameters> for BgpPeerParameters {
+impl TryFrom<v14::bgp::config::BgpPeerParameters> for BgpPeerParameters {
     type Error = Md5AuthStringError;
 
     fn try_from(
-        old: v11::bgp::config::BgpPeerParameters,
+        old: v14::bgp::config::BgpPeerParameters,
     ) -> Result<Self, Self::Error> {
-        let v11::bgp::config::BgpPeerParameters {
+        let v14::bgp::config::BgpPeerParameters {
             hold_time,
             idle_hold_time,
             delay_open,
@@ -301,7 +301,7 @@ impl TryFrom<v11::bgp::config::BgpPeerParameters> for BgpPeerParameters {
             passive,
             remote_asn,
             min_ttl,
-            md5_auth_key: md5_auth_key_from_v11(md5_auth_key)?,
+            md5_auth_key: md5_auth_key_from_v14(md5_auth_key)?,
             multi_exit_discriminator,
             communities,
             local_pref,
@@ -318,7 +318,7 @@ impl TryFrom<v11::bgp::config::BgpPeerParameters> for BgpPeerParameters {
     }
 }
 
-impl From<BgpPeerParameters> for v11::bgp::config::BgpPeerParameters {
+impl From<BgpPeerParameters> for v14::bgp::config::BgpPeerParameters {
     fn from(new: BgpPeerParameters) -> Self {
         let BgpPeerParameters {
             hold_time,
@@ -355,7 +355,7 @@ impl From<BgpPeerParameters> for v11::bgp::config::BgpPeerParameters {
             passive,
             remote_asn,
             min_ttl,
-            md5_auth_key: md5_auth_key_to_v11(md5_auth_key),
+            md5_auth_key: md5_auth_key_to_v14(md5_auth_key),
             multi_exit_discriminator,
             communities,
             local_pref,
@@ -372,13 +372,13 @@ impl From<BgpPeerParameters> for v11::bgp::config::BgpPeerParameters {
     }
 }
 
-impl TryFrom<v11::bgp::config::BgpPeerConfig> for BgpPeerConfig {
+impl TryFrom<v14::bgp::config::BgpPeerConfig> for BgpPeerConfig {
     type Error = Md5AuthStringError;
 
     fn try_from(
-        old: v11::bgp::config::BgpPeerConfig,
+        old: v14::bgp::config::BgpPeerConfig,
     ) -> Result<Self, Self::Error> {
-        let v11::bgp::config::BgpPeerConfig {
+        let v14::bgp::config::BgpPeerConfig {
             host,
             name,
             parameters,
@@ -391,7 +391,7 @@ impl TryFrom<v11::bgp::config::BgpPeerConfig> for BgpPeerConfig {
     }
 }
 
-impl From<BgpPeerConfig> for v11::bgp::config::BgpPeerConfig {
+impl From<BgpPeerConfig> for v14::bgp::config::BgpPeerConfig {
     fn from(new: BgpPeerConfig) -> Self {
         let BgpPeerConfig {
             host,
@@ -406,15 +406,15 @@ impl From<BgpPeerConfig> for v11::bgp::config::BgpPeerConfig {
     }
 }
 
-impl TryFrom<v11::bgp::config::UnnumberedBgpPeerConfig>
+impl TryFrom<v14::bgp::config::UnnumberedBgpPeerConfig>
     for UnnumberedBgpPeerConfig
 {
     type Error = Md5AuthStringError;
 
     fn try_from(
-        old: v11::bgp::config::UnnumberedBgpPeerConfig,
+        old: v14::bgp::config::UnnumberedBgpPeerConfig,
     ) -> Result<Self, Self::Error> {
-        let v11::bgp::config::UnnumberedBgpPeerConfig {
+        let v14::bgp::config::UnnumberedBgpPeerConfig {
             interface,
             name,
             router_lifetime,
@@ -430,7 +430,7 @@ impl TryFrom<v11::bgp::config::UnnumberedBgpPeerConfig>
 }
 
 impl From<UnnumberedBgpPeerConfig>
-    for v11::bgp::config::UnnumberedBgpPeerConfig
+    for v14::bgp::config::UnnumberedBgpPeerConfig
 {
     fn from(new: UnnumberedBgpPeerConfig) -> Self {
         let UnnumberedBgpPeerConfig {
@@ -448,11 +448,11 @@ impl From<UnnumberedBgpPeerConfig>
     }
 }
 
-impl TryFrom<v11::bgp::config::Neighbor> for Neighbor {
+impl TryFrom<v14::bgp::config::Neighbor> for Neighbor {
     type Error = Md5AuthStringError;
 
-    fn try_from(old: v11::bgp::config::Neighbor) -> Result<Self, Self::Error> {
-        let v11::bgp::config::Neighbor {
+    fn try_from(old: v14::bgp::config::Neighbor) -> Result<Self, Self::Error> {
+        let v14::bgp::config::Neighbor {
             asn,
             name,
             group,
@@ -469,7 +469,7 @@ impl TryFrom<v11::bgp::config::Neighbor> for Neighbor {
     }
 }
 
-impl From<Neighbor> for v11::bgp::config::Neighbor {
+impl From<Neighbor> for v14::bgp::config::Neighbor {
     fn from(new: Neighbor) -> Self {
         let Neighbor {
             asn,
@@ -488,13 +488,13 @@ impl From<Neighbor> for v11::bgp::config::Neighbor {
     }
 }
 
-impl TryFrom<v11::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
+impl TryFrom<v14::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
     type Error = Md5AuthStringError;
 
     fn try_from(
-        old: v11::bgp::config::UnnumberedNeighbor,
+        old: v14::bgp::config::UnnumberedNeighbor,
     ) -> Result<Self, Self::Error> {
-        let v11::bgp::config::UnnumberedNeighbor {
+        let v14::bgp::config::UnnumberedNeighbor {
             asn,
             name,
             group,
@@ -513,7 +513,7 @@ impl TryFrom<v11::bgp::config::UnnumberedNeighbor> for UnnumberedNeighbor {
     }
 }
 
-impl From<UnnumberedNeighbor> for v11::bgp::config::UnnumberedNeighbor {
+impl From<UnnumberedNeighbor> for v14::bgp::config::UnnumberedNeighbor {
     fn from(new: UnnumberedNeighbor) -> Self {
         let UnnumberedNeighbor {
             asn,
@@ -534,13 +534,13 @@ impl From<UnnumberedNeighbor> for v11::bgp::config::UnnumberedNeighbor {
     }
 }
 
-impl TryFrom<v11::bgp::config::ApplyRequest> for ApplyRequest {
+impl TryFrom<v14::bgp::config::ApplyRequest> for ApplyRequest {
     type Error = Md5AuthStringError;
 
     fn try_from(
-        old: v11::bgp::config::ApplyRequest,
+        old: v14::bgp::config::ApplyRequest,
     ) -> Result<Self, Self::Error> {
-        let v11::bgp::config::ApplyRequest {
+        let v14::bgp::config::ApplyRequest {
             asn,
             originate,
             checker,
@@ -581,7 +581,7 @@ impl TryFrom<v11::bgp::config::ApplyRequest> for ApplyRequest {
     }
 }
 
-impl From<ApplyRequest> for v11::bgp::config::ApplyRequest {
+impl From<ApplyRequest> for v14::bgp::config::ApplyRequest {
     fn from(new: ApplyRequest) -> Self {
         let ApplyRequest {
             asn,
@@ -617,10 +617,10 @@ mod proptests {
     use super::*;
     use proptest::prelude::*;
 
-    fn v11_parameters(
+    fn v14_parameters(
         md5_auth_key: impl Into<String>,
-    ) -> v11::bgp::config::BgpPeerParameters {
-        let mut parameters: v11::bgp::config::BgpPeerParameters =
+    ) -> v14::bgp::config::BgpPeerParameters {
+        let mut parameters: v14::bgp::config::BgpPeerParameters =
             BgpPeerParameters::default().into();
         parameters.md5_auth_key = Some(md5_auth_key.into());
         parameters
@@ -718,8 +718,8 @@ mod proptests {
     }
 
     #[test]
-    fn v11_neighbor_conversions_round_trip() {
-        let numbered = v11::bgp::config::Neighbor {
+    fn v14_neighbor_conversions_round_trip() {
+        let numbered = v14::bgp::config::Neighbor {
             asn: 64512,
             name: "numbered".into(),
             group: "test".into(),
@@ -727,21 +727,21 @@ mod proptests {
                 .parse::<std::net::SocketAddr>()
                 .unwrap()
                 .into(),
-            parameters: v11_parameters("numbered secret"),
+            parameters: v14_parameters("numbered secret"),
         };
-        let unnumbered = v11::bgp::config::UnnumberedNeighbor {
+        let unnumbered = v14::bgp::config::UnnumberedNeighbor {
             asn: 64512,
             name: "unnumbered".into(),
             group: "test".into(),
             interface: "tfportqsfp0_0".into(),
             act_as_a_default_ipv6_router: 1800,
-            parameters: v11_parameters("unnumbered secret"),
+            parameters: v14_parameters("unnumbered secret"),
         };
 
-        let numbered_round_trip = v11::bgp::config::Neighbor::from(
+        let numbered_round_trip = v14::bgp::config::Neighbor::from(
             Neighbor::try_from(numbered.clone()).unwrap(),
         );
-        let unnumbered_round_trip = v11::bgp::config::UnnumberedNeighbor::from(
+        let unnumbered_round_trip = v14::bgp::config::UnnumberedNeighbor::from(
             UnnumberedNeighbor::try_from(unnumbered.clone()).unwrap(),
         );
 
@@ -750,36 +750,36 @@ mod proptests {
     }
 
     #[test]
-    fn v11_apply_request_conversion_preserves_peer_maps() {
-        let request = v11::bgp::config::ApplyRequest {
+    fn v14_apply_request_conversion_preserves_peer_maps() {
+        let request = v14::bgp::config::ApplyRequest {
             asn: 64512,
             originate: vec!["192.0.2.0/24".parse().unwrap()],
             checker: None,
             shaper: None,
             peers: HashMap::from([(
                 "numbered".into(),
-                vec![v11::bgp::config::BgpPeerConfig {
+                vec![v14::bgp::config::BgpPeerConfig {
                     host: "192.0.2.1:179"
                         .parse::<std::net::SocketAddr>()
                         .unwrap()
                         .into(),
                     name: "numbered".into(),
-                    parameters: v11_parameters("numbered secret"),
+                    parameters: v14_parameters("numbered secret"),
                 }],
             )]),
             unnumbered_peers: HashMap::from([(
                 "unnumbered".into(),
-                vec![v11::bgp::config::UnnumberedBgpPeerConfig {
+                vec![v14::bgp::config::UnnumberedBgpPeerConfig {
                     interface: "tfportqsfp0_0".into(),
                     name: "unnumbered".into(),
                     router_lifetime: 1800,
-                    parameters: v11_parameters("unnumbered secret"),
+                    parameters: v14_parameters("unnumbered secret"),
                 }],
             )]),
         };
         let expected = serde_json::to_value(&request).unwrap();
 
-        let round_trip = v11::bgp::config::ApplyRequest::from(
+        let round_trip = v14::bgp::config::ApplyRequest::from(
             ApplyRequest::try_from(request).unwrap(),
         );
 
@@ -787,9 +787,9 @@ mod proptests {
     }
 
     #[test]
-    fn v11_conversion_rejects_invalid_md5_auth_key() {
+    fn v14_conversion_rejects_invalid_md5_auth_key() {
         assert_eq!(
-            BgpPeerParameters::try_from(v11_parameters("")),
+            BgpPeerParameters::try_from(v14_parameters("")),
             Err(Md5AuthStringError::Empty),
         );
     }

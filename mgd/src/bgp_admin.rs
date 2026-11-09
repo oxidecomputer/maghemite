@@ -50,7 +50,7 @@ use mg_api_types::ndp::{
 };
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
-use mg_api_types_versions::{v1, v2, v4, v5};
+use mg_api_types_versions::{v1, v2, v4, v5, v11};
 use mg_common::lock;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Asn, RibExt};
@@ -873,14 +873,16 @@ pub async fn get_exported_v5(
     let orig6 = r.originated6().map_err(Error::Db)?;
 
     // Determine which address families to process
-    let process_ipv4 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv4);
-    let process_ipv6 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv6);
+    let process_ipv4 =
+        rq.afi.is_none() || rq.afi == Some(v4::bgp::messages::Afi::Ipv4);
+    let process_ipv6 =
+        rq.afi.is_none() || rq.afi == Some(v4::bgp::messages::Afi::Ipv6);
 
     let mut exported = HashMap::new();
 
     if let Some(ref peer_filter) = rq.peer {
         // Specific peer requested - look it up directly
-        if let Some(session) = r.get_session(peer_filter.clone())
+        if let Some(session) = r.get_session(PeerId::from(peer_filter.clone()))
             && let Some((peer_key, routes)) = helpers::get_exported(
                 &session,
                 &orig4,
@@ -889,8 +891,10 @@ pub async fn get_exported_v5(
                 process_ipv6,
             )
         {
-            exported
-                .insert(peer_key, routes.into_iter().map(Into::into).collect());
+            exported.insert(
+                peer_key.into(),
+                routes.into_iter().map(Into::into).collect(),
+            );
         }
     } else {
         // No peer filter - iterate all sessions
@@ -903,7 +907,7 @@ pub async fn get_exported_v5(
                 process_ipv6,
             ) {
                 exported.insert(
-                    peer_key,
+                    peer_key.into(),
                     routes.into_iter().map(Into::into).collect(),
                 );
             }
@@ -981,9 +985,9 @@ pub async fn get_imported_v1(
     let imported = get_router!(ctx, rq.asn)?
         .db
         .full_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(v1::rib::Rib::from(
+    Ok(HttpResponseOk(v1::rib::Rib::from(v5::rib::Rib::from(
         imported.into_latest_api_rib(),
-    )))
+    ))))
 }
 
 pub async fn get_selected_v1(
@@ -995,9 +999,9 @@ pub async fn get_selected_v1(
     let selected = get_router!(ctx, rq.asn)?
         .db
         .loc_rib(Some(AddressFamily::Ipv4));
-    Ok(HttpResponseOk(v1::rib::Rib::from(
+    Ok(HttpResponseOk(v1::rib::Rib::from(v5::rib::Rib::from(
         selected.into_latest_api_rib(),
-    )))
+    ))))
 }
 
 pub async fn get_neighbors_v1(
@@ -1041,7 +1045,7 @@ pub async fn get_neighbors_v1(
             };
 
         let pi = v2::bgp::history::PeerInfo {
-            state: s.state(),
+            state: s.state().into(),
             asn: s.remote_asn(),
             duration_millis: dur,
             timers: v1::bgp::config::PeerTimers {
@@ -1112,7 +1116,7 @@ pub async fn get_neighbors_v2(
         peers.insert(
             peer_ip,
             v2::bgp::history::PeerInfo {
-                state: s.state(),
+                state: s.state().into(),
                 asn: s.remote_asn(),
                 duration_millis: dur,
                 timers: v1::bgp::config::PeerTimers {
@@ -1157,7 +1161,12 @@ pub async fn get_neighbors_v4(
             PeerId::Ip(ip) => ip,
             PeerId::Interface(_) => continue, // Skip unnumbered sessions
         };
-        peers.insert(peer_ip, s.get_peer_info().into());
+        peers.insert(
+            peer_ip,
+            v4::bgp::config::PeerInfo::from(v11::bgp::config::PeerInfo::from(
+                s.get_peer_info(),
+            )),
+        );
     }
 
     Ok(HttpResponseOk(peers))
@@ -1544,7 +1553,9 @@ pub async fn message_history_v1(
             result.insert(
                 *addr,
                 v1::bgp::session::MessageHistory::from(
-                    v4::bgp::session::MessageHistory::from(mh),
+                    v4::bgp::session::MessageHistory::from(
+                        v11::bgp::session::MessageHistory::from(mh),
+                    ),
                 ),
             );
         }
@@ -1581,7 +1592,12 @@ pub async fn message_history_v4(
         .into_iter()
         .filter_map(|(key, history)| {
             key.parse::<IpAddr>().ok().map(|addr| {
-                (addr, v4::bgp::session::MessageHistory::from(history))
+                (
+                    addr,
+                    v4::bgp::session::MessageHistory::from(
+                        v11::bgp::session::MessageHistory::from(history),
+                    ),
+                )
             })
         })
         .collect();
@@ -1619,7 +1635,9 @@ pub async fn message_history_v2(
                 (
                     addr,
                     v2::bgp::history::MessageHistory::from(
-                        v4::bgp::session::MessageHistory::from(history),
+                        v4::bgp::session::MessageHistory::from(
+                            v11::bgp::session::MessageHistory::from(history),
+                        ),
                     ),
                 )
             })
@@ -1711,7 +1729,9 @@ pub async fn fsm_history_v2(
     let by_peer = by_peer_string
         .into_iter()
         .filter_map(|(key, history): (String, Vec<FsmEventRecord>)| {
-            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+            key.parse::<IpAddr>().ok().map(|addr| {
+                (addr, history.into_iter().map(Into::into).collect())
+            })
         })
         .collect();
 
@@ -1993,10 +2013,22 @@ pub(crate) mod helpers {
                     communities: rq.parameters.communities,
                     local_pref: rq.parameters.local_pref,
                     enforce_first_as: rq.parameters.enforce_first_as,
-                    allow_import4: allow_import4.into(),
-                    allow_import6: allow_import6.into(),
-                    allow_export4: allow_export4.into(),
-                    allow_export6: allow_export6.into(),
+                    allow_import4: v11::bgp::policy::ImportExportPolicy4::from(
+                        allow_import4,
+                    )
+                    .into(),
+                    allow_import6: v11::bgp::policy::ImportExportPolicy6::from(
+                        allow_import6,
+                    )
+                    .into(),
+                    allow_export4: v11::bgp::policy::ImportExportPolicy4::from(
+                        allow_export4,
+                    )
+                    .into(),
+                    allow_export6: v11::bgp::policy::ImportExportPolicy6::from(
+                        allow_export6,
+                    )
+                    .into(),
                     ipv4_enabled: rq.parameters.ipv4_unicast.is_some(),
                     ipv6_enabled: rq.parameters.ipv6_unicast.is_some(),
                     nexthop4,
@@ -2109,10 +2141,22 @@ pub(crate) mod helpers {
                     communities: rq.parameters.communities.clone(),
                     local_pref: rq.parameters.local_pref,
                     enforce_first_as: rq.parameters.enforce_first_as,
-                    allow_import4: allow_import4.into(),
-                    allow_import6: allow_import6.into(),
-                    allow_export4: allow_export4.into(),
-                    allow_export6: allow_export6.into(),
+                    allow_import4: v11::bgp::policy::ImportExportPolicy4::from(
+                        allow_import4,
+                    )
+                    .into(),
+                    allow_import6: v11::bgp::policy::ImportExportPolicy6::from(
+                        allow_import6,
+                    )
+                    .into(),
+                    allow_export4: v11::bgp::policy::ImportExportPolicy4::from(
+                        allow_export4,
+                    )
+                    .into(),
+                    allow_export6: v11::bgp::policy::ImportExportPolicy6::from(
+                        allow_export6,
+                    )
+                    .into(),
                     ipv4_enabled: rq.parameters.ipv4_unicast.is_some(),
                     ipv6_enabled: rq.parameters.ipv6_unicast.is_some(),
                     nexthop4,

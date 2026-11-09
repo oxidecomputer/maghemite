@@ -20,6 +20,7 @@ use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
 use mg_api_types::rdb::path::Path;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_api_types::rdb::router::BgpRouterInfo;
+use mg_api_types_versions::v12;
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use sled::Tree;
@@ -470,7 +471,8 @@ impl Db {
     pub fn add_bfd_neighbor(&self, cfg: BfdPeerConfig) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
         let key = cfg.peer.to_string();
-        let value = serde_json::to_string(&cfg)?;
+        // Use the fixed v12 identifiers for persistent storage.
+        let value = serde_json::to_string(&v12::bfd::BfdPeerConfig::from(cfg))?;
         tree.insert(key.as_str(), value.as_str())?;
         tree.flush()?;
         Ok(())
@@ -502,20 +504,21 @@ impl Db {
                     }
                 };
                 let value = String::from_utf8_lossy(&value);
-                let value: BfdPeerConfig = match serde_json::from_str(&value) {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bfd entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT,
-                            "error" => format!("{e}")
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
+                let value: v12::bfd::BfdPeerConfig =
+                    match serde_json::from_str(&value) {
+                        Ok(item) => item,
+                        Err(ref e) => {
+                            rdb_log!(
+                                self,
+                                error,
+                                "error parsing bfd entry value {value:?}: {e}";
+                                "unit" => UNIT_PERSISTENT,
+                                "error" => format!("{e}")
+                            );
+                            return None;
+                        }
+                    };
+                Some(BfdPeerConfig::from(value))
             })
             .collect();
         Ok(result)
@@ -2471,5 +2474,60 @@ mod test {
         assert!("invalid".parse::<Ipv6Net>().is_err());
         assert!("2001:db8:".parse::<Ipv6Net>().is_err());
         assert!("2001:db8::/abc".parse::<Ipv6Net>().is_err());
+    }
+
+    #[test]
+    fn test_bfd_neighbor_storage_uses_v12_shape() {
+        use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
+        use std::num::NonZeroU8;
+
+        let db = get_test_db();
+        let cfg = BfdPeerConfig {
+            peer: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
+            listen: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)),
+            required_rx: 1_000_000,
+            detection_threshold: NonZeroU8::new(3).expect("3 is nonzero"),
+            mode: SessionMode::MultiHop,
+        };
+        db.add_bfd_neighbor(cfg).expect("added bfd neighbor");
+
+        let tree = db
+            .persistent
+            .open_tree(super::BFD_NEIGHBOR)
+            .expect("opened bfd tree");
+        let raw = tree
+            .get(cfg.peer.to_string())
+            .expect("read bfd entry")
+            .expect("bfd entry exists");
+        let raw: serde_json::Value =
+            serde_json::from_slice(&raw).expect("bfd entry is valid JSON");
+        assert_eq!(
+            raw,
+            serde_json::json!({
+                "peer": "192.0.2.1",
+                "listen": "192.0.2.2",
+                "required_rx": 1_000_000,
+                "detection_threshold": 3,
+                "mode": "MultiHop",
+            }),
+        );
+
+        let stored = db.get_bfd_neighbors().expect("listed bfd neighbors");
+        assert_eq!(stored.len(), 1);
+        let BfdPeerConfig {
+            peer,
+            listen,
+            required_rx,
+            detection_threshold,
+            mode,
+        } = stored[0];
+        assert_eq!(peer, cfg.peer);
+        assert_eq!(listen, cfg.listen);
+        assert_eq!(required_rx, cfg.required_rx);
+        assert_eq!(detection_threshold, cfg.detection_threshold);
+        match mode {
+            SessionMode::MultiHop => {}
+            SessionMode::SingleHop => panic!("expected MultiHop, got {mode:?}"),
+        }
     }
 }
