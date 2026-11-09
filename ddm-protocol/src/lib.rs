@@ -170,8 +170,8 @@ impl From<v2::TunnelOrigin> for v3::TunnelOrigin {
 
 impl From<v3::TunnelOrigin> for v2::TunnelOrigin {
     fn from(value: v3::TunnelOrigin) -> Self {
-        // Compile barrier: adding a TunnelOrigin (latest API) field
-        // fails to bind here, forcing a decision about whether the new
+        // Compile barrier: adding a v3::TunnelOrigin field fails to
+        // bind here, forcing a decision about whether the new
         // field is representable in the V2 wire form.
         let v3::TunnelOrigin {
             overlay_prefix,
