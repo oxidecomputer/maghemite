@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "3.0.0"
+    "version": "4.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -51,7 +51,7 @@
         }
       }
     },
-    "/external_peers": {
+    "/external-peers": {
       "get": {
         "operationId": "get_external_peers",
         "responses": {
@@ -126,7 +126,7 @@
         }
       }
     },
-    "/originated_tunnel_endpoints": {
+    "/originated-tunnel-endpoints": {
       "get": {
         "operationId": "get_originated_tunnel_endpoints",
         "responses": {
@@ -315,7 +315,7 @@
         }
       }
     },
-    "/tunnel_endpoint": {
+    "/tunnel-endpoint": {
       "put": {
         "operationId": "advertise_tunnel_endpoints",
         "requestBody": {
@@ -375,7 +375,7 @@
         }
       }
     },
-    "/tunnel_endpoints": {
+    "/tunnel-endpoints": {
       "get": {
         "operationId": "get_tunnel_endpoints",
         "responses": {
@@ -580,7 +580,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Init"
+                  "init"
                 ]
               }
             },
@@ -598,7 +598,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Solicit"
+                  "solicit"
                 ]
               }
             },
@@ -616,7 +616,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Exchange"
+                  "exchange"
                 ]
               }
             },
@@ -634,7 +634,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Expired"
+                  "expired"
                 ]
               }
             },
