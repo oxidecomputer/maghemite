@@ -81,7 +81,7 @@ progenitor::generate_api!(
 
 progenitor_extras::slog_hooks::impl_slog_client_hooks!(Client);
 
-pub use mg_api_types_versions::{latest::mrib, v14};
+pub use mg_api_types_versions::{latest::mrib, v15};
 
 use client_common::{eprintln_nopipe, println_nopipe};
 use colored::*;

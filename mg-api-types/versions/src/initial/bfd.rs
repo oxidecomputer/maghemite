@@ -58,14 +58,6 @@ pub enum BfdPeerState {
     Up = 3,
 }
 
-impl BfdPeerState {
-    /// A helper function to transition between enum and wire representations
-    /// for peer states.
-    pub fn wire_format(&self) -> u8 {
-        (*self as u8) << 6
-    }
-}
-
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BfdPeerInfo {
     pub config: BfdPeerConfig,

@@ -437,14 +437,14 @@ mod tests {
             ("group=ff04::1", 400),
             ("group=239.1.1.1&vni=16777216", 400),
             ("group=239.1.1.1&source=2001:db8::1", 400),
-            ("address_family=Ipv4&group=ff0e::1", 400),
-            ("address_family=Ipv6&source=10.0.0.1", 400),
+            ("address_family=ipv4&group=ff0e::1", 400),
+            ("address_family=ipv6&source=10.0.0.1", 400),
             ("source=224.0.0.5", 400),
             ("group=232.1.1.1", 200),
             ("group=239.1.1.1", 200),
             ("source=10.0.0.1", 200),
             ("vni=77", 200),
-            ("address_family=Ipv4&group=239.1.1.1&source=10.0.0.1", 200),
+            ("address_family=ipv4&group=239.1.1.1&source=10.0.0.1", 200),
         ] {
             let path = format!("/mrib/status/imported?{query}");
             assert_eq!(
@@ -455,15 +455,15 @@ mod tests {
         }
 
         let ssm_without_source = concat!(
-            r#"{"routes":[{"key":{"V4":{"group":"232.1.1.1","source":null,"#,
+            r#"{"routes":[{"key":{"v4":{"group":"232.1.1.1","source":null,"#,
             r#""vni":77}},"underlay_group":"ff04::1"}]}"#,
         );
         let bad_underlay = concat!(
-            r#"{"routes":[{"key":{"V4":{"group":"239.1.1.1","source":null,"#,
+            r#"{"routes":[{"key":{"v4":{"group":"239.1.1.1","source":null,"#,
             r#""vni":77}},"underlay_group":"ff05::1"}]}"#,
         );
         let missing_vni = concat!(
-            r#"{"routes":[{"key":{"V4":{"group":"239.1.1.1","source":null}},"#,
+            r#"{"routes":[{"key":{"v4":{"group":"239.1.1.1","source":null}},"#,
             r#""underlay_group":"ff04::1"}]}"#,
         );
         for body in [ssm_without_source, bad_underlay, missing_vni] {

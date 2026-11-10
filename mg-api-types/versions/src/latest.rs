@@ -10,12 +10,12 @@
 //! `vN` with `latest` leaves the rest of the path unchanged.
 
 pub mod bfd {
-    pub use crate::v1::bfd::BfdPeerState;
     pub use crate::v1::bfd::DeleteBfdPeerPathParams;
-    pub use crate::v1::bfd::SessionMode;
 
-    pub use crate::v12::bfd::BfdPeerConfig;
-    pub use crate::v12::bfd::BfdPeerInfo;
+    pub use crate::v14::bfd::BfdPeerConfig;
+    pub use crate::v14::bfd::BfdPeerInfo;
+    pub use crate::v14::bfd::BfdPeerState;
+    pub use crate::v14::bfd::SessionMode;
 
     pub mod error {
         pub use crate::impls::bfd::error::BfdRequestError;
@@ -30,38 +30,39 @@ pub mod bgp {
         pub use crate::v1::bgp::config::ShaperSource;
 
         pub use crate::v4::bgp::config::AfiSafi;
-        pub use crate::v4::bgp::config::BgpCapability;
         pub use crate::v4::bgp::config::DynamicTimerInfo;
         pub use crate::v4::bgp::config::JitterRange;
-        pub use crate::v4::bgp::config::NeighborResetOp;
-        pub use crate::v4::bgp::config::NeighborResetRequest;
         pub use crate::v4::bgp::config::PeerCounters;
         pub use crate::v4::bgp::config::PeerTimers;
         pub use crate::v4::bgp::config::StaticTimerInfo;
 
         pub use crate::v5::bgp::config::NeighborSelector;
-        pub use crate::v5::bgp::config::UnnumberedNeighborResetRequest;
         pub use crate::v5::bgp::config::UnnumberedNeighborSelector;
 
-        pub use crate::v11::bgp::config::ApplyRequest;
-        pub use crate::v11::bgp::config::BgpPeerConfig;
-        pub use crate::v11::bgp::config::BgpPeerParameters;
-        pub use crate::v11::bgp::config::Ipv4UnicastConfig;
-        pub use crate::v11::bgp::config::Ipv6UnicastConfig;
-        pub use crate::v11::bgp::config::Neighbor;
         pub use crate::v11::bgp::config::Origin4;
-        pub use crate::v11::bgp::config::PeerInfo;
-        pub use crate::v11::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v11::bgp::config::UnnumberedNeighbor;
+
+        pub use crate::v14::bgp::config::ApplyRequest;
+        pub use crate::v14::bgp::config::BgpCapability;
+        pub use crate::v14::bgp::config::BgpPeerConfig;
+        pub use crate::v14::bgp::config::BgpPeerParameters;
+        pub use crate::v14::bgp::config::Ipv4UnicastConfig;
+        pub use crate::v14::bgp::config::Ipv6UnicastConfig;
+        pub use crate::v14::bgp::config::Neighbor;
+        pub use crate::v14::bgp::config::NeighborResetOp;
+        pub use crate::v14::bgp::config::NeighborResetRequest;
+        pub use crate::v14::bgp::config::PeerInfo;
+        pub use crate::v14::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v14::bgp::config::UnnumberedNeighbor;
+        pub use crate::v14::bgp::config::UnnumberedNeighborResetRequest;
     }
 
     pub mod peer {
-        pub use crate::v1::bgp::peer::PeerId;
+        pub use crate::v14::bgp::peer::PeerId;
     }
 
     pub mod policy {
-        pub use crate::v11::bgp::policy::ImportExportPolicy4;
-        pub use crate::v11::bgp::policy::ImportExportPolicy6;
+        pub use crate::v14::bgp::policy::ImportExportPolicy4;
+        pub use crate::v14::bgp::policy::ImportExportPolicy6;
     }
 
     pub mod history {
@@ -92,7 +93,6 @@ pub mod bgp {
         pub use crate::v1::bgp::messages::Capability;
         pub use crate::v1::bgp::messages::CapabilityCode;
         pub use crate::v1::bgp::messages::CeaseErrorSubcode;
-        pub use crate::v1::bgp::messages::Community;
         pub use crate::v1::bgp::messages::ErrorCode;
         pub use crate::v1::bgp::messages::ErrorSubcode;
         pub use crate::v1::bgp::messages::ExtendedNexthopElement;
@@ -112,51 +112,52 @@ pub mod bgp {
         pub use crate::v1::bgp::messages::Tlv;
         pub use crate::v1::bgp::messages::UpdateErrorSubcode;
 
-        pub use crate::v4::bgp::messages::Afi;
         pub use crate::v4::bgp::messages::Aggregator;
         pub use crate::v4::bgp::messages::As4Aggregator;
-        pub use crate::v4::bgp::messages::BgpNexthop;
         pub use crate::v4::bgp::messages::Ipv6DoubleNexthop;
         pub use crate::v4::bgp::messages::PathAttributeType;
         pub use crate::v4::bgp::messages::PathAttributeTypeCode;
         pub use crate::v4::bgp::messages::path_attribute_flags;
 
-        pub use crate::v11::bgp::messages::Message;
-        pub use crate::v11::bgp::messages::MpReachIpv4Unicast;
-        pub use crate::v11::bgp::messages::MpReachIpv6Unicast;
-        pub use crate::v11::bgp::messages::MpReachNlri;
         pub use crate::v11::bgp::messages::MpUnreachIpv4Unicast;
         pub use crate::v11::bgp::messages::MpUnreachIpv6Unicast;
         pub use crate::v11::bgp::messages::MpUnreachNlri;
-        pub use crate::v11::bgp::messages::PathAttribute;
-        pub use crate::v11::bgp::messages::PathAttributeValue;
-        pub use crate::v11::bgp::messages::UpdateMessage;
+
+        pub use crate::v14::bgp::messages::Afi;
+        pub use crate::v14::bgp::messages::BgpNexthop;
+        pub use crate::v14::bgp::messages::Community;
+        pub use crate::v14::bgp::messages::Message;
+        pub use crate::v14::bgp::messages::MpReachIpv4Unicast;
+        pub use crate::v14::bgp::messages::MpReachIpv6Unicast;
+        pub use crate::v14::bgp::messages::MpReachNlri;
+        pub use crate::v14::bgp::messages::PathAttribute;
+        pub use crate::v14::bgp::messages::PathAttributeValue;
+        pub use crate::v14::bgp::messages::UpdateMessage;
     }
 
     pub mod session {
         pub use crate::v2::bgp::session::ConnectionDirection;
         pub use crate::v2::bgp::session::ConnectionId;
-        pub use crate::v2::bgp::session::FsmEventCategory;
-        pub use crate::v2::bgp::session::FsmEventRecord;
-        pub use crate::v2::bgp::session::FsmStateKind;
-
-        pub use crate::v5::bgp::session::ExportedSelector;
-        pub use crate::v5::bgp::session::FsmHistoryResponse;
 
         pub use crate::v11::bgp::session::MAX_MESSAGE_HISTORY;
-        pub use crate::v11::bgp::session::MessageHistory;
-        pub use crate::v11::bgp::session::MessageHistoryEntry;
-        pub use crate::v11::bgp::session::MessageHistoryResponse;
 
-        pub use crate::v13::bgp::session::FsmHistoryRequest;
-        pub use crate::v13::bgp::session::MessageHistoryRequest;
+        pub use crate::v14::bgp::session::ExportedSelector;
+        pub use crate::v14::bgp::session::FsmEventCategory;
+        pub use crate::v14::bgp::session::FsmEventRecord;
+        pub use crate::v14::bgp::session::FsmHistoryRequest;
+        pub use crate::v14::bgp::session::FsmHistoryResponse;
+        pub use crate::v14::bgp::session::FsmStateKind;
+        pub use crate::v14::bgp::session::MessageHistory;
+        pub use crate::v14::bgp::session::MessageHistoryEntry;
+        pub use crate::v14::bgp::session::MessageHistoryRequest;
+        pub use crate::v14::bgp::session::MessageHistoryResponse;
     }
 }
 
 pub mod rdb {
     pub mod rib {
-        pub use crate::v1::rdb::rib::AddressFamily;
-        pub use crate::v1::rdb::rib::ProtocolFilter;
+        pub use crate::v14::rdb::rib::AddressFamily;
+        pub use crate::v14::rdb::rib::ProtocolFilter;
     }
 
     pub mod neighbor {
@@ -166,8 +167,8 @@ pub mod rdb {
     }
 
     pub mod path {
-        pub use crate::v5::rdb::path::BgpPathProperties;
-        pub use crate::v5::rdb::path::Path;
+        pub use crate::v14::rdb::path::BgpPathProperties;
+        pub use crate::v14::rdb::path::Path;
     }
 
     pub mod router {
@@ -179,32 +180,32 @@ pub mod rdb {
 }
 
 pub mod mrib {
-    pub use crate::v14::mrib::EmbeddedIpv4;
-    pub use crate::v14::mrib::InvalidEmbeddedRp;
-    pub use crate::v14::mrib::InvalidMulticastSource;
-    pub use crate::v14::mrib::MribAddStaticRequest;
-    pub use crate::v14::mrib::MribDeleteStaticRequest;
-    pub use crate::v14::mrib::MribQuery;
-    pub use crate::v14::mrib::MribQueryError;
-    pub use crate::v14::mrib::MulticastAddr;
-    pub use crate::v14::mrib::MulticastAddrV4;
-    pub use crate::v14::mrib::MulticastAddrV6;
-    pub use crate::v14::mrib::MulticastGroupError;
-    pub use crate::v14::mrib::MulticastRoute;
-    pub use crate::v14::mrib::MulticastRouteError;
-    pub use crate::v14::mrib::MulticastRouteKey;
-    pub use crate::v14::mrib::MulticastRouteKeyV4;
-    pub use crate::v14::mrib::MulticastRouteKeyV6;
-    pub use crate::v14::mrib::MulticastSourceError;
-    pub use crate::v14::mrib::MulticastSourceProtocol;
-    pub use crate::v14::mrib::RouteOriginFilter;
-    pub use crate::v14::mrib::StaticMulticastRoute;
-    pub use crate::v14::mrib::UnderlayMulticastError;
-    pub use crate::v14::mrib::UnderlayMulticastIpv6;
-    pub use crate::v14::mrib::UnicastAddrV4;
-    pub use crate::v14::mrib::UnicastAddrV6;
-    pub use crate::v14::mrib::Vni;
-    pub use crate::v14::mrib::VniError;
+    pub use crate::v15::mrib::EmbeddedIpv4;
+    pub use crate::v15::mrib::InvalidEmbeddedRp;
+    pub use crate::v15::mrib::InvalidMulticastSource;
+    pub use crate::v15::mrib::MribAddStaticRequest;
+    pub use crate::v15::mrib::MribDeleteStaticRequest;
+    pub use crate::v15::mrib::MribQuery;
+    pub use crate::v15::mrib::MribQueryError;
+    pub use crate::v15::mrib::MulticastAddr;
+    pub use crate::v15::mrib::MulticastAddrV4;
+    pub use crate::v15::mrib::MulticastAddrV6;
+    pub use crate::v15::mrib::MulticastGroupError;
+    pub use crate::v15::mrib::MulticastRoute;
+    pub use crate::v15::mrib::MulticastRouteError;
+    pub use crate::v15::mrib::MulticastRouteKey;
+    pub use crate::v15::mrib::MulticastRouteKeyV4;
+    pub use crate::v15::mrib::MulticastRouteKeyV6;
+    pub use crate::v15::mrib::MulticastSourceError;
+    pub use crate::v15::mrib::MulticastSourceProtocol;
+    pub use crate::v15::mrib::RouteOriginFilter;
+    pub use crate::v15::mrib::StaticMulticastRoute;
+    pub use crate::v15::mrib::UnderlayMulticastError;
+    pub use crate::v15::mrib::UnderlayMulticastIpv6;
+    pub use crate::v15::mrib::UnicastAddrV4;
+    pub use crate::v15::mrib::UnicastAddrV6;
+    pub use crate::v15::mrib::Vni;
+    pub use crate::v15::mrib::VniError;
 }
 
 pub mod ndp {
@@ -220,10 +221,9 @@ pub mod rib {
     pub use crate::v1::rib::BestpathFanoutRequest;
     pub use crate::v1::rib::BestpathFanoutResponse;
 
-    pub use crate::v2::rib::RibQuery;
-
-    pub use crate::v5::rib::GetRibResult;
-    pub use crate::v5::rib::Rib;
+    pub use crate::v14::rib::GetRibResult;
+    pub use crate::v14::rib::Rib;
+    pub use crate::v14::rib::RibQuery;
 }
 
 pub mod static_routes {

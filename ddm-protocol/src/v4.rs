@@ -19,11 +19,11 @@ use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
 
 use dpd_types_versions::v8::mcast::UnderlayMulticastIpv6;
-use dpd_types_versions::v14::mcast::{
+use dpd_types_versions::v15::mcast::{
     ExternalMulticastIp as OverlayMulticast, MulticastSourceError,
     UnicastAddrV4, UnicastAddrV6, is_ssm_address,
 };
-use dpd_types_versions::v14::network::Vni;
+use dpd_types_versions::v15::network::Vni;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
