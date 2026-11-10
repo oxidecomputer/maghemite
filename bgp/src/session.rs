@@ -24,7 +24,6 @@ use crate::{
     router::{Router, RouterInstanceId},
     unnumbered::{UnnumberedError, UnnumberedManager},
 };
-use mg_api_types::bgp::config::Md5AuthString;
 use mg_api_types::bgp::config::{
     BgpPeerParameters, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
     JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
@@ -39,6 +38,7 @@ use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
 use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use oxnet::Md5AuthString;
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db};

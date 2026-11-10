@@ -15,7 +15,7 @@ use crate::{
     session::{FsmEvent, PeerId, SessionInfo},
     unnumbered::UnnumberedManager,
 };
-use mg_api_types::bgp::config::Md5AuthString;
+use oxnet::Md5AuthString;
 use slog::Logger;
 use std::{
     net::{SocketAddr, ToSocketAddrs},

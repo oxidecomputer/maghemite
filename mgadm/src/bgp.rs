@@ -8,12 +8,11 @@ use client_common::{print_nopipe, println_nopipe};
 use colored::*;
 use mg_admin_client::{Client, types};
 use mg_api_types::bgp::config::{
-    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, Md5AuthString,
-    NeighborResetRequest,
+    Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, NeighborResetRequest,
 };
 use mg_api_types::bgp::messages::Afi;
 use mg_api_types::bgp::policy::{ImportExportPolicy4, ImportExportPolicy6};
-use oxnet::{Ipv4Net, Ipv6Net};
+use oxnet::{Ipv4Net, Ipv6Net, Md5AuthString};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},

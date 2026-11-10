@@ -4,7 +4,7 @@
 
 //! Version `MD5_AUTH_STRING` of the Maghemite Admin API.
 //!
-//! Replaces `Option<String>` with `Option<Md5AuthString>` which upholds
+//! Replaces `Option<String>` with `Option<oxnet::Md5AuthString>` which upholds
 //! invariants about what values are acceptable as keys for the MD5 TCP option.
 //! This mainly updates `BgpPeerParameters` but trickles down to all its
 //! consumers.

@@ -3575,7 +3575,13 @@
         ]
       },
       "Md5AuthString": {
-        "description": "A TCP MD5 signature key (RFC 2385) for a BGP session.\n\nMust be 1 to 80 bytes of printable ASCII (0x20 through 0x7e). RFC 2385 section 4.5 recommends that implementations support at least keys of this form, and limiting keys to printable ASCII lets them round-trip through JSON.",
+        "title": "An MD5 authentication string",
+        "description": "A nonempty printable ASCII string of at most 80 bytes",
+        "x-rust-type": {
+          "crate": "oxnet",
+          "path": "oxnet::Md5AuthString",
+          "version": "0.1.8"
+        },
         "type": "string",
         "pattern": "^[ -~]+$",
         "minLength": 1,

@@ -12,11 +12,12 @@ use anyhow::{Context, Result};
 use dpd_client::types::{Ipv4Entry, LinkId, PortId};
 use mg_admin_client::{Client as MgdClient, types::Neighbor};
 use mg_api_types::bgp::{
-    config::{Ipv4UnicastConfig, Md5AuthString, Origin4, PeerInfo, Router},
+    config::{Ipv4UnicastConfig, Origin4, PeerInfo, Router},
     history::Origin6,
     policy::ImportExportPolicy4,
     session::FsmStateKind,
 };
+use oxnet::Md5AuthString;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     time::Duration,

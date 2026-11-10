@@ -25,7 +25,7 @@ use mg_admin_client::{
     Client as MgdClient,
     types::{BfdPeerConfig, BfdPeerState, SessionMode},
 };
-use mg_api_types::bgp::config::{Md5AuthString, Origin4, Router};
+use mg_api_types::bgp::config::{Origin4, Router};
 use mg_api_types::bgp::history::Origin6;
 use mg_api_types::bgp::session::FsmStateKind;
 use mg_api_types::rdb::rib::AddressFamily;
@@ -34,6 +34,7 @@ use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, StaticRoute4,
     StaticRoute4List, StaticRoute6, StaticRoute6List,
 };
+use oxnet::Md5AuthString;
 use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{

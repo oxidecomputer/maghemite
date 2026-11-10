@@ -4096,7 +4096,6 @@ dependencies = [
  "nom 8.0.0",
  "num_enum 0.7.6",
  "oxnet",
- "proptest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -5285,9 +5284,9 @@ dependencies = [
 
 [[package]]
 name = "oxnet"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c18d1166306acc00465fd792bab330933eb7587753ff2f15ca3aa0427163dd4"
+checksum = "ea8d0d4f1ffb3c7c4d907efc5941ece53e3563ee5e42c150c1914ab3ac409099"
 dependencies = [
  "ipnetwork",
  "schemars 0.8.22",

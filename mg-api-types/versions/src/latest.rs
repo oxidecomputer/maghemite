@@ -52,8 +52,6 @@ pub mod bgp {
         pub use crate::v15::bgp::config::ApplyRequest;
         pub use crate::v15::bgp::config::BgpPeerConfig;
         pub use crate::v15::bgp::config::BgpPeerParameters;
-        pub use crate::v15::bgp::config::Md5AuthString;
-        pub use crate::v15::bgp::config::Md5AuthStringError;
         pub use crate::v15::bgp::config::Neighbor;
         pub use crate::v15::bgp::config::UnnumberedBgpPeerConfig;
         pub use crate::v15::bgp::config::UnnumberedNeighbor;
