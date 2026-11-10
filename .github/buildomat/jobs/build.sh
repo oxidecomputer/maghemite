@@ -81,3 +81,9 @@ do
 done
 
 cp target/release/falcon-lab /work/release/falcon-lab
+
+# The falcon job runs without a checkout, so record the dendrite commit that
+# dpd-client is pinned to for it to install in the softnpu VM.
+dendrite_commit=$(grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p')
+[[ -n "${dendrite_commit}" ]]
+echo "${dendrite_commit}" > /work/release/dendrite-commit

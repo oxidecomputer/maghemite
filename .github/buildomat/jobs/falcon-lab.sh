@@ -50,6 +50,10 @@ cp /input/build/work/release/ddmd .
 
 chmod +x dhcp-server falcon-lab mgd ddmd
 
+# Install the same dendrite that dpd-client is pinned to, rather than the
+# latest on main.
+DENDRITE_COMMIT=$(cat /input/build/work/release/dendrite-commit)
+
 mkdir -p cargo-bay
 mv mgd cargo-bay/
 mv ddmd cargo-bay/
@@ -106,7 +110,8 @@ run_test() {
 	local status=0
 
 	clear_falcon_workspace_files
-	RUST_LOG=debug pfexec ./falcon-lab run "${topology}" "${scenario}" --no-cleanup || status=$?
+	RUST_LOG=debug pfexec ./falcon-lab run "${topology}" "${scenario}" --no-cleanup \
+		--dendrite-commit "${DENDRITE_COMMIT}" || status=$?
 	if (( status != 0 )); then
 		collect_falcon_artifacts "${test_name}"
 	fi
