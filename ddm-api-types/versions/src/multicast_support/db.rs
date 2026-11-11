@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::exchange::MulticastPathHop;
 use super::net::MulticastOrigin;
 use crate::v1::db::RouterKind;
-use crate::v2;
-use crate::v2::db::PeerStatus;
+use crate::v4;
+use crate::v4::db::PeerStatus;
 
 /// A multicast route learned via DDM.
 ///
@@ -52,7 +52,7 @@ pub struct PeerInfo {
 
 /// Downconvert a MULTICAST_SUPPORT `PeerInfo` to PEER_DURATIONS by dropping
 /// the `if_name`.
-impl From<PeerInfo> for v2::db::PeerInfo {
+impl From<PeerInfo> for v4::db::PeerInfo {
     fn from(p: PeerInfo) -> Self {
         Self {
             status: p.status,

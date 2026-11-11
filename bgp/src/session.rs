@@ -36,7 +36,7 @@ pub(crate) use mg_api_types::bgp::session::{
 pub use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_BGP;
 use mg_api_types::rdb::path::BgpPathProperties;
 use mg_api_types::rdb::rib::AddressFamily;
-use mg_api_types_versions::{v1, v4};
+use mg_api_types_versions::{v1, v4, v11};
 use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
@@ -1103,10 +1103,18 @@ impl From<&v1::bgp::config::BgpPeerParameters> for SessionInfo {
             ipv4_unicast: Some(Ipv4UnicastConfig {
                 nexthop: None,
                 import_policy: ImportExportPolicy4::from(
-                    v4::bgp::policy::ImportExportPolicy4::from(allow_import),
+                    v11::bgp::policy::ImportExportPolicy4::from(
+                        v4::bgp::policy::ImportExportPolicy4::from(
+                            allow_import,
+                        ),
+                    ),
                 ),
                 export_policy: ImportExportPolicy4::from(
-                    v4::bgp::policy::ImportExportPolicy4::from(allow_export),
+                    v11::bgp::policy::ImportExportPolicy4::from(
+                        v4::bgp::policy::ImportExportPolicy4::from(
+                            allow_export,
+                        ),
+                    ),
                 ),
             }),
             ipv6_unicast: None,

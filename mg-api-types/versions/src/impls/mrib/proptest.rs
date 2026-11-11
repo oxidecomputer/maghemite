@@ -10,7 +10,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use dpd_types_versions::testing;
-use dpd_types_versions::v14::mcast::is_ssm_address;
+use dpd_types_versions::v15::mcast::is_ssm_address;
 use proptest::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -312,8 +312,8 @@ fn prop_key_construction_matches_spec(
     let fields =
         serde_json::json!({ "source": source, "group": ip, "vni": vni });
     let json = match group {
-        MulticastAddr::V4(_) => serde_json::json!({ "V4": fields }),
-        MulticastAddr::V6(_) => serde_json::json!({ "V6": fields }),
+        MulticastAddr::V4(_) => serde_json::json!({ "v4": fields }),
+        MulticastAddr::V6(_) => serde_json::json!({ "v6": fields }),
     };
     let decoded = serde_json::from_value::<MulticastRouteKey>(json.clone());
     prop_assert_eq!(decoded.ok(), got.ok(), "{}", json);

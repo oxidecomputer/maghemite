@@ -28,25 +28,25 @@
 use std::fmt::{self, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use dpd_types_versions::v14::mcast::{
+use dpd_types_versions::v15::mcast::{
     is_ssm_address, validate_external_multicast_ipv4,
     validate_external_multicast_ipv6,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v1::rdb::rib::AddressFamily;
+use crate::v14::rdb::rib::AddressFamily;
 
 pub use dpd_types_versions::v1::network::VniError;
 pub use dpd_types_versions::v8::mcast::{
     UnderlayMulticastError, UnderlayMulticastIpv6,
 };
-pub use dpd_types_versions::v14::mcast::{
+pub use dpd_types_versions::v15::mcast::{
     EmbeddedIpv4, ExternalMulticastIpError as MulticastGroupError,
     InvalidEmbeddedRp, InvalidMulticastSource, MulticastSourceError,
     UnicastAddrV4, UnicastAddrV6,
 };
-pub use dpd_types_versions::v14::network::Vni;
+pub use dpd_types_versions::v15::network::Vni;
 
 /// Errors raised while validating multicast addresses and route keys.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -658,6 +658,7 @@ impl From<MulticastRouteKeyV6> for MulticastRouteKeyV6Shadow {
     Deserialize,
     JsonSchema,
 )]
+#[serde(rename_all = "snake_case")]
 pub enum MulticastRouteKey {
     /// An IPv4 route key.
     V4(MulticastRouteKeyV4),
@@ -870,6 +871,7 @@ impl MulticastRoute {
 #[derive(
     Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq,
 )]
+#[serde(rename_all = "snake_case")]
 pub enum MulticastSourceProtocol {
     /// Static route configured via API.
     Static,
@@ -902,6 +904,7 @@ pub struct MribDeleteStaticRequest {
 #[derive(
     Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq,
 )]
+#[serde(rename_all = "snake_case")]
 pub enum RouteOriginFilter {
     /// Static routes only (operator configured).
     Static,
@@ -1254,15 +1257,15 @@ mod tests {
     fn ssm_key_without_source_fails_decode() {
         for (json, group) in [
             (
-                r#"{"V4":{"source":null,"group":"232.1.2.3","vni":77}}"#,
+                r#"{"v4":{"source":null,"group":"232.1.2.3","vni":77}}"#,
                 "232.1.2.3",
             ),
-            (r#"{"V4":{"group":"232.1.2.3","vni":77}}"#, "232.1.2.3"),
+            (r#"{"v4":{"group":"232.1.2.3","vni":77}}"#, "232.1.2.3"),
             (
-                r#"{"V6":{"source":null,"group":"ff3e::4000:1","vni":77}}"#,
+                r#"{"v6":{"source":null,"group":"ff3e::4000:1","vni":77}}"#,
                 "ff3e::4000:1",
             ),
-            (r#"{"V6":{"group":"ffbe::1","vni":77}}"#, "ffbe::1"),
+            (r#"{"v6":{"group":"ffbe::1","vni":77}}"#, "ffbe::1"),
         ] {
             let err = serde_json::from_str::<MulticastRouteKey>(json)
                 .expect_err(json)
@@ -1274,11 +1277,11 @@ mod tests {
         }
 
         for json in [
-            r#"{"V4":{"source":null,"group":"239.1.2.3","vni":77}}"#,
-            r#"{"V4":{"source":"192.0.2.1","group":"232.1.2.3","vni":77}}"#,
-            r#"{"V6":{"group":"ff0e::1","vni":77}}"#,
+            r#"{"v4":{"source":null,"group":"239.1.2.3","vni":77}}"#,
+            r#"{"v4":{"source":"192.0.2.1","group":"232.1.2.3","vni":77}}"#,
+            r#"{"v6":{"group":"ff0e::1","vni":77}}"#,
             concat!(
-                r#"{"V6":{"source":"2001:db8::1","group":"ff3e::4000:1","#,
+                r#"{"v6":{"source":"2001:db8::1","group":"ff3e::4000:1","#,
                 r#""vni":77}}"#,
             ),
         ] {
@@ -1291,8 +1294,8 @@ mod tests {
     #[test]
     fn route_key_requires_vni() {
         for json in [
-            r#"{"V4":{"source":null,"group":"239.1.2.3"}}"#,
-            r#"{"V6":{"group":"ff0e::1"}}"#,
+            r#"{"v4":{"source":null,"group":"239.1.2.3"}}"#,
+            r#"{"v6":{"group":"ff0e::1"}}"#,
         ] {
             let err = serde_json::from_str::<MulticastRouteKey>(json)
                 .expect_err(json)

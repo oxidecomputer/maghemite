@@ -5,6 +5,8 @@
 use ddm_api_types_versions::latest;
 use ddm_api_types_versions::v1;
 use ddm_api_types_versions::v2;
+use ddm_api_types_versions::v3;
+use ddm_api_types_versions::v4;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -27,7 +29,8 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (4, MULTICAST_SUPPORT),
+    (5, MULTICAST_SUPPORT),
+    (4, OPENAPI_LINT),
     (3, EXTERNAL_PEERS),
     (2, PEER_DURATIONS),
     (1, INITIAL),
@@ -62,12 +65,27 @@ pub trait DdmAdminApi {
         operation_id = "get_peers",
         method = GET,
         path = "/peers",
-        versions = VERSION_PEER_DURATIONS..VERSION_MULTICAST_SUPPORT,
+        versions = VERSION_OPENAPI_LINT..VERSION_MULTICAST_SUPPORT,
+    }]
+    async fn get_peers_v4(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v4::db::PeerInfo>>, HttpError> {
+        let resp = Self::get_peers(ctx).await?;
+        let converted: HashMap<u32, v4::db::PeerInfo> =
+            resp.0.into_iter().map(|(k, v)| (k, v.into())).collect();
+        Ok(HttpResponseOk(converted))
+    }
+
+    #[endpoint {
+        operation_id = "get_peers",
+        method = GET,
+        path = "/peers",
+        versions = VERSION_PEER_DURATIONS..VERSION_OPENAPI_LINT,
     }]
     async fn get_peers_v2(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashMap<u32, v2::db::PeerInfo>>, HttpError> {
-        let resp = Self::get_peers(ctx).await?;
+        let resp = Self::get_peers_v4(ctx).await?;
         let converted: HashMap<u32, v2::db::PeerInfo> =
             resp.0.into_iter().map(|(k, v)| (k, v.into())).collect();
         Ok(HttpResponseOk(converted))
@@ -107,11 +125,24 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = GET,
-        path = "/originated_tunnel_endpoints",
+        path = "/originated-tunnel-endpoints",
+        versions = VERSION_OPENAPI_LINT..,
     }]
     async fn get_originated_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<latest::net::TunnelOrigin>>, HttpError>;
+
+    #[endpoint {
+        operation_id = "get_originated_tunnel_endpoints",
+        method = GET,
+        path = "/originated_tunnel_endpoints",
+        versions = ..VERSION_OPENAPI_LINT,
+    }]
+    async fn get_originated_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<v1::net::TunnelOrigin>>, HttpError> {
+        Self::get_originated_tunnel_endpoints(ctx).await
+    }
 
     #[endpoint {
         method = GET,
@@ -123,11 +154,24 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = GET,
-        path = "/tunnel_endpoints",
+        path = "/tunnel-endpoints",
+        versions = VERSION_OPENAPI_LINT..,
     }]
     async fn get_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<latest::db::TunnelRoute>>, HttpError>;
+
+    #[endpoint {
+        operation_id = "get_tunnel_endpoints",
+        method = GET,
+        path = "/tunnel_endpoints",
+        versions = ..VERSION_OPENAPI_LINT,
+    }]
+    async fn get_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<v1::db::TunnelRoute>>, HttpError> {
+        Self::get_tunnel_endpoints(ctx).await
+    }
 
     #[endpoint {
         method = PUT,
@@ -140,12 +184,26 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = PUT,
-        path = "/tunnel_endpoint",
+        path = "/tunnel-endpoint",
+        versions = VERSION_OPENAPI_LINT..,
     }]
     async fn advertise_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        operation_id = "advertise_tunnel_endpoints",
+        method = PUT,
+        path = "/tunnel_endpoint",
+        versions = ..VERSION_OPENAPI_LINT,
+    }]
+    async fn advertise_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<v1::net::TunnelOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::advertise_tunnel_endpoints(ctx, request).await
+    }
 
     #[endpoint {
         method = DELETE,
@@ -158,7 +216,8 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = DELETE,
-        path = "/tunnel_endpoint",
+        path = "/tunnel-endpoint",
+        versions = VERSION_OPENAPI_LINT..,
     }]
     async fn withdraw_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
@@ -166,8 +225,21 @@ pub trait DdmAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
+        operation_id = "withdraw_tunnel_endpoints",
+        method = DELETE,
+        path = "/tunnel_endpoint",
+        versions = ..VERSION_OPENAPI_LINT,
+    }]
+    async fn withdraw_tunnel_endpoints_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<v1::net::TunnelOrigin>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::withdraw_tunnel_endpoints(ctx, request).await
+    }
+
+    #[endpoint {
         method = GET,
-        path = "/originated_multicast_groups",
+        path = "/originated-multicast-groups",
         versions = VERSION_MULTICAST_SUPPORT..
     }]
     async fn get_originated_multicast_groups(
@@ -176,7 +248,7 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = GET,
-        path = "/multicast_groups",
+        path = "/multicast-groups",
         versions = VERSION_MULTICAST_SUPPORT..
     }]
     async fn get_multicast_groups(
@@ -185,7 +257,7 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = PUT,
-        path = "/multicast_group",
+        path = "/multicast-group",
         versions = VERSION_MULTICAST_SUPPORT..
     }]
     async fn advertise_multicast_groups(
@@ -195,7 +267,7 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = DELETE,
-        path = "/multicast_group",
+        path = "/multicast-group",
         versions = VERSION_MULTICAST_SUPPORT..
     }]
     async fn withdraw_multicast_groups(
@@ -230,8 +302,8 @@ pub trait DdmAdminApi {
 
     #[endpoint {
         method = PUT,
-        path = "/external_peers",
-        versions = VERSION_EXTERNAL_PEERS..,
+        path = "/external-peers",
+        versions = VERSION_OPENAPI_LINT..,
     }]
     async fn set_external_peers(
         ctx: RequestContext<Self::Context>,
@@ -239,11 +311,37 @@ pub trait DdmAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
-        method = GET,
+        operation_id = "set_external_peers",
+        method = PUT,
         path = "/external_peers",
-        versions = VERSION_EXTERNAL_PEERS..,
+        versions = VERSION_EXTERNAL_PEERS..VERSION_OPENAPI_LINT,
+    }]
+    async fn set_external_peers_v3(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v3::external_peers::ExternalPeers>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        Self::set_external_peers(ctx, request).await
+    }
+
+    #[endpoint {
+        method = GET,
+        path = "/external-peers",
+        versions = VERSION_OPENAPI_LINT..,
     }]
     async fn get_external_peers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
+
+    #[endpoint {
+        operation_id = "get_external_peers",
+        method = GET,
+        path = "/external_peers",
+        versions = VERSION_EXTERNAL_PEERS..VERSION_OPENAPI_LINT,
+    }]
+    async fn get_external_peers_v3(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<v3::external_peers::ExternalPeers>, HttpError>
+    {
+        Self::get_external_peers(ctx).await
+    }
 }

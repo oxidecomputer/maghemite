@@ -91,9 +91,9 @@ ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.229", features = ["derive"] }
 hostname = "0.4"
 thiserror = "2.0"
-dropshot = { version = "0.17.1", features = [ "usdt-probes" ] }
-dropshot-api-manager = "0.8.0"
-dropshot-api-manager-types = "0.8.0"
+dropshot = { version = "0.18.0", features = [ "usdt-probes" ] }
+dropshot-api-manager = "0.9.1"
+dropshot-api-manager-types = "0.9.1"
 expectorate = "1.3.0"
 schemars = { version = "0.8.22", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.49", features = ["full"] }
@@ -118,6 +118,7 @@ libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.14"
 nom = "8.0"
 num_enum = "0.7.6"
+openapiv3 = "2.2.0"
 pretty-hex = "0.4"
 pretty_assertions = "1.4"
 lazy_static = "1.5"
@@ -133,6 +134,7 @@ oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oxnet = { version = "0.1.7", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+openapi-lint = { git = "https://github.com/oxidecomputer/openapi-lint", branch = "main" }
 gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 uuid = { version = "1.21", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
@@ -150,16 +152,16 @@ iddqd = "0.5"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+rev = "7bdb93d99511f236a13ba7a67a7371f7a4743a7d"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "44052786cb63ad9ff32ec47bd8d65edb6a184e21"
+rev = "7bdb93d99511f236a13ba7a67a7371f7a4743a7d"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "6a5425b2e6ae84d6c4d18bd3a984a16731bf4734"
+rev = "e08cf4c06c1b56be6b0066d53855b90782bf8d1c"
 
 [workspace.dependencies.dpd-types-versions]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "6a5425b2e6ae84d6c4d18bd3a984a16731bf4734"
+rev = "e08cf4c06c1b56be6b0066d53855b90782bf8d1c"

@@ -6,9 +6,13 @@
 //! types.
 
 use crate::latest;
+use crate::latest::bgp::config::AfiSafi;
+use crate::latest::bgp::config::BgpCapability;
 use crate::latest::bgp::config::Ipv4UnicastConfig;
 use crate::latest::bgp::config::Ipv6UnicastConfig;
 use crate::latest::bgp::config::JitterRange;
+use crate::latest::bgp::messages::Capability;
+use crate::latest::bgp::messages::CapabilityCode;
 use crate::latest::bgp::policy::ImportExportPolicy4;
 use crate::latest::bgp::policy::ImportExportPolicy6;
 use crate::latest::rdb::neighbor::BgpNeighborInfo;
@@ -218,14 +222,30 @@ fn latest_params_from_rdb(
         ipv4_unicast: ipv4_unicast_config_new(
             ipv4_enabled,
             nexthop4,
-            allow_import4.into(),
-            allow_export4.into(),
+            ImportExportPolicy4::from(
+                crate::v11::bgp::policy::ImportExportPolicy4::from(
+                    allow_import4,
+                ),
+            ),
+            ImportExportPolicy4::from(
+                crate::v11::bgp::policy::ImportExportPolicy4::from(
+                    allow_export4,
+                ),
+            ),
         ),
         ipv6_unicast: ipv6_unicast_config_new(
             ipv6_enabled,
             nexthop6,
-            allow_import6.into(),
-            allow_export6.into(),
+            ImportExportPolicy6::from(
+                crate::v11::bgp::policy::ImportExportPolicy6::from(
+                    allow_import6,
+                ),
+            ),
+            ImportExportPolicy6::from(
+                crate::v11::bgp::policy::ImportExportPolicy6::from(
+                    allow_export6,
+                ),
+            ),
         ),
         vlan_id,
         connect_retry_jitter: Some(JitterRange {
@@ -270,5 +290,68 @@ fn ipv6_unicast_config_new(
         })
     } else {
         None
+    }
+}
+
+impl From<&Capability> for BgpCapability {
+    fn from(value: &Capability) -> Self {
+        // BgpCapability has structured variants only for capabilities
+        // we actively implement (MultiprotocolExtensions, RouteRefresh,
+        // FourOctetAsn, AddPath). The remaining v1 Capability variants
+        // are deliberately collapsed into BgpCapability::Unknown(code)
+        // because there is no meaningful structured representation for
+        // them today — most are RFC-listed but not yet implemented in
+        // bgp.
+        //
+        // The match below names every v1 Capability variant explicitly
+        // rather than using a wildcard arm, so that adding a new v1
+        // variant fails to compile here. That forces a deliberate
+        // decision: add a structured BgpCapability variant for it, or
+        // route it to Unknown like the others.
+        match value {
+            Capability::MultiprotocolExtensions { afi, safi } => {
+                Self::MultiprotocolExtensions(AfiSafi {
+                    afi: *afi,
+                    safi: *safi,
+                })
+            }
+            Capability::RouteRefresh {} => Self::RouteRefresh,
+            Capability::FourOctetAs { asn } => Self::FourOctetAsn(*asn),
+            Capability::AddPath { elements } => Self::AddPath {
+                elements: elements
+                    .iter()
+                    .map(|e| AfiSafi {
+                        afi: e.afi,
+                        safi: e.safi,
+                    })
+                    .collect(),
+            },
+            // Capabilities without a structured BgpCapability shape.
+            c @ (Capability::OutboundRouteFiltering {}
+            | Capability::MultipleRoutesToDestination {}
+            | Capability::ExtendedNextHopEncoding { .. }
+            | Capability::BGPExtendedMessage {}
+            | Capability::BgpSec {}
+            | Capability::MultipleLabels {}
+            | Capability::BgpRole {}
+            | Capability::GracefulRestart {}
+            | Capability::DynamicCapability {}
+            | Capability::MultisessionBgp {}
+            | Capability::EnhancedRouteRefresh {}
+            | Capability::LongLivedGracefulRestart {}
+            | Capability::RoutingPolicyDistribution {}
+            | Capability::Fqdn {}
+            | Capability::PrestandardRouteRefresh {}
+            | Capability::PrestandardOrfAndPd {}
+            | Capability::PrestandardOutboundRouteFiltering {}
+            | Capability::PrestandardMultisession {}
+            | Capability::PrestandardFqdn {}
+            | Capability::PrestandardOperationalMessage {}
+            | Capability::Experimental { .. }
+            | Capability::Unassigned { .. }
+            | Capability::Reserved { .. }) => {
+                Self::Unknown(CapabilityCode::from(c.clone()) as u8)
+            }
+        }
     }
 }
