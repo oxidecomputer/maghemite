@@ -20,14 +20,31 @@
 
 use thiserror::Error;
 
+#[cfg(any(test, all(feature = "backend", target_os = "illumos")))]
+mod mcast;
+
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 mod runtime;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
+pub(crate) use mcast::reconcile_multicast_update;
+
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::{
-    announce_tunnel, announce_underlay, do_pull, handler, pull,
-    withdraw_tunnel, withdraw_underlay,
+    announce_multicast, announce_tunnel, announce_underlay, handler,
+    probe_exchange_server, pull, withdraw_multicast, withdraw_tunnel,
+    withdraw_underlay,
 };
+
+/// Whether imported routes are redistributed or imported locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateMode {
+    /// Import only into the local DB.
+    ImportOnly,
+    /// Re-announce imports to other peers on transit routers.
+    /// Server routers treat this as [`Self::ImportOnly`].
+    Redistribute,
+}
 
 #[derive(Error, Debug)]
 pub enum ExchangeError {
@@ -48,8 +65,26 @@ pub enum ExchangeError {
 
     #[error("json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+
+    /// A multicast update exceeds the exchange body limit.
+    #[error("multicast update is {size} bytes, limit is {limit}")]
+    MulticastUpdateTooLarge { size: usize, limit: usize },
+
+    /// A pull response body exceeds the pull limit.
+    ///
+    /// TODO: This is only visible in the error log. A peer whose snapshot
+    /// goes over the limit cannot complete a pull until it shrinks, which
+    /// means it deserves a bump on a stats counter that operators can alert
+    /// on.
+    #[error("pull response exceeds {limit} bytes")]
+    ResponseTooLarge { limit: usize },
+
+    /// An exchange request URI could not be constructed.
+    #[error("invalid exchange request URI: {0}")]
+    InvalidUri(String),
 }
 
+#[cfg(any(test, all(feature = "backend", target_os = "illumos")))]
 impl ExchangeError {
     pub(crate) fn is_transient(&self) -> bool {
         match self {
@@ -62,7 +97,10 @@ impl ExchangeError {
                     || *status == hyper::StatusCode::REQUEST_TIMEOUT
                     || *status == hyper::StatusCode::TOO_MANY_REQUESTS
             }
-            Self::SerdeJson(_) => false,
+            Self::SerdeJson(_)
+            | Self::MulticastUpdateTooLarge { .. }
+            | Self::ResponseTooLarge { .. }
+            | Self::InvalidUri(_) => false,
         }
     }
 }
@@ -104,6 +142,7 @@ mod tests {
     fn decode_errors_are_not_transient() {
         let e = serde_json::from_str::<u32>("not json").unwrap_err();
         assert!(!ExchangeError::SerdeJson(e).is_transient());
+        assert!(!ExchangeError::ResponseTooLarge { limit: 8 }.is_transient());
     }
 
     #[test]
