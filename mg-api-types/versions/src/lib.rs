@@ -31,6 +31,7 @@
 
 mod impls;
 pub mod latest;
+
 #[path = "initial/mod.rs"]
 pub mod v1;
 #[path = "v4_over_v6_static_routes/mod.rs"]
@@ -43,6 +44,8 @@ pub mod v12;
 pub mod v13;
 #[path = "openapi_lint/mod.rs"]
 pub mod v14;
+#[path = "multicast_support/mod.rs"]
+pub mod v15;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

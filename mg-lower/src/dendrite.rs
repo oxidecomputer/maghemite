@@ -404,7 +404,7 @@ fn get_port_and_link(
     {
         let (port, link, _vlan) = parse_tfport_name(iface)?;
         let port_name = format!("qsfp{port}");
-        let port_id = types::Qsfp::try_from(&port_name)
+        let port_id = types::Qsfp::try_from(port_name.as_str())
             .map(types::PortId::Qsfp)
             .map_err(|e| {
                 Error::Tfport(format!(
@@ -439,7 +439,7 @@ fn resolve_port_and_link(
 
     let (port, link, _vlan) = parse_tfport_name(&ifname)?;
     let port_name = format!("qsfp{port}");
-    let port_id = types::Qsfp::try_from(&port_name)
+    let port_id = types::Qsfp::try_from(port_name.as_str())
         .map(types::PortId::Qsfp)
         .map_err(|e| {
             Error::Tfport(format!(

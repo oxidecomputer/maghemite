@@ -3,8 +3,8 @@
 source .github/buildomat/common.sh
 
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
-export SOFTNPU_VERSION=77ba891f8b8c2288ac8d01d3c372892ad1111592
-export SIDECAR_LITE_VERSION=2e7bd9b52a90224fb227e72c27623beb5b827e57
+export SOFTNPU_VERSION=a6a878533f9eae542552ef66223a37443f931149
+export SIDECAR_LITE_VERSION=be3c09fe9a7e9c6bc5f5c6d184ad203b62b1eb32
 export DENDRITE_VERSION=`grep -A3 'dpd-client' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p'`
 
 function cleanup {
@@ -55,6 +55,10 @@ sed -i  "s#<service_fmri value='svc:/oxide/zone-network-setup:default' />##g" \
     zones/dendrite/root/var/svc/manifest/site/dendrite/manifest.xml
 sed -i  "s#<service_fmri value='svc:/oxide/.*setup:default' />##g" \
     zones/dendrite/root/var/svc/manifest/site/tfport/manifest.xml
+# TODO: remove once the dendrite pin includes
+# https://github.com/oxidecomputer/dendrite/pull/422
+sed -i -e 's/,RS,/,rs,/' -e 's/,None,/,none,/' \
+    zones/dendrite/root/opt/oxide/dendrite/misc/xcvr_defaults.csv
 popd
 
 banner "install"
