@@ -873,32 +873,10 @@ impl State for Exchange {
                         "redistributing update to {} peers",
                         self.ctx.event_channels.len()
                     );
+                    // handle_update already removed the announcements that
+                    // went through us.
                     update.underlay = update.underlay.map(|u| {
-                        let sans_loops = u.break_loops(&self.ctx.router_id);
-
-                        let announce_loop =
-                            u.announce.difference(&sans_loops.announce);
-                        let withdraw_loop =
-                            u.withdraw.difference(&sans_loops.withdraw);
-
-                        for x in announce_loop {
-                            wrn!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "loop detected: dropping announcement: {:?}",
-                                x,
-                            )
-                        }
-                        for x in withdraw_loop {
-                            wrn!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "loop detected: dropping withdraw {:?}",
-                                x,
-                            )
-                        }
-
-                        sans_loops.with_path_element(self.ctx.router_id.clone())
+                        u.with_path_element(self.ctx.router_id.clone())
                     });
                     super::send(
                         Event::Peer(PeerEvent::Push(update)),

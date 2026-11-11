@@ -486,6 +486,20 @@ fn handle_pull_response(
 fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
+    // Path vector loop breaking. An announcement with our router ID in its
+    // path has already gone through us: neither import nor redistribute it.
+    let sans_loops = update.break_loops(&ctx.router_id);
+    if let (Some(u), Some(s)) = (&update.underlay, &sans_loops.underlay) {
+        for x in u.announce.difference(&s.announce) {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "loop detected: dropping announcement: {x:?}"
+            );
+        }
+    }
+    let update = &sans_loops;
+
     if let Some(underlay_update) = &update.underlay {
         handle_underlay_update(underlay_update, ctx, peer);
     }
@@ -581,11 +595,6 @@ fn handle_underlay_update(
     let db = &ctx.db;
 
     for prefix in &update.announce {
-        // Skip announcements with ourselves in the path e.g. path vector
-        // loop breaking.
-        if prefix.path.contains(&ctx.router_id) {
-            continue;
-        }
         import.insert(Route {
             destination: prefix.destination,
             nexthop: peer.addr,

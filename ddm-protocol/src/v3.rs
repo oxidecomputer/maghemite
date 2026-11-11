@@ -19,6 +19,18 @@ pub struct Update {
 }
 
 impl Update {
+    /// This update without the announcements that have `router_id` in their
+    /// path, because they have already gone through that router.
+    pub fn break_loops(&self, router_id: &str) -> Self {
+        // compilation barrier. a new route class must be checked here.
+        let Self { underlay, tunnel } = self;
+        Self {
+            underlay: underlay.as_ref().map(|u| u.break_loops(router_id)),
+            // Tunnel routes carry no path.
+            tunnel: tunnel.clone(),
+        }
+    }
+
     /// The update that turns the routes we hold from a peer into the routes in
     /// its pull response `pr`: announce what is new and withdraw what is
     /// missing. A pull response is the peer's complete advertisement, not an
@@ -148,12 +160,12 @@ impl UnderlayUpdate {
                 .collect(),
         }
     }
-    pub fn break_loops(&self, hostname: &String) -> Self {
+    pub fn break_loops(&self, hostname: &str) -> Self {
         Self {
             announce: self
                 .announce
                 .iter()
-                .filter(|x| !x.path.contains(hostname))
+                .filter(|x| !x.path.iter().any(|h| h == hostname))
                 .cloned()
                 .collect(),
             withdraw: self.withdraw.clone(),
