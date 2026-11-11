@@ -37,7 +37,9 @@ pub mod v1;
 pub mod v2;
 #[path = "external_peers/mod.rs"]
 pub mod v3;
-#[path = "multicast_support/mod.rs"]
+#[path = "openapi_lint/mod.rs"]
 pub mod v4;
-#[path = "multicast_interfaces/mod.rs"]
+#[path = "multicast_support/mod.rs"]
 pub mod v5;
+#[path = "multicast_interfaces/mod.rs"]
+pub mod v6;

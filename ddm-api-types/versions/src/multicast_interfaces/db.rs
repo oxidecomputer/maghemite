@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::v4;
+use crate::v5;
 
 /// A multicast route with the interface on which its peer was discovered.
 #[derive(
@@ -13,12 +13,12 @@ use crate::v4;
 )]
 pub struct ImportedMulticastRoute {
     /// The imported multicast route.
-    pub route: v4::db::MulticastRoute,
+    pub route: v5::db::MulticastRoute,
     /// Local interface on which the advertising peer was discovered.
     pub if_name: String,
 }
 
-impl From<ImportedMulticastRoute> for v4::db::MulticastRoute {
+impl From<ImportedMulticastRoute> for v5::db::MulticastRoute {
     fn from(imported: ImportedMulticastRoute) -> Self {
         imported.route
     }

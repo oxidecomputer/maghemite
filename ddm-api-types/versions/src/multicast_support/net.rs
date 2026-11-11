@@ -7,8 +7,8 @@ pub use dpd_types_versions::v1::network::VniError;
 pub use dpd_types_versions::v8::mcast::{
     UnderlayMulticastError, UnderlayMulticastIpv6,
 };
-pub use dpd_types_versions::v14::mcast::{
+pub use dpd_types_versions::v15::mcast::{
     ExternalMulticastIp as OverlayMulticast,
     ExternalMulticastIpError as OverlayMulticastError,
 };
-pub use dpd_types_versions::v14::network::Vni;
+pub use dpd_types_versions::v15::network::Vni;

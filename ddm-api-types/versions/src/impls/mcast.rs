@@ -40,12 +40,12 @@ mod tests {
     use std::hash::{DefaultHasher, Hash, Hasher};
     use std::net::Ipv6Addr;
 
-    use crate::v4::db::MulticastRoute;
-    use crate::v4::exchange::MulticastPathHop;
-    use crate::v4::net::{
+    use crate::v5::db::MulticastRoute;
+    use crate::v5::exchange::MulticastPathHop;
+    use crate::v5::net::{
         MulticastOrigin, OverlayMulticast, UnderlayMulticastIpv6, Vni,
     };
-    use crate::v5::db::ImportedMulticastRoute;
+    use crate::v6::db::ImportedMulticastRoute;
 
     fn origin(overlay: &str) -> MulticastOrigin {
         MulticastOrigin::new(
@@ -58,7 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_conversion_drops_interface_ident() {
+    fn v5_conversion_drops_interface_ident() {
         let route = MulticastRoute {
             origin: origin("233.252.0.1"),
             nexthop: "fe80::1".parse().unwrap(),
@@ -79,7 +79,7 @@ mod tests {
         ]);
         assert_eq!(imported.len(), 2);
 
-        let prev: HashSet<crate::v4::db::MulticastRoute> =
+        let prev: HashSet<crate::v5::db::MulticastRoute> =
             imported.into_iter().map(Into::into).collect();
         assert_eq!(prev, HashSet::from([route]));
     }

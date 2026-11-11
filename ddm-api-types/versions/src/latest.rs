@@ -14,33 +14,33 @@ pub mod db {
     pub use crate::v1::db::RouterKind;
     pub use crate::v1::db::TunnelRoute;
 
-    pub use crate::v2::db::PeerStatus;
+    pub use crate::v4::db::PeerStatus;
 
-    pub use crate::v4::db::MulticastRoute;
-    pub use crate::v4::db::PeerInfo;
+    pub use crate::v5::db::MulticastRoute;
+    pub use crate::v5::db::PeerInfo;
 
-    pub use crate::v5::db::ImportedMulticastRoute;
+    pub use crate::v6::db::ImportedMulticastRoute;
 }
 
 pub mod exchange {
     pub use crate::v1::exchange::PathVector;
 
-    pub use crate::v4::exchange::MulticastPathHop;
-    pub use crate::v4::exchange::MulticastPathVector;
-    pub use crate::v4::exchange::RouterId;
+    pub use crate::v5::exchange::MulticastPathHop;
+    pub use crate::v5::exchange::MulticastPathVector;
+    pub use crate::v5::exchange::RouterId;
 }
 
 pub mod net {
     pub use crate::v1::net::TunnelOrigin;
 
-    pub use crate::v4::net::MulticastOrigin;
-    pub use crate::v4::net::MulticastOriginError;
-    pub use crate::v4::net::OverlayMulticast;
-    pub use crate::v4::net::OverlayMulticastError;
-    pub use crate::v4::net::UnderlayMulticastError;
-    pub use crate::v4::net::UnderlayMulticastIpv6;
-    pub use crate::v4::net::Vni;
-    pub use crate::v4::net::VniError;
+    pub use crate::v5::net::MulticastOrigin;
+    pub use crate::v5::net::MulticastOriginError;
+    pub use crate::v5::net::OverlayMulticast;
+    pub use crate::v5::net::OverlayMulticastError;
+    pub use crate::v5::net::UnderlayMulticastError;
+    pub use crate::v5::net::UnderlayMulticastIpv6;
+    pub use crate::v5::net::Vni;
+    pub use crate::v5::net::VniError;
 }
 
 pub mod external_peers {

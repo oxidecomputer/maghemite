@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "4.0.0"
+    "version": "6.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -51,7 +51,7 @@
         }
       }
     },
-    "/external_peers": {
+    "/external-peers": {
       "get": {
         "operationId": "get_external_peers",
         "responses": {
@@ -98,7 +98,7 @@
         }
       }
     },
-    "/multicast_group": {
+    "/multicast-group": {
       "put": {
         "operationId": "advertise_multicast_groups",
         "requestBody": {
@@ -158,7 +158,7 @@
         }
       }
     },
-    "/multicast_groups": {
+    "/multicast-groups": {
       "get": {
         "operationId": "get_multicast_groups",
         "responses": {
@@ -167,10 +167,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Set_of_MulticastRoute",
+                  "title": "Set_of_ImportedMulticastRoute",
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/MulticastRoute"
+                    "$ref": "#/components/schemas/ImportedMulticastRoute"
                   },
                   "uniqueItems": true
                 }
@@ -214,7 +214,7 @@
         }
       }
     },
-    "/originated_multicast_groups": {
+    "/originated-multicast-groups": {
       "get": {
         "operationId": "get_originated_multicast_groups",
         "responses": {
@@ -242,7 +242,7 @@
         }
       }
     },
-    "/originated_tunnel_endpoints": {
+    "/originated-tunnel-endpoints": {
       "get": {
         "operationId": "get_originated_tunnel_endpoints",
         "responses": {
@@ -431,7 +431,7 @@
         }
       }
     },
-    "/tunnel_endpoint": {
+    "/tunnel-endpoint": {
       "put": {
         "operationId": "advertise_tunnel_endpoints",
         "requestBody": {
@@ -491,7 +491,7 @@
         }
       }
     },
-    "/tunnel_endpoints": {
+    "/tunnel-endpoints": {
       "get": {
         "operationId": "get_tunnel_endpoints",
         "responses": {
@@ -578,7 +578,7 @@
         ]
       },
       "ExternalMulticastIp": {
-        "description": "A validated IP address for a customer-visible overlay multicast group.\n\nThe overlay multicast group is the address guests can send to and join, e.g. `233.252.0.1` or `ff0e::1`, and spans both address families. Its rack-internal underlay mapping is validated separately via `UnderlayMulticastIpv6`, with a 1:1 mapping between the two.\n\nJSON uses the ordinary IP-address string form. Deserialization rejects addresses that are not multicast, use a reserved, interface-local, or link-local IPv6 scope, fall in the IPv4 local network control block (`224.0.0.0/24`) or the `ff04::/64` underlay subnet, are a reserved base or SSM null address, or carry malformed prefix-based or embedded-RP flags.",
+        "description": "A validated IP address for a customer-visible overlay multicast group.\n\nThe overlay multicast group is the address guests can send to and join, e.g. `233.252.0.1` or `ff0e::1`, and spans both address families. Its rack-internal underlay mapping is validated separately via `UnderlayMulticastIpv6`, with a 1:1 mapping between the two.\n\nEncoded as an IP address string.\n\nRequests are rejected if the address is not multicast, uses a reserved, interface-local, or link-local IPv6 scope, falls within the IPv4 local network control block (`224.0.0.0/24`) or the `ff04::/64` underlay subnet, is a reserved base or SSM null address, or carries malformed prefix-based or embedded-RP flags.",
         "type": "string",
         "format": "ip"
       },
@@ -595,6 +595,28 @@
         },
         "required": [
           "address_objects"
+        ]
+      },
+      "ImportedMulticastRoute": {
+        "description": "A multicast route with the interface on which its peer was discovered.",
+        "type": "object",
+        "properties": {
+          "if_name": {
+            "description": "Local interface on which the advertising peer was discovered.",
+            "type": "string"
+          },
+          "route": {
+            "description": "The imported multicast route.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastRoute"
+              }
+            ]
+          }
+        },
+        "required": [
+          "if_name",
+          "route"
         ]
       },
       "IpNet": {
@@ -805,7 +827,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Init"
+                  "init"
                 ]
               }
             },
@@ -823,7 +845,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Solicit"
+                  "solicit"
                 ]
               }
             },
@@ -841,7 +863,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Exchange"
+                  "exchange"
                 ]
               }
             },
@@ -859,7 +881,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "Expired"
+                  "expired"
                 ]
               }
             },

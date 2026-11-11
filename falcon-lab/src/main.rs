@@ -22,7 +22,7 @@ mod scenario;
 mod topo;
 mod util;
 
-const DEFAULT_NPUVM_COMMIT: &str = "63687602f0d26add71d4dae4ac62d46563ba23f5";
+const DEFAULT_NPUVM_COMMIT: &str = "42ff234fbb5e4b2da55eff9e11529694c43589d9";
 
 #[derive(Debug, Parser)]
 struct Cli {

@@ -12,3 +12,5 @@ ddm-api.workspace = true
 dropshot-api-manager-types.workspace = true
 dropshot-api-manager.workspace = true
 mg-api.workspace = true
+openapi-lint.workspace = true
+openapiv3.workspace = true

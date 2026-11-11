@@ -26,7 +26,7 @@ const STATIC_MCAST_ROUTES: &str = "static_mcast_routes";
 /// A new persisted version must retain a decode path for existing values.
 ///
 /// [omicron's ledger versioning]: https://github.com/oxidecomputer/omicron/blob/cbb10ff6c3bae0ec445b0eca16d466a70cf6fc9a/sled-agent/config-reconciler/src/ledger/ledgered_config_versioning.rs#L30-L39
-type PersistedMcastRoute = mg_api_types_versions::v14::mrib::MulticastRoute;
+type PersistedMcastRoute = mg_api_types_versions::v15::mrib::MulticastRoute;
 
 /// The [`MulticastRouteKey`] version serialized as the key in the
 /// [`STATIC_MCAST_ROUTES`] tree. It is pinned for the same reason
@@ -34,7 +34,7 @@ type PersistedMcastRoute = mg_api_types_versions::v14::mrib::MulticastRoute;
 ///
 /// Changing the serialized key format also requires migrating stored keys.
 type PersistedMcastRouteKey =
-    mg_api_types_versions::v14::mrib::MulticastRouteKey;
+    mg_api_types_versions::v15::mrib::MulticastRouteKey;
 
 /// Encode `key` as its pinned JSON form.
 fn encode_key(key: &MulticastRouteKey) -> Result<Vec<u8>, Error> {
