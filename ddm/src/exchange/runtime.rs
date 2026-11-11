@@ -107,7 +107,7 @@ pub(crate) fn do_pull(
         "http://[{}%{}]:{}/v3/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
-    let body = do_pull_common(uri, rt)?;
+    let body = do_pull_common(uri, ctx.config.exchange_timeout, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -120,12 +120,13 @@ pub(crate) fn do_pull_v2(
         "http://[{}%{}]:{}/v2/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
-    let body = do_pull_common(uri, rt)?;
+    let body = do_pull_common(uri, ctx.config.exchange_timeout, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
 fn do_pull_common(
     uri: String,
+    timeout_dur: Duration,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<Bytes, ExchangeError> {
     let client = Client::builder(TokioExecutor::new()).build_http();
@@ -139,13 +140,14 @@ fn do_pull_common(
     let resp = client.request(req);
 
     rt.block_on(async move {
-        let body = timeout(Duration::from_millis(250), resp)
-            .await??
-            .into_body()
-            .collect()
-            .await?
-            .to_bytes();
-        Ok(body)
+        timeout(timeout_dur, async {
+            let resp = resp.await?;
+            if !resp.status().is_success() {
+                return Err(ExchangeError::Status(resp.status()));
+            }
+            Ok(resp.into_body().collect().await?.to_bytes())
+        })
+        .await?
     })
 }
 
@@ -694,4 +696,111 @@ fn handle_underlay_update(
     ctx.stats
         .imported_underlay_prefixes
         .store(ctx.db.imported_count() as u64, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExchangeError, do_pull_common};
+    use crate::defaults::EXCHANGE_TIMEOUT;
+    use ddm_protocol::v3;
+    use dropshot::test_util::TestContext;
+    use dropshot::{
+        ApiDescription, ConfigDropshot, HttpError, HttpResponseOk,
+        RequestContext, endpoint,
+    };
+    use hyper::StatusCode;
+    use slog::{Discard, Logger, o};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::runtime::Runtime;
+
+    #[endpoint { method = GET, path = "/unavailable" }]
+    async fn pull_unavailable(
+        _ctx: RequestContext<()>,
+    ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
+        Err(HttpError::for_unavail(None, "busy".into()))
+    }
+
+    #[endpoint { method = GET, path = "/slow" }]
+    async fn pull_slow(
+        _ctx: RequestContext<()>,
+    ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok(HttpResponseOk(v3::PullResponse::default()))
+    }
+
+    fn fetch(path: &str) -> Result<Vec<u8>, ExchangeError> {
+        fetch_with_timeout(path, EXCHANGE_TIMEOUT)
+    }
+
+    fn fetch_with_timeout(
+        path: &str,
+        budget: Duration,
+    ) -> Result<Vec<u8>, ExchangeError> {
+        let rt = Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let mut api = ApiDescription::new();
+        api.register(pull_unavailable).unwrap();
+        api.register(pull_slow).unwrap();
+
+        let log = Logger::root(Discard, o!());
+        let server =
+            TestContext::new(api, (), &ConfigDropshot::default(), None, log);
+        let uri = format!("http://{}{path}", server.server.local_addr());
+        let handle = Arc::new(rt.handle().clone());
+        let res = do_pull_common(uri, budget, &handle).map(|b| b.to_vec());
+        rt.block_on(server.teardown());
+        res
+    }
+
+    #[test]
+    fn slow_response_times_out() {
+        let e =
+            fetch_with_timeout("/slow", Duration::from_millis(50)).unwrap_err();
+        assert!(matches!(e, ExchangeError::Timeout(_)), "{e}");
+    }
+
+    #[test]
+    fn stalled_body_times_out() {
+        let rt = Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let listener = rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+        let uri = format!("http://{}/", listener.local_addr().unwrap());
+        rt.spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await.unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 1024\r\n\r\n")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let handle = Arc::new(rt.handle().clone());
+        let e = do_pull_common(uri, Duration::from_millis(200), &handle)
+            .unwrap_err();
+        assert!(matches!(e, ExchangeError::Timeout(_)), "{e}");
+    }
+
+    #[test]
+    fn server_error_surfaces_as_status() {
+        let e = fetch("/unavailable").unwrap_err();
+        assert!(
+            matches!(e, ExchangeError::Status(StatusCode::SERVICE_UNAVAILABLE)),
+            "{e}",
+        );
+    }
+
+    #[test]
+    fn client_error_surfaces_as_status() {
+        let e = fetch("/missing").unwrap_err();
+        assert!(
+            matches!(e, ExchangeError::Status(StatusCode::NOT_FOUND)),
+            "{e}"
+        );
+    }
 }
