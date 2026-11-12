@@ -17,6 +17,7 @@ use mg_api_types::bgp::{
     policy::ImportExportPolicy4,
     session::FsmStateKind,
 };
+use oxnet::Md5AuthString;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     time::Duration,
@@ -292,7 +293,10 @@ fn md5_neighbor(
         passive,
         remote_asn: Some(remote_asn),
         min_ttl: None,
-        md5_auth_key: Some(MD5_KEY.to_owned()),
+        md5_auth_key: Some(
+            Md5AuthString::new(MD5_KEY.to_owned())
+                .expect("MD5_KEY is a valid MD5 auth key"),
+        ),
         multi_exit_discriminator: None,
         communities: Vec::new(),
         local_pref: None,

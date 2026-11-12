@@ -43,6 +43,8 @@ pub mod v12;
 pub mod v13;
 #[path = "openapi_lint/mod.rs"]
 pub mod v14;
+#[path = "md5_auth_string/mod.rs"]
+pub mod v15;
 #[path = "ipv6_basic/mod.rs"]
 pub mod v2;
 #[path = "switch_identifiers/mod.rs"]

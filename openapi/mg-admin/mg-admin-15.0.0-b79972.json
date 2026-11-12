@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "14.0.0"
+    "version": "15.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -2311,7 +2311,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -3570,6 +3574,19 @@
           "min"
         ]
       },
+      "Md5AuthString": {
+        "title": "An MD5 authentication string",
+        "description": "A nonempty printable ASCII string of at most 80 bytes",
+        "x-rust-type": {
+          "crate": "oxnet",
+          "path": "oxnet::Md5AuthString",
+          "version": "0.1.8"
+        },
+        "type": "string",
+        "pattern": "^[ -~]+$",
+        "minLength": 1,
+        "maxLength": 80
+      },
       "Message": {
         "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
         "oneOf": [
@@ -4177,7 +4194,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -5670,7 +5691,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -5845,7 +5870,11 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5AuthString"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,

@@ -23,6 +23,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
+use oxnet::Md5AuthString;
 use slog::{Logger, info};
 use slog_error_chain::InlineErrorChain;
 use std::{
@@ -282,7 +283,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn apply_policy(
         _conn: &BgpConnectionChannel,
         _min_ttl: Option<u8>,
-        _md5_key: Option<String>,
+        _md5_key: Option<Md5AuthString>,
     ) -> Result<(), ConnectionPolicyError> {
         // Policy application is ignored for test connections
         Ok(())

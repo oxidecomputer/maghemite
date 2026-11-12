@@ -34,6 +34,7 @@ use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, StaticRoute4,
     StaticRoute4List, StaticRoute6, StaticRoute6List,
 };
+use oxnet::Md5AuthString;
 use oxnet::{Ipv4Net, Ipv6Net};
 use slog::{info, warn};
 use std::{
@@ -1309,7 +1310,10 @@ async fn setup_bird_bgp(
             33,
             0,
         );
-        neighbor.md5_auth_key = Some(bird::MD5_KEY.to_owned());
+        neighbor.md5_auth_key = Some(
+            Md5AuthString::new(bird::MD5_KEY.to_owned())
+                .expect("MD5_KEY is a valid MD5 auth key"),
+        );
         neighbor.remote_asn = Some(bird::ASN);
         mgd.create_unnumbered_neighbor(&neighbor)
             .await

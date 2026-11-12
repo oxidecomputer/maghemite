@@ -14,6 +14,7 @@ use mg_api_types_versions::v1::rdb::prefix::{Prefix4, Prefix6};
 use mg_api_types_versions::v4::bgp::policy::{
     ImportExportPolicy4, ImportExportPolicy6,
 };
+use oxnet::Md5AuthString;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use proptest::{prelude::*, strategy::Just};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -187,7 +188,9 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                         passive: false,
                         remote_asn: Some(65001),
                         min_ttl: Some(1),
-                        md5_auth_key: Some("password".to_string()),
+                        md5_auth_key: Some(
+                            Md5AuthString::new("password".to_string()).unwrap(),
+                        ),
                         multi_exit_discriminator: Some(100),
                         communities: vec![],
                         local_pref: Some(100),

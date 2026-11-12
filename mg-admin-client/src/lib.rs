@@ -28,6 +28,7 @@ progenitor::generate_api!(
         Ipv4UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv4UnicastConfig,
         Ipv6UnicastConfig = mg_api_types_versions::latest::bgp::config::Ipv6UnicastConfig,
         JitterRange = mg_api_types_versions::latest::bgp::config::JitterRange,
+        Md5AuthString = oxnet::Md5AuthString,
         MessageDirection = mg_api_types_versions::latest::bgp::history::MessageDirection,
         NeighborResetOp = mg_api_types_versions::latest::bgp::config::NeighborResetOp,
         NeighborResetRequest = mg_api_types_versions::latest::bgp::config::NeighborResetRequest,

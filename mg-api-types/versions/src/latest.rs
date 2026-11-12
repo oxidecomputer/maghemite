@@ -41,19 +41,20 @@ pub mod bgp {
 
         pub use crate::v11::bgp::config::Origin4;
 
-        pub use crate::v14::bgp::config::ApplyRequest;
         pub use crate::v14::bgp::config::BgpCapability;
-        pub use crate::v14::bgp::config::BgpPeerConfig;
-        pub use crate::v14::bgp::config::BgpPeerParameters;
         pub use crate::v14::bgp::config::Ipv4UnicastConfig;
         pub use crate::v14::bgp::config::Ipv6UnicastConfig;
-        pub use crate::v14::bgp::config::Neighbor;
         pub use crate::v14::bgp::config::NeighborResetOp;
         pub use crate::v14::bgp::config::NeighborResetRequest;
         pub use crate::v14::bgp::config::PeerInfo;
-        pub use crate::v14::bgp::config::UnnumberedBgpPeerConfig;
-        pub use crate::v14::bgp::config::UnnumberedNeighbor;
         pub use crate::v14::bgp::config::UnnumberedNeighborResetRequest;
+
+        pub use crate::v15::bgp::config::ApplyRequest;
+        pub use crate::v15::bgp::config::BgpPeerConfig;
+        pub use crate::v15::bgp::config::BgpPeerParameters;
+        pub use crate::v15::bgp::config::Neighbor;
+        pub use crate::v15::bgp::config::UnnumberedBgpPeerConfig;
+        pub use crate::v15::bgp::config::UnnumberedNeighbor;
     }
 
     pub mod peer {
@@ -161,9 +162,9 @@ pub mod rdb {
     }
 
     pub mod neighbor {
-        pub use crate::v4::rdb::neighbor::BgpNeighborInfo;
-        pub use crate::v4::rdb::neighbor::BgpNeighborParameters;
-        pub use crate::v4::rdb::neighbor::BgpUnnumberedNeighborInfo;
+        pub use crate::v15::rdb::neighbor::BgpNeighborInfo;
+        pub use crate::v15::rdb::neighbor::BgpNeighborParameters;
+        pub use crate::v15::rdb::neighbor::BgpUnnumberedNeighborInfo;
     }
 
     pub mod path {

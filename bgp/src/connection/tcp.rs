@@ -26,6 +26,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
+use oxnet::Md5AuthString;
 use slog::{Logger, info};
 use slog_error_chain::InlineErrorChain;
 use std::{
@@ -244,7 +245,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn apply_policy(
         conn: &BgpConnectionTcp,
         min_ttl: Option<u8>,
-        md5_key: Option<String>,
+        md5_key: Option<Md5AuthString>,
     ) -> Result<(), ConnectionPolicyError> {
         let tcp_stream = lock!(conn.conn);
 
@@ -256,15 +257,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         if let Some(ref key) = md5_key {
             #[cfg(target_os = "linux")]
             {
-                let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-                let len = key.len();
-                keyval[..len].copy_from_slice(key.as_bytes());
-                set_md5_sig(
-                    tcp_stream.as_raw_fd(),
-                    len as u16,
-                    keyval,
-                    conn.peer,
-                )?;
+                set_md5_sig(tcp_stream.as_raw_fd(), key, conn.peer)?;
             }
 
             #[cfg(target_os = "illumos")]
@@ -272,7 +265,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 let local = get_md5_source_addrs(conn.peer.ip())?;
                 conn.manage_md5_associations(
                     tcp_stream.as_raw_fd(),
-                    key,
+                    key.as_str(),
                     local,
                     conn.peer,
                 )?;
@@ -309,28 +302,29 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         // Apply MD5 authentication before connecting (Linux)
         #[cfg(target_os = "linux")]
         if let Some(key) = &config.md5_auth_key {
-            let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-            let len = key.len();
-            keyval[..len].copy_from_slice(key.as_bytes());
-            set_md5_sig(s.as_raw_fd(), len as u16, keyval, peer).inspect_err(
-                |e| {
-                    connection_log_lite!(log,
-                        warn,
-                        "failed to apply MD5 auth for {peer}";
-                        "direction" => ConnectionDirection::Outbound,
-                        "peer" => format!("{peer}"),
-                        "error" => InlineErrorChain::new(e)
-                    );
-                },
-            )?;
+            set_md5_sig(s.as_raw_fd(), key, peer).inspect_err(|e| {
+                connection_log_lite!(log,
+                    warn,
+                    "failed to apply MD5 auth for {peer}";
+                    "direction" => ConnectionDirection::Outbound,
+                    "peer" => format!("{peer}"),
+                    "error" => InlineErrorChain::new(e)
+                );
+            })?;
         }
 
         // Setup MD5 for Illumos (initialization + SA tracking data)
         #[cfg(target_os = "illumos")]
         let md5_locals = if let Some(key) = &config.md5_auth_key {
             Some(
-                setup_outbound_md5(s.as_raw_fd(), key, peer.ip(), peer, &log)
-                    .inspect_err(|e| {
+                setup_outbound_md5(
+                    s.as_raw_fd(),
+                    key.as_str(),
+                    peer.ip(),
+                    peer,
+                    &log,
+                )
+                .inspect_err(|e| {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply MD5 auth for {peer}";
@@ -1346,17 +1340,22 @@ impl Default for TcpMd5Sig {
     }
 }
 
+#[cfg(target_os = "linux")]
+const _: () = assert!(
+    Md5AuthString::MAX_LEN <= u16::MAX as usize,
+    "tcpm_keylen is a u16",
+);
+
 /// Apply TCP_MD5SIG socket option to a socket
 #[cfg(target_os = "linux")]
 fn set_md5_sig(
     fd: i32,
-    keylen: u16,
-    key: [u8; MAX_MD5SIG_KEYLEN],
+    key: &Md5AuthString,
     peer: SocketAddr,
 ) -> Result<(), Md5Error> {
     let mut sig = TcpMd5Sig {
-        tcpm_keylen: keylen,
-        tcpm_key: key,
+        tcpm_keylen: key.byte_len() as u16,
+        tcpm_key: key.to_padded_bytes(),
         ..Default::default()
     };
     let addr = socket2::SockAddr::from(peer);

@@ -15,6 +15,7 @@ use crate::{
     session::{FsmEvent, PeerId, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use oxnet::Md5AuthString;
 use slog::Logger;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -29,6 +30,12 @@ pub(crate) use mg_api_types::bgp::session::{
 
 #[cfg(target_os = "linux")]
 pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
+
+#[cfg(target_os = "linux")]
+const _: () = assert!(
+    Md5AuthString::MAX_LEN == MAX_MD5SIG_KEYLEN,
+    "padded key must fill tcpm_key exactly",
+);
 
 #[cfg(target_os = "illumos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
@@ -158,7 +165,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     fn apply_policy(
         conn: &Cnx,
         min_ttl: Option<u8>,
-        md5_key: Option<String>,
+        md5_key: Option<Md5AuthString>,
     ) -> Result<(), ConnectionPolicyError>;
 
     /// `SocketAddr` the listener is receiving connections on
