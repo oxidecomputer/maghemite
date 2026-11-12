@@ -35,12 +35,12 @@ use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
 
-#[derive(Clone)]
+/// Fixed for the life of the exchange server, so handlers share it without
+/// locking.
 pub struct HandlerContext {
     ctx: SmContext,
     peer: PeerIdentity,
@@ -257,10 +257,10 @@ pub fn handler(
     peer: PeerIdentity,
     log: Logger,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
-    let context = Arc::new(Mutex::new(HandlerContext {
+    let context = Arc::new(HandlerContext {
         ctx: ctx.clone(),
         peer,
-    }));
+    });
 
     let sa = SocketAddrV6::new(addr, ctx.config.exchange_port, 0, 0);
 
@@ -311,10 +311,8 @@ pub fn handler(
     }))
 }
 
-pub fn api_description() -> Result<
-    ApiDescription<Arc<Mutex<HandlerContext>>>,
-    ApiDescriptionRegisterError,
-> {
+pub fn api_description()
+-> Result<ApiDescription<Arc<HandlerContext>>, ApiDescriptionRegisterError> {
     let mut api = ApiDescription::new();
     api.register(push_handler_v2)?;
     api.register(push_handler)?;
@@ -328,7 +326,7 @@ pub fn api_description() -> Result<
     path = "/v2/push",
 }]
 async fn push_handler_v2(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<v2::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update_v2 = request.into_inner();
@@ -341,7 +339,7 @@ async fn push_handler_v2(
     path = "/v3/push",
 }]
 async fn push_handler(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<v3::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update = request.into_inner();
@@ -349,10 +347,10 @@ async fn push_handler(
 }
 
 async fn push_handler_common(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
     update: v3::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
+    let ctx = ctx.context().clone();
 
     tokio::task::spawn_blocking(move || {
         handle_update(&update, &ctx.ctx, &ctx.peer);
@@ -370,7 +368,7 @@ async fn push_handler_common(
     path = "/v2/pull",
 }]
 async fn pull_handler_v2(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
     pull_handler_common(ctx)
         .await
@@ -382,15 +380,15 @@ async fn pull_handler_v2(
     path = "/v3/pull",
 }]
 async fn pull_handler(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
     pull_handler_common(ctx).await
 }
 
 async fn pull_handler_common(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
+    let ctx = ctx.context();
 
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
