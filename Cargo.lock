@@ -1441,6 +1441,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "iddqd 0.5.0",
  "ispf",
  "libnet",
  "mg-common",
