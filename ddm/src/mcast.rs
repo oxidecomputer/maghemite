@@ -542,6 +542,27 @@ mod tests {
         }
     }
 
+    fn ssm_route(
+        nexthop: Ipv6Addr,
+        group: UnderlayMulticastIpv6,
+        source: Ipv6Addr,
+    ) -> MulticastRoute {
+        MulticastRoute {
+            origin: MulticastOrigin::new(
+                OverlayMulticast::new(IpAddr::V6(Ipv6Addr::new(
+                    0xff3e, 0, 0, 0, 0, 0, 0x4000, 1,
+                )))
+                .unwrap(),
+                group,
+                Vni::new(77).unwrap(),
+                Some(IpAddr::V6(source)),
+            )
+            .unwrap(),
+            nexthop,
+            path: Vec::new(),
+        }
+    }
+
     fn learned(
         imported: &HashSet<MulticastRoute>,
         links: &HashMap<Ipv6Addr, (PortId, LinkId)>,
@@ -713,6 +734,74 @@ mod tests {
             set(&[member("rear0", 0), member("rear1", 0)])
         );
         assert_eq!(writes[1], vec![member("rear1", 0)]);
+    }
+
+    #[test]
+    fn ssm_source_withdraw_keeps_shared_link() {
+        let peer = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
+        let source_a = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let source_b = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
+        let group = underlay(4);
+        let both = vec![
+            (
+                ssm_route(peer, group, source_a),
+                "tfportrear0_0".to_string(),
+            ),
+            (
+                ssm_route(peer, group, source_b),
+                "tfportrear0_0".to_string(),
+            ),
+        ];
+        let source_b_only = vec![(
+            ssm_route(peer, group, source_b),
+            "tfportrear0_0".to_string(),
+        )];
+
+        let mock = MockDpd::new(found(Vec::new()), WriteOutcome::Updated);
+        let log = Logger::root(slog::Discard, slog::o!());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+
+        let mut programmed = HashMap::new();
+        let mut unresolved = HashSet::new();
+        rt.block_on(reconcile_pass(
+            &mut programmed,
+            &mut unresolved,
+            &both,
+            &mock,
+            &log,
+        ));
+        assert_eq!(
+            programmed,
+            HashMap::from([(group, set(&[member("rear0", 0)]))])
+        );
+        assert_eq!(mock.writes(), vec![vec![member("rear0", 0)]]);
+
+        rt.block_on(reconcile_pass(
+            &mut programmed,
+            &mut unresolved,
+            &source_b_only,
+            &mock,
+            &log,
+        ));
+        assert_eq!(
+            programmed,
+            HashMap::from([(group, set(&[member("rear0", 0)]))])
+        );
+        assert_eq!(mock.writes().len(), 1);
+
+        rt.block_on(reconcile_pass(
+            &mut programmed,
+            &mut unresolved,
+            &[],
+            &mock,
+            &log,
+        ));
+        assert!(programmed.is_empty());
+        let writes = mock.writes();
+        assert_eq!(writes.len(), 2);
+        assert!(writes[1].is_empty());
     }
 
     #[test]

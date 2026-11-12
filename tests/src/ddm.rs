@@ -869,11 +869,16 @@ async fn run_trio_tests(
 /// 3. t1 withdraws, and both servers clear.
 /// 4. s1 originates O4. t1 redistributes it to s2, s1 imports nothing in
 ///    return, and t1 programs rear0 for O4's underlay group.
-/// 5. s2 also subscribes to O4. t1 programs rear0 and rear1, then rear1 once
-///    s1 withdraws, and drains the group when s2 withdraws.
+/// 5. s2 also subscribes to O4. t1 programs rear0 and rear1, removes rear0
+///    once s1 withdraws, and drains the group when s2 withdraws.
 /// 6. s1 subscribes to an origin whose underlay group doesn't exist yet. The
 ///    group is still missing until it is created, after which the
 ///    periodic sweep programs rear0. s1 withdraws, and the group drains.
+/// 7. s1 subscribes to an IPv4 SSM group from two sources (an (S,G) origin
+///    each) and to an IPv6 SSM group from one. t1 and s2 import all three,
+///    and t1 programs rear0 for both of the underlay groups. rear0 remains
+///    as is when s1 withdraws one of the IPv4 sources, and both groups drain
+///    accordingly once s1 withdraws from the rest.
 async fn run_trio_mcast(
     zs1: &RouterZone<'_>,
     zt1: &RouterZone<'_>,
@@ -1016,6 +1021,71 @@ async fn run_trio_mcast(
     wait_for_multicast_members(zt1, &delayed_group, &[])?;
 
     println_nopipe!("multicast delayed underlay group creation passed");
+
+    let ssm_origin = |group: &str, underlay: &str, source: &str| {
+        MulticastOrigin::new(
+            group.parse().unwrap(),
+            underlay.parse().unwrap(),
+            Vni::try_from(MULTICAST_VNI).unwrap(),
+            Some(source.parse().unwrap()),
+        )
+        .unwrap()
+    };
+    let ssm_a = ssm_origin("232.1.1.1", "ff04::103", "192.0.2.1");
+    let ssm_b = ssm_origin("232.1.1.1", "ff04::103", "192.0.2.2");
+    let ssm_v6 = ssm_origin("ff3e::4000:2", "ff04::104", "2001:db8::1");
+    let ssm_group =
+        create_multicast_underlay_group(zt1, ssm_a.underlay_group().into())?;
+    let ssm_v6_group =
+        create_multicast_underlay_group(zt1, ssm_v6.underlay_group().into())?;
+
+    s1.advertise_multicast_groups(&vec![
+        ssm_a.clone(),
+        ssm_b.clone(),
+        ssm_v6.clone(),
+    ])
+    .await?;
+    assert_multicast_origins!(&s1, [ssm_a, ssm_b, ssm_v6]);
+    assert_multicast_imports!(
+        t1,
+        [
+            ("tfportrear0_0", ssm_a),
+            ("tfportrear0_0", ssm_b),
+            ("tfportrear0_0", ssm_v6),
+        ]
+    );
+    assert_multicast_imports!(
+        s2,
+        [("sl1", ssm_a), ("sl1", ssm_b), ("sl1", ssm_v6)]
+    );
+    assert_eq!(multicast_imports(&s1).await?, MulticastImports::new());
+    wait_for_multicast_members(zt1, &ssm_group, &s1_member)?;
+    wait_for_multicast_members(zt1, &ssm_v6_group, &s1_member)?;
+
+    s1.withdraw_multicast_groups(&vec![ssm_a.clone()]).await?;
+    assert_multicast_origins!(&s1, [ssm_b, ssm_v6]);
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", ssm_b), ("tfportrear0_0", ssm_v6)],
+        1,
+        5
+    );
+    assert_multicast_imports!(s2, [("sl1", ssm_b), ("sl1", ssm_v6)], 1, 5);
+    assert_multicast_members_unchanged(
+        zt1,
+        &ssm_group,
+        &s1_member,
+        MEMBER_HOLD,
+    )?;
+
+    s1.withdraw_multicast_groups(&vec![ssm_b, ssm_v6]).await?;
+    assert_multicast_origins!(&s1, []);
+    assert_multicast_imports!(t1, [], 1, 5);
+    assert_multicast_imports!(s2, [], 1, 5);
+    wait_for_multicast_members(zt1, &ssm_group, &[])?;
+    wait_for_multicast_members(zt1, &ssm_v6_group, &[])?;
+
+    println_nopipe!("multicast ssm sources passed");
 
     Ok(())
 }
@@ -2393,6 +2463,12 @@ async fn run_sextet_mcast(
         t2,
         [("tfportrear0_0", origin), ("tfportqsfp1_0", origin)]
     );
+    assert_multicast_members_unchanged(
+        zt1,
+        &group_t1,
+        &t1_members,
+        MEMBER_HOLD,
+    )?;
     wait_for_multicast_members(zt2, &group_t2, &rear0)?;
 
     println_nopipe!("sextet multicast subscribers in both racks passed");
@@ -2413,6 +2489,13 @@ async fn run_sextet_mcast(
         t2,
         [("tfportrear0_0", origin), ("tfportqsfp0_0", origin)]
     );
+    assert_multicast_members_unchanged(
+        zt1,
+        &group_t1,
+        &t1_members,
+        MEMBER_HOLD,
+    )?;
+    assert_multicast_members_unchanged(zt2, &group_t2, &rear0, MEMBER_HOLD)?;
 
     println_nopipe!("sextet multicast external link move passed");
 
@@ -2462,6 +2545,12 @@ async fn run_sextet_mcast(
     s3.withdraw_multicast_groups(&vec![origin.clone()]).await?;
     assert_multicast_imports!(t1, [("tfportrear0_0", origin)]);
     assert_multicast_imports!(t2, [("tfportqsfp1_0", origin)]);
+    assert_multicast_members_unchanged(
+        zt1,
+        &group_t1,
+        &t1_members,
+        MEMBER_HOLD,
+    )?;
     wait_for_multicast_members(zt2, &group_t2, &[])?;
 
     println_nopipe!("sextet multicast remote withdraw passed");
