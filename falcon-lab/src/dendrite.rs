@@ -30,12 +30,12 @@ pub fn fmt_error_chain(err: &(dyn StdError + 'static)) -> String {
 }
 
 /// Commits pinning the buildomat artifacts that `npuvm install` pulls.
-/// `npuvm` itself is always pinned; the other two default to "latest on
-/// main" when `None`.
+/// `npuvm` and `dendrite` are always pinned; `sidecar_lite` defaults to
+/// "latest on main" when `None`.
 #[derive(Debug, Clone)]
 pub struct NpuvmCommits {
     pub npuvm: String,
-    pub dendrite: Option<String>,
+    pub dendrite: String,
     pub sidecar_lite: Option<String>,
 }
 
@@ -136,12 +136,8 @@ impl DendriteNode {
                         --front-ports {front_ports} \
                         --rear-ports {rear_ports} \
                         --pkt-source vioif0 \
-                        {} {}",
-                    commits
-                        .dendrite
-                        .as_ref()
-                        .map(|x| format!("--dendrite-commit {x}"))
-                        .unwrap_or_default(),
+                        --dendrite-commit {} {}",
+                    commits.dendrite,
                     commits
                         .sidecar_lite
                         .as_ref()
