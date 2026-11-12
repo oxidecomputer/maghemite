@@ -24,6 +24,10 @@ mod util;
 
 const DEFAULT_NPUVM_COMMIT: &str = "fd2c726815cdb03c2687e1bf2912a9184905557b";
 
+/// The dendrite revision the workspace pins `dpd-client` to (see `build.rs`),
+/// used unless `--dendrite-commit` overrides it.
+const DEFAULT_DENDRITE_COMMIT: &str = env!("DENDRITE_COMMIT");
+
 #[derive(Debug, Parser)]
 struct Cli {
     #[command(subcommand)]
@@ -67,8 +71,8 @@ struct RunOptions {
     no_diag_on_fail: bool,
     #[arg(long, default_value = DEFAULT_NPUVM_COMMIT)]
     npuvm_commit: String,
-    #[arg(long)]
-    dendrite_commit: Option<String>,
+    #[arg(long, default_value = DEFAULT_DENDRITE_COMMIT)]
+    dendrite_commit: String,
     #[arg(long)]
     sidecar_lite_commit: Option<String>,
 }

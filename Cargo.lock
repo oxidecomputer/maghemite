@@ -2125,6 +2125,7 @@ name = "falcon-lab"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cargo_toml",
  "clap",
  "client-common",
  "colored",
