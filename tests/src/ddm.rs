@@ -8,14 +8,21 @@ use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin, Vni};
+use dpd_types_versions::latest::link::LinkId;
+use dpd_types_versions::latest::mcast::{
+    Direction, MulticastGroupCreateUnderlayEntry, MulticastGroupMember,
+    MulticastGroupUnderlayResponse,
+};
 use oxnet::Ipv6Net;
 use slog::{Drain, Logger};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::net::Ipv6Addr;
 use std::ops::{Deref, DerefMut};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::TryRecvError;
 use zone::Zlogin;
 use ztest::*;
 
@@ -56,11 +63,87 @@ macro_rules! ip6_net {
     };
 }
 
+type MulticastImports = HashSet<(String, MulticastOrigin, u64)>;
+
+macro_rules! assert_client_state {
+    ($client:expr, $read:expr, $expected:expr, $period:expr, $count:expr) => {{
+        let expected = $expected;
+        let mut actual = $read.await;
+        for _ in 0..$count {
+            if actual.as_ref().ok() == Some(&expected) {
+                break;
+            }
+            sleep(Duration::from_secs($period));
+            actual = $read.await;
+        }
+        if actual.as_ref().ok() != Some(&expected) {
+            eprintln_nopipe!(
+                "{}: expected {expected:#?}, last response: {actual:#?}",
+                stringify!($client),
+            );
+            dump_client_state(stringify!($client), $client).await;
+        }
+        assert_eq!(actual.ok(), Some(expected));
+    }};
+    ($client:expr, $read:expr, $expected:expr) => {
+        assert_client_state!($client, $read, $expected, 1, 10)
+    };
+}
+
+macro_rules! assert_multicast_imports {
+    ($client:expr, [$(($iface:expr, $origin:expr)),* $(,)?]
+        $(, $period:expr, $count:expr)?) => {{
+        let expected: MulticastImports =
+            [$(($iface.to_string(), ($origin).clone(), ($origin).metric())),*]
+                .into_iter()
+                .collect();
+        assert_client_state!(
+            $client,
+            multicast_imports($client),
+            expected
+            $(, $period, $count)?
+        );
+    }};
+}
+
+macro_rules! assert_multicast_origins {
+    ($client:expr, [$($origin:expr),* $(,)?]) => {{
+        let expected: HashSet<(MulticastOrigin, u64)> =
+            [$((($origin).clone(), ($origin).metric())),*]
+                .into_iter()
+                .collect();
+        assert_client_state!($client, multicast_origins($client), expected);
+    }};
+}
+
 const ZONE_BRAND: &str = "omicron1";
 
 /// How long to wait for a stopped ddmd to exit, and how often to check.
 const DDMD_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const DDMD_STOP_POLL: Duration = Duration::from_millis(100);
+
+const MULTICAST_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(30);
+const MULTICAST_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// The VNI shared by every multicast origin these tests advertise.
+const MULTICAST_VNI: u32 = 77;
+
+/// The duration for holding multicast members steady after an import change.
+const MEMBER_HOLD: Duration = Duration::from_secs(3);
+
+/// How often the failover observer samples, less coarse than
+/// [`MULTICAST_POLL_INTERVAL`] to narrow the window a flap could slip by.
+const FAILOVER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long the failover observer keeps watching after the transit converges.
+const FAILOVER_SETTLE: Duration = Duration::from_secs(3);
+
+/// DPD API version for the raw underlay-group requests.
+///
+/// This is the version the pinned `dpd-client` is generated from, matching
+/// both what `ddmd` sends out and the `latest` types these requests use.
+fn dpd_api_version() -> &'static str {
+    <dpd_client::Client as dpd_client::ClientInfo<_>>::api_version()
+}
 
 struct SoftnpuZone<'a> {
     zfs: &'a Zfs,
@@ -496,10 +579,6 @@ macro_rules! run_topo {
 }
 
 #[tokio::test]
-async fn test_trio_v3() -> Result<()> {
-    test_trio().await
-}
-
 async fn test_trio() -> Result<()> {
     // A trio. Two server routers and one transit router.
     //
@@ -580,10 +659,9 @@ async fn run_trio_tests(
     let s2 = Client::new("http://10.0.0.2:8000", log.clone());
     let t1 = Client::new("http://10.0.0.3:8000", log.clone());
 
-    // If we never get a response from a server, return 99 as a sentinel value.
-    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 2);
+    assert_client_state!(&s1, peer_count(&s1), 1);
+    assert_client_state!(&s2, peer_count(&s2), 1);
+    assert_client_state!(&t1, peer_count(&t1), 2);
 
     println_nopipe!("initial peering test passed");
 
@@ -767,14 +845,14 @@ async fn run_trio_tests(
 
     println_nopipe!("tunnel endpoint withdraw passed");
 
-    run_trio_mcast(zs1, &s1, &s2, &t1, &log).await
+    run_trio_mcast(zs1, zt1, &s1, &s2, &t1, &log).await
 }
 
 /// Multicast group advertise/withdraw across the trio.
 ///
-/// This emulates how mg-lower in the switch zone publishes
+/// This emulates how mg-lower operates in the switch zone when publishing
 /// overlay→underlay multicast bindings: the transit router
-/// originates an advertisement, and the server routers learn it via
+/// originates an advertisement and the server routers learn it via
 /// the DDM exchange.
 ///
 /// ```text
@@ -785,26 +863,37 @@ async fn run_trio_tests(
 ///                          (O4)
 /// ```
 ///
-/// - t1 originates one IPv4 and one IPv6 group, and both servers import
-///   them. t1 imports nothing back (a re-import would be a loop).
-/// - s1 restarts and relearns both groups from t1.
-/// - t1 withdraws, and both servers clear.
-/// - s1 originates O4. t1 redistributes it to s2, and s1 imports nothing
-///   in return. s1 withdraws, and t1 and s2 clear.
+/// 1. t1 originates an IPv4 and an IPv6 group, and both servers import
+///    them. t1 imports nothing in return (a re-import would cause a loop).
+/// 2. s1 restarts and re-learns both groups from t1.
+/// 3. t1 withdraws, and both servers clear.
+/// 4. s1 originates O4. t1 redistributes it to s2, s1 imports nothing in
+///    return, and t1 programs rear0 for O4's underlay group.
+/// 5. s2 also subscribes to O4. t1 programs rear0 and rear1, removes rear0
+///    once s1 withdraws, and drains the group when s2 withdraws.
+/// 6. s1 subscribes to an origin whose underlay group doesn't exist yet. The
+///    group is still missing until it is created, after which the
+///    periodic sweep programs rear0. s1 withdraws, and the group drains.
+/// 7. s1 subscribes to an IPv4 SSM group from two sources (an (S,G) origin
+///    each) and to an IPv6 SSM group from one. t1 and s2 import all three,
+///    and t1 programs rear0 for both of the underlay groups. rear0 remains
+///    as is when s1 withdraws one of the IPv4 sources, and both groups drain
+///    accordingly once s1 withdraws from the rest.
 async fn run_trio_mcast(
     zs1: &RouterZone<'_>,
+    zt1: &RouterZone<'_>,
     s1: &Client,
     s2: &Client,
     t1: &Client,
     log: &Logger,
 ) -> Result<()> {
-    wait_for_eq!(multicast_originated_count(t1).await?, 0);
+    assert_multicast_origins!(t1, []);
 
     // Cover advertisement and withdrawal for both IP families.
     let mcast_origin_v4 = MulticastOrigin::new(
         "233.252.0.1".parse().unwrap(),
         "ff04::100".parse().unwrap(),
-        Vni::try_from(77u32).unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
         None,
     )
     .unwrap();
@@ -812,10 +901,17 @@ async fn run_trio_mcast(
     let mcast_origin_v6 = MulticastOrigin::new(
         "ff0e::1".parse().unwrap(),
         "ff04::101".parse().unwrap(),
-        Vni::try_from(77u32).unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
         None,
     )
     .unwrap();
+
+    let ipv4_origin_underlay = create_multicast_underlay_group(
+        zt1,
+        mcast_origin_v4.underlay_group().into(),
+    )?;
+    let s1_member = [underlay_member("rear0")];
+    let s2_member = [underlay_member("rear1")];
 
     t1.advertise_multicast_groups(&vec![
         mcast_origin_v4.clone(),
@@ -823,21 +919,30 @@ async fn run_trio_mcast(
     ])
     .await?;
 
-    wait_for_eq!(multicast_originated_count(t1).await?, 2);
-    wait_for_eq!(multicast_group_count(s1).await?, 2);
-    wait_for_eq!(multicast_group_count(s2).await?, 2);
+    assert_multicast_origins!(t1, [mcast_origin_v4, mcast_origin_v6]);
+    assert_multicast_imports!(
+        s1,
+        [("sl0", mcast_origin_v4), ("sl0", mcast_origin_v6)]
+    );
+    assert_multicast_imports!(
+        s2,
+        [("sl1", mcast_origin_v4), ("sl1", mcast_origin_v6)]
+    );
     // A looped announcement bouncing back from a server would show up here.
-    assert_eq!(multicast_group_count(t1).await?, 0);
+    assert_eq!(multicast_imports(t1).await?, MulticastImports::new());
 
     println_nopipe!("multicast group advertise passed");
 
-    // Server router restart: s1's view of the multicast group must
-    // converge again after ddmd restarts. `wait_for_eq` tolerates the
-    // restart window via the `unwrap_or` sentinel.
+    // Server router restart: s1's view of the multicast group must converge
+    // again after ddmd restarts. `assert_multicast_imports!` retries through
+    // the restart window.
     zs1.stop_router()?;
     zs1.start_router(false)?;
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
-    wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 2);
+    assert_multicast_imports!(
+        &s1,
+        [("sl0", mcast_origin_v4), ("sl0", mcast_origin_v6)]
+    );
 
     println_nopipe!("multicast router restart passed");
 
@@ -847,31 +952,460 @@ async fn run_trio_mcast(
     ])
     .await?;
 
-    wait_for_eq!(multicast_originated_count(t1).await?, 0);
+    assert_multicast_origins!(t1, []);
     // A periodic pull can also clear the routes within this deadline.
-    wait_for_eq!(multicast_group_count(&s1).await?, 0, 1, 5);
-    wait_for_eq!(multicast_group_count(s2).await?, 0, 1, 5);
-    assert_eq!(multicast_group_count(t1).await?, 0);
+    assert_multicast_imports!(&s1, [], 1, 5);
+    assert_multicast_imports!(s2, [], 1, 5);
+    assert_eq!(multicast_imports(t1).await?, MulticastImports::new());
 
     println_nopipe!("multicast group withdraw passed");
 
     s1.advertise_multicast_groups(&vec![mcast_origin_v4.clone()])
         .await?;
 
-    wait_for_eq!(multicast_originated_count(&s1).await?, 1);
-    wait_for_eq!(multicast_group_count(t1).await?, 1);
-    wait_for_eq!(multicast_group_count(s2).await?, 1);
-    assert_eq!(multicast_group_count(&s1).await?, 0);
+    assert_multicast_origins!(&s1, [mcast_origin_v4]);
+    assert_multicast_imports!(t1, [("tfportrear0_0", mcast_origin_v4)]);
+    assert_multicast_imports!(s2, [("sl1", mcast_origin_v4)]);
+    assert_eq!(multicast_imports(&s1).await?, MulticastImports::new());
+
+    wait_for_multicast_members(zt1, &ipv4_origin_underlay, &s1_member)?;
 
     println_nopipe!("multicast server-originated redistribution passed");
 
-    s1.withdraw_multicast_groups(&vec![mcast_origin_v4]).await?;
+    let origin = mcast_origin_v4;
+    let group = &ipv4_origin_underlay;
+    s2.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", origin), ("tfportrear1_0", origin)]
+    );
+    wait_for_multicast_members(
+        zt1,
+        group,
+        &[s1_member[0].clone(), s2_member[0].clone()],
+    )?;
 
-    wait_for_eq!(multicast_originated_count(&s1).await?, 0);
-    wait_for_eq!(multicast_group_count(t1).await?, 0, 1, 5);
-    wait_for_eq!(multicast_group_count(s2).await?, 0, 1, 5);
+    s1.withdraw_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_origins!(&s1, []);
+    assert_multicast_imports!(t1, [("tfportrear1_0", origin)], 1, 5);
+    wait_for_multicast_members(zt1, group, &s2_member)?;
 
-    println_nopipe!("multicast server-originated withdraw passed");
+    s2.withdraw_multicast_groups(&vec![origin]).await?;
+    assert_multicast_imports!(t1, [], 1, 5);
+    assert_multicast_imports!(&s1, [], 1, 5);
+    assert_multicast_imports!(s2, [], 1, 5);
+    wait_for_multicast_members(zt1, group, &[])?;
+
+    println_nopipe!("multicast underlay replication members passed");
+
+    let delayed_origin = MulticastOrigin::new(
+        "233.252.0.2".parse().unwrap(),
+        "ff04::102".parse().unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
+        None,
+    )
+    .unwrap();
+    let delayed_group_ip: Ipv6Addr = delayed_origin.underlay_group().into();
+
+    s1.advertise_multicast_groups(&vec![delayed_origin.clone()])
+        .await?;
+    assert_multicast_imports!(t1, [("tfportrear0_0", delayed_origin)]);
+    assert_multicast_imports!(s2, [("sl1", delayed_origin)]);
+    assert_multicast_underlay_group_missing(zt1, delayed_group_ip)?;
+
+    let delayed_group = create_multicast_underlay_group(zt1, delayed_group_ip)?;
+    wait_for_multicast_members(zt1, &delayed_group, &s1_member)?;
+
+    s1.withdraw_multicast_groups(&vec![delayed_origin]).await?;
+    assert_multicast_imports!(t1, []);
+    wait_for_multicast_members(zt1, &delayed_group, &[])?;
+
+    println_nopipe!("multicast delayed underlay group creation passed");
+
+    let ssm_origin = |group: &str, underlay: &str, source: &str| {
+        MulticastOrigin::new(
+            group.parse().unwrap(),
+            underlay.parse().unwrap(),
+            Vni::try_from(MULTICAST_VNI).unwrap(),
+            Some(source.parse().unwrap()),
+        )
+        .unwrap()
+    };
+    let ssm_a = ssm_origin("232.1.1.1", "ff04::103", "192.0.2.1");
+    let ssm_b = ssm_origin("232.1.1.1", "ff04::103", "192.0.2.2");
+    let ssm_v6 = ssm_origin("ff3e::4000:2", "ff04::104", "2001:db8::1");
+    let ssm_group =
+        create_multicast_underlay_group(zt1, ssm_a.underlay_group().into())?;
+    let ssm_v6_group =
+        create_multicast_underlay_group(zt1, ssm_v6.underlay_group().into())?;
+
+    s1.advertise_multicast_groups(&vec![
+        ssm_a.clone(),
+        ssm_b.clone(),
+        ssm_v6.clone(),
+    ])
+    .await?;
+    assert_multicast_origins!(&s1, [ssm_a, ssm_b, ssm_v6]);
+    assert_multicast_imports!(
+        t1,
+        [
+            ("tfportrear0_0", ssm_a),
+            ("tfportrear0_0", ssm_b),
+            ("tfportrear0_0", ssm_v6),
+        ]
+    );
+    assert_multicast_imports!(
+        s2,
+        [("sl1", ssm_a), ("sl1", ssm_b), ("sl1", ssm_v6)]
+    );
+    assert_eq!(multicast_imports(&s1).await?, MulticastImports::new());
+    wait_for_multicast_members(zt1, &ssm_group, &s1_member)?;
+    wait_for_multicast_members(zt1, &ssm_v6_group, &s1_member)?;
+
+    s1.withdraw_multicast_groups(&vec![ssm_a.clone()]).await?;
+    assert_multicast_origins!(&s1, [ssm_b, ssm_v6]);
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", ssm_b), ("tfportrear0_0", ssm_v6)],
+        1,
+        5
+    );
+    assert_multicast_imports!(s2, [("sl1", ssm_b), ("sl1", ssm_v6)], 1, 5);
+    assert_multicast_members_unchanged(
+        zt1,
+        &ssm_group,
+        &s1_member,
+        MEMBER_HOLD,
+    )?;
+
+    s1.withdraw_multicast_groups(&vec![ssm_b, ssm_v6]).await?;
+    assert_multicast_origins!(&s1, []);
+    assert_multicast_imports!(t1, [], 1, 5);
+    assert_multicast_imports!(s2, [], 1, 5);
+    wait_for_multicast_members(zt1, &ssm_group, &[])?;
+    wait_for_multicast_members(zt1, &ssm_v6_group, &[])?;
+
+    println_nopipe!("multicast ssm sources passed");
+
+    Ok(())
+}
+
+fn assert_multicast_underlay_group_missing(
+    zone: &RouterZone<'_>,
+    group_ip: Ipv6Addr,
+) -> Result<()> {
+    let version = dpd_api_version();
+    let status = zone.zexec(&format!(
+        "curl --noproxy '*' --globoff --silent --show-error \
+         --max-time 5 --output /dev/null --write-out '%{{http_code}}' \
+         --header 'api-version: {version}' \
+         'http://[::1]:12224/multicast/underlay-groups/{group_ip}'"
+    ))?;
+    if status.trim() != "404" {
+        return Err(anyhow!(
+            "underlay group {group_ip}: expected HTTP 404, got {status:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn create_multicast_underlay_group(
+    zone: &RouterZone<'_>,
+    group_ip: Ipv6Addr,
+) -> Result<MulticastGroupUnderlayResponse> {
+    create_multicast_underlay_group_with(zone, group_ip, &[])
+}
+
+fn create_multicast_underlay_group_with(
+    zone: &RouterZone<'_>,
+    group_ip: Ipv6Addr,
+    members: &[MulticastGroupMember],
+) -> Result<MulticastGroupUnderlayResponse> {
+    let body = serde_json::to_string(&MulticastGroupCreateUnderlayEntry {
+        group_ip: group_ip.try_into()?,
+        tag: Some(format!("{}:{group_ip}", zone.zone.name)),
+        members: members.to_vec(),
+    })?
+    .replace('\'', "'\\''");
+    let version = dpd_api_version();
+    let response = zone.zexec(&format!(
+        "curl --noproxy '*' --globoff --fail --silent --show-error \
+         --max-time 5 --request POST \
+         --header 'api-version: {version}' \
+         --header 'Content-Type: application/json' --data '{body}' \
+         'http://[::1]:12224/multicast/underlay-groups'"
+    ))?;
+    Ok(serde_json::from_str(&response)?)
+}
+
+fn get_multicast_underlay_group(
+    zone: &RouterZone<'_>,
+    group: &MulticastGroupUnderlayResponse,
+) -> Result<MulticastGroupUnderlayResponse> {
+    let version = dpd_api_version();
+    let body = zone.zexec(&format!(
+        "curl --noproxy '*' --globoff --fail --silent --show-error \
+         --max-time 5 --header 'api-version: {version}' \
+         'http://[::1]:12224/multicast/underlay-groups/{}'",
+        group.group_ip,
+    ))?;
+    Ok(serde_json::from_str(&body)?)
+}
+
+fn same_group(
+    actual: &MulticastGroupUnderlayResponse,
+    group: &MulticastGroupUnderlayResponse,
+) -> bool {
+    actual.group_ip == group.group_ip
+        && actual.tag == group.tag
+        && actual.external_group_id == group.external_group_id
+        && actual.underlay_group_id == group.underlay_group_id
+}
+
+fn same_membership(
+    actual: &[MulticastGroupMember],
+    members: &[MulticastGroupMember],
+) -> bool {
+    actual.len() == members.len()
+        && members.iter().all(|member| actual.contains(member))
+}
+
+fn wait_for_multicast_members(
+    zone: &RouterZone<'_>,
+    group: &MulticastGroupUnderlayResponse,
+    members: &[MulticastGroupMember],
+) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        let response = get_multicast_underlay_group(zone, group);
+        if let Ok(actual) = &response
+            && same_group(actual, group)
+            && same_membership(&actual.members, members)
+        {
+            return Ok(());
+        }
+        if start.elapsed() >= MULTICAST_CONVERGENCE_TIMEOUT {
+            return Err(anyhow!(
+                "underlay group {} did not converge to {members:?}; \
+                 last response: {response:?}",
+                group.group_ip,
+            ));
+        }
+        sleep(MULTICAST_POLL_INTERVAL);
+    }
+}
+
+fn assert_multicast_members_unchanged(
+    zone: &RouterZone<'_>,
+    group: &MulticastGroupUnderlayResponse,
+    members: &[MulticastGroupMember],
+    window: Duration,
+) -> Result<()> {
+    let start = Instant::now();
+    while start.elapsed() < window {
+        let actual = get_multicast_underlay_group(zone, group)?;
+        if !same_group(&actual, group)
+            || !same_membership(&actual.members, members)
+        {
+            return Err(anyhow!(
+                "underlay group {} left {members:?} within {window:?}: \
+                 {actual:?}",
+                group.group_ip,
+            ));
+        }
+        sleep(MULTICAST_POLL_INTERVAL);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dual_sidecar() -> Result<()> {
+    //                sidecar A                    sidecar B
+    //   t1 rear0 --- sr0 | sw0 --- sl0  s1  sl1 --- sw2 | sr2 --- rear0 t2
+    //   t1 rear1 --- sr1 | sw1 --- sl2  s2  sl3 --- sw3 | sr3 --- rear1 t2
+    let tra_sr_0 = SimnetLink::new("tra0", "sr0")?;
+    let tra_sr_1 = SimnetLink::new("tra1", "sr1")?;
+    let trb_sr_2 = SimnetLink::new("trb0", "sr2")?;
+    let trb_sr_3 = SimnetLink::new("trb1", "sr3")?;
+
+    let sl0_sw0 = SimnetLink::new("sl0", "sw0")?;
+    let sl2_sw1 = SimnetLink::new("sl2", "sw1")?;
+    let sl1_sw2 = SimnetLink::new("sl1", "sw2")?;
+    let sl3_sw3 = SimnetLink::new("sl3", "sw3")?;
+
+    let mgmt0 = Etherstub::new("mgmt0")?;
+    let mg0 = Vnic::new("mg0", &mgmt0.name)?;
+    let mgd1 = Vnic::new("mgd1", &mgmt0.name)?;
+    let mgd2 = Vnic::new("mgd2", &mgmt0.name)?;
+    let mgd3 = Vnic::new("mgd3", &mgmt0.name)?;
+    let mgd4 = Vnic::new("mgd4", &mgmt0.name)?;
+
+    let _mgip = Ip::new("10.0.0.254/24", &mg0.name, "test")?;
+
+    let zfs = Zfs::new("mgdual")?;
+
+    let sidecar_a = SoftnpuZone::new(
+        "sidecar_a.dual",
+        &zfs,
+        &[
+            &tra_sr_0.end_b,
+            &tra_sr_1.end_b,
+            &sl0_sw0.end_b,
+            &sl2_sw1.end_b,
+        ],
+        "dual",
+    )?;
+    let sidecar_b = SoftnpuZone::new(
+        "sidecar_b.dual",
+        &zfs,
+        &[
+            &trb_sr_2.end_b,
+            &trb_sr_3.end_b,
+            &sl1_sw2.end_b,
+            &sl3_sw3.end_b,
+        ],
+        "dual",
+    )?;
+
+    println_nopipe!("start zone s1");
+    let s1 = RouterZone::server(
+        "s1.dual",
+        &zfs,
+        &mgd1.name,
+        &[&sl0_sw0.end_a, &sl1_sw2.end_a],
+    )?;
+    println_nopipe!("start zone s2");
+    let s2 = RouterZone::server(
+        "s2.dual",
+        &zfs,
+        &mgd2.name,
+        &[&sl2_sw1.end_a, &sl3_sw3.end_a],
+    )?;
+
+    println_nopipe!("start zone t1");
+    let mut t1 = RouterZone::transit(
+        "t1.dual",
+        &zfs,
+        &mgd3.name,
+        &[&tra_sr_0.end_a, &tra_sr_1.end_a],
+        "dual",
+        "sidecar_a.dual",
+    )?;
+    t1.set_port_map(BTreeMap::from([
+        ("tra0".into(), "tfportrear0_0".into()),
+        ("tra1".into(), "tfportrear1_0".into()),
+    ]));
+
+    println_nopipe!("start zone t2");
+    let mut t2 = RouterZone::transit(
+        "t2.dual",
+        &zfs,
+        &mgd4.name,
+        &[&trb_sr_2.end_a, &trb_sr_3.end_a],
+        "dual",
+        "sidecar_b.dual",
+    )?;
+    t2.set_port_map(BTreeMap::from([
+        ("trb0".into(), "tfportrear0_0".into()),
+        ("trb1".into(), "tfportrear1_0".into()),
+    ]));
+
+    println_nopipe!("waiting for zones to come up");
+    sleep(Duration::from_secs(10));
+
+    sidecar_a.setup()?;
+    sidecar_b.setup()?;
+    s1.setup(1)?;
+    s2.setup(2)?;
+    t1.setup(3)?;
+    t2.setup(4)?;
+
+    run_topo!(run_dual_sidecar_mcast(&s1, &t1, &t2).await)
+}
+
+async fn run_dual_sidecar_mcast(
+    zs1: &RouterZone<'_>,
+    zt1: &RouterZone<'_>,
+    zt2: &RouterZone<'_>,
+) -> Result<()> {
+    let log = init_logger();
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    let s2 = Client::new("http://10.0.0.2:8000", log.clone());
+    let t1 = Client::new("http://10.0.0.3:8000", log.clone());
+    let t2 = Client::new("http://10.0.0.4:8000", log.clone());
+
+    assert_client_state!(&s1, peer_count(&s1), 2);
+    assert_client_state!(&s2, peer_count(&s2), 2);
+    assert_client_state!(&t1, peer_count(&t1), 2);
+    assert_client_state!(&t2, peer_count(&t2), 2);
+
+    println_nopipe!("dual sidecar peering passed");
+
+    let origin = MulticastOrigin::new(
+        "233.252.0.20".parse().unwrap(),
+        "ff04::120".parse().unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
+        None,
+    )
+    .unwrap();
+    let group_ip: Ipv6Addr = origin.underlay_group().into();
+    let group_a = create_multicast_underlay_group(zt1, group_ip)?;
+    let group_b = create_multicast_underlay_group(zt2, group_ip)?;
+    let s1_member = [underlay_member("rear0")];
+    let s2_member = [underlay_member("rear1")];
+    let both = [s1_member[0].clone(), s2_member[0].clone()];
+
+    s1.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(&t1, [("tfportrear0_0", origin)]);
+    assert_multicast_imports!(&t2, [("tfportrear0_0", origin)]);
+    wait_for_multicast_members(zt1, &group_a, &s1_member)?;
+    wait_for_multicast_members(zt2, &group_b, &s1_member)?;
+
+    s2.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(
+        &t1,
+        [("tfportrear0_0", origin), ("tfportrear1_0", origin)]
+    );
+    assert_multicast_imports!(
+        &t2,
+        [("tfportrear0_0", origin), ("tfportrear1_0", origin)]
+    );
+    wait_for_multicast_members(zt1, &group_a, &both)?;
+    wait_for_multicast_members(zt2, &group_b, &both)?;
+    assert_multicast_imports!(&s1, [("sl0", origin), ("sl1", origin)]);
+
+    println_nopipe!("dual sidecar subscription passed");
+
+    zt2.stop_router()?;
+    zt2.start_router(false)?;
+    let t2 = Client::new("http://10.0.0.4:8000", log.clone());
+    assert_multicast_imports!(
+        &t2,
+        [("tfportrear0_0", origin), ("tfportrear1_0", origin)]
+    );
+    assert_multicast_members_unchanged(zt2, &group_b, &both, MEMBER_HOLD)?;
+
+    println_nopipe!("dual sidecar transit restart passed");
+
+    zs1.zexec("ipadm delete-addr sl1/v6")?;
+    assert_client_state!(&s1, exchange_peer_count(&s1), 1, 1, 30);
+    assert_multicast_imports!(&t2, [("tfportrear1_0", origin)], 1, 30);
+    assert_multicast_imports!(&s1, [("sl0", origin)], 1, 30);
+    wait_for_multicast_members(zt2, &group_b, &s2_member)?;
+    assert_multicast_members_unchanged(zt1, &group_a, &both, MEMBER_HOLD)?;
+
+    zs1.zexec("ipadm create-addr -t -T addrconf sl1/v6")?;
+    assert_client_state!(&s1, exchange_peer_count(&s1), 2, 1, 30);
+    assert_multicast_imports!(
+        &t2,
+        [("tfportrear0_0", origin), ("tfportrear1_0", origin)],
+        1,
+        30
+    );
+    wait_for_multicast_members(zt2, &group_b, &both)?;
+    assert_multicast_imports!(&s1, [("sl0", origin), ("sl1", origin)], 1, 30);
+
+    println_nopipe!("dual sidecar link failover passed");
 
     Ok(())
 }
@@ -980,11 +1514,10 @@ async fn run_quartet_tests(
     let s3 = Client::new("http://10.0.0.3:8000", log.clone());
     let t1 = Client::new("http://10.0.0.4:8000", log.clone());
 
-    // If we never get a response from a server, return 99 as a sentinel value.
-    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s3.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
+    assert_client_state!(&s1, peer_count(&s1), 1);
+    assert_client_state!(&s2, peer_count(&s2), 1);
+    assert_client_state!(&s3, peer_count(&s3), 1);
+    assert_client_state!(&t1, peer_count(&t1), 3);
 
     println_nopipe!("initial peering test passed");
 
@@ -1038,8 +1571,8 @@ async fn run_quartet_tests(
 ///  (origin O)
 /// ```
 ///
-/// - s1 withdraws origin O. t1 still reaches O via s2. s3 holds its route
-///   through a 3 s window, shorter than the 10 s periodic pull.
+/// - s1 withdraws origin O. t1 still reaches O via s2. The observer checks
+///   s3's route through t1's convergence and for [`FAILOVER_SETTLE`] afterward.
 /// - s1 still holds s2's copy of O via t1, and s2 drops the copy it
 ///   learned from s1.
 /// - s2 withdraws O, and t1, s1, and s3 clear.
@@ -1052,7 +1585,7 @@ async fn run_quartet_mcast_failover(
     let origin = MulticastOrigin::new(
         "233.252.0.10".parse().unwrap(),
         "ff04::110".parse().unwrap(),
-        Vni::try_from(77u32).unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
         None,
     )
     .unwrap();
@@ -1060,34 +1593,56 @@ async fn run_quartet_mcast_failover(
     s1.advertise_multicast_groups(&vec![origin.clone()]).await?;
     s2.advertise_multicast_groups(&vec![origin.clone()]).await?;
 
-    wait_for_eq!(multicast_group_count(t1).await?, 2);
-    wait_for_eq!(multicast_group_count(s1).await?, 1);
-    wait_for_eq!(multicast_group_count(s2).await?, 1);
-    wait_for_eq!(multicast_group_count(s3).await?, 1);
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", origin), ("tfportrear1_0", origin)]
+    );
+    assert_multicast_imports!(s1, [("sl0", origin)]);
+    assert_multicast_imports!(s2, [("sl1", origin)]);
+    assert_multicast_imports!(s3, [("sl2", origin)]);
     println_nopipe!("multicast dual origination passed");
 
-    s1.withdraw_multicast_groups(&vec![origin.clone()]).await?;
-    wait_for_eq!(multicast_group_count(t1).await?, 1);
+    let expected = MulticastImports::from([(
+        "sl2".to_string(),
+        origin.clone(),
+        origin.metric(),
+    )]);
+    let expected_transit = MulticastImports::from([(
+        "tfportrear1_0".to_string(),
+        origin.clone(),
+        origin.metric(),
+    )]);
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (done_tx, done_rx) = oneshot::channel();
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        let count = multicast_group_count(s3).await?;
-        if count != 1 {
-            return Err(anyhow!(
-                "s3 lost the group after s1 withdrew (count {count})"
-            ));
-        }
-        sleep(Duration::from_millis(100));
-    }
+    let failover = async {
+        ready_rx.await?;
+        s1.withdraw_multicast_groups(&vec![origin.clone()]).await?;
+        wait_for_imports(
+            "t1",
+            t1,
+            &expected_transit,
+            MULTICAST_CONVERGENCE_TIMEOUT,
+        )
+        .await?;
+        tokio::time::sleep(FAILOVER_SETTLE).await;
+        done_tx
+            .send(())
+            .map_err(|_| anyhow!("s3 observation stopped before completion"))
+    };
+    tokio::try_join!(
+        observe_imports_unchanged("s3", s3, &expected, ready_tx, done_rx),
+        failover,
+    )?;
 
-    wait_for_eq!(multicast_group_count(s1).await?, 1);
-    wait_for_eq!(multicast_group_count(s2).await?, 0);
+    assert_multicast_imports!(s1, [("sl0", origin)]);
+    assert_multicast_imports!(s2, []);
     println_nopipe!("multicast failover passed");
 
     s2.withdraw_multicast_groups(&vec![origin]).await?;
-    wait_for_eq!(multicast_group_count(t1).await?, 0);
-    wait_for_eq!(multicast_group_count(s1).await?, 0);
-    wait_for_eq!(multicast_group_count(s3).await?, 0);
+    assert_multicast_imports!(t1, []);
+    assert_multicast_imports!(s1, []);
+    assert_multicast_imports!(s3, []);
     println_nopipe!("multicast final withdrawal passed");
 
     Ok(())
@@ -1115,14 +1670,14 @@ async fn run_quartet_mcast_resync(
     let origin = MulticastOrigin::new(
         "233.252.0.11".parse().unwrap(),
         "ff04::111".parse().unwrap(),
-        Vni::try_from(77u32).unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
         None,
     )
     .unwrap();
 
     s1.advertise_multicast_groups(&vec![origin.clone()]).await?;
-    wait_for_eq!(multicast_group_count(t1).await?, 1);
-    wait_for_eq!(multicast_group_count(s3).await?, 1);
+    assert_multicast_imports!(t1, [("tfportrear0_0", origin)]);
+    assert_multicast_imports!(s3, [("sl2", origin)]);
 
     let peers = t1.get_peers().await?;
     let peer = peers
@@ -1137,6 +1692,7 @@ async fn run_quartet_mcast_resync(
     let groups = s3.get_multicast_groups().await?;
     let route = groups
         .iter()
+        .map(|imported| &imported.route)
         .find(|route| route.origin == origin)
         .ok_or_else(|| anyhow!("s3 has not imported the test origin"))?;
     let vector = serde_json::json!({
@@ -1174,27 +1730,33 @@ async fn run_quartet_mcast_resync(
     };
     let started = Instant::now();
 
-    wait_for_eq!(
-        {
+    assert_client_state!(
+        s3,
+        async {
             push(false)?;
-            multicast_group_count(s3).await?
+            multicast_imports(s3).await
         },
-        0
+        MulticastImports::new()
     );
-    wait_for_eq!(multicast_group_count(s3).await?, 1, 1, 30);
+    assert_multicast_imports!(s3, [("sl2", origin)], 1, 30);
     println_nopipe!("multicast resync import passed");
 
-    s1.withdraw_multicast_groups(&vec![origin]).await?;
-    wait_for_eq!(multicast_group_count(t1).await?, 0);
-    wait_for_eq!(multicast_group_count(s3).await?, 0);
-    wait_for_eq!(
-        {
+    s1.withdraw_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(t1, []);
+    assert_multicast_imports!(s3, []);
+    assert_client_state!(
+        s3,
+        async {
             push(true)?;
-            multicast_group_count(s3).await?
+            multicast_imports(s3).await
         },
-        1
+        MulticastImports::from([(
+            "sl2".to_string(),
+            origin.clone(),
+            origin.metric(),
+        )])
     );
-    wait_for_eq!(multicast_group_count(s3).await?, 0, 1, 30);
+    assert_multicast_imports!(s3, [], 1, 30);
     println_nopipe!("multicast resync withdrawal passed");
 
     let min_uptime = *uptime + started.elapsed();
@@ -1402,8 +1964,8 @@ async fn run_sextet_tests(
     _zs2: &RouterZone<'_>,
     _zs3: &RouterZone<'_>,
     _zs4: &RouterZone<'_>,
-    _zt1: &RouterZone<'_>,
-    _zt2: &RouterZone<'_>,
+    zt1: &RouterZone<'_>,
+    zt2: &RouterZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
 
@@ -1434,13 +1996,7 @@ async fn run_sextet_tests(
             let name = self.name.clone();
             tokio::task::block_in_place(|| {
                 rt.block_on(async move {
-                    println_nopipe!("{name}:");
-                    if let Ok(peers) = c.get_peers().await {
-                        println_nopipe!("peers: {peers:#?}");
-                    }
-                    if let Ok(prefixes) = c.get_prefixes().await {
-                        println_nopipe!("prefixes: {prefixes:#?}");
-                    }
+                    dump_client_state(&name, &c).await;
                 });
             });
         }
@@ -1506,10 +2062,7 @@ async fn run_sextet_tests(
                 stringify!($client),
                 $count
             );
-            wait_for_eq!(
-                $client.get_peers().await.map(|x| x.len()).ok(),
-                Some($count)
-            );
+            assert_client_state!(&$client, peer_count(&$client), $count);
         }};
     }
 
@@ -1531,21 +2084,17 @@ async fn run_sextet_tests(
                 stringify!($client),
                 $reach
             );
-            wait_for_eq!(
-                $client
-                    .get_prefixes()
-                    .await
-                    .map(|x| x
-                        .values()
-                        .cloned()
-                        .into_iter()
-                        .flat_map(|x| x
-                            .clone()
-                            .into_iter()
-                            .map(|y| y.destination))
-                        .collect::<BTreeSet<_>>())
-                    .ok(),
-                Some($reach)
+            assert_client_state!(
+                &$client,
+                async {
+                    $client.get_prefixes().await.map(|x| {
+                        x.values()
+                            .flatten()
+                            .map(|route| route.destination)
+                            .collect::<BTreeSet<_>>()
+                    })
+                },
+                $reach
             );
         }};
     }
@@ -1637,7 +2186,7 @@ async fn run_sextet_tests(
     assert_peer_counts!(PeerCounts::default().server(1).transit(4));
 
     //
-    // Going down to the first peer should result in three peering sessions
+    // Going down to the 1st peer should result in three peering sessions
     // per transit router. Note in the model above that qsfp0/qsfp1 are cross
     // connected between the two transit routers. Here we are connecting
     // swA/qsfp0 <-> swB/qsfp1
@@ -1791,6 +2340,238 @@ async fn run_sextet_tests(
         assert_all_nexthops_are_peers!();
     }
 
+    run_sextet_mcast(zt1, zt2, &s1, &s3, &t1, &t2).await
+}
+
+fn underlay_member(port: &str) -> MulticastGroupMember {
+    MulticastGroupMember {
+        port_id: port.parse().unwrap(),
+        link_id: LinkId(0),
+        direction: Direction::Underlay,
+    }
+}
+
+fn external_member(port: &str) -> MulticastGroupMember {
+    MulticastGroupMember {
+        port_id: port.parse().unwrap(),
+        link_id: LinkId(0),
+        direction: Direction::External,
+    }
+}
+
+/// Multicast replication members across the two racks of the sextet.
+///
+/// Each transit router's `ddmd` programs the underlay members of its own
+/// switch from the subscriptions it imports. Subscriptions still cross racks
+/// over the qsfp external peers, but only rear ports become members, since
+/// members on both parallel qsfp links would circulate replicas between the
+/// racks. The two qsfp links are cross-connected, akin to the diagram on
+/// `test_external_peer_sextet`.
+///
+/// ```text
+///          rack A                                        rack B
+///   s1 ---- rear0 [t1] qsfp0 ------------------ qsfp1 [t2] rear0 ---- s3
+///                      qsfp1 ------------------ qsfp0
+/// ```
+///
+/// This test checks cross-rack subscriptions and local replication membership.
+/// Cross-rack underlay replication remains unsupported until inter-rack
+/// replication prevents cycles.
+///
+/// 1. Peer t1/qsfp0 <-> t2/qsfp1 only, and s1 subscribes. t1 programs rear0;
+///    t2 imports the subscription over qsfp1 but doesn't program anything.
+/// 2. s3 subscribes. Each switch imports the other rack's subscription over
+///    qsfp and programs only its own rear0.
+/// 3. Move the peering to t1/qsfp1 <-> t2/qsfp0. The imports follow the link;
+///    both switches stay at rear0.
+/// 4. Peer over both links. Each switch imports the other rack over two next
+///    hops, a case that would cause looping with qsfp members, and stays at
+///    rear0.
+/// 5. Drop back to t1/qsfp0 <-> t2/qsfp1. Each switch loses only the dropped
+///    link's import, remaining at rear0.
+/// 6. s3 withdraws. t1 keeps rear0 and t2 drains to empty membership.
+/// 7. s1 withdraws. t2 drops its import, and t1 keeps only its `External`
+///    member.
+async fn run_sextet_mcast(
+    zt1: &RouterZone<'_>,
+    zt2: &RouterZone<'_>,
+    s1: &Client,
+    s3: &Client,
+    t1: &Client,
+    t2: &Client,
+) -> Result<()> {
+    const QSFP0: &str = "tfportqsfp0_0/v6";
+    const QSFP1: &str = "tfportqsfp1_0/v6";
+    let external_peers = |aobjs: &[&str]| ExternalPeers {
+        address_objects: aobjs.iter().map(|x| x.to_string()).collect(),
+    };
+
+    //
+    // Nexus creates each underlay group before subscriptions arrive.
+    // Each switch gets its own copy of the group.
+    //
+
+    let origin = MulticastOrigin::new(
+        "233.252.0.2".parse().unwrap(),
+        "ff04::200".parse().unwrap(),
+        Vni::try_from(MULTICAST_VNI).unwrap(),
+        None,
+    )
+    .unwrap();
+    let rear0 = [underlay_member("rear0")];
+    let t1_external = [external_member("qsfp0")];
+    let t1_members = [rear0[0].clone(), t1_external[0].clone()];
+
+    // Nexus-owned `External` member on t1, which ddmd must never remove.
+    let group_t1 = create_multicast_underlay_group_with(
+        zt1,
+        origin.underlay_group().into(),
+        &t1_external,
+    )?;
+    let group_t2 =
+        create_multicast_underlay_group(zt2, origin.underlay_group().into())?;
+
+    //
+    // Peer swA/qsfp0 <-> swB/qsfp1 only, then subscribe s1. t1 learns the
+    // subscription from s1 on rear0 and redistributes it to t2, which imports
+    // it over qsfp1. t2 has no local subscriber and leaves its group empty.
+    //
+
+    t1.set_external_peers(&external_peers(&[QSFP0])).await?;
+    t2.set_external_peers(&external_peers(&[QSFP1])).await?;
+
+    s1.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(t1, [("tfportrear0_0", origin)]);
+    assert_multicast_imports!(t2, [("tfportqsfp1_0", origin)]);
+    wait_for_multicast_members(zt1, &group_t1, &t1_members)?;
+    wait_for_multicast_members(zt2, &group_t2, &[])?;
+
+    println_nopipe!("sextet multicast remote import passed");
+
+    //
+    // A 2nd subscriber in rack B provides each switch with a local rear member.
+    // Each switch also imports the other rack's subscription over qsfp, and the
+    // exact wait on t2 fails if that import resolves to a qsfp member.
+    //
+
+    s3.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", origin), ("tfportqsfp0_0", origin)]
+    );
+    assert_multicast_imports!(
+        t2,
+        [("tfportrear0_0", origin), ("tfportqsfp1_0", origin)]
+    );
+    assert_multicast_members_unchanged(
+        zt1,
+        &group_t1,
+        &t1_members,
+        MEMBER_HOLD,
+    )?;
+    wait_for_multicast_members(zt2, &group_t2, &rear0)?;
+
+    println_nopipe!("sextet multicast subscribers in both racks passed");
+
+    //
+    // Switch to swA/qsfp1 <-> swB/qsfp0. Shutting down the old external peer
+    // expires its routes, and the imports move to the new link while ddmd
+    // programs only rear0 on both switches.
+    //
+
+    t1.set_external_peers(&external_peers(&[QSFP1])).await?;
+    t2.set_external_peers(&external_peers(&[QSFP0])).await?;
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", origin), ("tfportqsfp1_0", origin)]
+    );
+    assert_multicast_imports!(
+        t2,
+        [("tfportrear0_0", origin), ("tfportqsfp0_0", origin)]
+    );
+    assert_multicast_members_unchanged(
+        zt1,
+        &group_t1,
+        &t1_members,
+        MEMBER_HOLD,
+    )?;
+    assert_multicast_members_unchanged(zt2, &group_t2, &rear0, MEMBER_HOLD)?;
+
+    println_nopipe!("sextet multicast external link move passed");
+
+    //
+    // Peer over both links. Each switch now learns the other rack's
+    // subscriber over two nexthops. With qsfp members, replicas would cycle
+    // between the racks here, so ddmd still programs only rear0.
+    //
+
+    let both = external_peers(&[QSFP0, QSFP1]);
+    t1.set_external_peers(&both).await?;
+    t2.set_external_peers(&both).await?;
+    for client in [t1, t2] {
+        assert_multicast_imports!(
+            client,
+            [
+                ("tfportrear0_0", origin),
+                ("tfportqsfp0_0", origin),
+                ("tfportqsfp1_0", origin),
+            ]
+        );
+    }
+    wait_for_multicast_members(zt1, &group_t1, &t1_members)?;
+    wait_for_multicast_members(zt2, &group_t2, &rear0)?;
+
+    println_nopipe!("sextet multicast both external links passed");
+
+    t1.set_external_peers(&external_peers(&[QSFP0])).await?;
+    t2.set_external_peers(&external_peers(&[QSFP1])).await?;
+    assert_multicast_imports!(
+        t1,
+        [("tfportrear0_0", origin), ("tfportqsfp0_0", origin)]
+    );
+    assert_multicast_imports!(
+        t2,
+        [("tfportrear0_0", origin), ("tfportqsfp1_0", origin)]
+    );
+    wait_for_multicast_members(zt1, &group_t1, &t1_members)?;
+    wait_for_multicast_members(zt2, &group_t2, &rear0)?;
+
+    println_nopipe!("sextet multicast partial link loss passed");
+
+    //
+    // With only s1 subscribed, t1 holds rear0 and t2 drains its rear0.
+    //
+
+    s3.withdraw_multicast_groups(&vec![origin.clone()]).await?;
+    assert_multicast_imports!(t1, [("tfportrear0_0", origin)]);
+    assert_multicast_imports!(t2, [("tfportqsfp1_0", origin)]);
+    assert_multicast_members_unchanged(
+        zt1,
+        &group_t1,
+        &t1_members,
+        MEMBER_HOLD,
+    )?;
+    wait_for_multicast_members(zt2, &group_t2, &[])?;
+
+    println_nopipe!("sextet multicast remote withdraw passed");
+
+    //
+    // Withdrawing the last subscriber drains both groups. The groups remain
+    // in DPD for Nexus to delete, and the external peers are cleared for any
+    // test that runs after this one.
+    //
+
+    s1.withdraw_multicast_groups(&vec![origin]).await?;
+    assert_multicast_imports!(t1, []);
+    assert_multicast_imports!(t2, []);
+    wait_for_multicast_members(zt1, &group_t1, &t1_external)?;
+    wait_for_multicast_members(zt2, &group_t2, &[])?;
+
+    t1.set_external_peers(&external_peers(&[])).await?;
+    t2.set_external_peers(&external_peers(&[])).await?;
+
+    println_nopipe!("sextet multicast withdraw passed");
+
     Ok(())
 }
 
@@ -1802,6 +2583,18 @@ async fn prefix_count(c: &Client) -> Result<usize> {
         .sum::<usize>())
 }
 
+async fn peer_count(c: &Client) -> Result<usize> {
+    Ok(c.get_peers().await?.len())
+}
+
+async fn exchange_peer_count(c: &Client) -> Result<usize> {
+    Ok(c.get_peers()
+        .await?
+        .values()
+        .filter(|peer| matches!(peer.status, PeerStatus::Exchange(_)))
+        .count())
+}
+
 async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
     Ok(c.get_tunnel_endpoints().await?.len())
 }
@@ -1810,12 +2603,104 @@ async fn tunnel_originated_endpoint_count(c: &Client) -> Result<usize> {
     Ok(c.get_originated_tunnel_endpoints().await?.len())
 }
 
-async fn multicast_group_count(c: &Client) -> Result<usize> {
-    Ok(c.get_multicast_groups().await?.len())
+async fn multicast_imports(c: &Client) -> Result<MulticastImports> {
+    Ok(c.get_multicast_groups()
+        .await?
+        .iter()
+        .map(|imported| {
+            (
+                imported.if_name.clone(),
+                imported.route.origin.clone(),
+                imported.route.origin.metric(),
+            )
+        })
+        .collect())
 }
 
-async fn multicast_originated_count(c: &Client) -> Result<usize> {
-    Ok(c.get_originated_multicast_groups().await?.len())
+async fn multicast_origins(
+    c: &Client,
+) -> Result<HashSet<(MulticastOrigin, u64)>> {
+    Ok(c.get_originated_multicast_groups()
+        .await?
+        .iter()
+        .map(|origin| (origin.clone(), origin.metric()))
+        .collect())
+}
+
+/// Wait for `client`'s multicast imports to equal what's `expected`.
+///
+/// Unlike [`assert_multicast_imports!`], this yields between reads, which means
+/// it can run alongside another future in the same task.
+async fn wait_for_imports(
+    name: &str,
+    client: &Client,
+    expected: &MulticastImports,
+    timeout: Duration,
+) -> Result<()> {
+    tokio::time::timeout(timeout, async {
+        while multicast_imports(client).await? != *expected {
+            tokio::time::sleep(FAILOVER_POLL_INTERVAL).await;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("{name} imports did not converge to {expected:#?}"))?
+}
+
+/// Fail if any read of `client`'s multicast imports differs from `expected`.
+///
+/// This signals `ready` after the 1st matching read, and then keeps sampling
+/// until `done` arrives.
+async fn observe_imports_unchanged(
+    name: &str,
+    client: &Client,
+    expected: &MulticastImports,
+    ready: oneshot::Sender<()>,
+    mut done: oneshot::Receiver<()>,
+) -> Result<()> {
+    let mut ready = Some(ready);
+    loop {
+        let imports = multicast_imports(client).await?;
+        if imports != *expected {
+            dump_client_state(name, client).await;
+            return Err(anyhow!("{name} imports changed: {imports:#?}"));
+        }
+        if let Some(ready) = ready.take() {
+            ready
+                .send(())
+                .map_err(|_| anyhow!("stopped before {name} was observed"))?;
+        }
+        match done.try_recv() {
+            Ok(()) => return Ok(()),
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Closed) => {
+                return Err(anyhow!("stopped before {name} observation ended"));
+            }
+        }
+        tokio::time::sleep(FAILOVER_POLL_INTERVAL).await;
+    }
+}
+
+async fn dump_client_state(name: &str, c: &Client) {
+    let dump = async {
+        println_nopipe!("{name}:");
+        println_nopipe!("peers: {:#?}", c.get_peers().await);
+        println_nopipe!("prefixes: {:#?}", c.get_prefixes().await);
+        println_nopipe!(
+            "originated multicast: {:#?}",
+            c.get_originated_multicast_groups().await
+        );
+        println_nopipe!(
+            "imported multicast: {:#?}",
+            c.get_multicast_groups().await
+        );
+    };
+    if tokio::time::timeout(Duration::from_secs(10), dump)
+        .await
+        .is_err()
+    {
+        eprintln_nopipe!("{name}: diagnostic dump timed out");
+    }
 }
 
 fn init_logger() -> Logger {

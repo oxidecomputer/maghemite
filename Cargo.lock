@@ -963,7 +963,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=e08cf4c06c1b56be6b0066d53855b90782bf8d1c#e08cf4c06c1b56be6b0066d53855b90782bf8d1c"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb#cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1431,6 +1431,7 @@ dependencies = [
  "ddm-api-types",
  "ddm-protocol",
  "dpd-client",
+ "dpd-types-versions",
  "dropshot 0.18.0",
  "hostname 0.4.2",
  "http-body-util",
@@ -1731,7 +1732,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=e08cf4c06c1b56be6b0066d53855b90782bf8d1c#e08cf4c06c1b56be6b0066d53855b90782bf8d1c"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb#cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1756,7 +1757,7 @@ dependencies = [
 [[package]]
 name = "dpd-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=e08cf4c06c1b56be6b0066d53855b90782bf8d1c#e08cf4c06c1b56be6b0066d53855b90782bf8d1c"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb#cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb"
 dependencies = [
  "dpd-types-versions",
 ]
@@ -1764,7 +1765,7 @@ dependencies = [
 [[package]]
 name = "dpd-types-versions"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=e08cf4c06c1b56be6b0066d53855b90782bf8d1c#e08cf4c06c1b56be6b0066d53855b90782bf8d1c"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb#cb4ed7c31a67b89ced7f5cfcf80b605a661fc8fb"
 dependencies = [
  "chrono",
  "oxnet",
@@ -4114,11 +4115,13 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
+ "dpd-client",
  "libc",
  "libnet",
  "oximeter",
  "oximeter-producer",
  "oxnet",
+ "proptest",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -4177,6 +4180,8 @@ dependencies = [
  "client-common",
  "ddm-admin-client",
  "ddm-api-types-versions",
+ "dpd-client",
+ "dpd-types-versions",
  "oxnet",
  "rand 0.10.3",
  "serde_json",
