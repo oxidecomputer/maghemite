@@ -118,10 +118,18 @@ impl IllumosNode {
         d: &Runner,
         svc: &str,
     ) -> Result<(String, String)> {
-        let path = d.exec(self.0, &format!("svcs -L {svc}")).await?;
+        // Falcon's exec returns stderr mixed into stdout, so a missing
+        // service would otherwise hand us `svcs: Pattern ... doesn't match`
+        // as the path. Passing that to `cat` leaves the guest shell waiting
+        // on the unbalanced quote and the exec never returns.
+        let path = d
+            .exec(self.0, &format!("svcs -L {svc} 2>/dev/null"))
+            .await?;
         let path = path.trim();
-        if path.is_empty() {
-            return Err(anyhow!("`svcs -L {svc}` returned empty path"));
+        if !path.starts_with('/') || path.contains(char::is_whitespace) {
+            return Err(anyhow!(
+                "`svcs -L {svc}` returned no log path: {path:?}"
+            ));
         }
         let contents = d.exec(self.0, &format!("cat {path}")).await?;
         Ok((path.to_string(), contents))
