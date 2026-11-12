@@ -24,7 +24,7 @@ const TUNNEL_ORIGINATE: &str = "tunnel_originate";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("datastore error {0}")]
+    #[error("datastore error")]
     DataStore(#[from] sled::Error),
 
     #[error("db key error {0}")]
@@ -33,7 +33,7 @@ pub enum Error {
     #[error("db value error {0}")]
     DbValue(String),
 
-    #[error("serialization error {0}")]
+    #[error("serialization error")]
     Serialization(#[from] serde_json::Error),
 }
 
