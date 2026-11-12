@@ -174,7 +174,8 @@ async fn run(args: RunArgs) {
             client: mg_lower::new_dpd_client(&log),
         };
         let ddm = mg_lower::ProductionDdm {
-            client: mg_lower::new_ddm_client(&log),
+            client: mg_lower::new_ddm_client(&log)
+                .expect("failed to create ddm client"),
         };
         let sw = mg_lower::ProductionSwitchZone {};
         Builder::new()

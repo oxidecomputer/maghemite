@@ -1471,7 +1471,7 @@ dependencies = [
  "ddm-api-types-versions",
  "oxnet",
  "progenitor 0.16.0",
- "progenitor-extras 0.3.0",
+ "progenitor-extras 0.4.0",
  "reqwest 0.13.5",
  "serde",
  "slog",
@@ -4041,7 +4041,7 @@ dependencies = [
  "mg-api-types-versions",
  "oxnet",
  "progenitor 0.16.0",
- "progenitor-extras 0.3.0",
+ "progenitor-extras 0.4.0",
  "reqwest 0.13.5",
  "schemars 0.8.22",
  "serde",
@@ -5846,11 +5846,11 @@ dependencies = [
 
 [[package]]
 name = "progenitor-extras"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fea8ab690a2c33f34256e93127c01803c3db4bdd6533572b5d68b937b973068"
+checksum = "cf70fd39ab9e9cbf6cfddcd7da96f36aed98c0ef85226d9a0b7d369f7f1f3472"
 dependencies = [
- "progenitor-client 0.15.1",
+ "progenitor-client 0.16.0",
  "reqwest 0.13.5",
  "slog",
 ]

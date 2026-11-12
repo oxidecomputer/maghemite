@@ -122,7 +122,7 @@ async fn run() -> Result<()> {
     };
     let endpoint = format!("http://{}", sa);
     let log = init_logger();
-    let client = Client::new(&endpoint, log.clone());
+    let client = Client::new(&endpoint, log.clone())?;
 
     match arg.subcmd {
         SubCommand::GetPeers => {
