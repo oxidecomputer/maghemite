@@ -679,6 +679,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo_toml"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82f4b26e751e711a5302649417f2da046dce6391b2ea30a4820f37462314f0b9"
+dependencies = [
+ "semver 1.0.28",
+ "serde",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2125,7 +2136,7 @@ name = "falcon-lab"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cargo_toml",
+ "cargo_toml 1.0.1",
  "clap",
  "client-common",
  "colored",
@@ -3788,7 +3799,7 @@ dependencies = [
  "anyhow",
  "base16ct 1.0.0",
  "camino",
- "cargo_toml",
+ "cargo_toml 0.22.3",
  "clap",
  "colored",
  "futures",
