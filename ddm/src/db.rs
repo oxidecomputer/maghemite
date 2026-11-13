@@ -9,46 +9,26 @@ use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{Logger, error};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
 
-/// The handle used to open a persistent key-value tree for originated
-/// prefixes.
-const ORIGINATE: &str = "originate";
-
-/// The handle used to open a persistent key-value tree for originated
-/// tunnel endpoints.
-const TUNNEL_ORIGINATE: &str = "tunnel_originate";
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("datastore error {0}")]
-    DataStore(#[from] sled::Error),
-
-    #[error("db key error {0}")]
-    DbKey(String),
-
-    #[error("db value error {0}")]
-    DbValue(String),
-
-    #[error("serialization error {0}")]
-    Serialization(#[from] serde_json::Error),
-}
-
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Db {
     data: Arc<Mutex<DbData>>,
-    persistent_data: sled::Db,
-    log: Logger,
 }
 
+// All state is held in memory only. Sled-agent's DDM reconciler re-advertises
+// underlay prefixes, mg-lower re-advertises tunnel endpoints, and the scrimlet
+// DDM reconciler re-applies the rack prefix.
 #[derive(Default, Clone)]
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
     pub external_peers: BTreeSet<String>,
+    pub originated: HashSet<Ipv6Net>,
+    pub originated_tunnel: HashSet<TunnelOrigin>,
+    pub rack_prefix: Option<Ipv6Net>,
 }
 
 const _: () = {
@@ -57,12 +37,10 @@ const _: () = {
 };
 
 impl Db {
-    pub fn new(db_path: &str, log: Logger) -> Result<Self, sled::Error> {
-        Ok(Self {
+    pub fn new() -> Self {
+        Self {
             data: Arc::new(Mutex::new(DbData::default())),
-            persistent_data: sled::open(db_path)?,
-            log,
-        })
+        }
     }
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
@@ -106,118 +84,58 @@ impl Db {
         }
     }
 
-    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
+    /// Mark `prefixes` as originated.
+    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) {
+        lock!(self.data).originated.extend(prefixes.iter().copied());
+    }
+
+    /// Mark `origins` as originated.
+    pub fn originate_tunnel(&self, origins: &HashSet<TunnelOrigin>) {
+        lock!(self.data)
+            .originated_tunnel
+            .extend(origins.iter().copied());
+    }
+
+    pub fn originated(&self) -> HashSet<Ipv6Net> {
+        lock!(self.data).originated.clone()
+    }
+
+    pub fn originated_count(&self) -> usize {
+        lock!(self.data).originated.len()
+    }
+
+    pub fn originated_tunnel(&self) -> HashSet<TunnelOrigin> {
+        lock!(self.data).originated_tunnel.clone()
+    }
+
+    pub fn originated_tunnel_count(&self) -> usize {
+        lock!(self.data).originated_tunnel.len()
+    }
+
+    /// Stop marking `prefixes` as originated.
+    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) {
+        let originated = &mut lock!(self.data).originated;
         for p in prefixes {
-            tree.insert(p.db_key(), "")?;
+            originated.remove(p);
         }
-        tree.flush()?;
-        Ok(())
     }
 
-    pub fn originate_tunnel(
-        &self,
-        origins: &HashSet<TunnelOrigin>,
-    ) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(TUNNEL_ORIGINATE)?;
+    /// Stop marking `origins` as originated.
+    pub fn withdraw_tunnel(&self, origins: &HashSet<TunnelOrigin>) {
+        let originated_tunnel = &mut lock!(self.data).originated_tunnel;
         for o in origins {
-            let entry = serde_json::to_string(o)?;
-            tree.insert(entry.as_str(), "")?;
+            originated_tunnel.remove(o);
         }
-        tree.flush()?;
-        Ok(())
     }
 
-    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error ddm originated prefix: {e}"
-                        );
-                        return None;
-                    }
-                };
-                Some(match Ipv6Net::from_db_key(&key) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing ddm origin entry value: {e}"
-                        );
-                        return None;
-                    }
-                })
-            })
-            .collect();
-        Ok(result)
+    /// The originated rack prefix, if one is set.
+    pub fn rack_prefix(&self) -> Option<Ipv6Net> {
+        lock!(self.data).rack_prefix
     }
 
-    pub fn originated_count(&self) -> Result<usize, Error> {
-        Ok(self.originated()?.len())
-    }
-
-    pub fn originated_tunnel(&self) -> Result<HashSet<TunnelOrigin>, Error> {
-        let tree = self.persistent_data.open_tree(TUNNEL_ORIGINATE)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching ddm tunnel origin entry: {e}"
-                        );
-                        return None;
-                    }
-                };
-                let value = String::from_utf8_lossy(&key);
-                let value: TunnelOrigin = match serde_json::from_str(&value) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing ddm tunnel origin: {e}"
-                        );
-                        return None;
-                    }
-                };
-                Some(value)
-            })
-            .collect();
-        Ok(result)
-    }
-
-    pub fn originated_tunnel_count(&self) -> Result<usize, Error> {
-        Ok(self.originated_tunnel()?.len())
-    }
-
-    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(ORIGINATE)?;
-        for p in prefixes {
-            tree.remove(p.db_key())?;
-        }
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn withdraw_tunnel(
-        &self,
-        origins: &HashSet<TunnelOrigin>,
-    ) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(TUNNEL_ORIGINATE)?;
-        for o in origins {
-            let entry = serde_json::to_string(o)?;
-            tree.remove(entry.as_str())?;
-        }
-        tree.flush()?;
-        Ok(())
+    /// Set or clear the originated rack prefix, replacing any it holds.
+    pub fn set_rack_prefix(&self, prefix: Option<Ipv6Net>) {
+        lock!(self.data).rack_prefix = prefix;
     }
 
     pub fn remove_nexthop_routes(
@@ -381,34 +299,6 @@ pub fn effective_route_set(
         }
     }
     result
-}
-
-trait DbKey: Sized {
-    fn db_key(&self) -> Vec<u8>;
-    fn from_db_key(v: &[u8]) -> Result<Self, Error>;
-}
-
-impl DbKey for Ipv6Net {
-    fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.addr().octets().into();
-        buf.push(self.width());
-        buf
-    }
-
-    fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        if v.len() < 17 {
-            Err(Error::DbKey(format!(
-                "buffer too short for prefix 6 key {} < 17",
-                v.len()
-            )))
-        } else {
-            Self::new(
-                Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
-                v[16],
-            )
-            .map_err(|e| Error::DbKey(e.to_string()))
-        }
-    }
 }
 
 #[cfg(test)]
