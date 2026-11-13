@@ -2599,10 +2599,15 @@ pub(crate) mod helpers {
                         ));
                     }
                     Ok(previous) => {
-                        rtr.send_admin_event(AdminEvent::ShaperChanged(Some(
-                            previous,
-                        )))
-                        .map_err(|e| {
+                        let event = match policy {
+                            PolicyKind::Checker => {
+                                AdminEvent::CheckerChanged(Some(previous))
+                            }
+                            PolicyKind::Shaper => {
+                                AdminEvent::ShaperChanged(Some(previous))
+                            }
+                        };
+                        rtr.send_admin_event(event).map_err(|e| {
                             HttpError::for_internal_error(format!(
                                 "send event: {e}"
                             ))
