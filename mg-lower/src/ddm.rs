@@ -108,6 +108,6 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
 }
 
 #[cfg(target_os = "illumos")]
-pub fn new_ddm_client(log: &Logger) -> Client {
+pub fn new_ddm_client(log: &Logger) -> Result<Client, reqwest::Error> {
     Client::new("http://localhost:8000", log.clone())
 }

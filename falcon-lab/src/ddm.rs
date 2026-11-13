@@ -28,7 +28,7 @@ impl DdmNode {
     }
 
     pub async fn client(&self, d: &Runner, addr: IpAddr) -> Result<Client> {
-        Ok(Client::new(&format!("http://{addr}:8000"), d.log.clone()))
+        Ok(Client::new(&format!("http://{addr}:8000"), d.log.clone())?)
     }
 
     pub fn illumos(&self) -> IllumosNode {
