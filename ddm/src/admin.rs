@@ -104,9 +104,6 @@ enum AdminError {
     #[error("no rack prefix is set")]
     NoRackPrefix,
 
-    #[error(transparent)]
-    Db(crate::db::Error),
-
     #[error("admin event send: sending on a closed channel")]
     EventSend,
 
@@ -139,9 +136,9 @@ impl From<AdminError> for HttpError {
                     msg,
                 )
             }
-            AdminError::Db(_)
-            | AdminError::EventSend
-            | AdminError::StatsServer(_) => Self::for_internal_error(msg),
+            AdminError::EventSend | AdminError::StatsServer(_) => {
+                Self::for_internal_error(msg)
+            }
         }
     }
 }
@@ -339,16 +336,14 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let originated = ctx.db.originated().map_err(AdminError::Db)?;
-        Ok(HttpResponseOk(originated))
+        Ok(HttpResponseOk(ctx.db.originated()))
     }
 
     async fn get_originated_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<HashSet<TunnelOrigin>>, HttpError> {
         let ctx = lock!(ctx.context());
-        let originated = ctx.db.originated_tunnel().map_err(AdminError::Db)?;
-        Ok(HttpResponseOk(originated))
+        Ok(HttpResponseOk(ctx.db.originated_tunnel()))
     }
 
     async fn get_prefixes(
@@ -394,7 +389,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
         let prefixes = request.into_inner();
-        ctx.db.originate(&prefixes).map_err(AdminError::Db)?;
+        ctx.db.originate(&prefixes);
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
@@ -403,18 +398,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(AdminError::from)?;
         }
 
-        match ctx.db.originated_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_underlay_prefixes
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated underlay prefixes stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_underlay_prefixes
+            .store(ctx.db.originated_count() as u64, Ordering::Relaxed);
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -427,9 +413,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx.require_router_kind(RouterKind::Transit)?;
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
-        ctx.db
-            .originate_tunnel(&endpoints)
-            .map_err(AdminError::Db)?;
+        ctx.db.originate_tunnel(&endpoints);
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
@@ -438,18 +422,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(AdminError::from)?;
         }
 
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunnel endpoints stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_tunnel_endpoints
+            .store(ctx.db.originated_tunnel_count() as u64, Ordering::Relaxed);
         Ok(HttpResponseUpdatedNoContent())
     }
 
@@ -459,7 +434,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
         let prefixes = request.into_inner();
-        ctx.db.withdraw(&prefixes).map_err(AdminError::Db)?;
+        ctx.db.withdraw(&prefixes);
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
@@ -468,18 +443,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(AdminError::from)?;
         }
 
-        match ctx.db.originated_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_underlay_prefixes
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated underlay prefixes stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_underlay_prefixes
+            .store(ctx.db.originated_count() as u64, Ordering::Relaxed);
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -492,7 +458,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx.require_router_kind(RouterKind::Transit)?;
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
-        ctx.db.withdraw_tunnel(&endpoints).map_err(AdminError::Db)?;
+        ctx.db.withdraw_tunnel(&endpoints);
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
@@ -501,18 +467,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .map_err(AdminError::from)?;
         }
 
-        match ctx.db.originated_tunnel_count() {
-            Ok(count) => ctx
-                .stats
-                .originated_tunnel_endpoints
-                .store(count as u64, Ordering::Relaxed),
-            Err(e) => {
-                error!(
-                    ctx.log,
-                    "failed to update originated tunel endpoints stat: {e}"
-                )
-            }
-        }
+        ctx.stats
+            .originated_tunnel_endpoints
+            .store(ctx.db.originated_tunnel_count() as u64, Ordering::Relaxed);
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -691,11 +648,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<RackPrefix>, HttpError> {
         let ctx = lock!(ctx.context());
         ctx.require_router_kind(RouterKind::Transit)?;
-        let prefix = ctx
-            .db
-            .rack_prefix()
-            .map_err(AdminError::Db)?
-            .ok_or(AdminError::NoRackPrefix)?;
+        let prefix = ctx.db.rack_prefix().ok_or(AdminError::NoRackPrefix)?;
         Ok(HttpResponseOk(RackPrefix { prefix }))
     }
 
@@ -707,13 +660,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx.require_router_kind(RouterKind::Transit)?;
         let RackPrefix { prefix } = request.into_inner();
 
-        let old = ctx.db.rack_prefix().map_err(AdminError::Db)?;
+        let old = ctx.db.rack_prefix();
         if old == Some(prefix) {
             return Ok(HttpResponseUpdatedNoContent());
         }
-        ctx.db
-            .set_rack_prefix(Some(prefix))
-            .map_err(AdminError::Db)?;
+        ctx.db.set_rack_prefix(Some(prefix));
         info!(ctx.log, "set rack prefix"; "prefix" => %prefix, "old" => ?old);
 
         // Announce the new prefix before withdrawing the old one, so peers
@@ -737,10 +688,10 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
         ctx.require_router_kind(RouterKind::Transit)?;
-        let Some(old) = ctx.db.rack_prefix().map_err(AdminError::Db)? else {
+        let Some(old) = ctx.db.rack_prefix() else {
             return Ok(HttpResponseUpdatedNoContent());
         };
-        ctx.db.set_rack_prefix(None).map_err(AdminError::Db)?;
+        ctx.db.set_rack_prefix(None);
         info!(ctx.log, "clear rack prefix"; "old" => %old);
 
         for e in ctx.event_channels() {

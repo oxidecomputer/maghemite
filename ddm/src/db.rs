@@ -8,50 +8,26 @@ use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{Logger, error};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
 
-/// The handle used to open a persistent key-value tree for originated
-/// prefixes.
-const ORIGINATE: &str = "originate";
-
-/// The handle used to open a persistent key-value tree for originated
-/// tunnel endpoints.
-const TUNNEL_ORIGINATE: &str = "tunnel_originate";
-
-/// The handle used to open a persistent key-value tree for the originated
-/// rack prefix. It holds at most one prefix.
-const RACK_PREFIX: &str = "rack_prefix";
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("datastore error")]
-    DataStore(#[from] sled::Error),
-
-    #[error("db key error {0}")]
-    DbKey(String),
-
-    #[error("db value error {0}")]
-    DbValue(String),
-
-    #[error("serialization error")]
-    Serialization(#[from] serde_json::Error),
-}
-
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Db {
     data: Arc<Mutex<DbData>>,
-    persistent_data: sled::Db,
-    log: Logger,
 }
 
+// All state is held in memory only. Sled-agent's DDM reconciler re-advertises
+// underlay prefixes, mg-lower re-advertises tunnel endpoints, and the scrimlet
+// DDM reconciler re-applies the rack prefix.
 #[derive(Default, Clone)]
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
     pub external_peers: BTreeSet<String>,
+    pub originated: HashSet<Ipv6Net>,
+    pub originated_tunnel: HashSet<TunnelOrigin>,
+    pub rack_prefix: Option<Ipv6Net>,
 }
 
 const _: () = {
@@ -60,12 +36,10 @@ const _: () = {
 };
 
 impl Db {
-    pub fn new(db_path: &str, log: Logger) -> Result<Self, sled::Error> {
-        Ok(Self {
+    pub fn new() -> Self {
+        Self {
             data: Arc::new(Mutex::new(DbData::default())),
-            persistent_data: sled::open(db_path)?,
-            log,
-        })
+        }
     }
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
@@ -132,103 +106,58 @@ impl Db {
         }
     }
 
-    /// Persist `prefixes` as originated.
-    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
-        self.update_persisted(ORIGINATE, prefixes, [])
+    /// Mark `prefixes` as originated.
+    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) {
+        lock!(self.data).originated.extend(prefixes.iter().copied());
     }
 
-    /// Persist `origins` as originated.
-    pub fn originate_tunnel(
-        &self,
-        origins: &HashSet<TunnelOrigin>,
-    ) -> Result<(), Error> {
-        self.update_persisted(TUNNEL_ORIGINATE, origins, [])
+    /// Mark `origins` as originated.
+    pub fn originate_tunnel(&self, origins: &HashSet<TunnelOrigin>) {
+        lock!(self.data)
+            .originated_tunnel
+            .extend(origins.iter().copied());
     }
 
-    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
-        self.persisted(ORIGINATE)
+    pub fn originated(&self) -> HashSet<Ipv6Net> {
+        lock!(self.data).originated.clone()
     }
 
-    pub fn originated_count(&self) -> Result<usize, Error> {
-        Ok(self.originated()?.len())
+    pub fn originated_count(&self) -> usize {
+        lock!(self.data).originated.len()
     }
 
-    pub fn originated_tunnel(&self) -> Result<HashSet<TunnelOrigin>, Error> {
-        self.persisted(TUNNEL_ORIGINATE)
+    pub fn originated_tunnel(&self) -> HashSet<TunnelOrigin> {
+        lock!(self.data).originated_tunnel.clone()
     }
 
-    pub fn originated_tunnel_count(&self) -> Result<usize, Error> {
-        Ok(self.originated_tunnel()?.len())
+    pub fn originated_tunnel_count(&self) -> usize {
+        lock!(self.data).originated_tunnel.len()
     }
 
-    /// Stop persisting `prefixes` as originated.
-    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
-        self.update_persisted(ORIGINATE, [], prefixes)
+    /// Stop marking `prefixes` as originated.
+    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) {
+        let originated = &mut lock!(self.data).originated;
+        for p in prefixes {
+            originated.remove(p);
+        }
     }
 
-    /// Stop persisting `origins` as originated.
-    pub fn withdraw_tunnel(
-        &self,
-        origins: &HashSet<TunnelOrigin>,
-    ) -> Result<(), Error> {
-        self.update_persisted(TUNNEL_ORIGINATE, [], origins)
+    /// Stop marking `origins` as originated.
+    pub fn withdraw_tunnel(&self, origins: &HashSet<TunnelOrigin>) {
+        let originated_tunnel = &mut lock!(self.data).originated_tunnel;
+        for o in origins {
+            originated_tunnel.remove(o);
+        }
     }
 
     /// The originated rack prefix, if one is set.
-    pub fn rack_prefix(&self) -> Result<Option<Ipv6Net>, Error> {
-        Ok(self.persisted(RACK_PREFIX)?.into_iter().next())
+    pub fn rack_prefix(&self) -> Option<Ipv6Net> {
+        lock!(self.data).rack_prefix
     }
 
     /// Set or clear the originated rack prefix, replacing any it holds.
-    pub fn set_rack_prefix(
-        &self,
-        prefix: Option<Ipv6Net>,
-    ) -> Result<(), Error> {
-        let held: HashSet<Ipv6Net> = self.persisted(RACK_PREFIX)?;
-        self.update_persisted(RACK_PREFIX, &prefix, &held)
-    }
-
-    /// The set of values persisted in `tree`. Entries that cannot be read
-    /// are logged and skipped.
-    fn persisted<K: DbKey>(&self, tree: &str) -> Result<HashSet<K>, Error> {
-        let result = self
-            .persistent_data
-            .open_tree(tree)?
-            .iter()
-            .keys()
-            .filter_map(|key| {
-                match key.map_err(Error::from).and_then(|k| K::from_db_key(&k))
-                {
-                    Ok(value) => Some(value),
-                    Err(e) => {
-                        error!(self.log, "db: skipping {tree} entry: {e}");
-                        None
-                    }
-                }
-            })
-            .collect();
-        Ok(result)
-    }
-
-    /// Remove `remove` from and add `insert` to the set of values persisted
-    /// in `tree`, in one atomic batch, and flush it to disk.
-    fn update_persisted<'a, K: DbKey + 'a>(
-        &self,
-        tree: &str,
-        insert: impl IntoIterator<Item = &'a K>,
-        remove: impl IntoIterator<Item = &'a K>,
-    ) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(tree)?;
-        let mut batch = sled::Batch::default();
-        for k in remove {
-            batch.remove(k.db_key()?);
-        }
-        for k in insert {
-            batch.insert(k.db_key()?, "");
-        }
-        tree.apply_batch(batch)?;
-        tree.flush()?;
-        Ok(())
+    pub fn set_rack_prefix(&self, prefix: Option<Ipv6Net>) {
+        lock!(self.data).rack_prefix = prefix;
     }
 
     pub fn remove_nexthop_routes(
@@ -466,47 +395,6 @@ pub fn tunnel_forwarding_changes(
     }
 }
 
-/// A value stored as the key of an entry in a persistent tree, which holds a
-/// set of such values.
-trait DbKey: Sized + Eq + std::hash::Hash {
-    fn db_key(&self) -> Result<Vec<u8>, Error>;
-    fn from_db_key(v: &[u8]) -> Result<Self, Error>;
-}
-
-impl DbKey for Ipv6Net {
-    fn db_key(&self) -> Result<Vec<u8>, Error> {
-        let mut buf: Vec<u8> = self.addr().octets().into();
-        buf.push(self.width());
-        Ok(buf)
-    }
-
-    fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        if v.len() < 17 {
-            Err(Error::DbKey(format!(
-                "buffer too short for prefix 6 key {} < 17",
-                v.len()
-            )))
-        } else {
-            Self::new(
-                Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
-                v[16],
-            )
-            .map_err(|e| Error::DbKey(e.to_string()))
-        }
-    }
-}
-
-/// Tunnel origins are stored as their JSON text.
-impl DbKey for TunnelOrigin {
-    fn db_key(&self) -> Result<Vec<u8>, Error> {
-        Ok(serde_json::to_vec(self)?)
-    }
-
-    fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        Ok(serde_json::from_slice(v)?)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -701,80 +589,17 @@ mod test {
         assert_eq!(to_del, expected_del);
     }
 
-    // Originations persist across upgrades, so their keys must keep the
-    // encoding earlier releases wrote: an Ipv6Net as its address octets and
-    // width, a tunnel origin as its JSON text.
     #[test]
-    fn originations_keep_their_on_disk_encoding() {
-        let dir = std::env::temp_dir()
-            .join(format!("ddm-originate-test-{}", std::process::id()));
-        let db = Db::new(
-            dir.to_str().unwrap(),
-            Logger::root(slog::Discard, slog::o!()),
-        )
-        .unwrap();
-        let prefix: Ipv6Net = "fd00:1::/64".parse().unwrap();
-        let origin = TunnelOrigin {
-            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
-            boundary_addr: "fd00:1701::1".parse().unwrap(),
-            vni: 47,
-            metric: 10,
-        };
-        let mut prefix_key = prefix.addr().octets().to_vec();
-        prefix_key.push(64);
-        let origin_key = serde_json::to_string(&origin).unwrap();
-
-        // Read what an earlier release wrote.
-        let underlay = db.persistent_data.open_tree(ORIGINATE).unwrap();
-        let tunnel = db.persistent_data.open_tree(TUNNEL_ORIGINATE).unwrap();
-        underlay.insert(&prefix_key, "").unwrap();
-        tunnel.insert(origin_key.as_str(), "").unwrap();
-        assert_eq!(db.originated().unwrap(), HashSet::from([prefix]));
-        assert_eq!(db.originated_tunnel().unwrap(), HashSet::from([origin]));
-
-        // Write it the same way.
-        db.withdraw(&HashSet::from([prefix])).unwrap();
-        db.withdraw_tunnel(&HashSet::from([origin])).unwrap();
-        assert!(underlay.is_empty() && tunnel.is_empty());
-        db.originate(&HashSet::from([prefix])).unwrap();
-        db.originate_tunnel(&HashSet::from([origin])).unwrap();
-        let keys = |t: &sled::Tree| -> Vec<Vec<u8>> {
-            t.iter().keys().map(|k| k.unwrap().to_vec()).collect()
-        };
-        assert_eq!(keys(&underlay), vec![prefix_key]);
-        assert_eq!(keys(&tunnel), vec![origin_key.into_bytes()]);
-
-        drop(db);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn rack_prefix_is_replaced_cleared_and_persisted() {
-        let dir = std::env::temp_dir()
-            .join(format!("ddm-rack-prefix-test-{}", std::process::id()));
-        let path = dir.to_str().unwrap();
-        let open =
-            || Db::new(path, Logger::root(slog::Discard, slog::o!())).unwrap();
+    fn rack_prefix_is_replaced_and_cleared() {
+        let db = Db::new();
         let a: Ipv6Net = "fd00:a::/56".parse().unwrap();
         let b: Ipv6Net = "fd00:b::/48".parse().unwrap();
 
-        let db = open();
-        assert_eq!(db.rack_prefix().unwrap(), None);
-        db.set_rack_prefix(Some(a)).unwrap();
-        db.set_rack_prefix(Some(b)).unwrap();
-        drop(db);
-
-        // b replaced a rather than joining it.
-        let db = open();
-        assert_eq!(
-            db.persisted::<Ipv6Net>(RACK_PREFIX).unwrap(),
-            HashSet::from([b])
-        );
-        assert_eq!(db.rack_prefix().unwrap(), Some(b));
-        db.set_rack_prefix(None).unwrap();
-        assert_eq!(db.rack_prefix().unwrap(), None);
-        drop(db);
-
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(db.rack_prefix(), None);
+        db.set_rack_prefix(Some(a));
+        db.set_rack_prefix(Some(b));
+        assert_eq!(db.rack_prefix(), Some(b));
+        db.set_rack_prefix(None);
+        assert_eq!(db.rack_prefix(), None);
     }
 }
