@@ -15,7 +15,9 @@ use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{MulticastRoute, PeerInfo, RouterKind, TunnelRoute};
+use ddm_api_types::db::{
+    ImportedMulticastRoute, PeerInfo, RouterKind, TunnelRoute,
+};
 use ddm_api_types::exchange::{PathVector, RouterId};
 use ddm_api_types::external_peers::ExternalPeers;
 use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
@@ -439,9 +441,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn get_multicast_groups(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<MulticastRoute>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashSet<ImportedMulticastRoute>>, HttpError>
+    {
         let ctx = lock!(ctx.context());
-        let imported = ctx.db.imported_mcast();
+        let imported = ctx
+            .db
+            .imported_mcast_links()
+            .into_iter()
+            .map(|(route, if_name)| ImportedMulticastRoute { route, if_name })
+            .collect();
         Ok(HttpResponseOk(imported))
     }
 

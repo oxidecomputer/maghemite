@@ -180,12 +180,21 @@ async fn run(args: RunArgs) {
             client: mg_lower::new_ddm_client(&log),
         };
         let sw = mg_lower::ProductionSwitchZone {};
-        Builder::new()
-            .name("mg-lower".to_string())
-            .spawn(move || {
-                mg_lower::run(ctx.tep, db, log, stats, rt, &dpd, &ddm, &sw);
-            })
+        let backends = mg_lower::Backends { dpd, ddm, sw };
+        mg_lower::spawn(ctx.tep, db, log, stats, rt, backends)
             .expect("failed to start mg-lower");
+    }
+
+    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
+    {
+        let rt = Arc::new(tokio::runtime::Handle::current());
+        let log = log.clone();
+        let db = context.db.clone();
+        let ddm = mg_lower::ProductionDdm {
+            client: mg_lower::new_ddm_client(&log),
+        };
+        mg_lower::mrib::spawn(db, log, rt, ddm)
+            .expect("failed to start mg-lower mrib");
     }
 
     start_bgp_routers(

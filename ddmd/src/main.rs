@@ -184,7 +184,7 @@ async fn run() {
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
     let context = Arc::new(Mutex::new(HandlerContext {
-        db,
+        db: db.clone(),
         stats: router_stats,
         peers,
         stats_handler: Arc::new(Mutex::new(None)),
@@ -207,6 +207,8 @@ async fn run() {
         sled_id: arg.sled_uuid,
         router_id: router_id.clone(),
     }));
+
+    start_mcast_sweep(arg.api_only, dpd, db, log.clone());
 
     if arg.with_stats
         && let (Some(rack_uuid), Some(sled_uuid)) =
@@ -342,6 +344,47 @@ fn start_state_machines(
     _log: &Logger,
 ) -> Vec<StateMachine> {
     Vec::new()
+}
+
+/// Spawn the multicast membership sweep.
+///
+/// This bypasses the sweep under `--api-only` or without `--dendrite`. In
+/// API-only mode, there's no routing, and, therefore, no imports to derive
+/// membership from.
+///
+/// Builds use `panic = "abort"` (see `.cargo/config.toml`), which means that a
+/// panic during a sweep terminates `ddmd` rather than only the task, after
+/// which SMF restarts the service.
+///
+/// The restarted process bootstraps with no record of programmed members.
+/// Existing membership remains in place, and only those an import re-derives
+/// come back under management, akin to the unicast and tunnel routes left
+/// behind by a `ddmd` crash.
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+fn start_mcast_sweep(
+    api_only: bool,
+    dpd: Option<DpdConfig>,
+    db: Db,
+    log: Logger,
+) {
+    let Some(dpd) = dpd else {
+        return;
+    };
+    if api_only {
+        return;
+    }
+    tokio::spawn(ddm::mcast::run(db, dpd, log));
+}
+
+/// Non-illumos variant: underlay multicast replicates only on a switch, meaning
+/// that a sweep never starts.
+#[cfg(not(all(feature = "backend", target_os = "illumos")))]
+fn start_mcast_sweep(
+    _api_only: bool,
+    _dpd: Option<DpdConfig>,
+    _db: Db,
+    _log: Logger,
+) {
 }
 
 /// Install a Ctrl-C handler that withdraws ddmd's imported routes from the
