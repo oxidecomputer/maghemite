@@ -4,11 +4,29 @@
 
 //! Test utilities for rdb tests.
 
+#[cfg(test)]
+use crate::types::UnderlayMulticastIpv6;
 use crate::{Db, error::Error};
 use client_common::eprintln_nopipe;
+#[cfg(test)]
+use mg_api_types::mrib::Vni;
 use slog::Logger;
+#[cfg(test)]
+use std::net::Ipv6Addr;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Create an underlay multicast group address for tests.
+#[cfg(test)]
+pub(crate) fn underlay_group() -> UnderlayMulticastIpv6 {
+    UnderlayMulticastIpv6::new(Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1))
+        .expect("valid test underlay address")
+}
+
+#[cfg(test)]
+pub(crate) fn vni() -> Vni {
+    Vni::new(77).expect("valid multicast test VNI")
+}
 
 /// A test database wrapper that automatically cleans up the database directory
 /// when dropped, but only if the test succeeded.
