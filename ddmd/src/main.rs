@@ -17,6 +17,7 @@ use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::db::RouterKind;
+use ddm_api_types::exchange::RouterId;
 use mg_common::lock;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
@@ -115,7 +116,7 @@ struct Arg {
 
     // Explicitly set router id instead of using hostname
     #[arg(long)]
-    router_id: Option<String>,
+    router_id: Option<RouterId>,
 
     /// Serve only the admin API. Skips the routing state machine
     /// (discovery, exchange, route synchronization), allowing test fixtures
@@ -172,7 +173,7 @@ async fn run() {
 
     let router_id = match &arg.router_id {
         Some(id) => id.clone(),
-        None => hostname.clone(),
+        None => hostname.clone().into(),
     };
 
     let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
@@ -257,7 +258,7 @@ fn start_state_machines(
     arg: &Arg,
     db: &Db,
     dpd: &Option<DpdConfig>,
-    router_id: &str,
+    router_id: &RouterId,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) -> Vec<StateMachine> {
@@ -296,7 +297,7 @@ fn start_state_machines(
             event_channels: Vec::new(),
             tx: tx.clone(),
             log: log.clone(),
-            router_id: router_id.to_string(),
+            router_id: router_id.clone(),
             rt: rt.clone(),
             iface: Arc::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
@@ -336,7 +337,7 @@ fn start_state_machines(
     _arg: &Arg,
     _db: &Db,
     _dpd: &Option<DpdConfig>,
-    _hostname: &str,
+    _router_id: &RouterId,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,
 ) -> Vec<StateMachine> {

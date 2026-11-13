@@ -5,8 +5,9 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin, Vni};
 use oxnet::Ipv6Net;
 use slog::{Drain, Logger};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,7 +15,7 @@ use std::env;
 use std::net::Ipv6Addr;
 use std::ops::{Deref, DerefMut};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use zone::Zlogin;
 use ztest::*;
 
@@ -56,6 +57,10 @@ macro_rules! ip6_net {
 }
 
 const ZONE_BRAND: &str = "omicron1";
+
+/// How long to wait for a stopped ddmd to exit, and how often to check.
+const DDMD_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const DDMD_STOP_POLL: Duration = Duration::from_millis(100);
 
 struct SoftnpuZone<'a> {
     zfs: &'a Zfs,
@@ -209,7 +214,61 @@ impl<'a> RouterZone<'a> {
     }
 
     fn stop_router(&self) -> Result<String> {
-        self.zone.zexec("pkill ddmd")
+        let output = self.zone.zexec("pkill -x ddmd")?;
+        let deadline = Instant::now() + DDMD_STOP_TIMEOUT;
+        loop {
+            let state = self.zone.zexec(
+                "pgrep -x ddmd > /dev/null; \
+                ddmd_status=$?; \
+                case \"$ddmd_status\" in \
+                0) echo running;; \
+                1) echo stopped;; \
+                *) exit \"$ddmd_status\";; \
+                esac",
+            )?;
+            match state.trim() {
+                "stopped" => return Ok(output),
+                "running" => {}
+                state => {
+                    return Err(anyhow!(
+                        "unexpected ddmd process state in zone {}: {state}",
+                        self.zone.name,
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(anyhow!(
+                    "timed out waiting for ddmd to exit in zone {}",
+                    self.zone.name,
+                ));
+            }
+            sleep(DDMD_STOP_POLL);
+        }
+    }
+
+    /// Wait for an SMF service in this zone to arrive online, failing fast if
+    /// it starts in maintenance.
+    fn wait_for_service_online(&self, fmri: &str) -> Result<()> {
+        for _ in 0..30 {
+            let state = self
+                .zone
+                .zexec(&format!("svcs -Ho state {fmri}"))
+                .unwrap_or_default();
+            match state.trim() {
+                "online" => return Ok(()),
+                "maintenance" => {
+                    return Err(anyhow!(
+                        "{fmri} entered maintenance in zone {}",
+                        self.zone.name,
+                    ));
+                }
+                _ => sleep(Duration::from_secs(1)),
+            }
+        }
+        Err(anyhow!(
+            "timed out waiting for {fmri} to come online in zone {}",
+            self.zone.name,
+        ))
     }
 
     fn start_router(&self, restart_dpd: bool) -> Result<()> {
@@ -271,9 +330,8 @@ impl<'a> RouterZone<'a> {
                 ))?;
                 self.zone.zexec("svcadm refresh dendrite:default")?;
                 self.zone.zexec("svcadm enable dendrite:default")?;
-                // wait for dendrite to come up
-                println_nopipe!("wait 10s for dendrite to come up ...");
-                sleep(Duration::from_secs(10));
+                println_nopipe!("waiting for dendrite to come online ...");
+                self.wait_for_service_online("dendrite:default")?;
                 self.zone.zexec(
                     "svccfg -s tfport setprop config/pkt_source = none",
                 )?;
@@ -282,6 +340,8 @@ impl<'a> RouterZone<'a> {
                 )?;
                 self.zone.zexec("svcadm refresh tfport:default")?;
                 self.zone.zexec("svcadm enable tfport")?;
+                println_nopipe!("waiting for tfport to come online ...");
+                self.wait_for_service_online("tfport:default")?;
             }
             self.zone.zexec(&format!(
                 "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",
@@ -707,6 +767,112 @@ async fn run_trio_tests(
 
     println_nopipe!("tunnel endpoint withdraw passed");
 
+    run_trio_mcast(zs1, &s1, &s2, &t1, &log).await
+}
+
+/// Multicast group advertise/withdraw across the trio.
+///
+/// This emulates how mg-lower in the switch zone publishes
+/// overlay→underlay multicast bindings: the transit router
+/// originates an advertisement, and the server routers learn it via
+/// the DDM exchange.
+///
+/// ```text
+///   transit-originated:     s1 ----- t1 ----- s2
+///                                  (O4, O6)
+///
+///   server-originated:      s1 ----- t1 ----- s2
+///                          (O4)
+/// ```
+///
+/// - t1 originates one IPv4 and one IPv6 group, and both servers import
+///   them. t1 imports nothing back (a re-import would be a loop).
+/// - s1 restarts and relearns both groups from t1.
+/// - t1 withdraws, and both servers clear.
+/// - s1 originates O4. t1 redistributes it to s2, and s1 imports nothing
+///   in return. s1 withdraws, and t1 and s2 clear.
+async fn run_trio_mcast(
+    zs1: &RouterZone<'_>,
+    s1: &Client,
+    s2: &Client,
+    t1: &Client,
+    log: &Logger,
+) -> Result<()> {
+    wait_for_eq!(multicast_originated_count(t1).await?, 0);
+
+    // Cover advertisement and withdrawal for both IP families.
+    let mcast_origin_v4 = MulticastOrigin::new(
+        "233.252.0.1".parse().unwrap(),
+        "ff04::100".parse().unwrap(),
+        Vni::try_from(77u32).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let mcast_origin_v6 = MulticastOrigin::new(
+        "ff0e::1".parse().unwrap(),
+        "ff04::101".parse().unwrap(),
+        Vni::try_from(77u32).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    t1.advertise_multicast_groups(&vec![
+        mcast_origin_v4.clone(),
+        mcast_origin_v6.clone(),
+    ])
+    .await?;
+
+    wait_for_eq!(multicast_originated_count(t1).await?, 2);
+    wait_for_eq!(multicast_group_count(s1).await?, 2);
+    wait_for_eq!(multicast_group_count(s2).await?, 2);
+    // A looped announcement bouncing back from a server would show up here.
+    assert_eq!(multicast_group_count(t1).await?, 0);
+
+    println_nopipe!("multicast group advertise passed");
+
+    // Server router restart: s1's view of the multicast group must
+    // converge again after ddmd restarts. `wait_for_eq` tolerates the
+    // restart window via the `unwrap_or` sentinel.
+    zs1.stop_router()?;
+    zs1.start_router(false)?;
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    wait_for_eq!(multicast_group_count(&s1).await.unwrap_or(99), 2);
+
+    println_nopipe!("multicast router restart passed");
+
+    t1.withdraw_multicast_groups(&vec![
+        mcast_origin_v4.clone(),
+        mcast_origin_v6.clone(),
+    ])
+    .await?;
+
+    wait_for_eq!(multicast_originated_count(t1).await?, 0);
+    // A periodic pull can also clear the routes within this deadline.
+    wait_for_eq!(multicast_group_count(&s1).await?, 0, 1, 5);
+    wait_for_eq!(multicast_group_count(s2).await?, 0, 1, 5);
+    assert_eq!(multicast_group_count(t1).await?, 0);
+
+    println_nopipe!("multicast group withdraw passed");
+
+    s1.advertise_multicast_groups(&vec![mcast_origin_v4.clone()])
+        .await?;
+
+    wait_for_eq!(multicast_originated_count(&s1).await?, 1);
+    wait_for_eq!(multicast_group_count(t1).await?, 1);
+    wait_for_eq!(multicast_group_count(s2).await?, 1);
+    assert_eq!(multicast_group_count(&s1).await?, 0);
+
+    println_nopipe!("multicast server-originated redistribution passed");
+
+    s1.withdraw_multicast_groups(&vec![mcast_origin_v4]).await?;
+
+    wait_for_eq!(multicast_originated_count(&s1).await?, 0);
+    wait_for_eq!(multicast_group_count(t1).await?, 0, 1, 5);
+    wait_for_eq!(multicast_group_count(s2).await?, 0, 1, 5);
+
+    println_nopipe!("multicast server-originated withdraw passed");
+
     Ok(())
 }
 
@@ -806,7 +972,7 @@ async fn run_quartet_tests(
     _zs1: &RouterZone<'_>,
     _zs2: &RouterZone<'_>,
     zs3: &RouterZone<'_>,
-    _zt1: &RouterZone<'_>,
+    zt1: &RouterZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
@@ -858,6 +1024,185 @@ async fn run_quartet_tests(
 
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
     retry_cmd!(zs3.zexec("ping fd00:1::1"), 1, 10);
+
+    run_quartet_mcast_failover(&s1, &s2, &s3, &t1).await?;
+    run_quartet_mcast_resync(zs3, zt1, &s1, &s3, &t1).await
+}
+
+/// ```text
+///       s1 ----,
+///  (origin O)   \
+///                t1 ---- s3
+///               /
+///       s2 ----'
+///  (origin O)
+/// ```
+///
+/// - s1 withdraws origin O. t1 still reaches O via s2. s3 holds its route
+///   through a 3 s window, shorter than the 10 s periodic pull.
+/// - s1 still holds s2's copy of O via t1, and s2 drops the copy it
+///   learned from s1.
+/// - s2 withdraws O, and t1, s1, and s3 clear.
+async fn run_quartet_mcast_failover(
+    s1: &Client,
+    s2: &Client,
+    s3: &Client,
+    t1: &Client,
+) -> Result<()> {
+    let origin = MulticastOrigin::new(
+        "233.252.0.10".parse().unwrap(),
+        "ff04::110".parse().unwrap(),
+        Vni::try_from(77u32).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    s1.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    s2.advertise_multicast_groups(&vec![origin.clone()]).await?;
+
+    wait_for_eq!(multicast_group_count(t1).await?, 2);
+    wait_for_eq!(multicast_group_count(s1).await?, 1);
+    wait_for_eq!(multicast_group_count(s2).await?, 1);
+    wait_for_eq!(multicast_group_count(s3).await?, 1);
+    println_nopipe!("multicast dual origination passed");
+
+    s1.withdraw_multicast_groups(&vec![origin.clone()]).await?;
+    wait_for_eq!(multicast_group_count(t1).await?, 1);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        let count = multicast_group_count(s3).await?;
+        if count != 1 {
+            return Err(anyhow!(
+                "s3 lost the group after s1 withdrew (count {count})"
+            ));
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    wait_for_eq!(multicast_group_count(s1).await?, 1);
+    wait_for_eq!(multicast_group_count(s2).await?, 0);
+    println_nopipe!("multicast failover passed");
+
+    s2.withdraw_multicast_groups(&vec![origin]).await?;
+    wait_for_eq!(multicast_group_count(t1).await?, 0);
+    wait_for_eq!(multicast_group_count(s1).await?, 0);
+    wait_for_eq!(multicast_group_count(s3).await?, 0);
+    println_nopipe!("multicast final withdrawal passed");
+
+    Ok(())
+}
+
+/// ```text
+///   s1 ----- t1 ----- s3
+///  (O)        |
+///             '-- injected push (curl from t1's zone) --> s3
+/// ```
+///
+/// - s3 learns about O via t1. An injected withdrawal of O removes it from
+///   s3, and s3's periodic pull of t1 restores it.
+/// - s1 withdraws O and s3 clears it. An injected announcement of O re-adds
+///   it, and the next periodic pull of t1 drops it, since t1 no longer has
+///   it.
+/// - s3 keeps its session with t1 throughout.
+async fn run_quartet_mcast_resync(
+    zs3: &RouterZone<'_>,
+    zt1: &RouterZone<'_>,
+    s1: &Client,
+    s3: &Client,
+    t1: &Client,
+) -> Result<()> {
+    let origin = MulticastOrigin::new(
+        "233.252.0.11".parse().unwrap(),
+        "ff04::111".parse().unwrap(),
+        Vni::try_from(77u32).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    s1.advertise_multicast_groups(&vec![origin.clone()]).await?;
+    wait_for_eq!(multicast_group_count(t1).await?, 1);
+    wait_for_eq!(multicast_group_count(s3).await?, 1);
+
+    let peers = t1.get_peers().await?;
+    let peer = peers
+        .values()
+        .find(|peer| peer.host == zs3.zone.name)
+        .ok_or_else(|| anyhow!("t1 has no peer for {}", zs3.zone.name))?;
+    let if_name = peer
+        .if_name
+        .as_ref()
+        .ok_or_else(|| anyhow!("s3 peer has no interface name"))?;
+    let uri = format!("http://[{}%25{if_name}]:56797/v4/push", peer.addr);
+    let groups = s3.get_multicast_groups().await?;
+    let route = groups
+        .iter()
+        .find(|route| route.origin == origin)
+        .ok_or_else(|| anyhow!("s3 has not imported the test origin"))?;
+    let vector = serde_json::json!({
+        "origin": route.origin,
+        "path": route.path,
+    });
+
+    let push = |announce: bool| -> Result<()> {
+        let mut multicast = serde_json::json!({
+            "announce": [],
+            "withdraw": [],
+        });
+        multicast[if announce { "announce" } else { "withdraw" }] =
+            serde_json::json!([vector]);
+        let body = serde_json::json!({ "multicast": multicast })
+            .to_string()
+            .replace('\'', "'\\''");
+        let status = zt1.zexec(&format!(
+            "curl --noproxy '*' --globoff --fail --silent --show-error \
+             --max-time 5 --request PUT \
+             --header 'Content-Type: application/json' --data '{body}' \
+             --write-out '%{{http_code}}' '{uri}'",
+        ))?;
+        if status.trim() != "204" {
+            return Err(anyhow!("multicast push returned {status}"));
+        }
+        Ok(())
+    };
+
+    let peers = s3.get_peers().await?;
+    let Some(PeerStatus::Exchange(uptime)) =
+        peers.values().next().map(|peer| &peer.status)
+    else {
+        return Err(anyhow!("s3 peer is not in Exchange"));
+    };
+    let started = Instant::now();
+
+    wait_for_eq!(
+        {
+            push(false)?;
+            multicast_group_count(s3).await?
+        },
+        0
+    );
+    wait_for_eq!(multicast_group_count(s3).await?, 1, 1, 30);
+    println_nopipe!("multicast resync import passed");
+
+    s1.withdraw_multicast_groups(&vec![origin]).await?;
+    wait_for_eq!(multicast_group_count(t1).await?, 0);
+    wait_for_eq!(multicast_group_count(s3).await?, 0);
+    wait_for_eq!(
+        {
+            push(true)?;
+            multicast_group_count(s3).await?
+        },
+        1
+    );
+    wait_for_eq!(multicast_group_count(s3).await?, 0, 1, 30);
+    println_nopipe!("multicast resync withdrawal passed");
+
+    let min_uptime = *uptime + started.elapsed();
+    let peers = s3.get_peers().await?;
+    assert!(matches!(
+        peers.values().next().map(|peer| &peer.status),
+        Some(PeerStatus::Exchange(uptime)) if *uptime >= min_uptime
+    ));
 
     Ok(())
 }
@@ -1463,6 +1808,14 @@ async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
 
 async fn tunnel_originated_endpoint_count(c: &Client) -> Result<usize> {
     Ok(c.get_originated_tunnel_endpoints().await?.len())
+}
+
+async fn multicast_group_count(c: &Client) -> Result<usize> {
+    Ok(c.get_multicast_groups().await?.len())
+}
+
+async fn multicast_originated_count(c: &Client) -> Result<usize> {
+    Ok(c.get_originated_multicast_groups().await?.len())
 }
 
 fn init_logger() -> Logger {

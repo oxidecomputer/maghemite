@@ -49,6 +49,34 @@ impl Update {
             multicast: pr.multicast.map(MulticastUpdate::announce),
         }
     }
+
+    /// Retain only the withdrawals from this [`Update`].
+    ///
+    /// Sections with nothing to withdraw translate into `None`, and an
+    /// announcement-only update yields an [`Update`] for which
+    /// [`Update::is_empty`] is true.
+    pub fn withdrawals_only(self) -> Self {
+        Self {
+            underlay: self
+                .underlay
+                .map(|u| v3::UnderlayUpdate::withdraw(u.withdraw))
+                .filter(|u| !u.withdraw.is_empty()),
+            tunnel: self
+                .tunnel
+                .map(|t| v3::TunnelUpdate::withdraw(t.withdraw))
+                .filter(|t| !t.withdraw.is_empty()),
+            multicast: self
+                .multicast
+                .map(|m| MulticastUpdate::withdraw(m.withdraw))
+                .filter(|m| !m.withdraw.is_empty()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.underlay.is_none()
+            && self.tunnel.is_none()
+            && self.multicast.is_none()
+    }
 }
 
 impl From<v3::UnderlayUpdate> for Update {
@@ -547,6 +575,56 @@ mod tests {
         assert!(v2.tunnel.is_some());
         assert_eq!(v2.underlay.unwrap().announce.len(), 1);
         assert_eq!(v2.tunnel.unwrap().announce.len(), 1);
+    }
+
+    #[test]
+    fn withdrawals_only_removes_empty_sections() {
+        let withdraw_pv = MulticastPathVector {
+            origin: mcast_origin("233.252.0.2", "ff04::2"),
+            path: vec![],
+        };
+        let underlay_withdraw = v3::PathVector {
+            destination: "fd00:1::/64".parse().unwrap(),
+            path: vec!["router-1".into()],
+        };
+
+        for withdraw in [HashSet::new(), HashSet::from([withdraw_pv])] {
+            let update = Update {
+                underlay: Some(v3::UnderlayUpdate {
+                    withdraw: HashSet::from([underlay_withdraw.clone()]),
+                    ..underlay_update()
+                }),
+                tunnel: Some(tunnel_update()),
+                multicast: Some(MulticastUpdate {
+                    withdraw: withdraw.clone(),
+                    ..multicast_update()
+                }),
+            };
+
+            let stripped = update.withdrawals_only();
+            let underlay = stripped.underlay.unwrap();
+            assert!(underlay.announce.is_empty());
+            assert_eq!(
+                underlay.withdraw,
+                HashSet::from([underlay_withdraw.clone()])
+            );
+            assert!(stripped.tunnel.is_none());
+            if withdraw.is_empty() {
+                assert!(stripped.multicast.is_none());
+            } else {
+                let multicast = stripped.multicast.unwrap();
+                assert!(multicast.announce.is_empty());
+                assert_eq!(multicast.withdraw, withdraw);
+            }
+        }
+    }
+
+    #[test]
+    fn is_empty_requires_all_sections_absent() {
+        assert!(Update::default().is_empty());
+        assert!(!Update::from(underlay_update()).is_empty());
+        assert!(!Update::from(tunnel_update()).is_empty());
+        assert!(!Update::from(multicast_update()).is_empty());
     }
 
     fn v3_pull_response() -> v3::PullResponse {

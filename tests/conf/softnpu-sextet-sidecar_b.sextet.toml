@@ -1,7 +1,8 @@
 p4_program = "/opt/libsidecar_lite.so"
+# 1500-byte router MTU plus softnpu's 24-byte sidecar header.
 ports = [
-    { sidecar = "sw4", scrimlet = "sq2", mtu = 1500 },
-    { sidecar = "sw5", scrimlet = "sq3", mtu = 1500 },
-    { sidecar = "sw6", scrimlet = "sr2", mtu = 1500 },
-    { sidecar = "sw7", scrimlet = "sr3", mtu = 1500 },
+    { sidecar = "sw4", scrimlet = "sq2", mtu = 1524 },
+    { sidecar = "sw5", scrimlet = "sq3", mtu = 1524 },
+    { sidecar = "sw6", scrimlet = "sr2", mtu = 1524 },
+    { sidecar = "sw7", scrimlet = "sr3", mtu = 1524 },
 ]
