@@ -21,3 +21,6 @@ mg-api-types-versions.workspace = true
 oxnet.workspace = true
 tabwriter.workspace = true
 colored.workspace = true
+
+[features]
+testing = ["mg-api-types-versions/testing"]

@@ -8,7 +8,7 @@ pub mod rib;
 pub mod types;
 
 pub use db::Db;
-pub use mrib::MribTable;
+pub use mrib::{MribTable, MribTableExt};
 pub use rib::{Rib, Rib4, Rib6, RibExt};
 pub use types::*;
 pub mod bestpath;
