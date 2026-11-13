@@ -438,12 +438,7 @@ async fn pull_handler_common(
         }
     }
     if ctx.tx_allowances.underlay {
-        let originated = ctx
-            .ctx
-            .db
-            .originated()
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-        for prefix in &originated {
+        for prefix in &ctx.ctx.db.originated() {
             let pv = v3::PathVector {
                 destination: *prefix,
                 path: vec![ctx.ctx.router_id.clone()],
@@ -453,11 +448,7 @@ async fn pull_handler_common(
     }
 
     if ctx.tx_allowances.rack
-        && let Some(prefix) = ctx
-            .ctx
-            .db
-            .rack_prefix()
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?
+        && let Some(prefix) = ctx.ctx.db.rack_prefix()
     {
         underlay.insert(v3::PathVector {
             destination: prefix,
@@ -466,13 +457,10 @@ async fn pull_handler_common(
     }
 
     if ctx.tx_allowances.tunnel {
-        let originated_tunnel = ctx
-            .ctx
-            .db
-            .originated_tunnel()
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
         tunnel.extend(
-            originated_tunnel
+            ctx.ctx
+                .db
+                .originated_tunnel()
                 .into_iter()
                 .map(|x| x.to_wire(vec![ctx.ctx.router_id.clone()])),
         );
