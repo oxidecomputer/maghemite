@@ -373,7 +373,11 @@ impl Exchange {
             self.ctx.db.remove_nexthop_routes(self.peer.addr);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
-            let mut r: crate::sys::Route = x.clone().into();
+            let mut r = crate::sys::Route::new(
+                x.destination.addr().into(),
+                x.destination.width(),
+                x.nexthop.into(),
+            );
             r.ifname.clone_from(&self.ctx.config.if_name);
             routes.push(r);
         }
