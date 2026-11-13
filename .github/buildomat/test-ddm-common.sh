@@ -55,10 +55,6 @@ sed -i  "s#<service_fmri value='svc:/oxide/zone-network-setup:default' />##g" \
     zones/dendrite/root/var/svc/manifest/site/dendrite/manifest.xml
 sed -i  "s#<service_fmri value='svc:/oxide/.*setup:default' />##g" \
     zones/dendrite/root/var/svc/manifest/site/tfport/manifest.xml
-# TODO: remove once the dendrite pin includes
-# https://github.com/oxidecomputer/dendrite/pull/422
-sed -i -e 's/,RS,/,rs,/' -e 's/,None,/,none,/' \
-    zones/dendrite/root/opt/oxide/dendrite/misc/xcvr_defaults.csv
 popd
 
 banner "install"
