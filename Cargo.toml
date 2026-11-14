@@ -41,6 +41,7 @@ members = [
     "ddm-api",
     "ddm-api-types",
     "ddm-api-types/versions",
+    "ddm-lower",
     "ddm-protocol",
     "dropshot-apis",
     "bfd",
@@ -144,6 +145,7 @@ internet-checksum = "0.2.1"
 network-interface = { git = "https://github.com/oxidecomputer/network-interface", branch = "illumos" }
 natord = "1.0"
 iddqd = "0.5"
+derive_more = {version = "2.1.1", features = ["full"]}
 
 
 [workspace.dependencies.opte-ioctl]
