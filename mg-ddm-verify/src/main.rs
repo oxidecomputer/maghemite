@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use client_common::{eprintln_nopipe, println_nopipe};
+use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::exchange::PathVector;
 use oxnet::Ipv6Net;
 use serde::Deserialize;
@@ -35,10 +36,13 @@ async fn run() -> Result<()> {
 
     for sled in &all_sleds {
         let response: HashMap<String, Vec<PathVector>> = serde_json::from_str(
-            &reqwest::get(format!("http://{}:8000/prefixes", sled_to_ip[sled]))
-                .await?
-                .text()
-                .await?,
+            &reqwest::get(format!(
+                "http://{}:{DEFAULT_ADMIN_PORT}/prefixes",
+                sled_to_ip[sled]
+            ))
+            .await?
+            .text()
+            .await?,
         )?;
 
         // expect only one next hop, I'm querying sleds that only have one
@@ -50,7 +54,7 @@ async fn run() -> Result<()> {
 
         let originated: Vec<Ipv6Net> = serde_json::from_str(
             &reqwest::get(format!(
-                "http://{}:8000/originated",
+                "http://{}:{DEFAULT_ADMIN_PORT}/originated",
                 sled_to_ip[sled]
             ))
             .await?

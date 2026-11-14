@@ -104,8 +104,8 @@ hyper = "1.12.0"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.154"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-progenitor = "0.15"
-progenitor-extras = "0.3.0"
+progenitor = "0.16"
+progenitor-extras = "0.4.0"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 clap = { version = "4.6.7", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
@@ -122,6 +122,7 @@ pretty_assertions = "1.4"
 lazy_static = "1.5"
 sled = "0.34"
 camino = "1.2.6"
+cargo_toml = "0.22"
 http = "1.5.0"
 http-body-util = "0.1"
 rand = "0.10.3"
@@ -158,8 +159,8 @@ rev = "7bdb93d99511f236a13ba7a67a7371f7a4743a7d"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "594ada0f8ec1f9a03dff1bf27a16cdc33078179e"
+rev = "8a502d2768642cd2b7cf2d13d446e3a011af5a23"
 
 [workspace.dependencies.dpd-types-versions]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "594ada0f8ec1f9a03dff1bf27a16cdc33078179e"
+rev = "8a502d2768642cd2b7cf2d13d446e3a011af5a23"

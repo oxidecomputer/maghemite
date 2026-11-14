@@ -16,6 +16,7 @@ use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
+use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::db::RouterKind;
 use mg_common::lock;
 use signal::handle_signals;
@@ -65,7 +66,7 @@ struct Arg {
     admin_addr: IpAddr,
 
     /// Port to listen on for the admin API.
-    #[arg(long, default_value_t = 8000)]
+    #[arg(long, default_value_t = DEFAULT_ADMIN_PORT)]
     admin_port: u16,
 
     /// Kind of router to run.

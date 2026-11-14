@@ -516,9 +516,9 @@ async fn run_trio_tests(
     softnpu: &SoftnpuZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
-    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
-    let s2 = Client::new("http://10.0.0.2:8000", log.clone());
-    let t1 = Client::new("http://10.0.0.3:8000", log.clone());
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone())?;
+    let s2 = Client::new("http://10.0.0.2:8000", log.clone())?;
+    let t1 = Client::new("http://10.0.0.3:8000", log.clone())?;
 
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
@@ -687,7 +687,7 @@ async fn run_trio_tests(
     sleep(Duration::from_secs(5));
     zs1.start_router(false)?;
     sleep(Duration::from_secs(5));
-    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone())?;
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
 
     println_nopipe!("tunnel router restart passed");
@@ -809,10 +809,10 @@ async fn run_quartet_tests(
     _zt1: &RouterZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
-    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
-    let s2 = Client::new("http://10.0.0.2:8000", log.clone());
-    let s3 = Client::new("http://10.0.0.3:8000", log.clone());
-    let t1 = Client::new("http://10.0.0.4:8000", log.clone());
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone())?;
+    let s2 = Client::new("http://10.0.0.2:8000", log.clone())?;
+    let s3 = Client::new("http://10.0.0.3:8000", log.clone())?;
+    let t1 = Client::new("http://10.0.0.4:8000", log.clone())?;
 
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
@@ -1104,7 +1104,7 @@ async fn run_sextet_tests(
     macro_rules! drop_dump {
         ($name:ident, $endpoint:expr) => {
             let $name = DropDump {
-                c: Client::new($endpoint, log.clone()),
+                c: Client::new($endpoint, log.clone())?,
                 name: stringify!($name).to_string(),
             };
         };

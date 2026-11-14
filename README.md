@@ -60,3 +60,16 @@ architecture is by design.
 - [DDM integration tests](tests/src/ddm.rs)
 - [BGP integration tests](bgp/src/test.rs)
 - [BFD integration tests](bfd/src/lib.rs#L282)
+
+### Lower-half API endpoints
+
+On illumos, by default, the `mgd` lower half uses Dendrite's `dpd` API at
+`[::1]:12224` and DDM's `ddmd` admin API at `[::1]:8000`.
+
+The `mgd run` options `--dendrite-addr` and `--ddm-addr` override these
+endpoints with explicit socket addresses. Test fixtures can bind each API to
+port `0` and pass the allocated addresses to `mgd`. This comes into play for
+concurrent tests (e.g., [Omicron's integration tests][omicron-tests] under
+nextest), where each test runs its own `dpd` and `ddmd` instances.
+
+[omicron-tests]: https://github.com/oxidecomputer/omicron/tree/main/nexus/tests/integration_tests

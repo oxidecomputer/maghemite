@@ -20,3 +20,6 @@ colored.workspace = true
 strum.workspace = true
 mg-api-types.workspace = true
 client-common.workspace = true
+
+[build-dependencies]
+cargo_toml.workspace = true

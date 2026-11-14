@@ -21,3 +21,6 @@ pub mod db;
 pub mod exchange;
 pub mod external_peers;
 pub mod net;
+
+/// Default port on which the ddmd admin API listens.
+pub const DEFAULT_ADMIN_PORT: u16 = 8000;

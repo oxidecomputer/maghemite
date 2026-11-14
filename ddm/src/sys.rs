@@ -144,7 +144,14 @@ pub fn add_routes_dendrite(
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
     };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
+    let client =
+        match Client::new(&format!("http://{host}:{port}"), client_state) {
+            Ok(client) => client,
+            Err(e) => {
+                err!(log, ifname, "failed to create dpd client: {e}");
+                return;
+            }
+        };
 
     for r in routes {
         let cidr = match r.dest {
@@ -416,7 +423,14 @@ pub fn remove_routes_dendrite(
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
     };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
+    let client =
+        match Client::new(&format!("http://{host}:{port}"), client_state) {
+            Ok(client) => client,
+            Err(e) => {
+                err!(log, ifname, "failed to create dpd client: {e}");
+                return;
+            }
+        };
 
     for r in routes {
         let cidr = match r.dest {
@@ -465,7 +479,8 @@ pub fn get_routes_dendrite(
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
     };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
+    let client = Client::new(&format!("http://{host}:{port}"), client_state)
+        .map_err(|e| format!("dpd client: {e}"))?;
 
     let routes = rt
         .block_on(async { client.route_ipv6_list(None, None).await })

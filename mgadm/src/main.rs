@@ -81,7 +81,7 @@ async fn run() -> Result<()> {
     let endpoint =
         format!("http://{}", SocketAddr::new(cli.address, cli.port),);
 
-    let client = Client::new(&endpoint, log.clone());
+    let client = Client::new(&endpoint, log.clone())?;
 
     match cli.command {
         Commands::Bgp(command) => bgp::commands(command, client).await?,
