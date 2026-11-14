@@ -111,7 +111,8 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
 
 /// Create a new DDM admin client.
 ///
-/// `addr` is ddmd's admin API, at `[::1]:8000` in the switch zone.
+/// `addr` is ddmd's admin API address; the switch-zone default is
+/// `[::1]:8000`.
 #[cfg(target_os = "illumos")]
 pub fn new_ddm_client(
     log: &Logger,

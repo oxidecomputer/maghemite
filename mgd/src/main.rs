@@ -110,11 +110,23 @@ struct RunArgs {
     mgs_addr: SocketAddr,
 
     /// SocketAddr of the dpd API used to program forwarding state.
-    #[arg(long, default_value = "[::1]:12224")]
+    #[arg(
+        long,
+        default_value_t = SocketAddr::new(
+            Ipv6Addr::LOCALHOST.into(),
+            dpd_client::default_port(),
+        )
+    )]
     dendrite_addr: SocketAddr,
 
     /// SocketAddr of the ddmd admin API used to advertise routes.
-    #[arg(long, default_value = "[::1]:8000")]
+    #[arg(
+        long,
+        default_value_t = SocketAddr::new(
+            Ipv6Addr::LOCALHOST.into(),
+            ddm_admin_client::default_port(),
+        )
+    )]
     ddm_addr: SocketAddr,
 
     /// SocketAddr for the BGP Dispatcher to listen on.

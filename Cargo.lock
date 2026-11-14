@@ -1468,6 +1468,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
+ "ddm-api-types",
  "ddm-api-types-versions",
  "oxnet",
  "progenitor 0.16.0",
@@ -4222,6 +4223,8 @@ dependencies = [
  "chrono",
  "clap",
  "client-common",
+ "ddm-admin-client",
+ "dpd-client",
  "dropshot 0.18.0",
  "gateway-client",
  "hostname 0.4.2",

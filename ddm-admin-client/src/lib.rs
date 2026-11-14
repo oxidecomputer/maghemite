@@ -19,3 +19,8 @@ progenitor::generate_api!(
 );
 
 progenitor_extras::slog_hooks::impl_slog_client_hooks!(Client);
+
+/// Return the default port on which the ddmd admin API listens for clients.
+pub const fn default_port() -> u16 {
+    ddm_api_types::DEFAULT_ADMIN_PORT
+}
