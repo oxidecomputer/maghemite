@@ -144,15 +144,16 @@ pub(super) fn apply_multicast_update(
     imported_before: Option<u64>,
 ) -> AppliedMulticastUpdate {
     let batch = MulticastRibChange {
+        ifname: &ctx.config.if_name,
         import: &import,
         remove,
         imported_before,
     };
 
-    let removed = ctx.db.update_imported_mcast(batch);
+    let spliced = ctx.db.splice_imported_mcast(batch);
     AppliedMulticastUpdate {
-        imported: import,
-        removed,
+        imported: spliced.imported,
+        removed: spliced.removed,
         hop: MulticastPathHop::new(ctx.router_id.clone(), ctx.config.addr),
     }
 }
@@ -229,8 +230,8 @@ pub(super) fn partition_multicast_update(
             path: Vec::new(),
         });
     }
-    // A simultaneous import would receive a sequence number above the pull
-    // cutoff.
+    // A simultaneous import would receive a sequence number at or above
+    // the pull sequence.
     import.retain(|route| !remove.contains(route));
 
     (import, remove)
@@ -359,17 +360,21 @@ mod tests {
         let log = Logger::root(Discard, o!());
         let db = Db::new(dir.path().as_str(), log).unwrap();
         let existing = HashSet::from([route(1)]);
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &existing,
             &HashSet::new(),
         ));
 
         let (import, remove) = partition(&update);
-        let removed =
-            db.update_imported_mcast(MulticastRibChange::new(&import, &remove));
+        let removed = db
+            .splice_imported_mcast(MulticastRibChange::new(
+                "test0", &import, &remove,
+            ))
+            .removed;
 
         assert_eq!(removed, existing);
-        assert!(db.imported_mcast().is_empty());
+        assert!(db.imported_mcast_links().is_empty());
         assert!(import.is_empty());
     }
 

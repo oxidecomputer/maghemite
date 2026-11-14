@@ -16,12 +16,29 @@ use slog::error;
 
 use super::{Db, Error, RemovedNexthopRoutes};
 
+mod imported;
+
+pub(in crate::db) use imported::ImportedMcast;
+use imported::Inserted;
+
+/// The effect of [`Db::splice_imported_mcast`] on the imported set.
+pub struct SplicedMulticast {
+    /// Imports that added an entry or changed an entry's path or metric.
+    pub imported: HashSet<MulticastRoute>,
+    /// Routes that were removed.
+    pub removed: HashSet<MulticastRoute>,
+}
+
 /// Persistent tree for locally originated multicast groups.
 const MCAST_ORIGINATE: &str = "mcast_originate";
 
 impl Db {
-    pub fn imported_mcast(&self) -> HashSet<MulticastRoute> {
-        lock!(self.data).imported_mcast.routes().cloned().collect()
+    pub fn imported_mcast_links(&self) -> Vec<(MulticastRoute, String)> {
+        lock!(self.data)
+            .imported_mcast
+            .links()
+            .map(|(route, ifname)| (route.clone(), ifname.to_string()))
+            .collect()
     }
 
     pub fn shortest_path_mcast(
@@ -35,34 +52,44 @@ impl Db {
             .collect()
     }
 
-    /// Sequence cutoff for routes imported before a pull occurs.
+    /// Pull sequence number used to identify earlier imports.
     pub fn next_mcast_seq(&self) -> u64 {
         lock!(self.data).mcast_seq + 1
     }
 
     /// Apply multicast imports and removals under a held data lock, returning
-    /// the routes that were actually removed.
-    pub fn update_imported_mcast(
+    /// the imports that affected the RIB and the routes that were actually
+    /// removed.
+    pub fn splice_imported_mcast(
         &self,
         update: MulticastRibChange<'_>,
-    ) -> HashSet<MulticastRoute> {
+    ) -> SplicedMulticast {
         let mut guard = lock!(self.data);
         let data = &mut *guard;
+        let mut edit = data.imported_mcast.edit(&self.mcast_wake);
 
         // Path and metric live outside of route identity and may change on
         // re-import.
-        for x in update.import {
-            data.mcast_seq += 1;
-            data.imported_mcast.insert(x, data.mcast_seq);
-        }
+        let imported = update
+            .import
+            .iter()
+            .filter(|x| {
+                data.mcast_seq += 1;
+                edit.insert(x, update.ifname, data.mcast_seq)
+                    != Inserted::Unchanged
+            })
+            .cloned()
+            .collect();
 
-        update
+        let removed = update
             .remove
             .iter()
             .filter_map(|x| {
-                data.imported_mcast.remove(x, update.imported_before)
+                edit.remove(x, update.ifname, update.imported_before)
             })
-            .collect()
+            .collect();
+
+        SplicedMulticast { imported, removed }
     }
 
     /// Persist multicast origins to advertise to peers.
@@ -144,14 +171,19 @@ impl Db {
         self.path_snapshot(&origins, HashMap::new())
     }
 
-    /// Remove multicast routes via `nexthop` on a downgrade below V4.
+    /// Remove multicast routes via `nexthop` on `ifname` on a downgrade below
+    /// V4.
     ///
     /// Underlay and tunnel routes remain intact.
     pub fn remove_nexthop_mcast_routes(
         &self,
         nexthop: Ipv6Addr,
+        ifname: &str,
     ) -> RemovedNexthopRoutes {
-        let removed = lock!(self.data).imported_mcast.extract_nexthop(nexthop);
+        let removed = lock!(self.data)
+            .imported_mcast
+            .edit(&self.mcast_wake)
+            .extract_link(nexthop, ifname);
 
         RemovedNexthopRoutes {
             underlay: HashSet::new(),
@@ -160,17 +192,18 @@ impl Db {
         }
     }
 
-    /// Origins imported via `nexthop` before `seq` that are not in
+    /// Origins imported via `nexthop` on `ifname` before `seq` that are not in
     /// `announced`.
     pub fn stale_mcast_by_nexthop(
         &self,
         nexthop: Ipv6Addr,
+        ifname: &str,
         seq: u64,
         announced: &HashSet<MulticastOrigin>,
     ) -> Vec<MulticastOrigin> {
         lock!(self.data)
             .imported_mcast
-            .stale(nexthop, seq, announced)
+            .stale(nexthop, ifname, seq, announced)
     }
 
     /// Read local origins to complete the snapshot of `imported`.
@@ -213,148 +246,6 @@ impl Db {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ImportedEntry {
-    route: MulticastRoute,
-    seq: u64,
-}
-
-/// A type wrapper over the set of imported multicast routes, keyed by origin
-/// and then by nexthop.
-///
-/// A path snapshot for an update's origins is a lookup per origin. Each
-/// origin's routes are sorted by nexthop, with the lowest-nexthop route
-/// coming first. Per-peer work (e.g., stale-route scans, expiry) visits each
-/// origin once.
-// Note: We use a sorted `Vec` here over a `BTreeMap` because an origin rarely
-// has more than a few nexthops.
-#[derive(Debug, Default, Clone)]
-pub struct ImportedMcast(HashMap<MulticastOrigin, Vec<ImportedEntry>>);
-
-fn find_nexthop(
-    nexthops: &[ImportedEntry],
-    nexthop: Ipv6Addr,
-) -> Result<usize, usize> {
-    nexthops.binary_search_by_key(&nexthop, |entry| entry.route.nexthop)
-}
-
-impl ImportedMcast {
-    fn routes(&self) -> impl Iterator<Item = &MulticastRoute> {
-        self.0.values().flatten().map(|entry| &entry.route)
-    }
-
-    fn shortest_path_routes<'a>(
-        &'a self,
-        peer_router_id: &'a RouterId,
-    ) -> impl Iterator<Item = &'a MulticastRoute> {
-        self.0.keys().filter_map(move |origin| {
-            self.shortest_path(origin, peer_router_id)
-        })
-    }
-
-    fn insert(&mut self, route: &MulticastRoute, seq: u64) {
-        let nexthops = self.0.entry(route.origin.clone()).or_default();
-        match find_nexthop(nexthops, route.nexthop) {
-            Ok(idx) => {
-                let entry = &mut nexthops[idx];
-                if entry.route.path != route.path
-                    || entry.route.origin.metric() != route.origin.metric()
-                {
-                    entry.route = route.clone();
-                }
-                entry.seq = seq;
-            }
-            Err(idx) => {
-                // Grow one slot at a time.
-                nexthops.reserve_exact(1);
-                nexthops.insert(
-                    idx,
-                    ImportedEntry {
-                        route: route.clone(),
-                        seq,
-                    },
-                );
-            }
-        }
-    }
-
-    fn remove(
-        &mut self,
-        route: &MulticastRoute,
-        imported_before: Option<u64>,
-    ) -> Option<MulticastRoute> {
-        let nexthops = self.0.get_mut(&route.origin)?;
-        let idx = find_nexthop(nexthops, route.nexthop).ok()?;
-        if imported_before.is_some_and(|seq| nexthops[idx].seq >= seq) {
-            return None;
-        }
-        let entry = nexthops.remove(idx);
-        if nexthops.is_empty() {
-            self.0.remove(&route.origin);
-        }
-        Some(entry.route)
-    }
-
-    pub(super) fn extract_nexthop(
-        &mut self,
-        nexthop: Ipv6Addr,
-    ) -> HashSet<MulticastRoute> {
-        let mut extracted = HashSet::new();
-        self.0.retain(|_, nexthops| {
-            if let Ok(idx) = find_nexthop(nexthops, nexthop) {
-                extracted.insert(nexthops.remove(idx).route);
-            }
-            !nexthops.is_empty()
-        });
-        extracted
-    }
-
-    /// Pick the route with the shortest path, breaking ties by the lowest
-    /// origin metric (first) and then by the lowest nexthop address (e.g.,
-    /// `fe80::1` < `fe80::2`).
-    ///
-    /// Routes whose path contains `peer_router_id` (the peer an update gets
-    /// sent to) are omitted. That peer would discard such a path as a loop
-    /// and drop its route through us.
-    fn shortest_path(
-        &self,
-        origin: &MulticastOrigin,
-        peer_router_id: &RouterId,
-    ) -> Option<&MulticastRoute> {
-        self.0
-            .get(origin)?
-            .iter()
-            .map(|entry| &entry.route)
-            .filter(|route| {
-                !route
-                    .path
-                    .iter()
-                    .any(|hop| &hop.router_id == peer_router_id)
-            })
-            .min_by_key(|route| {
-                (route.path.len(), route.origin.metric(), route.nexthop)
-            })
-    }
-
-    fn stale(
-        &self,
-        nexthop: Ipv6Addr,
-        seq: u64,
-        announced: &HashSet<MulticastOrigin>,
-    ) -> Vec<MulticastOrigin> {
-        self.0
-            .values()
-            .filter_map(|nexthops| {
-                find_nexthop(nexthops, nexthop).ok().map(|i| &nexthops[i])
-            })
-            .filter(|entry| {
-                entry.seq < seq && !announced.contains(&entry.route.origin)
-            })
-            .map(|entry| entry.route.origin.clone())
-            .collect()
-    }
-}
-
 /// Persistent origin key, excluding metric as in `PartialEq` and `Hash`.
 fn mcast_origin_key(origin: &MulticastOrigin) -> Result<String, Error> {
     Ok(serde_json::to_string(&(
@@ -368,20 +259,23 @@ fn mcast_origin_key(origin: &MulticastOrigin) -> Result<String, Error> {
 /// A batch of multicast imports and removals.
 #[derive(Debug, Clone, Copy)]
 pub struct MulticastRibChange<'a> {
+    pub ifname: &'a str,
     pub import: &'a HashSet<MulticastRoute>,
     pub remove: &'a HashSet<MulticastRoute>,
     /// Remove only routes imported before this sequence number.
-    /// Pull reconciliation uses this cutoff to preserve concurrent pushes.
+    /// Pull reconciliation uses this sequence to preserve concurrent pushes.
     pub imported_before: Option<u64>,
 }
 
 impl<'a> MulticastRibChange<'a> {
-    /// A change without a sequence cutoff, as used for push withdrawals.
+    /// A change without a pull sequence, as used for push withdrawals.
     pub fn new(
+        ifname: &'a str,
         import: &'a HashSet<MulticastRoute>,
         remove: &'a HashSet<MulticastRoute>,
     ) -> Self {
         Self {
+            ifname,
             import,
             remove,
             imported_before: None,
@@ -422,6 +316,7 @@ pub(crate) mod tests {
     use ddm_protocol::v4::MulticastPathHop;
     use pretty_assertions::assert_eq;
     use slog::Logger;
+    use tokio::sync::watch;
 
     use super::*;
 
@@ -456,7 +351,8 @@ pub(crate) mod tests {
     }
 
     fn import(db: &Db, routes: &HashSet<MulticastRoute>) {
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             routes,
             &HashSet::new(),
         ));
@@ -488,7 +384,8 @@ pub(crate) mod tests {
             path: Vec::new(),
         };
         db.originate_mcast(&HashSet::from([good.clone()])).unwrap();
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &HashSet::from([route.clone()]),
             &HashSet::new(),
         ));
@@ -523,7 +420,8 @@ pub(crate) mod tests {
 
         db.originate_mcast(&HashSet::from([local_origin.clone()]))
             .unwrap();
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &HashSet::from([route.clone()]),
             &HashSet::new(),
         ));
@@ -604,7 +502,7 @@ pub(crate) mod tests {
         db.import_tunnel(&HashSet::from([tunnel]));
 
         let removed =
-            db.remove_nexthop_mcast_routes("fe80::a".parse().unwrap());
+            db.remove_nexthop_mcast_routes("fe80::a".parse().unwrap(), "test0");
 
         // A snapshot taken after removal no longer views the removed routes.
         let paths = db
@@ -615,7 +513,7 @@ pub(crate) mod tests {
         assert_eq!(removed.multicast, HashSet::from([a, a2]));
         assert!(removed.underlay.is_empty());
         assert!(removed.tunnel.is_empty());
-        assert_eq!(db.imported_mcast(), HashSet::from([b.clone()]));
+        assert_eq!(db.imported_mcast_links(), vec![(b, "test0".to_string())]);
         assert_eq!(db.imported_count(), 1);
         assert_eq!(db.imported_tunnel(), HashSet::from([tunnel]));
     }
@@ -656,16 +554,11 @@ pub(crate) mod tests {
         let tunnel_b = tunnel("fe80::b", "fd00:1701::b");
         db.import_tunnel(&HashSet::from([tunnel_a, tunnel_b]));
 
-        let removed = db.remove_nexthop_routes("fe80::a".parse().unwrap());
+        let removed =
+            db.remove_nexthop_routes("fe80::a".parse().unwrap(), "test0");
 
         assert_eq!(removed.underlay, HashSet::from([underlay_a]));
         assert_eq!(removed.tunnel, HashSet::from([tunnel_a]));
-        let paths = db.snapshot_mcast_paths(
-            [&multicast_a.origin, &multicast_b.origin],
-            &NO_PEER,
-        );
-        assert!(paths.imported(&multicast_a.origin).is_none());
-        assert_eq!(paths.imported(&multicast_b.origin), Some(&multicast_b));
         assert_eq!(removed.multicast, HashSet::from([multicast_a]));
         assert_eq!(db.imported(), HashSet::from([underlay_b]));
         assert_eq!(db.imported_tunnel(), HashSet::from([tunnel_b]));
@@ -692,6 +585,13 @@ pub(crate) mod tests {
                 other_peer,
             ]),
         );
+        let other_link =
+            route(mcast_origin("233.252.0.5", "ff04::5"), "fe80::a");
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test1",
+            &HashSet::from([other_link.clone()]),
+            &HashSet::new(),
+        ));
 
         let seq = db.next_mcast_seq();
         let late = route(mcast_origin("233.252.0.4", "ff04::4"), "fe80::a");
@@ -699,16 +599,25 @@ pub(crate) mod tests {
 
         let stale = db.stale_mcast_by_nexthop(
             peer,
+            "test0",
+            seq,
+            &HashSet::from([announced.origin.clone()]),
+        );
+        assert_eq!(stale, vec![unannounced.origin]);
+
+        let stale = db.stale_mcast_by_nexthop(
+            peer,
+            "test1",
             seq,
             &HashSet::from([announced.origin]),
         );
-        assert_eq!(stale, vec![unannounced.origin]);
+        assert_eq!(stale, vec![other_link.origin]);
     }
 
-    /// The cutoff removes an untouched route and preserves imports made
-    /// after it.
+    /// Remove an untouched route and preserve imports made at or after the
+    /// pull sequence.
     #[test]
-    fn stale_removal_skips_routes_imported_after_the_cutoff() {
+    fn stale_removal_skips_routes_imported_at_or_after_the_pull_seq() {
         let (_dir, db) = test_db();
 
         let prev = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::a");
@@ -716,7 +625,7 @@ pub(crate) mod tests {
             route(mcast_origin("233.252.0.2", "ff04::2"), "fe80::a");
         import(&db, &HashSet::from([prev.clone(), refreshed.clone()]));
 
-        let started_at = db.next_mcast_seq();
+        let pull_seq = db.next_mcast_seq();
 
         // A concurrent push re-announces `refreshed` and adds a `new` route
         // while the pull is reading a snapshot that contains neither of these.
@@ -736,14 +645,25 @@ pub(crate) mod tests {
                 ..new.clone()
             },
         ]);
-        let removed = db.update_imported_mcast(MulticastRibChange {
-            import: &HashSet::new(),
-            remove: &candidates,
-            imported_before: Some(started_at),
-        });
+        let removed = db
+            .splice_imported_mcast(MulticastRibChange {
+                ifname: "test0",
+                import: &HashSet::new(),
+                remove: &candidates,
+                imported_before: Some(pull_seq),
+            })
+            .removed;
 
         assert_eq!(removed, HashSet::from([prev]));
-        assert_eq!(db.imported_mcast(), HashSet::from([refreshed, new]));
+        assert_eq!(
+            db.imported_mcast_links()
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                (refreshed, "test0".to_string()),
+                (new, "test0".to_string()),
+            ]),
+        );
     }
 
     #[test]
@@ -766,7 +686,8 @@ pub(crate) mod tests {
             Some((low.nexthop, low.path.clone()))
         );
 
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &HashSet::new(),
             &HashSet::from([low.clone()]),
         ));
@@ -789,7 +710,7 @@ pub(crate) mod tests {
         );
 
         import(&db, &HashSet::from([low.clone()]));
-        let removed = db.remove_nexthop_mcast_routes(low.nexthop);
+        let removed = db.remove_nexthop_mcast_routes(low.nexthop, "test0");
         assert_eq!(removed.multicast.len(), 2);
         assert_eq!(
             shortest(&db, &origin),
@@ -797,9 +718,9 @@ pub(crate) mod tests {
         );
         assert_eq!(shortest(&db, &other), None);
 
-        db.remove_nexthop_mcast_routes(high.nexthop);
+        db.remove_nexthop_mcast_routes(high.nexthop, "test0");
         assert_eq!(shortest(&db, &origin), None);
-        assert!(db.imported_mcast().is_empty());
+        assert!(db.imported_mcast_links().is_empty());
     }
 
     #[test]
@@ -818,9 +739,12 @@ pub(crate) mod tests {
         let peer_in_path = via("fe80::1", &["peer", "x"]);
         let long = via("fe80::2", &["a", "b", "c"]);
         let short = via("fe80::3", &["d", "e"]);
-        imported.insert(&peer_in_path, 1);
-        imported.insert(&long, 2);
-        imported.insert(&short, 3);
+        let wake = watch::Sender::new(0);
+        let mut edit = imported.edit(&wake);
+        edit.insert(&peer_in_path, "test0", 1);
+        edit.insert(&long, "test0", 2);
+        edit.insert(&short, "test0", 3);
+        drop(edit);
 
         let picked = imported.shortest_path(&origin, &"peer".into()).unwrap();
         assert_eq!(picked.nexthop, short.nexthop);
@@ -845,13 +769,16 @@ pub(crate) mod tests {
         let low_nexthop = via("fe80::1", 20, &["a", "b"]);
         let low_metric = via("fe80::2", 10, &["c", "d"]);
         let shorter = via("fe80::3", 30, &["e"]);
-        imported.insert(&low_nexthop, 1);
-        imported.insert(&low_metric, 2);
+        let wake = watch::Sender::new(0);
+        let mut edit = imported.edit(&wake);
+        edit.insert(&low_nexthop, "test0", 1);
+        edit.insert(&low_metric, "test0", 2);
+        drop(edit);
 
         let picked = imported.shortest_path(&origin, &"peer".into()).unwrap();
         assert_eq!(picked.nexthop, low_metric.nexthop);
 
-        imported.insert(&shorter, 3);
+        imported.edit(&wake).insert(&shorter, "test0", 3);
         let picked = imported.shortest_path(&origin, &"peer".into()).unwrap();
         assert_eq!(picked.nexthop, shorter.nexthop);
     }
@@ -859,14 +786,234 @@ pub(crate) mod tests {
     #[test]
     fn imported_mcast_drops_emptied_origins() {
         let mut imported = ImportedMcast::default();
+        let wake = watch::Sender::new(0);
         let a = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::1");
 
-        imported.insert(&a, 1);
-        assert_eq!(imported.remove(&a, None), Some(a.clone()));
-        assert!(imported.0.is_empty());
+        let mut edit = imported.edit(&wake);
+        edit.insert(&a, "test0", 1);
+        assert_eq!(edit.remove(&a, "test0", None), Some(a.clone()));
+        drop(edit);
+        assert!(imported.links().next().is_none());
+    }
 
-        imported.insert(&a, 2);
-        assert_eq!(imported.extract_nexthop(a.nexthop), HashSet::from([a]));
-        assert!(imported.0.is_empty());
+    #[test]
+    fn imports_are_keyed_per_link() {
+        let mut imported = ImportedMcast::default();
+        let wake = watch::Sender::new(0);
+        let ifnames = |imported: &ImportedMcast| -> Vec<String> {
+            imported
+                .links()
+                .map(|(_, ifname)| ifname.to_string())
+                .collect()
+        };
+        let a = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::1");
+
+        let mut edit = imported.edit(&wake);
+        assert_eq!(edit.insert(&a, "tfportrear0_0", 1), Inserted::New);
+        assert_eq!(edit.insert(&a, "tfportrear1_0", 2), Inserted::New);
+        drop(edit);
+        assert_eq!(*wake.borrow(), 1);
+
+        assert_eq!(
+            imported.edit(&wake).insert(&a, "tfportrear0_0", 3),
+            Inserted::Unchanged
+        );
+        assert_eq!(*wake.borrow(), 1);
+        assert_eq!(imported.links().count(), 2);
+
+        assert_eq!(
+            imported.edit(&wake).remove(&a, "tfportrear0_0", None),
+            Some(a.clone())
+        );
+        assert_eq!(ifnames(&imported), vec!["tfportrear1_0"]);
+
+        let mut edit = imported.edit(&wake);
+        edit.insert(&a, "tfportrear0_0", 4);
+        assert_eq!(
+            edit.extract_link(a.nexthop, "tfportrear0_0"),
+            HashSet::from([a.clone()]),
+        );
+        drop(edit);
+        assert_eq!(ifnames(&imported), vec!["tfportrear1_0"]);
+        assert_eq!(
+            imported
+                .edit(&wake)
+                .extract_link(a.nexthop, "tfportrear1_0"),
+            HashSet::from([a]),
+        );
+        assert!(imported.links().next().is_none());
+        assert_eq!(*wake.borrow(), 4);
+    }
+
+    #[test]
+    fn splice_reports_only_changed_imports() {
+        let (_dir, db) = test_db();
+        let a = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::a");
+        let splice = |routes: &HashSet<MulticastRoute>| {
+            db.splice_imported_mcast(MulticastRibChange::new(
+                "test0",
+                routes,
+                &HashSet::new(),
+            ))
+            .imported
+        };
+
+        let routes = HashSet::from([a.clone()]);
+        assert_eq!(splice(&routes), routes);
+        assert!(splice(&routes).is_empty());
+
+        let mut wake = db.subscribe_mcast_sweep();
+        wake.borrow_and_update();
+
+        let remetric = MulticastRoute {
+            origin: a.origin.clone().with_metric(5),
+            ..a
+        };
+        let changed = splice(&HashSet::from([remetric.clone()]));
+        assert_eq!(
+            changed
+                .iter()
+                .map(|r| r.origin.metric())
+                .collect::<Vec<_>>(),
+            vec![5],
+        );
+        assert!(splice(&HashSet::from([remetric])).is_empty());
+        assert!(!wake.has_changed().unwrap());
+    }
+
+    fn check_multicast_removal_by_interface(
+        remove_routes: impl Fn(&Db, Ipv6Addr, &str) -> RemovedNexthopRoutes,
+    ) {
+        let (_dir, db) = test_db();
+        let shared = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::1");
+        let unique = route(mcast_origin("233.252.0.2", "ff04::2"), "fe80::1");
+        let other = route(mcast_origin("233.252.0.3", "ff04::3"), "fe80::2");
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "tfportrear0_0",
+            &HashSet::from([shared.clone(), unique.clone(), other.clone()]),
+            &HashSet::new(),
+        ));
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "tfportrear1_0",
+            &HashSet::from([shared.clone()]),
+            &HashSet::new(),
+        ));
+
+        let mut rx = db.subscribe_mcast_sweep();
+        let generation = *rx.borrow_and_update();
+        let removed = remove_routes(&db, shared.nexthop, "tfportrear2_0");
+        assert!(removed.multicast.is_empty());
+        assert_eq!(db.imported_mcast_links().len(), 4);
+        assert_eq!(*rx.borrow_and_update(), generation);
+
+        let removed = remove_routes(&db, shared.nexthop, "tfportrear0_0");
+        assert_eq!(
+            removed.multicast,
+            HashSet::from([shared.clone(), unique.clone()]),
+        );
+        assert_eq!(
+            db.imported_mcast_links()
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                (shared.clone(), "tfportrear1_0".to_string()),
+                (other.clone(), "tfportrear0_0".to_string()),
+            ]),
+        );
+        let paths =
+            db.snapshot_mcast_paths([&shared.origin, &unique.origin], &NO_PEER);
+        assert_eq!(paths.imported(&shared.origin), Some(&shared));
+        assert!(paths.imported(&unique.origin).is_none());
+        assert_eq!(*rx.borrow_and_update(), generation + 1);
+
+        let removed = remove_routes(&db, shared.nexthop, "tfportrear0_0");
+        assert!(removed.multicast.is_empty());
+        assert_eq!(*rx.borrow_and_update(), generation + 1);
+
+        let removed = remove_routes(&db, shared.nexthop, "tfportrear1_0");
+        assert_eq!(removed.multicast, HashSet::from([shared.clone()]));
+        assert_eq!(
+            db.imported_mcast_links(),
+            vec![(other, "tfportrear0_0".to_string())],
+        );
+        assert!(
+            db.snapshot_mcast_paths([&shared.origin], &NO_PEER)
+                .imported(&shared.origin)
+                .is_none(),
+        );
+        assert_eq!(*rx.borrow_and_update(), generation + 2);
+    }
+
+    #[test]
+    fn expiry_preserves_multicast_on_other_interfaces() {
+        check_multicast_removal_by_interface(Db::remove_nexthop_routes);
+    }
+
+    #[test]
+    fn downgrade_preserves_multicast_on_other_interfaces() {
+        check_multicast_removal_by_interface(Db::remove_nexthop_mcast_routes);
+    }
+
+    #[test]
+    fn membership_changes_wake_subscribers() {
+        let (_dir, db) = test_db();
+        let mut rx = db.subscribe_mcast_sweep();
+        let a = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::a");
+        let b = route(mcast_origin("233.252.0.2", "ff04::2"), "fe80::a");
+
+        import(&db, &HashSet::from([a.clone()]));
+        assert!(rx.has_changed().unwrap());
+        rx.borrow_and_update();
+
+        import(&db, &HashSet::from([b.clone()]));
+        assert!(rx.has_changed().unwrap());
+        rx.borrow_and_update();
+
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
+            &HashSet::new(),
+            &HashSet::from([b.clone()]),
+        ));
+        assert!(rx.has_changed().unwrap());
+    }
+
+    #[test]
+    fn non_membership_changes_do_not_wake_subscribers() {
+        let (_dir, db) = test_db();
+        let mut rx = db.subscribe_mcast_sweep();
+        let a = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::a");
+        let absent = route(mcast_origin("233.252.0.9", "ff04::9"), "fe80::b");
+
+        let pull_seq = db.next_mcast_seq();
+        import(&db, &HashSet::from([a.clone()]));
+        rx.borrow_and_update();
+
+        import(&db, &HashSet::from([a.clone()]));
+        let mut rerouted = a.clone();
+        rerouted.path.push(MulticastPathHop::new(
+            "other".into(),
+            "fe80::3".parse().unwrap(),
+        ));
+        import(&db, &HashSet::from([rerouted]));
+
+        import(&db, &HashSet::new());
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
+            &HashSet::new(),
+            &HashSet::from([absent.clone()]),
+        ));
+        let removed = db
+            .splice_imported_mcast(MulticastRibChange {
+                ifname: "test0",
+                import: &HashSet::new(),
+                remove: &HashSet::from([a.clone()]),
+                imported_before: Some(pull_seq),
+            })
+            .removed;
+        assert!(removed.is_empty());
+        db.remove_nexthop_mcast_routes(absent.nexthop, "test0");
+        db.remove_nexthop_routes(absent.nexthop, "test0");
+
+        assert!(!rx.has_changed().unwrap());
     }
 }

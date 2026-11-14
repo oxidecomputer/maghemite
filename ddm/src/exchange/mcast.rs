@@ -151,7 +151,8 @@ mod tests {
         if !originated.is_empty() {
             db.originate_mcast(&originated).unwrap();
         }
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &imported,
             &HashSet::new(),
         ));
@@ -438,7 +439,8 @@ mod tests {
         let still_imported = origin("233.252.0.1", "ff04::1", 10);
         let local_origin = origin("233.252.0.2", "ff04::2", 10);
         let remaining_hop = hop("remaining", 2);
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &HashSet::from([MulticastRoute {
                 origin: still_imported.clone(),
                 nexthop: "fe80::2".parse().unwrap(),
@@ -495,7 +497,8 @@ mod tests {
         let other_hop = hop("other", 3);
         let local_hop = hop("local", 2);
         let withdrawn_hop = hop("withdrawn", 4);
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
+            "test0",
             &HashSet::from([
                 MulticastRoute {
                     origin: alternate.clone(),

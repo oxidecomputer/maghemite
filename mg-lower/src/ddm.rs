@@ -5,13 +5,14 @@
 use crate::log::ddm_log;
 #[cfg(target_os = "illumos")]
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::net::{MulticastOrigin, TunnelOrigin};
 use oxnet::Ipv6Net;
 use slog::Logger;
 #[cfg(target_os = "illumos")]
 use std::net::SocketAddr;
 use std::{net::Ipv6Addr, sync::Arc};
 
+use crate::error::Error;
 use crate::platform::Ddm;
 
 pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
@@ -107,6 +108,64 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
             "prefixes" => format!("{routes:#?}")
         ),
     }
+}
+
+pub(crate) fn add_multicast_routes<
+    'a,
+    I: Iterator<Item = &'a MulticastOrigin>,
+>(
+    client: &impl Ddm,
+    routes: I,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) -> Result<(), Error> {
+    let routes: Vec<MulticastOrigin> = routes.cloned().collect();
+    if routes.is_empty() {
+        return Ok(());
+    }
+    let resp = rt.block_on(client.advertise_multicast_groups(&routes));
+    if let Err(e) = resp {
+        ddm_log!(log,
+            error,
+            "advertise multicast groups error: {e}";
+            "error" => format!("{e}"),
+            "groups" => format!("{routes:#?}")
+        );
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_multicast_routes<
+    'a,
+    I: Iterator<Item = &'a MulticastOrigin>,
+>(
+    client: &impl Ddm,
+    routes: I,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) -> Result<(), Error> {
+    let routes: Vec<MulticastOrigin> = routes.cloned().collect();
+    if routes.is_empty() {
+        return Ok(());
+    }
+    let resp = rt.block_on(client.withdraw_multicast_groups(&routes));
+    match resp {
+        Err(e) => {
+            ddm_log!(log,
+                error,
+                "withdraw multicast groups error: {e}";
+                "groups" => format!("{routes:#?}")
+            );
+            return Err(e.into());
+        }
+        Ok(_) => ddm_log!(log,
+            debug,
+            "withdrew multicast groups";
+            "groups" => format!("{routes:#?}")
+        ),
+    }
+    Ok(())
 }
 
 /// Create a new DDM admin client.

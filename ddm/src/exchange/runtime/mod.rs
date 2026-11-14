@@ -346,8 +346,9 @@ fn fetch_pull_body(
 /// Withdrawals are synthesized only after the complete snapshot has been
 /// imported. A failed pull imports nothing and synthesizes no withdrawals.
 ///
-/// `started_at` is the cutoff for this pull. A route updated during the read
-/// stays out of stale-route removal, including a refresh after the scan.
+/// `pull_seq` is recorded before reading routes from the peer. A route
+/// updated during the read stays out of stale-route removal, including a
+/// refresh after the scan.
 ///
 /// Underlay and tunnel withdrawals remain push-only at every version.
 pub(crate) fn pull(
@@ -359,7 +360,7 @@ pub(crate) fn pull(
     mode: UpdateMode,
 ) -> Result<(), ExchangeError> {
     let version = session.version;
-    let started_at = ctx.db.next_mcast_seq();
+    let pull_seq = ctx.db.next_mcast_seq();
 
     if stop.load(Ordering::Relaxed) {
         return Ok(());
@@ -390,7 +391,7 @@ pub(crate) fn pull(
 
     let withdraw: HashSet<MulticastPathVector> = ctx
         .db
-        .stale_mcast_by_nexthop(addr, started_at, &announced)
+        .stale_mcast_by_nexthop(addr, &ctx.config.if_name, pull_seq, &announced)
         .into_iter()
         .map(|origin| MulticastPathVector {
             origin,
@@ -410,7 +411,7 @@ pub(crate) fn pull(
             ctx,
             addr,
             mode,
-            Some(started_at),
+            Some(pull_seq),
             session,
         );
     }
@@ -877,9 +878,9 @@ fn handle_update(
 
         if session.is_canceled() {
             redistribute = redistribute.withdrawals_only();
-            if redistribute.is_empty() {
-                return;
-            }
+        }
+        if redistribute.is_empty() {
+            return;
         }
 
         if let Err(e) = ctx.tx.send(Event::Peer(PeerEvent::Redistribute {
@@ -1121,8 +1122,8 @@ mod tests {
     use crate::defaults::EXCHANGE_TIMEOUT;
     use crate::discovery::Version;
     use crate::sm::{
-        Config, Event, ExchangeSession, InterfaceState, PeerIdentity,
-        SessionStats, SmContext,
+        Config, Event, ExchangeSession, InterfaceState, PeerEvent,
+        PeerIdentity, SessionStats, SmContext,
     };
     use ddm_api_types::db::{MulticastRoute, RouterKind};
     use ddm_api_types::net::{OverlayMulticast, UnderlayMulticastIpv6, Vni};
@@ -1274,7 +1275,7 @@ mod tests {
 
     struct ExchangeFixture {
         ctx: SmContext,
-        _events: Receiver<Event>,
+        events: Receiver<Event>,
         _dir: camino_tempfile::Utf8TempDir,
     }
 
@@ -1319,7 +1320,7 @@ mod tests {
                     discovery_stop: None,
                     first_run: true,
                 },
-                _events: events,
+                events,
                 _dir: dir,
             }
         }
@@ -1416,6 +1417,68 @@ mod tests {
         });
     }
 
+    fn redistributed_multicast(events: &Receiver<Event>) -> Vec<usize> {
+        events
+            .try_iter()
+            .filter_map(|event| match event {
+                Event::Peer(PeerEvent::Redistribute { update, .. }) => Some(
+                    update.multicast.as_ref().map_or(0, |m| m.announce.len()),
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn transit_redistributes_only_changed_multicast() {
+        let rt = Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let mut fixture = ExchangeFixture::new(&rt);
+        fixture.ctx.config.kind = RouterKind::Transit;
+        let session = publish(&fixture.ctx, Version::V4);
+        let server = fixture.server(session);
+        let (update, route) = multicast_announcement();
+
+        push_v4(&rt, &server, &update);
+        push_v4(&rt, &server, &update);
+        assert_eq!(redistributed_multicast(&fixture.events), vec![1]);
+
+        let rerouted: v4::Update =
+            v4::MulticastUpdate::announce(HashSet::from([
+                v4::MulticastPathVector {
+                    origin: route.origin,
+                    path: vec![
+                        v4::MulticastPathHop::new("peer".into(), PEER),
+                        v4::MulticastPathHop::new("far".into(), PEER),
+                    ],
+                },
+            ]))
+            .into();
+        push_v4(&rt, &server, &rerouted);
+        push_v4(&rt, &server, &rerouted);
+        assert_eq!(redistributed_multicast(&fixture.events), vec![1]);
+
+        let missing = v4::MulticastOrigin::new(
+            OverlayMulticast::new("233.252.0.9".parse().unwrap()).unwrap(),
+            UnderlayMulticastIpv6::new("ff04::109".parse().unwrap()).unwrap(),
+            Vni::new(77).unwrap(),
+            None,
+        )
+        .unwrap();
+        let withdraw: v4::Update =
+            v4::MulticastUpdate::withdraw(HashSet::from([
+                v4::MulticastPathVector {
+                    origin: missing,
+                    path: Vec::new(),
+                },
+            ]))
+            .into();
+        push_v4(&rt, &server, &withdraw);
+        assert!(redistributed_multicast(&fixture.events).is_empty());
+
+        rt.block_on(server.teardown());
+    }
+
     #[test]
     fn stale_push_cannot_restore_multicast_after_session_replacement() {
         let rt = Runtime::new().unwrap();
@@ -1426,26 +1489,29 @@ mod tests {
         let old_server = fixture.server(old_session);
         let (update, route) = multicast_announcement();
 
+        let imported = vec![(route.clone(), ctx.config.if_name.clone())];
         push_v4(&rt, &old_server, &update);
-        assert_eq!(ctx.db.imported_mcast(), HashSet::from([route.clone()]));
+        assert_eq!(ctx.db.imported_mcast_links(), imported);
 
         {
             let mut session = ctx.iface.session();
             *session = Some(Arc::new(ExchangeSession::new(Version::V3)));
-            let removed = ctx.db.remove_nexthop_mcast_routes(PEER);
+            let removed = ctx
+                .db
+                .remove_nexthop_mcast_routes(PEER, &ctx.config.if_name);
             assert_eq!(removed.multicast, HashSet::from([route.clone()]));
         }
-        assert!(ctx.db.imported_mcast().is_empty());
+        assert!(ctx.db.imported_mcast_links().is_empty());
         push_v4(&rt, &old_server, &update);
-        assert!(ctx.db.imported_mcast().is_empty());
+        assert!(ctx.db.imported_mcast_links().is_empty());
 
         let fresh_session = publish(ctx, Version::V4);
         push_v4(&rt, &old_server, &update);
-        assert!(ctx.db.imported_mcast().is_empty());
+        assert!(ctx.db.imported_mcast_links().is_empty());
 
         let fresh_server = fixture.server(fresh_session);
         push_v4(&rt, &fresh_server, &update);
-        assert_eq!(ctx.db.imported_mcast(), HashSet::from([route]));
+        assert_eq!(ctx.db.imported_mcast_links(), imported);
 
         rt.block_on(fresh_server.teardown());
         rt.block_on(old_server.teardown());
@@ -1474,7 +1540,7 @@ mod tests {
             .unwrap()
         });
         assert_eq!(error.message, "multicast exchange requires a V4 peer");
-        assert!(fixture.ctx.db.imported_mcast().is_empty());
+        assert!(fixture.ctx.db.imported_mcast_links().is_empty());
 
         rt.block_on(server.teardown());
     }
@@ -1489,7 +1555,7 @@ mod tests {
         let server = fixture.server(session);
 
         push_v4(&rt, &server, &v4::Update::default());
-        assert!(fixture.ctx.db.imported_mcast().is_empty());
+        assert!(fixture.ctx.db.imported_mcast_links().is_empty());
 
         rt.block_on(server.teardown());
     }
@@ -1506,7 +1572,7 @@ mod tests {
 
         session.cancel();
         push_v4(&rt, &server, &update);
-        assert!(ctx.db.imported_mcast().is_empty());
+        assert!(ctx.db.imported_mcast_links().is_empty());
 
         rt.block_on(server.teardown());
     }
