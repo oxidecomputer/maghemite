@@ -41,6 +41,7 @@ members = [
     "ddm-api",
     "ddm-api-types",
     "ddm-api-types/versions",
+    "ddm-lower",
     "ddm-protocol",
     "dropshot-apis",
     "bfd",
@@ -58,7 +59,7 @@ members = [
     "mg-common",
     "ndp",
     "xtask",
-    "falcon-lab", "ddm-lower",
+    "falcon-lab",
 ]
 
 [workspace.dependencies]

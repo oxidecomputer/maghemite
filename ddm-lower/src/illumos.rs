@@ -35,6 +35,13 @@ pub enum Error {
         #[source]
         err: libnet::route::Error,
     },
+
+    #[error("failed to remove route from illumos: {route:?}")]
+    RemoveRoute {
+        route: Route,
+        #[source]
+        err: libnet::route::Error,
+    },
 }
 
 impl IllumosPlatform {
@@ -44,7 +51,7 @@ impl IllumosPlatform {
     /// be used by the reconciler for statistics and external reporting.
     pub fn add_routes(&self, mut routes: Vec<Route>) -> Result<(), Vec<Error>> {
         // Filter out all local routes.
-        // An error here is fatal. We'll try again on the next reconcilliation.
+        // An error here is fatal. We'll try again on the next reconciliation.
         let local_addrs = Self::read_local_addrs().map_err(|e| vec![e])?;
         routes.retain(|r| !Self::route_is_local(&r, &local_addrs));
 
@@ -78,6 +85,54 @@ impl IllumosPlatform {
                         err
                     );
                     errors.push(Error::AddRoute { route: r, err });
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Remove routes from illumos, returning any errors encountered.
+    ///
+    /// We log any errors inside here, but we also return them so that they can
+    /// be used by the reconciler for statistics and external reporting.
+    pub fn remove_routes(&self, routes: Vec<Route>) -> Result<(), Vec<Error>> {
+        let mut errors = vec![];
+
+        for r in routes {
+            info!(
+                self.log,
+                "[{}] removing route {} -> {}", r.ifname, r.dest, r.gw,
+            );
+
+            match libnet::delete_route(
+                r.dest,
+                r.gw,
+                Some(r.ifname.as_str().to_string()),
+            ) {
+                Ok(()) => {
+                    info!(
+                        self.log,
+                        "[{}] successfully removed route {} -> {}",
+                        r.ifname,
+                        r.dest,
+                        r.gw,
+                    );
+                }
+                Err(err) => {
+                    error!(
+                        self.log,
+                        "[{}] failed to remove route {} -> {}: {}",
+                        r.ifname,
+                        r.dest,
+                        r.gw,
+                        err
+                    );
+                    errors.push(Error::RemoveRoute { route: r, err });
                 }
             }
         }
