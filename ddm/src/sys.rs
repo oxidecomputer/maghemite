@@ -30,7 +30,6 @@ pub struct Route {
     pub dest: IpAddr,
     pub prefix_len: u8,
     pub gw: IpAddr,
-    pub egress_port: u16,
     pub ifname: String,
 }
 
@@ -40,7 +39,6 @@ impl Route {
             dest,
             prefix_len,
             gw,
-            egress_port: 0,
             ifname: String::new(),
         }
     }
@@ -52,7 +50,6 @@ impl From<crate::db::Route> for Route {
             dest: r.destination.addr().into(),
             prefix_len: r.destination.width(),
             gw: r.nexthop.into(),
-            egress_port: 0,
             ifname: r.ifname,
         }
     }
@@ -64,7 +61,6 @@ impl From<libnet::route::Route> for Route {
             dest: r.dest,
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
-            egress_port: 0,
             ifname: r.ifx.unwrap_or_default(),
         }
     }
@@ -453,72 +449,6 @@ pub fn remove_routes_dendrite(
             continue;
         }
     }
-}
-
-pub fn get_routes_dendrite(
-    host: String,
-    port: u16,
-    rt: &Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<Vec<Route>, String> {
-    let client_state = ClientState {
-        tag: DDM_DPD_TAG.into(),
-        log: log.clone(),
-    };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
-
-    let routes = rt
-        .block_on(async { client.route_ipv6_list(None, None).await })
-        .map_err(|e| format!("dpd route list: {}", e))?
-        .items
-        .to_vec();
-
-    let mut result = Vec::new();
-
-    for r in routes {
-        for target in r.targets {
-            let egress_port = match &target.port_id {
-                PortId::Rear(rear) => match rear.parse::<u16>() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        slog::warn!(
-                            log,
-                            "Found invalid rear port ({}): {:?}",
-                            target.port_id,
-                            e
-                        );
-                        continue;
-                    }
-                },
-                _ => continue,
-            };
-
-            result.push(Route {
-                dest: r.cidr.prefix().into(),
-                prefix_len: r.cidr.width(),
-                gw: target.tgt_ip.into(),
-                egress_port,
-                ifname: String::new(),
-            });
-        }
-    }
-
-    Ok(result)
-}
-
-pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
-    let mut result = Vec::new();
-
-    let routes = match libnet::get_routes() {
-        Ok(rs) => rs,
-        Err(e) => return Err(format!("get routes: {}", e)),
-    };
-
-    for r in routes {
-        result.push(r.into());
-    }
-
-    Ok(result)
 }
 
 pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
