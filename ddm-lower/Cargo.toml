@@ -1,0 +1,28 @@
+[package]
+name = "ddm-lower"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+derive_more.workspace = true
+dpd-client.workspace = true
+iddqd.workspace = true
+oxnet.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slog.workspace = true
+slog-error-chain.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+# illumos-only deps used by the routing state machine and platform sys layer.
+# Gated by the `backend` feature so stub builds (e.g. Linux test fixtures
+# running `ddmd` with `--api-only`) link cleanly.
+libnet = { workspace = true, optional = true }
+opte-ioctl = { workspace = true, optional = true }
+oxide-vpc = { workspace = true, optional = true }
+
+[features]
+default = ["backend"]
+backend = ["dep:libnet", "dep:opte-ioctl", "dep:oxide-vpc"]
