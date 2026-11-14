@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use clap::builder::TypedValueParser;
 use client_common::println_nopipe;
 use colored::*;
 use ddm_admin_client::Client;
@@ -65,6 +66,18 @@ enum SubCommand {
     /// Withdraw prefixes from a DDM router.
     TunnelWithdraw(TunnelEndpoint),
 
+    /// Get multicast groups imported from DDM peers.
+    MulticastImported,
+
+    /// Get locally originated multicast groups.
+    MulticastOriginated,
+
+    /// Advertise multicast groups from this router.
+    MulticastAdvertise(MulticastOriginArgs),
+
+    /// Withdraw multicast groups from this router.
+    MulticastWithdraw(MulticastOriginArgs),
+
     /// Sync prefix information from peers.
     Sync,
 
@@ -95,6 +108,47 @@ struct TunnelEndpoint {
 
     #[arg(short, long)]
     pub metric: u64,
+}
+
+#[derive(Debug, Parser)]
+struct MulticastOriginArgs {
+    /// Overlay multicast group address (e.g. 233.252.0.1 or ff0e::1).
+    #[arg(short = 'g', long)]
+    pub overlay_group: types::OverlayMulticast,
+
+    /// Underlay multicast address (ff04::/64 admin-local scope).
+    #[arg(short = 'u', long)]
+    pub underlay_group: types::UnderlayMulticastIpv6,
+
+    /// Virtual Network Identifier.
+    #[arg(
+        short,
+        long,
+        value_parser = clap::value_parser!(u32).try_map(types::Vni::try_from),
+    )]
+    pub vni: types::Vni,
+
+    /// Path metric.
+    #[arg(short, long, default_value_t = 0)]
+    pub metric: u64,
+
+    /// Source address for (S,G) routes (omit for (*,G)).
+    #[arg(short, long)]
+    pub source: Option<IpAddr>,
+}
+
+impl TryFrom<MulticastOriginArgs> for types::MulticastOrigin {
+    type Error = types::MulticastOriginError;
+
+    fn try_from(args: MulticastOriginArgs) -> Result<Self, Self::Error> {
+        Ok(types::MulticastOrigin::new(
+            args.overlay_group,
+            args.underlay_group,
+            args.vni,
+            args.source,
+        )?
+        .with_metric(args.metric))
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -275,6 +329,82 @@ async fn run() -> Result<()> {
                 }])
                 .await?;
         }
+        SubCommand::MulticastImported => {
+            let msg = client.get_multicast_groups().await?;
+            let mut routes: Vec<_> = msg.into_inner().into_iter().collect();
+            routes.sort_by_key(|route| {
+                (origin_sort_key(&route.origin), route.nexthop)
+            });
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "Overlay Group".dimmed(),
+                "Underlay Group".dimmed(),
+                "VNI".dimmed(),
+                "Metric".dimmed(),
+                "Source".dimmed(),
+                "Nexthop".dimmed(),
+                "Path".dimmed(),
+            )?;
+            for route in &routes {
+                let path: Vec<_> = route
+                    .path
+                    .iter()
+                    .rev()
+                    .map(|h| h.router_id.as_str())
+                    .collect();
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    route.origin.overlay_group(),
+                    route.origin.underlay_group(),
+                    route.origin.vni(),
+                    route.origin.metric(),
+                    source_column(route.origin.source()),
+                    route.nexthop,
+                    path.join(" "),
+                )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::MulticastOriginated => {
+            let msg = client.get_originated_multicast_groups().await?;
+            let mut origins: Vec<_> = msg.into_inner().into_iter().collect();
+            origins.sort_by_key(origin_sort_key);
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{}\t{}",
+                "Overlay Group".dimmed(),
+                "Underlay Group".dimmed(),
+                "VNI".dimmed(),
+                "Metric".dimmed(),
+                "Source".dimmed(),
+            )?;
+            for origin in &origins {
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{}\t{}\t{}",
+                    origin.overlay_group(),
+                    origin.underlay_group(),
+                    origin.vni(),
+                    origin.metric(),
+                    source_column(origin.source()),
+                )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::MulticastAdvertise(args) => {
+            client
+                .advertise_multicast_groups(&vec![args.try_into()?])
+                .await?;
+        }
+        SubCommand::MulticastWithdraw(args) => {
+            client
+                .withdraw_multicast_groups(&vec![args.try_into()?])
+                .await?;
+        }
         SubCommand::Sync => {
             client.sync().await?;
         }
@@ -294,6 +424,29 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn origin_sort_key(
+    origin: &types::MulticastOrigin,
+) -> (
+    types::OverlayMulticast,
+    types::UnderlayMulticastIpv6,
+    types::Vni,
+    Option<IpAddr>,
+) {
+    (
+        origin.overlay_group(),
+        origin.underlay_group(),
+        origin.vni(),
+        origin.source(),
+    )
+}
+
+fn source_column(source: Option<IpAddr>) -> String {
+    match source {
+        Some(s) => s.to_string(),
+        None => String::from("(*,G)"),
+    }
 }
 
 fn init_logger() -> Logger {

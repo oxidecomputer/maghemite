@@ -10,21 +10,19 @@
 use crate::db::Db;
 use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
+use ddm_protocol::RouterId;
 use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use uuid::Uuid;
-
-#[cfg(target_os = "illumos")]
-use std::collections::BTreeSet;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) mod state;
@@ -36,6 +34,15 @@ pub enum AdminEvent {
 
     /// Withdraw a set of IPv6 prefixes
     Withdraw(PrefixSet),
+
+    /// Announce a set of multicast origins to peers.
+    AnnounceMulticast(HashSet<MulticastOrigin>),
+
+    /// Withdraw multicast origins already removed from the DB.
+    ///
+    /// The removal hits before this event gets enqueued, so a path snapshot
+    /// taken at processing time observes it and any import in the meantime.
+    WithdrawMulticast(HashSet<MulticastOrigin>),
 
     /// Expire the peer at the specified address
     Expire(Ipv6Addr),
@@ -61,13 +68,19 @@ pub enum PrefixSet {
 pub enum PeerEvent {
     /// Upon reception of this event, a state machine is to push the update to
     /// its peer.
-    Push(ddm_protocol::v3::Update),
+    Push(Arc<ddm_protocol::v4::Update>),
 
-    /// Upon reception of this event, a state machine is to redistribute the
-    /// update to it's sibling routers through it's event channels. The state
-    /// machine is responsible for maintaining the path vector and performing
-    /// loop breaking.
-    Redistribute(ddm_protocol::v3::Update),
+    /// Redistribute to sibling routers through the event channels.
+    ///
+    /// The state machine adds the underlay hop and checks for loops.
+    /// Multicast announcements arrive with the local hop already appended.
+    /// Sibling state machines reconcile the multicast update when dequeuing
+    /// the push event.
+    Redistribute {
+        update: Arc<ddm_protocol::v4::Update>,
+        session: Arc<ExchangeSession>,
+        peer: Ipv6Addr,
+    },
 
     /// Upon reception of this event, a state machine is to expire its peer,
     /// since a persistent HTTP status ended the pull's ability to retry, or
@@ -219,7 +232,7 @@ impl FsmState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeerIdentity {
     pub addr: Ipv6Addr,
-    pub hostname: String,
+    pub router_id: RouterId,
     pub kind: RouterKind,
 }
 
@@ -230,6 +243,120 @@ pub struct InterfaceState {
     pub fsm_state: Mutex<FsmState>,
     pub last_fsm_state_change: Mutex<Instant>,
     pub peer_identity: Mutex<Option<PeerIdentity>>,
+    /// The current exchange session.
+    ///
+    /// Updates validate against the session and execute their DB changes while
+    /// holding this lock, which serializes DB work for the interface.
+    ///
+    /// Expiry and version change replace the session under the same lock, and
+    /// any subsequent update from the previous session is rejected.
+    /// Expiry also drains in-flight updates. See [`ExchangeSession`] for how
+    /// route programming is drained.
+    ///
+    /// NOTE: discovery must not take this lock.
+    pub session: Mutex<Option<Arc<ExchangeSession>>>,
+}
+
+/// The negotiated version and cancellation flag for one exchange session
+/// with a peer, from entering the exchange state until expiry or a version
+/// change.
+///
+/// Two races motivate how updates are fenced against expiry and version
+/// change:
+///
+/// 1. A push still running when the peer expires could import and install
+///    routes after expiry has removed them, leaving forwarding state for a
+///    peer that is gone. Pushes already running in `spawn_blocking` survive
+///    an abort of the exchange server.
+/// 2. Two updates on one interface (a push and a pull) could interleave
+///    their DB changes. Tunnel programming diffs the route set before and
+///    after its own import, and underlay programming chooses removals after
+///    its own withdrawal. Either could program or remove the wrong routes.
+///
+/// ```text
+///  update                   expiry
+///  ------                   ------
+///  session lock ───┐
+///  validate        │
+///  update guard ─┐ │
+///  DB changes    │ │        cancel()
+///  unlock ───────┼─┘
+///  install routes│          session lock ─────┐
+///  (stops once   │          drain_updates()   │
+///   canceled)    │            ...waits...     │
+///  enqueue       │                            │
+///  release ──────┘                            │
+///                           clear session     │
+///                           remove DB routes  │
+///                           unlock ───────────┘
+///                           remove backend routes
+/// ```
+///
+/// The session lock serializes DB changes, and route installation runs
+/// outside it. Updates on one interface do not wait on each other's backend
+/// calls.
+///
+/// Expiry cancels before draining: an in-flight update checks for
+/// cancellation before installing each route. In-flight removals finish
+/// their batches before the drain completes. Expiry's backend removal covers
+/// any routes the update had installed before it stopped, since their DB
+/// entries were written first.
+///
+/// A version change replaces the session without canceling or draining it.
+/// The peer and its DB routes are unchanged. The exchange state retains the
+/// replaced session, and expiry cancels and drains it alongside the current
+/// one.
+///
+/// TODO: Route installation and redistribution from two in-flight updates
+/// are not strictly ordered. When a push and a pull overlap on one
+/// interface, or a previous-session update is still installing after a
+/// version change, a subsequent update's removal can reach the backend or a
+/// peer before an earlier update's add of the same route. The backend or
+/// peer then disagrees with the DB until the next update or resync for that
+/// route. Unicast has no periodic repair currently.
+#[derive(Debug)]
+pub struct ExchangeSession {
+    pub version: Version,
+    canceled: AtomicBool,
+    updates: RwLock<()>,
+}
+
+impl ExchangeSession {
+    pub fn new(version: Version) -> Self {
+        Self {
+            version,
+            canceled: AtomicBool::new(false),
+            updates: RwLock::new(()),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.canceled.store(true, Ordering::Release);
+    }
+
+    pub fn is_canceled(&self) -> bool {
+        self.canceled.load(Ordering::Acquire)
+    }
+
+    pub fn canceled(&self) -> &AtomicBool {
+        &self.canceled
+    }
+
+    /// Mark a single update as in flight until the guard is dropped.
+    ///
+    /// Updates take the guard under the session lock and hold onto it through
+    /// route programming and redistribution.
+    pub fn update_guard(&self) -> RwLockReadGuard<'_, ()> {
+        self.updates.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Wait for in-flight updates to finish.
+    ///
+    /// Callers hold this session lock, and while this drains, new updates
+    /// cannot pass validation.
+    pub fn drain_updates(&self) {
+        drop(self.updates.write().unwrap_or_else(|e| e.into_inner()));
+    }
 }
 
 impl InterfaceState {
@@ -247,6 +374,16 @@ impl InterfaceState {
 
     pub fn clear_peer(&self) {
         *lock!(self.peer_identity) = None;
+    }
+
+    /// Take the session lock, recovering it if a pull worker panicked while
+    /// holding onto it.
+    ///
+    /// Updates never write to the session itself, which means that a poisoned
+    /// guard still contains a valid value, and expiry must be able to proceed
+    /// after the panic it's cleaning up.
+    pub fn session(&self) -> MutexGuard<'_, Option<Arc<ExchangeSession>>> {
+        self.session.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn set_if_info(&self, index: u32, name: String) {
@@ -269,6 +406,7 @@ impl Default for InterfaceState {
             fsm_state: Mutex::new(FsmState::Init),
             last_fsm_state_change: Mutex::new(Instant::now()),
             peer_identity: Mutex::new(None),
+            session: Mutex::new(None),
         }
     }
 }
@@ -299,7 +437,7 @@ pub struct SmContext {
     pub tx: Sender<Event>,
     pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
-    pub router_id: String,
+    pub router_id: RouterId,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
@@ -312,7 +450,7 @@ pub struct StateMachine {
     pub rx: Option<Receiver<Event>>,
 }
 
-#[cfg(not(target_os = "illumos"))]
+#[cfg(not(all(feature = "backend", target_os = "illumos")))]
 impl StateMachine {
     pub fn run(&mut self) -> Result<(), SmError> {
         Ok(())
@@ -321,20 +459,26 @@ impl StateMachine {
 
 /// Send an event to all channels in the list, removing any channels from the
 /// list that are dead.
-#[cfg(target_os = "illumos")]
+#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) fn send(e: Event, event_channels: &mut Vec<Sender<Event>>) {
-    // Ensure our indices are unique and ordered.
-    let mut dead_channels = BTreeSet::default();
-    for (i, c) in event_channels.iter().enumerate() {
-        if c.send(e.clone()).is_err() {
-            dead_channels.insert(i);
-        }
-    }
-    // we need to remove in descending order, so we don't remove `i` and then
-    // try to remove `i+1` later which wlll be a _different_ item than we grabbed
-    // the index for. Removing from the top down causes no shifting for subsequent
-    // index removals.
-    for i in dead_channels.iter().rev() {
-        event_channels.remove(*i);
+    event_channels.retain(|c| c.send(e.clone()).is_ok());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InterfaceState;
+
+    #[test]
+    fn session_lock_recovers_from_a_panic_while_held() {
+        let iface = InterfaceState::default();
+        let res =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = iface.session();
+                panic!("pull worker died mid-import");
+            }));
+        assert!(res.is_err());
+        assert!(iface.session.is_poisoned());
+
+        let _recovered = iface.session();
     }
 }

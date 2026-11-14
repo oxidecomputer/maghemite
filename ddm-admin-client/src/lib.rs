@@ -11,6 +11,11 @@ progenitor::generate_api!(
     },
     replace = {
         TunnelOrigin = ddm_api_types_versions::latest::net::TunnelOrigin,
+        MulticastOrigin = ddm_api_types_versions::latest::net::MulticastOrigin,
+        ExternalMulticastIp = ddm_api_types_versions::latest::net::OverlayMulticast,
+        UnderlayMulticastIpv6 = ddm_api_types_versions::latest::net::UnderlayMulticastIpv6,
+        MulticastRoute = ddm_api_types_versions::latest::db::MulticastRoute,
+        MulticastPathHop = ddm_api_types_versions::latest::exchange::MulticastPathHop,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
         PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,
         Duration = std::time::Duration,

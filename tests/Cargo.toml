@@ -19,3 +19,4 @@ ztest.workspace = true
 uuid.workspace = true
 rand.workspace = true
 oxnet.workspace = true
+serde_json.workspace = true

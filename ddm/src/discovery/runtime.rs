@@ -29,6 +29,9 @@ const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
 const SOLICIT: u8 = 1;
 const ADVERTISE: u8 = 1 << 1;
+// Advertise V4 capability while keeping the version byte acceptable to
+// peers on previous versions.
+const MCAST_CAPABLE: u8 = 1 << 2;
 
 /// Reinterpret an initialized prefix of `[MaybeUninit<u8>]` as `[u8]`.
 ///
@@ -59,7 +62,7 @@ impl DiscoveryPacket {
     fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
             version: Version::V2 as u8,
-            flags: ADVERTISE,
+            flags: ADVERTISE | MCAST_CAPABLE,
             hostname,
             kind,
         }
@@ -89,6 +92,8 @@ struct Neighbor {
     hostname: String,
     kind: RouterKind,
     last_seen: Instant,
+    /// Last negotiated version, used to detect capability changes.
+    version: Version,
 }
 
 pub(crate) fn handler(
@@ -339,6 +344,7 @@ fn handle_msg(
             msg.hostname,
             msg.kind,
             msg.version,
+            msg.flags,
             stats,
         );
     }
@@ -358,12 +364,30 @@ fn handle_solicitation(
     }
 }
 
+/// Select the exchange version from a peer's advertisement.
+///
+/// Reject versions below V2 even when the capability flag is set.
+fn negotiate_version(version: u8, flags: u8) -> Option<Version> {
+    let base = match version {
+        2 => Version::V2,
+        3 => Version::V3,
+        4.. => Version::V4,
+        _ => return None,
+    };
+    if (flags & MCAST_CAPABLE) != 0 {
+        Some(Version::V4)
+    } else {
+        Some(base)
+    }
+}
+
 fn handle_advertisement(
     ctx: &HandlerContext,
     sender: &Ipv6Addr,
     hostname: String,
     kind: RouterKind,
     version: u8,
+    flags: u8,
     stats: &Arc<SessionStats>,
 ) {
     trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
@@ -371,28 +395,14 @@ fn handle_advertisement(
         .advertisements_received
         .fetch_add(1, Ordering::Relaxed);
 
-    // TODO: version negotiation
-    //
-    // Things currently work because ddm v1 does no version checking at all.
-    // So ddm v2 speakers can send out discovery packets with the version set to
-    // 2, and ddm v1 speakers can send out discovery packets with the version
-    // set to 1, and as long a v2 router speaks version 1 after discovering a v1
-    // peer, things will work. However, this will not work for version 3. So we
-    // need to implement version negotiation. This would also not work for
-    // changes in the discovery protocol, if we were to have changes there. So
-    // we need to come up with a general way for both protocols to evolve.
-    let version = match version {
-        2 => Version::V2,
-        3 => Version::V3,
-        x => {
-            err!(
-                ctx.log,
-                ctx.config.if_name,
-                "unknown protocol version {}, known versions are: 1, 2",
-                x
-            );
-            return;
-        }
+    let Some(version) = negotiate_version(version, flags) else {
+        err!(
+            ctx.log,
+            ctx.config.if_name,
+            "unsupported protocol version {version}, this node supports {}..",
+            Version::V2 as u8,
+        );
+        return;
     };
 
     let mut guard = match ctx.nbr.write() {
@@ -402,7 +412,7 @@ fn handle_advertisement(
             return;
         }
     };
-    match &mut *guard {
+    let version_changed = match &mut *guard {
         Some(nbr) => {
             if *sender != nbr.addr {
                 inf!(
@@ -422,33 +432,46 @@ fn handle_advertisement(
                 stats.peer_address_changes.fetch_add(1, Ordering::Relaxed);
             }
             nbr.last_seen = Instant::now();
+            let version_changed = nbr.version != version;
+            if version_changed {
+                inf!(
+                    ctx.log,
+                    ctx.config.if_name,
+                    "nbr {}@{} version {:?} -> {version:?}",
+                    nbr.hostname,
+                    nbr.addr,
+                    nbr.version,
+                );
+            }
+            nbr.version = version;
+            version_changed
         }
         None => {
             inf!(
                 ctx.log,
                 ctx.config.if_name,
-                "nbr is {}@{} {}",
-                sender,
-                hostname,
-                kind
+                "nbr is {sender}@{hostname} {kind} {version:?}",
             );
             *guard = Some(Neighbor {
                 addr: *sender,
                 hostname: hostname.clone(),
                 last_seen: Instant::now(),
                 kind,
+                version,
             });
             stats.peer_established.fetch_add(1, Ordering::Relaxed);
+            false
         }
     };
     drop(guard);
     let new_peer = PeerIdentity {
         addr: *sender,
-        hostname,
+        router_id: hostname.into(),
         kind,
     };
     let mut info = lock!(ctx.iface.peer_identity);
-    if info.as_ref() != Some(&new_peer) {
+    // Notify the state machine of version changes on an otherwise stable peer.
+    if info.as_ref() != Some(&new_peer) || version_changed {
         *info = Some(new_peer);
         drop(info);
         emit_nbr_update(ctx, sender, version);
@@ -508,4 +531,70 @@ fn advertise(
     let n = ctx.uc_socket.send_to(data.as_slice(), &sa)?;
     stats.advertisements_sent.fetch_add(1, Ordering::Relaxed);
     Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn negotiate_version_contract() {
+        let cases = [
+            // Use the advertised version when the capability flag is unset.
+            (2u8, 0u8, Some(Version::V2)),
+            (3, 0, Some(Version::V3)),
+            (4, 0, Some(Version::V4)),
+            // Advertised versions above V4 are capped at V4.
+            (5, 0, Some(Version::V4)),
+            (255, 0, Some(Version::V4)),
+            // Capability flag raises any accepted byte to V4.
+            (2, MCAST_CAPABLE, Some(Version::V4)),
+            (3, MCAST_CAPABLE, Some(Version::V4)),
+            (4, MCAST_CAPABLE, Some(Version::V4)),
+            (5, MCAST_CAPABLE, Some(Version::V4)),
+            // Reserved flags are ignored rather than rejected.
+            (2, 1 << 3, Some(Version::V2)),
+            (2, SOLICIT | ADVERTISE, Some(Version::V2)),
+            // Bytes below the floor are rejected, flag or not.
+            (0, 0, None),
+            (1, 0, None),
+            (1, MCAST_CAPABLE, None),
+        ];
+
+        for (version, flags, expected) in cases {
+            assert_eq!(
+                negotiate_version(version, flags),
+                expected,
+                "negotiate_version({version}, {flags:#05b})"
+            );
+        }
+    }
+
+    #[test]
+    fn only_advertisements_convey_multicast_capability() {
+        let solicitation = DiscoveryPacket::new_solicitation(
+            "router".into(),
+            RouterKind::Server,
+        );
+        assert_eq!(solicitation.version, Version::V2 as u8);
+        assert_eq!(solicitation.flags, SOLICIT);
+
+        let advertisement = DiscoveryPacket::new_advertisement(
+            "router".into(),
+            RouterKind::Transit,
+        );
+        assert_eq!(advertisement.version, Version::V2 as u8);
+        assert_eq!(advertisement.flags, ADVERTISE | MCAST_CAPABLE);
+        assert_eq!(
+            negotiate_version(advertisement.version, advertisement.flags),
+            Some(Version::V4),
+        );
+        assert_eq!(
+            negotiate_version(
+                advertisement.version,
+                advertisement.flags & !MCAST_CAPABLE
+            ),
+            Some(Version::V2),
+        );
+    }
 }
