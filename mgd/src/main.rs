@@ -109,6 +109,14 @@ struct RunArgs {
     #[arg(long, default_value = "[::1]:12225")]
     mgs_addr: SocketAddr,
 
+    /// SocketAddr of the dpd API used to program forwarding state.
+    #[arg(long, default_value = "[::1]:12224")]
+    dendrite_addr: SocketAddr,
+
+    /// SocketAddr of the ddmd admin API used to advertise routes.
+    #[arg(long, default_value = "[::1]:8000")]
+    ddm_addr: SocketAddr,
+
     /// SocketAddr for the BGP Dispatcher to listen on.
     #[arg(long, default_value = "[::]:179")]
     bgp_dispatcher_addr: SocketAddr,
@@ -171,10 +179,10 @@ async fn run(args: RunArgs) {
         let db = ctx.db.clone();
         let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
-            client: mg_lower::new_dpd_client(&log),
+            client: mg_lower::new_dpd_client(&log, args.dendrite_addr),
         };
         let ddm = mg_lower::ProductionDdm {
-            client: mg_lower::new_ddm_client(&log)
+            client: mg_lower::new_ddm_client(&log, args.ddm_addr)
                 .expect("failed to create ddm client"),
         };
         let sw = mg_lower::ProductionSwitchZone {};

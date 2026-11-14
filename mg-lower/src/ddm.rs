@@ -8,6 +8,8 @@ use ddm_admin_client::Client;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use slog::Logger;
+#[cfg(target_os = "illumos")]
+use std::net::SocketAddr;
 use std::{net::Ipv6Addr, sync::Arc};
 
 use crate::platform::Ddm;
@@ -107,7 +109,13 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     }
 }
 
+/// Create a new DDM admin client.
+///
+/// `addr` is ddmd's admin API, at `[::1]:8000` in the switch zone.
 #[cfg(target_os = "illumos")]
-pub fn new_ddm_client(log: &Logger) -> Result<Client, reqwest::Error> {
-    Client::new("http://localhost:8000", log.clone())
+pub fn new_ddm_client(
+    log: &Logger,
+    addr: SocketAddr,
+) -> Result<Client, reqwest::Error> {
+    Client::new(&format!("http://{addr}"), log.clone())
 }
