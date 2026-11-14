@@ -13,6 +13,8 @@ use dpd_client::types::{self, LinkState, Route};
 use mg_api_types::rdb::path::Path;
 use oxnet::IpNet;
 use slog::Logger;
+#[cfg(target_os = "illumos")]
+use std::net::SocketAddr;
 use std::{
     collections::{BTreeSet, HashSet},
     hash::Hash,
@@ -560,16 +562,16 @@ pub(crate) fn get_routes_for_prefix(
     Ok(result.into_iter().collect())
 }
 
-/// Create a new Dendrite/dpd client. The lower half always runs on the same
-/// host/zone as the underlying platform.
+/// Create a new Dendrite/dpd client. The lower half normally runs on the same
+/// host/zone as the underlying platform, where dpd listens on `[::1]:12224`.
+///
+/// Set `addr` to reach a dpd instance assigned elsewhere, e.g., a test fixture
+/// on a random port.
 #[cfg(target_os = "illumos")]
-pub fn new_dpd_client(log: &Logger) -> DpdClient {
+pub fn new_dpd_client(log: &Logger, addr: SocketAddr) -> DpdClient {
     let client_state = dpd_client::ClientState {
         tag: MG_LOWER_TAG.into(),
         log: log.clone(),
     };
-    DpdClient::new(
-        &format!("http://localhost:{}", dpd_client::default_port()),
-        client_state,
-    )
+    DpdClient::new(&format!("http://{addr}"), client_state)
 }

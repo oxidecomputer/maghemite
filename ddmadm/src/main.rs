@@ -26,7 +26,7 @@ struct Arg {
     address: IpAddr,
 
     /// Admin API TCP port.
-    #[arg(short, long, default_value_t = 8000)]
+    #[arg(short, long, default_value_t = ddm_admin_client::default_port())]
     port: u16,
 
     #[clap(subcommand)]
