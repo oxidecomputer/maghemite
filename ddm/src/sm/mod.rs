@@ -68,6 +68,16 @@ pub enum PeerEvent {
     /// machine is responsible for maintaining the path vector and performing
     /// loop breaking.
     Redistribute(ddm_protocol::v3::Update),
+
+    /// Upon reception of this event, a state machine is to expire its peer,
+    /// since a persistent HTTP status ended the pull's ability to retry, or
+    /// the pull worker panicked. The event carries the session's stop flag
+    /// and the peer address the pull targeted, so that a stale event cannot
+    /// expire a later session or a renumbered peer.
+    PullFailed {
+        session: Arc<AtomicBool>,
+        peer: Ipv6Addr,
+    },
 }
 
 #[derive(Debug, Clone)]
