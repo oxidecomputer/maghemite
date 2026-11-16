@@ -4,4 +4,5 @@
 
 //! Functional code for the latest versions of types.
 
+mod admin;
 mod net;

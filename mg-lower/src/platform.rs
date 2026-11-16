@@ -8,7 +8,9 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use ddm_admin_client::types::Error as DdmError;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::{
+    admin::OriginatedPrefix, net::TunnelOrigin,
+};
 use dpd_client::types::{Error as DpdError, *};
 // Use the crate-specific re-exports of progenitor_client types to avoid
 // version conflicts: dpd_client re-exports from progenitor-client 0.11 (via
@@ -187,14 +189,14 @@ pub trait Ddm {
     async fn get_originated(
         &self,
     ) -> Result<
-        ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
+        ddm_admin_client::ResponseValue<Vec<OriginatedPrefix>>,
         ddm_admin_client::Error<DdmError>,
     >;
 
     #[allow(clippy::ptr_arg)]
     async fn advertise_prefixes<'a>(
         &'a self,
-        body: &'a Vec<oxnet::Ipv6Net>,
+        body: &'a Vec<OriginatedPrefix>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
         ddm_admin_client::Error<DdmError>,
@@ -371,7 +373,7 @@ impl Ddm for ProductionDdm {
     async fn get_originated(
         &self,
     ) -> Result<
-        ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
+        ddm_admin_client::ResponseValue<Vec<OriginatedPrefix>>,
         ddm_admin_client::Error<DdmError>,
     > {
         self.client.get_originated().await
@@ -379,7 +381,7 @@ impl Ddm for ProductionDdm {
 
     async fn advertise_prefixes<'a>(
         &'a self,
-        body: &'a Vec<oxnet::Ipv6Net>,
+        body: &'a Vec<OriginatedPrefix>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
         ddm_admin_client::Error<DdmError>,
@@ -699,7 +701,7 @@ pub(crate) mod test {
     /// useful for tests.
     pub(crate) struct TestDdm {
         pub(crate) tunnel_originated: Mutex<Vec<TunnelOrigin>>,
-        pub(crate) originated: Mutex<Vec<oxnet::Ipv6Net>>,
+        pub(crate) originated: Mutex<Vec<OriginatedPrefix>>,
     }
 
     impl Default for TestDdm {
@@ -726,7 +728,7 @@ pub(crate) mod test {
         async fn get_originated(
             &self,
         ) -> Result<
-            ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
+            ddm_admin_client::ResponseValue<Vec<OriginatedPrefix>>,
             ddm_admin_client::Error<DdmError>,
         > {
             Ok(ddm_response_ok!(self.originated.lock().unwrap().clone()))
@@ -734,7 +736,7 @@ pub(crate) mod test {
 
         async fn advertise_prefixes<'a>(
             &'a self,
-            body: &'a Vec<oxnet::Ipv6Net>,
+            body: &'a Vec<OriginatedPrefix>,
         ) -> Result<
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,

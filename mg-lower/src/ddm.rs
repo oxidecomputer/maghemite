@@ -5,7 +5,10 @@
 use crate::log::ddm_log;
 #[cfg(target_os = "illumos")]
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::net::TunnelOrigin;
+use ddm_api_types_versions::latest::{
+    admin::{OriginatedPrefix, PrefixKind},
+    net::TunnelOrigin,
+};
 use oxnet::Ipv6Net;
 use slog::Logger;
 #[cfg(target_os = "illumos")]
@@ -23,7 +26,7 @@ fn ensure_tep_underlay_origin(
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
-    let current: Vec<Ipv6Net> = match rt
+    let current: Vec<OriginatedPrefix> = match rt
         .block_on(async { client.get_originated().await })
         .map(|x| x.into_inner())
     {
@@ -41,7 +44,10 @@ fn ensure_tep_underlay_origin(
     .into_iter()
     .collect();
 
-    let target = Ipv6Net::new(tep, 64).unwrap();
+    let target = OriginatedPrefix {
+        kind: PrefixKind::Underlay,
+        prefix: Ipv6Net::new(tep, 64).unwrap(),
+    };
 
     if current.contains(&target) {
         return;

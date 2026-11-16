@@ -15,6 +15,7 @@ use crate::sm::{
     SmContext,
 };
 use crate::{err, inf, wrn};
+use ddm_api_types::admin::PrefixKind;
 use ddm_api_types::db::RouterKind;
 use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::{v2, v3};
@@ -63,6 +64,18 @@ pub(crate) fn announce_underlay(
     send_update(ctx, config, update.into(), peer, rt, log)
 }
 
+pub(crate) fn announce_bootstrap(
+    ctx: &SmContext,
+    config: Config,
+    prefixes: HashSet<v3::PathVector>,
+    peer: &PeerIdentity,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = v3::BootstrapUpdate::announce(prefixes);
+    send_update(ctx, config, update.into(), peer, rt, log)
+}
+
 pub(crate) fn announce_tunnel(
     ctx: &SmContext,
     config: Config,
@@ -89,6 +102,18 @@ pub(crate) fn withdraw_underlay(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::withdraw(prefixes);
+    send_update(ctx, config, update.into(), peer, rt, log)
+}
+
+pub(crate) fn withdraw_bootstrap(
+    ctx: &SmContext,
+    config: Config,
+    prefixes: HashSet<v3::PathVector>,
+    peer: &PeerIdentity,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = v3::BootstrapUpdate::withdraw(prefixes);
     send_update(ctx, config, update.into(), peer, rt, log)
 }
 
@@ -413,10 +438,11 @@ async fn pull_handler_common(
     let ctx = ctx.context();
 
     let mut underlay = HashSet::new();
+    let mut bootstrap = HashSet::new();
     let mut tunnel = HashSet::new();
 
     if ctx.tx_allowances.redistributed {
-        for route in &ctx.ctx.db.imported() {
+        for route in &ctx.ctx.db.imported_underlay() {
             // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer.addr {
                 continue;
@@ -428,6 +454,17 @@ async fn pull_handler_common(
             pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
+        for route in &ctx.ctx.db.imported_bootstrap() {
+            if route.nexthop == ctx.peer.addr {
+                continue;
+            }
+            let mut pv = v3::PathVector {
+                destination: route.destination,
+                path: route.path.clone(),
+            };
+            pv.path.push(ctx.ctx.router_id.clone());
+            bootstrap.insert(pv);
+        }
         for route in ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer.addr {
                 continue;
@@ -437,14 +474,26 @@ async fn pull_handler_common(
             tunnel.insert(tv);
         }
     }
+
     if ctx.tx_allowances.underlay {
-        let originated = ctx.ctx.db.originated();
+        let originated = ctx.ctx.db.originated_underlay();
         for prefix in &originated {
             let pv = v3::PathVector {
                 destination: *prefix,
                 path: vec![ctx.ctx.router_id.clone()],
             };
             underlay.insert(pv);
+        }
+    }
+
+    if ctx.tx_allowances.bootstrap {
+        let originated = ctx.ctx.db.originated_bootstrap();
+        for prefix in &originated {
+            let pv = v3::PathVector {
+                destination: *prefix,
+                path: vec![ctx.ctx.router_id.clone()],
+            };
+            bootstrap.insert(pv);
         }
     }
 
@@ -472,6 +521,11 @@ async fn pull_handler_common(
         } else {
             Some(underlay)
         },
+        bootstrap: if bootstrap.is_empty() {
+            None
+        } else {
+            Some(bootstrap)
+        },
         tunnel: if tunnel.is_empty() {
             None
         } else {
@@ -493,7 +547,13 @@ fn handle_pull_response(
     // Convert what we hold from this peer into wire types for the diff.
     let held_underlay: HashSet<v3::PathVector> = ctx
         .db
-        .imported_from(peer.addr)
+        .imported_underlay_from(peer.addr)
+        .into_iter()
+        .map(v3::PathVector::from)
+        .collect();
+    let held_bootstrap: HashSet<v3::PathVector> = ctx
+        .db
+        .imported_bootstrap_from(peer.addr)
         .into_iter()
         .map(v3::PathVector::from)
         .collect();
@@ -504,8 +564,12 @@ fn handle_pull_response(
         .map(v3::TunnelOrigin::from)
         .collect();
 
-    let update =
-        v3::Update::from_pull_response(pr, &held_underlay, &held_tunnel);
+    let update = v3::Update::from_pull_response(
+        pr,
+        &held_underlay,
+        &held_bootstrap,
+        &held_tunnel,
+    );
 
     handle_update(&update, ctx, peer);
 }
@@ -521,7 +585,16 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
             wrn!(
                 ctx.log,
                 ctx.config.if_name,
-                "loop detected: dropping announcement: {x:?}"
+                "loop detected: dropping underlay announcement: {x:?}"
+            );
+        }
+    }
+    if let (Some(b), Some(s)) = (&update.bootstrap, &sans_loops.bootstrap) {
+        for x in b.announce.difference(&s.announce) {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "loop detected: dropping bootstrap announcement: {x:?}"
             );
         }
     }
@@ -541,7 +614,23 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     }
 
     if let Some(underlay_update) = &update.underlay {
-        handle_underlay_update(underlay_update, ctx, peer);
+        handle_standard_update(
+            PrefixKind::Underlay,
+            &underlay_update.announce,
+            &underlay_update.withdraw,
+            ctx,
+            peer,
+        );
+    }
+
+    if let Some(bootstrap_update) = &update.bootstrap {
+        handle_standard_update(
+            PrefixKind::Bootstrap,
+            &bootstrap_update.announce,
+            &bootstrap_update.withdraw,
+            ctx,
+            peer,
+        );
     }
 
     if let Some(tunnel_update) = &update.tunnel {
@@ -551,9 +640,9 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     // distribute updates, unless there is nothing to distribute
 
     if ctx.config.kind == RouterKind::Transit
-        && let Err(e) = ctx
-            .tx
-            .send(Event::Peer(PeerEvent::Redistribute(update.clone())))
+        && let Err(e) = ctx.tx.send(Event::Peer(PeerEvent::Redistribute(
+            Box::new(update.clone()),
+        )))
     {
         wrn!(
             ctx.log,
@@ -618,8 +707,10 @@ fn handle_tunnel_update(
     }
 }
 
-fn handle_underlay_update(
-    update: &v3::UnderlayUpdate,
+fn handle_standard_update(
+    kind: PrefixKind,
+    announce: &HashSet<PathVector>,
+    withdraw: &HashSet<PathVector>,
     ctx: &SmContext,
     peer: &PeerIdentity,
 ) {
@@ -627,54 +718,72 @@ fn handle_underlay_update(
     let mut add = Vec::new();
     let db = &ctx.db;
 
-    for prefix in &update.announce {
+    let source = match kind {
+        PrefixKind::Underlay => ctx.db.underlay_addr().map(|a| a.address()),
+        PrefixKind::Bootstrap => Some(ctx.bootstrap_addr),
+    };
+    for prefix in announce {
         import.insert(Route {
             destination: prefix.destination,
             nexthop: peer.addr,
-            ifname: ctx.config.if_name.clone(),
+            addrobj_name: ctx.config.addrobj_name.clone(),
             path: prefix.path.clone(),
+            kind,
         });
-        let mut r = crate::sys::Route::new(
-            prefix.destination.addr().into(),
-            prefix.destination.width(),
-            peer.addr.into(),
-        );
-        r.ifname.clone_from(&ctx.config.if_name);
-        add.push(r);
-    }
-    db.import(&import);
-    crate::sys::add_underlay_routes(&ctx.log, &ctx.config, add, &ctx.rt);
-
-    let mut withdraw = HashSet::new();
-    for prefix in &update.withdraw {
-        withdraw.insert(Route {
-            destination: prefix.destination,
-            nexthop: peer.addr,
-            ifname: ctx.config.if_name.clone(),
-            path: prefix.path.clone(),
-        });
-    }
-    db.delete_import(&withdraw);
-
-    // We cannot simply delete withdrawn routes here. If we have other paths to
-    // the destination with the same nexthop, we'll be left with a route in the
-    // DB but not the underlying forwarding platform. We cannot delete a
-    // (destination, nexthop) pair until all path-vector routes with that tuple
-    // are gone. Another way to say this is that while we track routes by path,
-    // the underlying forwarding platform only knows about a vector. And since
-    // there can be many paths along vector, we can only delete a route from the
-    // forwarding platform if the complete vector is gone.
-    let mut del = Vec::new();
-    for w in &withdraw {
-        if db.routes_by_vector(w.destination, w.nexthop).is_empty() {
+        if let Some(src) = source {
             let mut r = crate::sys::Route::new(
-                w.destination.addr().into(),
-                w.destination.width(),
-                w.nexthop.into(),
+                prefix.destination.addr().into(),
+                prefix.destination.width(),
+                peer.addr.into(),
+                src,
             );
             r.ifname.clone_from(&ctx.config.if_name);
-            del.push(r);
+            add.push(r);
         }
+    }
+    match kind {
+        PrefixKind::Underlay => db.import_underlay(&import),
+        PrefixKind::Bootstrap => db.import_bootstrap(&import),
+    }
+    if source.is_some() {
+        crate::sys::add_underlay_routes(&ctx.log, &ctx.config, add, &ctx.rt);
+    } else {
+        // TODO: nothing installs deferred routes once an underlay address is
+        // set, and changing the address leaves installed routes with the old
+        // source. They stay out of sys until a peer re-announces them.
+        inf!(
+            ctx.log,
+            ctx.config.if_name,
+            "source IP not ready, deferring install of routes into sys"
+        )
+    }
+
+    let mut delete = HashSet::new();
+    for prefix in withdraw {
+        delete.insert(Route {
+            destination: prefix.destination,
+            nexthop: peer.addr,
+            addrobj_name: ctx.config.addrobj_name.clone(),
+            path: prefix.path.clone(),
+            kind,
+        });
+    }
+
+    // We cannot simply delete withdrawn routes from the forwarding platform.
+    // We track routes by path, but the platform only knows about a
+    // (destination, nexthop) vector, and there can be many paths along one
+    // vector. delete_import returns only the vectors whose last path is gone.
+    let mut del = Vec::new();
+    for (destination, nexthop) in db.delete_import(kind, &delete) {
+        // Route removal does not use the source address.
+        let mut r = crate::sys::Route::new(
+            destination.addr().into(),
+            destination.width(),
+            nexthop.into(),
+            Ipv6Addr::UNSPECIFIED,
+        );
+        r.ifname.clone_from(&ctx.config.if_name);
+        del.push(r);
     }
     crate::sys::remove_underlay_routes(
         &ctx.log,

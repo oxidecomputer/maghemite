@@ -132,6 +132,11 @@ struct Arg {
     /// directory should.
     #[arg(long)]
     admin_port_file: Option<Utf8PathBuf>,
+
+    /// The local IP corresponding to the Bootstrap network.
+    /// Used as the RTA_SRC for Bootstrap routes installed into Illumos.
+    #[arg(long)]
+    bootstrap_addr: Ipv6Addr,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -193,6 +198,7 @@ async fn run() {
         peers,
         stats_handler: Arc::new(Mutex::new(None)),
         router_kind: arg.kind,
+        bootstrap_addr: arg.bootstrap_addr,
         tunables: Tunables {
             solicit_interval: Duration::from_millis(arg.solicit_interval),
             expire_threshold: Duration::from_millis(arg.expire_threshold),
@@ -307,6 +313,7 @@ fn start_state_machines(
             tx: tx.clone(),
             log: log.clone(),
             router_id: router_id.to_string(),
+            bootstrap_addr: arg.bootstrap_addr,
             rt: rt.clone(),
             iface: Interface::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
@@ -370,7 +377,7 @@ fn termination_handler(
 
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
-            let imported = db.imported();
+            let imported = db.imported_underlay();
             let routes: Vec<Route> =
                 imported.iter().map(|x| (x.clone()).into()).collect();
             ddm::sys::remove_underlay_routes(

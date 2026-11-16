@@ -15,14 +15,13 @@ use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
 use ddm_api_types::admin::{
-    EnableStatsRequest, ExpirePathParams, PeerStatsPathParams, PrefixMap,
-    RackPrefix,
+    EnableStatsRequest, ExpirePathParams, OriginatedPrefix,
+    PeerStatsPathParams, PrefixKind, PrefixMap, RackPrefix, UnderlayAddress,
 };
 use ddm_api_types::db::{Peer, PeerInfo, PeerStats, RouterKind, TunnelRoute};
-use ddm_api_types::exchange::PathVector;
 use ddm_api_types::external_peers::ExternalPeers;
 use ddm_api_types::net::TunnelOrigin;
-use ddm_api_types_versions::v4;
+use ddm_api_types_versions::{v1, v4};
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ClientErrorStatusCode;
@@ -58,6 +57,7 @@ const UNIT_API_SERVER: &str = "api_server";
 #[derive(Default)]
 pub struct RouterStats {
     pub originated_underlay_prefixes: AtomicU64,
+    pub originated_bootstrap_prefixes: AtomicU64,
     pub originated_tunnel_endpoints: AtomicU64,
 }
 
@@ -69,6 +69,7 @@ pub struct ApiHandlerContext {
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
     pub router_kind: RouterKind,
+    pub bootstrap_addr: Ipv6Addr,
     pub rack_id: Option<Uuid>,
     pub sled_id: Option<Uuid>,
     pub router_id: String,
@@ -104,6 +105,9 @@ enum AdminError {
     #[error("no rack prefix is set")]
     NoRackPrefix,
 
+    #[error("no underlay address is set")]
+    NoUnderlayAddress,
+
     #[error("admin event send: sending on a closed channel")]
     EventSend,
 
@@ -127,7 +131,9 @@ impl From<AdminError> for HttpError {
             | AdminError::AddressObjectInUse(_) => {
                 Self::for_bad_request(None, msg)
             }
-            AdminError::UnknownAddressObject(_) | AdminError::NoRackPrefix => {
+            AdminError::UnknownAddressObject(_)
+            | AdminError::NoRackPrefix
+            | AdminError::NoUnderlayAddress => {
                 // Unlike for_not_found, this sends the message to the
                 // client, so it learns which name was not found.
                 Self::for_client_error(
@@ -335,9 +341,21 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn get_originated(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashSet<OriginatedPrefix>>, HttpError> {
         let ctx = lock!(ctx.context());
-        Ok(HttpResponseOk(ctx.db.originated()))
+        let originated = |kind, prefixes: HashSet<Ipv6Net>| {
+            prefixes
+                .into_iter()
+                .map(move |prefix| OriginatedPrefix { kind, prefix })
+        };
+        Ok(HttpResponseOk(
+            originated(PrefixKind::Underlay, ctx.db.originated_underlay())
+                .chain(originated(
+                    PrefixKind::Bootstrap,
+                    ctx.db.originated_bootstrap(),
+                ))
+                .collect(),
+        ))
     }
 
     async fn get_originated_tunnel_endpoints(
@@ -351,26 +369,31 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<PrefixMap>, HttpError> {
         let ctx = lock!(ctx.context());
-        let imported = ctx.db.imported();
-
         let mut result = PrefixMap::default();
-
-        for route in imported {
-            if let Some(entry) = result.get_mut(&route.nexthop) {
-                entry.insert(PathVector {
-                    destination: route.destination,
-                    path: route.path,
-                });
-            } else {
-                let mut s = HashSet::new();
-                s.insert(PathVector {
-                    destination: route.destination,
-                    path: route.path,
-                });
-                result.insert(route.nexthop, s);
-            }
+        let imported_underlay = ctx.db.imported_underlay();
+        let imported_bootstrap = ctx.db.imported_bootstrap();
+        for route in imported_underlay.into_iter().chain(imported_bootstrap) {
+            result
+                .entry(route.addrobj_name.clone())
+                .or_default()
+                .insert(route.into());
         }
+        Ok(HttpResponseOk(result))
+    }
 
+    async fn get_prefixes_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<v1::admin::PrefixMap>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let mut result = v1::admin::PrefixMap::default();
+        let imported_underlay = ctx.db.imported_underlay();
+        let imported_bootstrap = ctx.db.imported_bootstrap();
+        for route in imported_underlay.into_iter().chain(imported_bootstrap) {
+            result
+                .entry(route.nexthop)
+                .or_default()
+                .insert(route.into());
+        }
         Ok(HttpResponseOk(result))
     }
 
@@ -386,22 +409,46 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn advertise_prefixes(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<Ipv6Net>>,
+        request: TypedBody<HashSet<OriginatedPrefix>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
-        let prefixes = request.into_inner();
-        ctx.db.originate(&prefixes);
+        let mut underlay = HashSet::default();
+        let mut bootstrap = HashSet::default();
+
+        for prefix in request.into_inner() {
+            match prefix.kind {
+                PrefixKind::Underlay => underlay.insert(prefix.prefix),
+                PrefixKind::Bootstrap => bootstrap.insert(prefix.prefix),
+            };
+        }
+
+        ctx.db.originate_underlay(&underlay);
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
-                prefixes.clone(),
+                underlay.clone(),
             ))))
             .map_err(AdminError::from)?;
         }
 
-        ctx.stats
-            .originated_underlay_prefixes
-            .store(ctx.db.originated_count() as u64, Ordering::Relaxed);
+        ctx.stats.originated_underlay_prefixes.store(
+            ctx.db.originated_underlay_count() as u64,
+            Ordering::Relaxed,
+        );
+
+        ctx.db.originate_bootstrap(&bootstrap);
+
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Bootstrap(
+                bootstrap.clone(),
+            ))))
+            .map_err(AdminError::from)?;
+        }
+
+        ctx.stats.originated_bootstrap_prefixes.store(
+            ctx.db.originated_bootstrap_count() as u64,
+            Ordering::Relaxed,
+        );
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -431,22 +478,46 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn withdraw_prefixes(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<Ipv6Net>>,
+        request: TypedBody<HashSet<OriginatedPrefix>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
-        let prefixes = request.into_inner();
-        ctx.db.withdraw(&prefixes);
+        let mut underlay = HashSet::default();
+        let mut bootstrap = HashSet::default();
+
+        for prefix in request.into_inner() {
+            match prefix.kind {
+                PrefixKind::Underlay => underlay.insert(prefix.prefix),
+                PrefixKind::Bootstrap => bootstrap.insert(prefix.prefix),
+            };
+        }
+
+        ctx.db.withdraw_underlay(&underlay);
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
-                prefixes.clone(),
+                underlay.clone(),
             ))))
             .map_err(AdminError::from)?;
         }
 
-        ctx.stats
-            .originated_underlay_prefixes
-            .store(ctx.db.originated_count() as u64, Ordering::Relaxed);
+        ctx.stats.originated_underlay_prefixes.store(
+            ctx.db.originated_underlay_count() as u64,
+            Ordering::Relaxed,
+        );
+
+        ctx.db.withdraw_bootstrap(&bootstrap);
+
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Bootstrap(
+                bootstrap.clone(),
+            ))))
+            .map_err(AdminError::from)?;
+        }
+
+        ctx.stats.originated_bootstrap_prefixes.store(
+            ctx.db.originated_bootstrap_count() as u64,
+            Ordering::Relaxed,
+        );
 
         Ok(HttpResponseUpdatedNoContent())
     }
@@ -613,6 +684,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 tx: tx.clone(),
                 log: ctx.log.clone(),
                 router_id: ctx.router_id.clone(),
+                bootstrap_addr: ctx.bootstrap_addr,
                 rt: Arc::new(tokio::runtime::Handle::current()),
                 iface: Interface::new(InterfaceState::external()),
                 stats: Arc::new(SessionStats::default()),
@@ -716,6 +788,48 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 .map_err(AdminError::from)?;
         }
 
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn get_underlay_address(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<UnderlayAddress>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let address = ctx
+            .db
+            .underlay_addr()
+            .ok_or(AdminError::NoUnderlayAddress)?;
+        Ok(HttpResponseOk(address))
+    }
+
+    async fn set_underlay_address(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<UnderlayAddress>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let address = request.into_inner();
+        let old = ctx.db.underlay_addr();
+        if old == Some(address) {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+        ctx.db.set_underlay_addr(Some(address));
+        info!(
+            ctx.log, "set underlay address";
+            "address" => %address.address(),
+            "old" => ?old.map(|a| a.address())
+        );
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn clear_underlay_address(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        let Some(old) = ctx.db.underlay_addr() else {
+            return Ok(HttpResponseUpdatedNoContent());
+        };
+        ctx.db.set_underlay_addr(None);
+        info!(ctx.log, "clear underlay address"; "old" => %old.address());
         Ok(HttpResponseUpdatedNoContent())
     }
 }

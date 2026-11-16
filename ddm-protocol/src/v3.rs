@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
+    pub bootstrap: Option<BootstrapUpdate>,
     pub tunnel: Option<TunnelUpdate>,
 }
 
@@ -23,9 +24,14 @@ impl Update {
     /// path, because they have already gone through that router.
     pub fn break_loops(&self, router_id: &str) -> Self {
         // compilation barrier. a new route class must be checked here.
-        let Self { underlay, tunnel } = self;
+        let Self {
+            underlay,
+            bootstrap,
+            tunnel,
+        } = self;
         Self {
             underlay: underlay.as_ref().map(|u| u.break_loops(router_id)),
+            bootstrap: bootstrap.as_ref().map(|b| b.break_loops(router_id)),
             tunnel: tunnel.as_ref().map(|t| t.break_loops(router_id)),
         }
     }
@@ -39,11 +45,13 @@ impl Update {
     pub fn from_pull_response(
         pr: PullResponse,
         held_underlay: &HashSet<PathVector>,
+        held_bootstrap: &HashSet<PathVector>,
         held_tunnel: &HashSet<TunnelOrigin>,
     ) -> Self {
         // An absent half means the peer advertises nothing of that kind, which
         // withdraws everything we hold from it.
         let pulled_underlay = pr.underlay.unwrap_or_default();
+        let pulled_bootstrap = pr.bootstrap.unwrap_or_default();
         let pulled_tunnel = pr.tunnel.unwrap_or_default();
 
         let underlay = UnderlayUpdate {
@@ -56,6 +64,16 @@ impl Update {
                 .cloned()
                 .collect(),
         };
+        let bootstrap = BootstrapUpdate {
+            announce: pulled_bootstrap
+                .difference(held_bootstrap)
+                .cloned()
+                .collect(),
+            withdraw: held_bootstrap
+                .difference(&pulled_bootstrap)
+                .cloned()
+                .collect(),
+        };
         let tunnel = TunnelUpdate {
             announce: pulled_tunnel.difference(held_tunnel).cloned().collect(),
             withdraw: held_tunnel.difference(&pulled_tunnel).cloned().collect(),
@@ -65,6 +83,7 @@ impl Update {
         // their handlers with empty sets.
         Self {
             underlay: underlay.into_option(),
+            bootstrap: bootstrap.into_option(),
             tunnel: tunnel.into_option(),
         }
     }
@@ -72,8 +91,13 @@ impl Update {
     /// Whether this update announces or withdraws nothing.
     pub fn is_empty(&self) -> bool {
         // compilation barrier. a new route class must be checked here.
-        let Self { underlay, tunnel } = self;
+        let Self {
+            underlay,
+            bootstrap,
+            tunnel,
+        } = self;
         underlay.as_ref().is_none_or(UnderlayUpdate::is_empty)
+            && bootstrap.as_ref().is_none_or(BootstrapUpdate::is_empty)
             && tunnel.as_ref().is_none_or(TunnelUpdate::is_empty)
     }
 }
@@ -81,6 +105,7 @@ impl Update {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct PullResponse {
     pub underlay: Option<HashSet<PathVector>>,
+    pub bootstrap: Option<HashSet<PathVector>>,
     pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
@@ -91,12 +116,142 @@ pub struct UnderlayUpdate {
 }
 
 impl UnderlayUpdate {
+    /// Whether this update announces or withdraws nothing.
     pub fn is_empty(&self) -> bool {
         self.announce.is_empty() && self.withdraw.is_empty()
     }
 
     pub fn into_option(self) -> Option<Self> {
         if self.is_empty() { None } else { Some(self) }
+    }
+
+    pub fn announce(prefixes: HashSet<PathVector>) -> Self {
+        Self {
+            announce: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn withdraw(prefixes: HashSet<PathVector>) -> Self {
+        Self {
+            withdraw: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn with_path_element(&self, element: String) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+            withdraw: self
+                .withdraw
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+        }
+    }
+    pub fn break_loops(&self, hostname: &str) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .filter(|x| !x.path.iter().any(|h| h == hostname))
+                .cloned()
+                .collect(),
+            withdraw: self.withdraw.clone(),
+        }
+    }
+}
+
+impl From<UnderlayUpdate> for Update {
+    fn from(u: UnderlayUpdate) -> Self {
+        Update {
+            underlay: Some(u),
+            bootstrap: None,
+            tunnel: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct BootstrapUpdate {
+    pub announce: HashSet<PathVector>,
+    pub withdraw: HashSet<PathVector>,
+}
+
+impl BootstrapUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
+    pub fn into_option(self) -> Option<Self> {
+        if self.is_empty() { None } else { Some(self) }
+    }
+
+    pub fn announce(prefixes: HashSet<PathVector>) -> Self {
+        Self {
+            announce: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn withdraw(prefixes: HashSet<PathVector>) -> Self {
+        Self {
+            withdraw: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn with_path_element(&self, element: String) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+            withdraw: self
+                .withdraw
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+        }
+    }
+    pub fn break_loops(&self, hostname: &str) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .filter(|x| !x.path.iter().any(|h| h == hostname))
+                .cloned()
+                .collect(),
+            withdraw: self.withdraw.clone(),
+        }
+    }
+}
+
+impl From<BootstrapUpdate> for Update {
+    fn from(b: BootstrapUpdate) -> Self {
+        Update {
+            underlay: None,
+            bootstrap: Some(b),
+            tunnel: None,
+        }
     }
 }
 
@@ -160,6 +315,16 @@ impl TunnelUpdate {
     }
 }
 
+impl From<TunnelUpdate> for Update {
+    fn from(t: TunnelUpdate) -> Self {
+        Update {
+            underlay: None,
+            bootstrap: None,
+            tunnel: Some(t),
+        }
+    }
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
@@ -180,72 +345,6 @@ pub struct TunnelOrigin {
     /// The routers this route was advertised through, starting with its
     /// originator. Each router appends itself before advertising the route.
     pub path: Vec<String>,
-}
-
-impl UnderlayUpdate {
-    pub fn announce(prefixes: HashSet<PathVector>) -> Self {
-        Self {
-            announce: prefixes,
-            ..Default::default()
-        }
-    }
-    pub fn withdraw(prefixes: HashSet<PathVector>) -> Self {
-        Self {
-            withdraw: prefixes,
-            ..Default::default()
-        }
-    }
-    pub fn with_path_element(&self, element: String) -> Self {
-        Self {
-            announce: self
-                .announce
-                .iter()
-                .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(element.clone());
-                    pv
-                })
-                .collect(),
-            withdraw: self
-                .withdraw
-                .iter()
-                .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(element.clone());
-                    pv
-                })
-                .collect(),
-        }
-    }
-    pub fn break_loops(&self, hostname: &str) -> Self {
-        Self {
-            announce: self
-                .announce
-                .iter()
-                .filter(|x| !x.path.iter().any(|h| h == hostname))
-                .cloned()
-                .collect(),
-            withdraw: self.withdraw.clone(),
-        }
-    }
-}
-
-impl From<UnderlayUpdate> for Update {
-    fn from(u: UnderlayUpdate) -> Self {
-        Update {
-            underlay: Some(u),
-            tunnel: None,
-        }
-    }
-}
-
-impl From<TunnelUpdate> for Update {
-    fn from(t: TunnelUpdate) -> Self {
-        Update {
-            underlay: None,
-            tunnel: Some(t),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -320,22 +419,32 @@ mod test {
         let x = path_vector("fd00:1::/64", &["peer"]);
         let y = path_vector("fd00:2::/64", &["peer"]);
         let z = path_vector("fd00:3::/64", &["peer"]);
+        // We hold bootstrap prefixes B1 and B2 from the peer, and it now
+        // advertises B2 and B3.
+        let b1 = path_vector("fdb0:1::/64", &["peer"]);
+        let b2 = path_vector("fdb0:2::/64", &["peer"]);
+        let b3 = path_vector("fdb0:3::/64", &["peer"]);
         // We hold a tunnel origin from the peer, and it now advertises none.
         let t = tunnel_origin(0);
         let pr = PullResponse {
             underlay: Some(HashSet::from([y.clone(), z.clone()])),
+            bootstrap: Some(HashSet::from([b2.clone(), b3.clone()])),
             tunnel: None,
         };
 
         let update = Update::from_pull_response(
             pr,
             &HashSet::from([x.clone(), y]),
+            &HashSet::from([b1.clone(), b2]),
             &HashSet::from([t.clone()]),
         );
 
         let underlay = update.underlay.expect("underlay changes");
         assert_eq!(underlay.announce, HashSet::from([z]));
         assert_eq!(underlay.withdraw, HashSet::from([x]));
+        let bootstrap = update.bootstrap.expect("bootstrap changes");
+        assert_eq!(bootstrap.announce, HashSet::from([b3]));
+        assert_eq!(bootstrap.withdraw, HashSet::from([b1]));
         let tunnel = update.tunnel.expect("tunnel changes");
         assert_eq!(tunnel.announce, HashSet::new());
         assert_eq!(tunnel.withdraw, HashSet::from([t]));
@@ -348,47 +457,58 @@ mod test {
     fn pull_response_replaces_changed_routes() {
         let old_path = path_vector("fd00:1::/64", &["peer"]);
         let new_path = path_vector("fd00:1::/64", &["far", "peer"]);
+        let old_bootstrap = path_vector("fdb0:1::/64", &["peer"]);
+        let new_bootstrap = path_vector("fdb0:1::/64", &["far", "peer"]);
         let old_metric = tunnel_origin(0);
         let new_metric = tunnel_origin(100);
         let pr = PullResponse {
             underlay: Some(HashSet::from([new_path.clone()])),
+            bootstrap: Some(HashSet::from([new_bootstrap.clone()])),
             tunnel: Some(HashSet::from([new_metric.clone()])),
         };
 
         let update = Update::from_pull_response(
             pr,
             &HashSet::from([old_path.clone()]),
+            &HashSet::from([old_bootstrap.clone()]),
             &HashSet::from([old_metric.clone()]),
         );
 
         let underlay = update.underlay.expect("underlay changes");
         assert_eq!(underlay.announce, HashSet::from([new_path]));
         assert_eq!(underlay.withdraw, HashSet::from([old_path]));
+        let bootstrap = update.bootstrap.expect("bootstrap changes");
+        assert_eq!(bootstrap.announce, HashSet::from([new_bootstrap]));
+        assert_eq!(bootstrap.withdraw, HashSet::from([old_bootstrap]));
         let tunnel = update.tunnel.expect("tunnel changes");
         assert_eq!(tunnel.announce, HashSet::from([new_metric]));
         assert_eq!(tunnel.withdraw, HashSet::from([old_metric]));
     }
 
     // The peer's pull response has the same routes we already hold from it,
-    // so nothing changed. The returned Update must have `underlay: None` and
-    // `tunnel: None`, so that handle_update skips the underlay and tunnel
+    // so nothing changed. The returned Update must have `underlay: None`,
+    // `bootstrap: None`, and `tunnel: None`, so that handle_update skips their
     // handlers instead of running them with empty sets.
     #[test]
     fn pull_response_without_changes_returns_empty_update() {
         let pv = path_vector("fd00:1::/64", &["peer"]);
+        let bs = path_vector("fdb0:1::/64", &["peer"]);
         let t = tunnel_origin(100);
         let pr = PullResponse {
             underlay: Some(HashSet::from([pv.clone()])),
+            bootstrap: Some(HashSet::from([bs.clone()])),
             tunnel: Some(HashSet::from([t.clone()])),
         };
 
         let update = Update::from_pull_response(
             pr,
             &HashSet::from([pv]),
+            &HashSet::from([bs]),
             &HashSet::from([t]),
         );
 
         assert!(update.underlay.is_none());
+        assert!(update.bootstrap.is_none());
         assert!(update.tunnel.is_none());
     }
 }

@@ -15,13 +15,13 @@ use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::v3::{
-    PathVector, TunnelOrigin as WireTunnelOrigin, TunnelUpdate, UnderlayUpdate,
-    Update,
+    BootstrapUpdate, PathVector, TunnelOrigin as WireTunnelOrigin,
+    TunnelUpdate, UnderlayUpdate, Update,
 };
 use libnet::get_ipaddr_info;
 use slog::Logger;
 use std::collections::HashSet;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
@@ -281,16 +281,29 @@ impl Exchange {
         }
     }
 
-    /// The underlay routes we originate for the prefixes in `set`, or None
-    /// if this peer may not receive them.
-    fn originated_underlay(
-        &self,
-        set: PrefixSet,
-    ) -> Option<HashSet<PathVector>> {
+    /// The underlay or bootstrap routes we originate for the prefixes in
+    /// `set`, or None if this peer may not receive them.
+    fn originated(&self, set: PrefixSet) -> Option<HashSet<PathVector>> {
         let prefixes = match set {
-            PrefixSet::Underlay(p) if self.tx_allowances.underlay => p,
-            PrefixSet::Rack(p) if self.tx_allowances.rack => HashSet::from([p]),
-            _ => return None,
+            PrefixSet::Underlay(p) => {
+                if !self.tx_allowances.underlay {
+                    return None;
+                }
+                p
+            }
+            PrefixSet::Bootstrap(p) => {
+                if !self.tx_allowances.bootstrap {
+                    return None;
+                }
+                p
+            }
+            PrefixSet::Rack(p) => {
+                if !self.tx_allowances.rack {
+                    return None;
+                }
+                HashSet::from([p])
+            }
+            PrefixSet::Tunnel(_) => return None,
         };
         Some(
             prefixes
@@ -372,14 +385,16 @@ impl Exchange {
         }
 
         exchange_thread.abort();
-        let (mut to_remove, to_remove_tnl) =
-            self.ctx.db.remove_nexthop_routes(self.peer.addr);
+
+        let (mut to_remove_underlay, mut to_remove_bootstrap, to_remove_tunnel) =
+            self.ctx.db.remove_peer_routes(self.peer.addr);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
-        for x in &to_remove {
+        for x in to_remove_underlay.iter().chain(&to_remove_bootstrap) {
             let mut r = crate::sys::Route::new(
                 x.destination.addr().into(),
                 x.destination.width(),
                 x.nexthop.into(),
+                Ipv6Addr::UNSPECIFIED,
             );
             r.ifname.clone_from(&self.ctx.config.if_name);
             routes.push(r);
@@ -396,14 +411,14 @@ impl Exchange {
             && let Err(e) = crate::sys::remove_tunnel_routes(
                 &self.log,
                 &self.ctx.config.if_name,
-                &to_remove_tnl,
+                &to_remove_tunnel,
             )
         {
             err!(
                 self.log,
                 self.ctx.config.if_name,
                 "failed to remove tunnel routes: {:#?} {e}",
-                to_remove_tnl
+                to_remove_tunnel
             );
         }
         if self.ctx.config.kind != RouterKind::Transit {
@@ -421,14 +436,14 @@ impl Exchange {
 
         // Only send withdraws for expirations that result in a total loss
         // of reachability to a destination for the given path.
-        let imported = self.ctx.db.imported();
+        let imported = self.ctx.db.imported_underlay();
         dbg!(self.log, self.ctx.config.if_name, "imported: {imported:#?}");
         dbg!(
             self.log,
             self.ctx.config.if_name,
-            "to_remove: {to_remove:#?}"
+            "to_remove: {to_remove_underlay:#?}"
         );
-        to_remove.retain(|x| {
+        to_remove_underlay.retain(|x| {
             !imported
                 .iter()
                 .any(|y| y.destination == x.destination && y.path == x.path)
@@ -436,14 +451,13 @@ impl Exchange {
         dbg!(
             self.log,
             self.ctx.config.if_name,
-            "to_remove (retained): {to_remove:#?}"
+            "to_remove (retained): {to_remove_underlay:#?}"
         );
-
-        let underlay = if to_remove.is_empty() {
+        let underlay = if to_remove_underlay.is_empty() {
             None
         } else {
             Some(UnderlayUpdate::withdraw(
-                to_remove
+                to_remove_underlay
                     .iter()
                     .map(|x| PathVector {
                         destination: x.destination,
@@ -457,19 +471,60 @@ impl Exchange {
             ))
         };
 
+        // Only send withdraws for expirations that result in a total loss
+        // of reachability to a destination for the given path.
+        let imported_bootstrap = self.ctx.db.imported_bootstrap();
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "imported: {imported_bootstrap:#?}"
+        );
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "to_remove: {to_remove_bootstrap:#?}"
+        );
+        to_remove_bootstrap.retain(|x| {
+            !imported_bootstrap
+                .iter()
+                .any(|y| y.destination == x.destination && y.path == x.path)
+        });
+        dbg!(
+            self.log,
+            self.ctx.config.if_name,
+            "to_remove (retained): {to_remove_bootstrap:#?}"
+        );
+        let bootstrap = if to_remove_bootstrap.is_empty() {
+            None
+        } else {
+            Some(BootstrapUpdate::withdraw(
+                to_remove_bootstrap
+                    .iter()
+                    .map(|x| PathVector {
+                        destination: x.destination,
+                        path: {
+                            let mut ps = x.path.clone();
+                            ps.push(self.ctx.router_id.clone());
+                            ps
+                        },
+                    })
+                    .collect(),
+            ))
+        };
         // Withdraw only the paths that no other peer still provides. A path
         // that another peer provides is still reachable through us.
-        let still_imported: HashSet<_> = self
+        let still_imported_tunnel: HashSet<_> = self
             .ctx
             .db
             .imported_tunnel()
             .into_iter()
             .map(WireTunnelOrigin::from)
             .collect();
-        let to_withdraw_tnl: HashSet<WireTunnelOrigin> = to_remove_tnl
+
+        let to_withdraw_tnl: HashSet<WireTunnelOrigin> = to_remove_tunnel
             .into_iter()
             .map(WireTunnelOrigin::from)
-            .filter(|x| !still_imported.contains(x))
+            .filter(|x| !still_imported_tunnel.contains(x))
             .collect();
         let tunnel = if to_withdraw_tnl.is_empty() {
             None
@@ -480,12 +535,16 @@ impl Exchange {
             )
         };
 
-        let push = Update { underlay, tunnel };
+        let push = Update {
+            underlay,
+            bootstrap,
+            tunnel,
+        };
         if push.is_empty() {
             return;
         }
         super::send(
-            Event::Peer(PeerEvent::Push(push)),
+            Event::Peer(PeerEvent::Push(Box::new(push))),
             &mut self.ctx.event_channels,
         );
     }
@@ -559,7 +618,7 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(
                     set @ (PrefixSet::Underlay(_) | PrefixSet::Rack(_)),
                 )) => {
-                    let Some(pv) = self.originated_underlay(set) else {
+                    let Some(pv) = self.originated(set) else {
                         continue;
                     };
                     let Err(e) = crate::exchange::announce_underlay(
@@ -573,11 +632,58 @@ impl State for Exchange {
                         continue;
                     };
 
-                    err!(self.log, self.ctx.config.if_name, "announce: {}", e,);
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "underlay announce: {e}"
+                    );
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "expiring peer {} due to failed announce",
+                        "expiring peer {} due to failed underlay announce",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
+
+                Event::Admin(AdminEvent::Announce(
+                    set @ PrefixSet::Bootstrap(_),
+                )) => {
+                    let Some(pv) = self.originated(set) else {
+                        continue;
+                    };
+                    let Err(e) = crate::exchange::announce_bootstrap(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        pv,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "bootstrap announce: {e}"
+                    );
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed bootstrap announce",
                         self.peer,
                     );
                     self.expire_peer(
@@ -641,7 +747,7 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Withdraw(
                     set @ (PrefixSet::Underlay(_) | PrefixSet::Rack(_)),
                 )) => {
-                    let Some(pv) = self.originated_underlay(set) else {
+                    let Some(pv) = self.originated(set) else {
                         continue;
                     };
                     let Err(e) = crate::exchange::withdraw_underlay(
@@ -655,11 +761,57 @@ impl State for Exchange {
                         continue;
                     };
 
-                    err!(self.log, self.ctx.config.if_name, "withdraw: {}", e,);
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "underlay withdraw: {e}"
+                    );
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "expiring peer {} due to failed withdraw",
+                        "expiring peer {} due to failed underlay withdraw",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
+                Event::Admin(AdminEvent::Withdraw(
+                    set @ PrefixSet::Bootstrap(_),
+                )) => {
+                    let Some(pv) = self.originated(set) else {
+                        continue;
+                    };
+                    let Err(e) = crate::exchange::withdraw_bootstrap(
+                        &self.ctx,
+                        self.ctx.config.clone(),
+                        pv,
+                        &self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) else {
+                        continue;
+                    };
+
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "bootstrap withdraw: {e}"
+                    );
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "expiring peer {} due to failed bootstrap withdraw",
                         self.peer,
                     );
                     self.expire_peer(
@@ -777,7 +929,16 @@ impl State for Exchange {
                     let push = Update {
                         underlay: Some(
                             UnderlayUpdate::announce(
-                                db.imported_from(self.peer.addr)
+                                db.imported_underlay_from(self.peer.addr)
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                            )
+                            .with_path_element(self.ctx.router_id.clone()),
+                        ),
+                        bootstrap: Some(
+                            BootstrapUpdate::announce(
+                                db.imported_bootstrap_from(self.peer.addr)
                                     .into_iter()
                                     .map(Into::into)
                                     .collect(),
@@ -795,7 +956,8 @@ impl State for Exchange {
                         ),
                     };
                     if !push.is_empty() {
-                        let _ = tx.send(Event::Peer(PeerEvent::Push(push)));
+                        let _ = tx
+                            .send(Event::Peer(PeerEvent::Push(Box::new(push))));
                     }
                     // Register unconditionally, as Init and Solicit do. A
                     // channel whose peer has already shut down is pruned the
@@ -828,7 +990,7 @@ impl State for Exchange {
                     let Err(e) = crate::exchange::send_update(
                         &self.ctx,
                         self.ctx.config.clone(),
-                        update,
+                        *update,
                         &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
@@ -856,20 +1018,31 @@ impl State for Exchange {
                         event,
                     );
                 }
-                Event::Peer(PeerEvent::Redistribute(mut update)) => {
+                Event::Peer(PeerEvent::Redistribute(update)) => {
                     dbg!(
                         self.log,
                         self.ctx.config.if_name,
                         "redistributing update to {} peers",
                         self.ctx.event_channels.len()
                     );
+
+                    let Update {
+                        mut underlay,
+                        mut bootstrap,
+                        mut tunnel,
+                    } = *update;
+
                     // handle_update already removed the announcements that
                     // went through us.
-                    update.underlay = update.underlay.map(|u| {
+                    underlay = underlay.map(|u| {
                         u.with_path_element(self.ctx.router_id.clone())
                     });
 
-                    if let Some(t) = update.tunnel.as_mut() {
+                    bootstrap = bootstrap.map(|u| {
+                        u.with_path_element(self.ctx.router_id.clone())
+                    });
+
+                    tunnel = tunnel.map(|mut t| {
                         // A path withdrawn by this peer that another peer
                         // still provides remains reachable through us.
                         let still_imported: HashSet<_> = self
@@ -880,14 +1053,20 @@ impl State for Exchange {
                             .map(WireTunnelOrigin::from)
                             .collect();
                         t.withdraw.retain(|x| !still_imported.contains(x));
-                        *t = t.with_path_element(&self.ctx.router_id);
-                    }
+                        t.with_path_element(&self.ctx.router_id)
+                    });
 
-                    if update.is_empty() {
+                    let new_update = Update {
+                        underlay,
+                        bootstrap,
+                        tunnel,
+                    };
+
+                    if new_update.is_empty() {
                         continue;
                     }
                     super::send(
-                        Event::Peer(PeerEvent::Push(update)),
+                        Event::Peer(PeerEvent::Push(Box::new(new_update))),
                         &mut self.ctx.event_channels,
                     );
                 }
