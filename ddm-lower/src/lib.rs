@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv6Addr;
 
+pub mod dendrite;
 #[cfg(target_os = "illumos")]
 pub mod illumos;
 
