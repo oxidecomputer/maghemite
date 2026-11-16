@@ -31,15 +31,22 @@ pub struct Route {
     pub prefix_len: u8,
     pub gw: IpAddr,
     pub ifname: String,
+    pub source: Ipv6Addr,
 }
 
 impl Route {
-    pub fn new(dest: IpAddr, prefix_len: u8, gw: IpAddr) -> Self {
+    pub fn new(
+        dest: IpAddr,
+        prefix_len: u8,
+        gw: IpAddr,
+        source: Ipv6Addr,
+    ) -> Self {
         Self {
             dest,
             prefix_len,
             gw,
             ifname: String::new(),
+            source,
         }
     }
 }
@@ -439,7 +446,7 @@ pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
             dst,
             gw,
             Some(ifname.into()),
-            None,
+            Some(r.source),
         ) {
             err!(log, ifname, "set route: {}", e);
         }

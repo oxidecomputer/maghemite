@@ -7,11 +7,15 @@
 pub mod admin {
     pub use crate::v1::admin::EnableStatsRequest;
     pub use crate::v1::admin::ExpirePathParams;
-    pub use crate::v1::admin::PrefixMap;
 
     pub use crate::v5::admin::PeerStatsPathParams;
 
+    pub use crate::v6::admin::LearnedPrefix;
+    pub use crate::v6::admin::OriginatedPrefix;
+    pub use crate::v6::admin::PrefixKind;
+    pub use crate::v6::admin::PrefixMap;
     pub use crate::v6::admin::RackPrefix;
+    pub use crate::v6::admin::UnderlayAddress;
 }
 
 pub mod db {
@@ -21,8 +25,8 @@ pub mod db {
 
     pub use crate::v5::db::Peer;
     pub use crate::v5::db::PeerInfo;
-    pub use crate::v5::db::PeerStats;
 
+    pub use crate::v6::db::PeerStats;
     pub use crate::v6::db::TunnelRoute;
 }
 

@@ -2,17 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types_versions::latest;
-use ddm_api_types_versions::v1;
-use ddm_api_types_versions::v2;
-use ddm_api_types_versions::v3;
-use ddm_api_types_versions::v4;
-use dropshot::HttpError;
-use dropshot::HttpResponseOk;
-use dropshot::HttpResponseUpdatedNoContent;
-use dropshot::Path;
-use dropshot::RequestContext;
-use dropshot::TypedBody;
+use ddm_api_types_versions::{v1, v2, v3, v4, v5, v6};
+use dropshot::{
+    HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
+    RequestContext, TypedBody,
+};
 use dropshot_api_manager_types::api_versions;
 use oxnet::Ipv6Net;
 use std::collections::{HashMap, HashSet};
@@ -62,7 +56,7 @@ pub trait DdmAdminApi {
     }]
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<String, latest::db::PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<String, v5::db::PeerInfo>>, HttpError>;
 
     #[endpoint {
         operation_id = "get_peers",
@@ -109,16 +103,33 @@ pub trait DdmAdminApi {
     }]
     async fn expire_peer(
         ctx: RequestContext<Self::Context>,
-        params: Path<latest::admin::ExpirePathParams>,
+        params: Path<v1::admin::ExpirePathParams>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
         method = GET,
         path = "/originated",
+        versions = VERSION_MULTIRACK..,
     }]
     async fn get_originated(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashSet<v6::admin::OriginatedPrefix>>, HttpError>;
+
+    #[endpoint {
+        operation_id = "get_originated",
+        method = GET,
+        path = "/originated",
+        versions = ..VERSION_MULTIRACK,
+    }]
+    async fn get_originated_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError> {
+        // Before MULTIRACK, prefixes carried no kind.
+        let resp = Self::get_originated(ctx).await?;
+        Ok(HttpResponseOk(
+            resp.0.into_iter().map(|p| p.prefix).collect(),
+        ))
+    }
 
     #[endpoint {
         method = GET,
@@ -127,7 +138,7 @@ pub trait DdmAdminApi {
     }]
     async fn get_originated_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<latest::net::TunnelOrigin>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashSet<v1::net::TunnelOrigin>>, HttpError>;
 
     #[endpoint {
         operation_id = "get_originated_tunnel_endpoints",
@@ -144,10 +155,21 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = GET,
         path = "/prefixes",
+        versions = VERSION_MULTIRACK..,
     }]
     async fn get_prefixes(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<latest::admin::PrefixMap>, HttpError>;
+    ) -> Result<HttpResponseOk<v6::admin::PrefixMap>, HttpError>;
+
+    #[endpoint {
+        operation_id = "get_prefixes",
+        method = GET,
+        path = "/prefixes",
+        versions = ..VERSION_MULTIRACK,
+    }]
+    async fn get_prefixes_v1(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<v1::admin::PrefixMap>, HttpError>;
 
     /// Get the tunnel routes imported from peers.
     ///
@@ -159,7 +181,7 @@ pub trait DdmAdminApi {
     }]
     async fn get_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<latest::db::TunnelRoute>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashSet<v6::db::TunnelRoute>>, HttpError>;
 
     #[endpoint {
         operation_id = "get_tunnel_endpoints",
@@ -190,11 +212,35 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = PUT,
         path = "/prefix",
+        versions = VERSION_MULTIRACK..,
     }]
     async fn advertise_prefixes(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<Ipv6Net>>,
+        request: TypedBody<HashSet<v6::admin::OriginatedPrefix>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        operation_id = "advertise_prefixes",
+        method = PUT,
+        path = "/prefix",
+        versions = ..VERSION_MULTIRACK,
+    }]
+    async fn advertise_prefixes_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<Ipv6Net>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        // Before MULTIRACK, every originated prefix was an underlay prefix.
+        let request = request.map(|prefixes| {
+            prefixes
+                .into_iter()
+                .map(|prefix| v6::admin::OriginatedPrefix {
+                    kind: v6::admin::PrefixKind::Underlay,
+                    prefix,
+                })
+                .collect()
+        });
+        Self::advertise_prefixes(ctx, request).await
+    }
 
     #[endpoint {
         method = PUT,
@@ -203,7 +249,7 @@ pub trait DdmAdminApi {
     }]
     async fn advertise_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
+        request: TypedBody<HashSet<v1::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
@@ -222,11 +268,35 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/prefix",
+        versions = VERSION_MULTIRACK..,
     }]
     async fn withdraw_prefixes(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<Ipv6Net>>,
+        request: TypedBody<HashSet<v6::admin::OriginatedPrefix>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        operation_id = "withdraw_prefixes",
+        method = DELETE,
+        path = "/prefix",
+        versions = ..VERSION_MULTIRACK,
+    }]
+    async fn withdraw_prefixes_v1(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<HashSet<Ipv6Net>>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        // Before MULTIRACK, every originated prefix was an underlay prefix.
+        let request = request.map(|prefixes| {
+            prefixes
+                .into_iter()
+                .map(|prefix| v6::admin::OriginatedPrefix {
+                    kind: v6::admin::PrefixKind::Underlay,
+                    prefix,
+                })
+                .collect()
+        });
+        Self::withdraw_prefixes(ctx, request).await
+    }
 
     #[endpoint {
         method = DELETE,
@@ -235,7 +305,7 @@ pub trait DdmAdminApi {
     }]
     async fn withdraw_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<HashSet<latest::net::TunnelOrigin>>,
+        request: TypedBody<HashSet<v1::net::TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
@@ -265,7 +335,7 @@ pub trait DdmAdminApi {
     }]
     async fn enable_stats(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::admin::EnableStatsRequest>,
+        request: TypedBody<v1::admin::EnableStatsRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
@@ -283,7 +353,7 @@ pub trait DdmAdminApi {
     }]
     async fn set_external_peers(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::external_peers::ExternalPeers>,
+        request: TypedBody<v3::external_peers::ExternalPeers>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint {
@@ -306,7 +376,7 @@ pub trait DdmAdminApi {
     }]
     async fn get_external_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<latest::external_peers::ExternalPeers>, HttpError>;
+    ) -> Result<HttpResponseOk<v3::external_peers::ExternalPeers>, HttpError>;
 
     #[endpoint {
         operation_id = "get_external_peers",
@@ -331,7 +401,7 @@ pub trait DdmAdminApi {
     }]
     async fn get_rack_prefix(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<latest::admin::RackPrefix>, HttpError>;
+    ) -> Result<HttpResponseOk<v6::admin::RackPrefix>, HttpError>;
 
     /// Set the rack prefix this router originates.
     ///
@@ -343,7 +413,7 @@ pub trait DdmAdminApi {
     }]
     async fn set_rack_prefix(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<latest::admin::RackPrefix>,
+        request: TypedBody<v6::admin::RackPrefix>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     /// Stop originating a rack prefix.
@@ -358,16 +428,71 @@ pub trait DdmAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
+    /// Get the underlay address of this router.
+    ///
+    /// Returns 404 if none is set.
+    #[endpoint {
+        method = GET,
+        path = "/underlay-address",
+        versions = VERSION_MULTIRACK..,
+    }]
+    async fn get_underlay_address(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<v6::admin::UnderlayAddress>, HttpError>;
+
+    /// Set the underlay address of this router.
+    ///
+    /// Replaces any previous underlay address.
+    #[endpoint {
+        method = PUT,
+        path = "/underlay-address",
+        versions = VERSION_MULTIRACK..,
+    }]
+    async fn set_underlay_address(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<v6::admin::UnderlayAddress>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Clear the underlay address of this router.
+    ///
+    /// Succeeds if none is set.
+    #[endpoint {
+        method = DELETE,
+        path = "/underlay-address",
+        versions = VERSION_MULTIRACK..,
+    }]
+    async fn clear_underlay_address(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
     /// Get the counters of the routing session on each address object, keyed
     /// by address object name.
     #[endpoint {
         method = GET,
         path = "/stats/peers",
-        versions = VERSION_PEER_STATS..,
+        versions = VERSION_MULTIRACK..,
     }]
     async fn get_peers_stats(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<String, latest::db::PeerStats>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<String, v6::db::PeerStats>>, HttpError>;
+
+    /// Get the counters of the routing session on each address object, keyed
+    /// by address object name.
+    #[endpoint {
+        operation_id = "get_peers_stats",
+        method = GET,
+        path = "/stats/peers",
+        versions = VERSION_PEER_STATS..VERSION_MULTIRACK,
+    }]
+    async fn get_peers_stats_v5(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<String, v5::db::PeerStats>>, HttpError>
+    {
+        let resp = Self::get_peers_stats(ctx).await?;
+        Ok(HttpResponseOk(
+            resp.0.into_iter().map(|(k, v)| (k, v.into())).collect(),
+        ))
+    }
 
     /// Get the counters of the routing session on one address object.
     ///
@@ -377,10 +502,29 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = GET,
         path = "/stats/peer/{aobj_name}",
-        versions = VERSION_PEER_STATS..,
+        versions = VERSION_MULTIRACK..,
     }]
     async fn get_peer_stats(
         ctx: RequestContext<Self::Context>,
-        params: Path<latest::admin::PeerStatsPathParams>,
-    ) -> Result<HttpResponseOk<latest::db::PeerStats>, HttpError>;
+        params: Path<v5::admin::PeerStatsPathParams>,
+    ) -> Result<HttpResponseOk<v6::db::PeerStats>, HttpError>;
+
+    /// Get the counters of the routing session on one address object.
+    ///
+    /// Address object names contain a `/` (e.g. `tfportqsfp0_0/v6`), which
+    /// must be percent-encoded as `%2F` in the path. Returns 404 if no
+    /// session uses the address object.
+    #[endpoint {
+        operation_id = "get_peer_stats",
+        method = GET,
+        path = "/stats/peer/{aobj_name}",
+        versions = VERSION_PEER_STATS..VERSION_MULTIRACK,
+    }]
+    async fn get_peer_stats_v5(
+        ctx: RequestContext<Self::Context>,
+        params: Path<v5::admin::PeerStatsPathParams>,
+    ) -> Result<HttpResponseOk<v5::db::PeerStats>, HttpError> {
+        let resp = Self::get_peer_stats(ctx, params).await?;
+        Ok(HttpResponseOk(resp.0.into()))
+    }
 }

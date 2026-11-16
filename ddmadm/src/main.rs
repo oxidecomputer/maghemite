@@ -7,7 +7,9 @@ use clap::Parser;
 use client_common::println_nopipe;
 use colored::*;
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::admin::RackPrefix;
+use ddm_api_types_versions::latest::admin::{
+    OriginatedPrefix, PrefixKind, RackPrefix, UnderlayAddress,
+};
 use ddm_api_types_versions::latest::db::{PeerStats, PeerStatus, RouterKind};
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net as types;
@@ -94,11 +96,38 @@ enum SubCommand {
 
     /// Stop originating a rack prefix from a transit router.
     ClearRackPrefix,
+
+    /// Get the underlay address of this router.
+    GetUnderlayAddress,
+
+    /// Set the underlay address of this router.
+    SetUnderlayAddress {
+        address: Ipv6Addr,
+    },
+
+    /// Clear the underlay address of this router.
+    ClearUnderlayAddress,
 }
 
 #[derive(Debug, Parser)]
 struct Prefixes {
+    /// The kind of route to advertise or withdraw the prefixes as.
+    #[arg(short, long, default_value = "underlay")]
+    kind: PrefixKind,
+
     prefixes: Vec<Ipv6Net>,
+}
+
+impl Prefixes {
+    fn originated(&self) -> Vec<OriginatedPrefix> {
+        self.prefixes
+            .iter()
+            .map(|&prefix| OriginatedPrefix {
+                kind: self.kind,
+                prefix,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -219,24 +248,27 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
                 "Destination".dimmed(),
-                "Next Hop".dimmed(),
+                "Kind".dimmed(),
+                "Address Object".dimmed(),
                 "Path".dimmed(),
             )?;
-            for (nexthop, mut destinations) in msg.into_inner() {
-                for pv in &mut destinations {
-                    // show path from perspective of this node, e.g. nearest node
-                    // first
-                    if let Some(p) = pv.path.pop() {
-                        writeln!(
-                            &mut tw,
-                            "{}\t{}\t{}",
-                            pv.destination, nexthop, p,
-                        )?;
-                    }
-                    for p in &pv.path {
-                        writeln!(&mut tw, "\t\t{}", p,)?;
+            for (addrobj, prefixes) in msg.into_inner() {
+                for lp in prefixes {
+                    // show path from perspective of this node, e.g. nearest
+                    // node first, one node per line
+                    let mut path = lp.path.iter().rev();
+                    writeln!(
+                        &mut tw,
+                        "{}\t{}\t{}\t{}",
+                        lp.prefix,
+                        lp.kind,
+                        addrobj,
+                        path.next().map_or("", String::as_str),
+                    )?;
+                    for p in path {
+                        writeln!(&mut tw, "\t\t\t{}", p)?;
                     }
                 }
             }
@@ -245,17 +277,17 @@ async fn run() -> Result<()> {
         SubCommand::GetOriginated => {
             let msg = client.get_originated().await?;
             let mut tw = TabWriter::new(stdout());
-            writeln!(&mut tw, "{}", "Prefix".dimmed(),)?;
-            for prefix in msg.into_inner() {
-                writeln!(&mut tw, "{}", prefix)?;
+            writeln!(&mut tw, "{}\t{}", "Prefix".dimmed(), "Kind".dimmed(),)?;
+            for op in msg.into_inner() {
+                writeln!(&mut tw, "{}\t{}", op.prefix, op.kind)?;
             }
             tw.flush()?;
         }
         SubCommand::AdvertisePrefixes(ac) => {
-            client.advertise_prefixes(&ac.prefixes).await?;
+            client.advertise_prefixes(&ac.originated()).await?;
         }
         SubCommand::WithdrawPrefixes(ac) => {
-            client.withdraw_prefixes(&ac.prefixes).await?;
+            client.withdraw_prefixes(&ac.originated()).await?;
         }
         SubCommand::TunnelImported => {
             let msg = client.get_tunnel_endpoints().await?;
@@ -374,12 +406,39 @@ async fn run() -> Result<()> {
         SubCommand::ClearRackPrefix => {
             client.clear_rack_prefix().await?;
         }
+        SubCommand::GetUnderlayAddress => {
+            // The API returns 404 when no underlay address is set. Show that
+            // as an empty table, as get-rack-prefix does.
+            let address = match client.get_underlay_address().await {
+                Ok(ua) => Some(ua.into_inner().address()),
+                Err(ddm_admin_client::Error::ErrorResponse(rv))
+                    if rv.status() == 404 =>
+                {
+                    None
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let mut tw = TabWriter::new(stdout());
+            writeln!(&mut tw, "{}", "Address".dimmed())?;
+            if let Some(address) = address {
+                writeln!(&mut tw, "{}", address)?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::SetUnderlayAddress { address } => {
+            let address =
+                UnderlayAddress::new(address).map_err(anyhow::Error::msg)?;
+            client.set_underlay_address(&address).await?;
+        }
+        SubCommand::ClearUnderlayAddress => {
+            client.clear_underlay_address().await?;
+        }
     }
 
     Ok(())
 }
 
-fn peer_stats_rows(s: &PeerStats) -> [(&'static str, u64); 12] {
+fn peer_stats_rows(s: &PeerStats) -> [(&'static str, u64); 13] {
     // compilation barrier. a new counter must be shown here.
     let PeerStats {
         solicitations_sent,
@@ -393,6 +452,7 @@ fn peer_stats_rows(s: &PeerStats) -> [(&'static str, u64); 12] {
         updates_received,
         update_send_fail,
         imported_underlay_prefixes,
+        imported_bootstrap_prefixes,
         imported_tunnel_endpoints,
     } = *s;
     [
@@ -407,6 +467,7 @@ fn peer_stats_rows(s: &PeerStats) -> [(&'static str, u64); 12] {
         ("Updates received", updates_received),
         ("Update send failures", update_send_fail),
         ("Imported underlay prefixes", imported_underlay_prefixes),
+        ("Imported bootstrap prefixes", imported_bootstrap_prefixes),
         ("Imported tunnel endpoints", imported_tunnel_endpoints),
     ]
 }

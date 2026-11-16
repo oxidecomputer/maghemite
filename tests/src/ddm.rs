@@ -5,12 +5,15 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
-use ddm_api_types_versions::latest::admin::RackPrefix;
+use ddm_api_types_versions::latest::admin::{
+    OriginatedPrefix, PrefixKind, RackPrefix,
+};
 use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use slog::{Drain, Logger};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::net::Ipv6Addr;
@@ -151,6 +154,9 @@ struct RouterZone<'a> {
     transit: bool,
     testname: String,
     port_map: BTreeMap<String, String>,
+    /// Set by `setup`. Picks the zone's addresses, such as its underlay
+    /// address `fd00:<index>::1`.
+    index: Cell<u8>,
 }
 
 impl<'a> RouterZone<'a> {
@@ -203,6 +209,7 @@ impl<'a> RouterZone<'a> {
             transit,
             testname: testname.into(),
             port_map: BTreeMap::default(),
+            index: Cell::new(0),
         })
     }
 
@@ -244,9 +251,13 @@ impl<'a> RouterZone<'a> {
 
         let ddm = "/opt/ddmd";
 
+        let index = self.index.get();
+
         // Tighter solicit interval and expire threshold are to speed up tests.
+        // No test installs bootstrap routes yet, so the bootstrap address is
+        // not configured in the zone.
         let extra_args = format!(
-            "--rack-uuid {} --sled-uuid {} --solicit-interval 200 --expire-threshold 500",
+            "--rack-uuid {} --sled-uuid {} --solicit-interval 200 --expire-threshold 500 --bootstrap-addr fdb0:{index}::1",
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),
         );
@@ -297,11 +308,22 @@ impl<'a> RouterZone<'a> {
                 "RUST_LOG=trace RUST_BACKTRACE=1", extra_args, addrs
             ))?;
         }
+
+        // ddmd installs no underlay routes until it has an underlay address.
+        // Use the address `setup` puts on lo0, retrying until ddmd listens.
+        retry_cmd!(
+            self.zone.zexec(&format!(
+                "/opt/ddmadm -a ::1 set-underlay-address fd00:{index}::1"
+            )),
+            1,
+            10
+        );
         Ok(())
     }
 
     fn setup(&self, index: u8) -> Result<()> {
         println_nopipe!("running zone {} setup", self.zone.name);
+        self.index.set(index);
 
         let z = Zlogin::new(&self.zone.name);
         self.zone.wait_for_network()?;
@@ -529,7 +551,7 @@ async fn run_trio_tests(
 
     println_nopipe!("initial peering test passed");
 
-    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+    s1.advertise_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
         .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 0);
@@ -538,7 +560,7 @@ async fn run_trio_tests(
 
     println_nopipe!("advertise from one passed");
 
-    s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+    s2.advertise_prefixes(&underlay(["fd00:2::/64".parse().unwrap()]))
         .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 1);
@@ -556,6 +578,8 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 0);
     zt1.start_router(false)?;
+    wait_for_eq!(peer_count(&t1).await.unwrap_or(99), 2);
+    expire_all_peers(&t1).await?;
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await.unwrap_or(99), 2);
@@ -570,11 +594,13 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&t1).await?, 1);
     softnpu_dump!(softnpu);
     zs1.start_router(false)?;
+    wait_for_eq!(peer_count(&s1).await.unwrap_or(99), 1);
+    expire_all_peers(&s1).await?;
 
     // After restarting a server router we must re-advertise its prefixes via
     // the client API. This simulates the omicron ddm reconciler doing its job.
     wait_for_eq!(
-        s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        s1.advertise_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
             .await
             .is_ok(),
         true
@@ -586,7 +612,7 @@ async fn run_trio_tests(
     softnpu_dump!(softnpu);
 
     // Re-advertising is idempotent
-    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+    s1.advertise_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
         .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 1);
@@ -628,14 +654,14 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
-    s2.withdraw_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+    s2.withdraw_prefixes(&underlay(["fd00:2::/64".parse().unwrap()]))
         .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 1);
 
-    s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+    s2.advertise_prefixes(&underlay(["fd00:2::/64".parse().unwrap()]))
         .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 1);
@@ -644,11 +670,11 @@ async fn run_trio_tests(
 
     println_nopipe!("peer expiration recovery passed");
 
-    s2.advertise_prefixes(&vec![
+    s2.advertise_prefixes(&underlay([
         "fd00:2::/64".parse().unwrap(),
         "fd00:3::/64".parse().unwrap(),
         "fd00:4::/64".parse().unwrap(),
-    ])
+    ]))
     .await?;
     // ensure that when an advertisement with a duplicate route is made, all
     // routes make it in the kernel of receivers.
@@ -834,10 +860,10 @@ async fn run_quartet_tests(
 
     println_nopipe!("initial peering test passed");
 
-    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+    s1.advertise_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
         .await?;
 
-    s3.advertise_prefixes(&vec!["fd00:3::/64".parse().unwrap()])
+    s3.advertise_prefixes(&underlay(["fd00:3::/64".parse().unwrap()]))
         .await?;
 
     // s1/s3 should now have 1 prefix
@@ -848,20 +874,20 @@ async fn run_quartet_tests(
     retry_cmd!(zs3.zexec("ping fd00:1::1"), 1, 10);
 
     // s2 hijacks s1's prefix
-    s2.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+    s2.advertise_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
         .await?;
 
     // s3 should now have 2 prefixes
     wait_for_eq!(prefix_count(&s3).await?, 2);
 
-    s2.withdraw_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+    s2.withdraw_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
         .await?;
 
     // wait for withdraw propagation
     sleep(Duration::from_secs(5));
 
     // unhijack
-    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+    s1.advertise_prefixes(&underlay(["fd00:1::/64".parse().unwrap()]))
         .await?;
     sleep(Duration::from_secs(5));
 
@@ -1211,10 +1237,7 @@ async fn run_sextet_tests(
                         .values()
                         .cloned()
                         .into_iter()
-                        .flat_map(|x| x
-                            .clone()
-                            .into_iter()
-                            .map(|y| y.destination))
+                        .flat_map(|x| x.clone().into_iter().map(|y| y.prefix))
                         .collect::<BTreeSet<_>>())
                     .ok(),
                 Some($reach)
@@ -1339,10 +1362,10 @@ async fn run_sextet_tests(
         .chain(s4_origin.clone())
         .collect();
 
-    s1.advertise_prefixes(&s1_origin).await?;
-    s2.advertise_prefixes(&s2_origin).await?;
-    s3.advertise_prefixes(&s3_origin).await?;
-    s4.advertise_prefixes(&s4_origin).await?;
+    s1.advertise_prefixes(&underlay(s1_origin.clone())).await?;
+    s2.advertise_prefixes(&underlay(s2_origin.clone())).await?;
+    s3.advertise_prefixes(&underlay(s3_origin.clone())).await?;
+    s4.advertise_prefixes(&underlay(s4_origin.clone())).await?;
 
     //
     // Each transit router originates a prefix for its rack, and t1 a tunnel
@@ -1369,8 +1392,8 @@ async fn run_sextet_tests(
                     .map(|x| x
                         .values()
                         .flatten()
-                        .filter(|y| rack_prefixes.contains(&y.destination))
-                        .map(|y| (y.destination, y.path.clone()))
+                        .filter(|y| rack_prefixes.contains(&y.prefix))
+                        .map(|y| (y.prefix, y.path.clone()))
                         .collect::<BTreeSet<_>>())
                     .ok(),
                 Some($expected)
@@ -1685,6 +1708,19 @@ async fn run_sextet_tests(
     Ok(())
 }
 
+/// `prefixes` as underlay routes to originate.
+fn underlay(
+    prefixes: impl IntoIterator<Item = Ipv6Net>,
+) -> Vec<OriginatedPrefix> {
+    prefixes
+        .into_iter()
+        .map(|prefix| OriginatedPrefix {
+            kind: PrefixKind::Underlay,
+            prefix,
+        })
+        .collect()
+}
+
 async fn prefix_count(c: &Client) -> Result<usize> {
     Ok(c.get_prefixes()
         .await?
@@ -1715,6 +1751,20 @@ async fn held_imports(c: &Client) -> Result<BTreeMap<String, u64>> {
         held.insert(aobj, count as u64);
     }
     Ok(held)
+}
+
+/// Expire every peer of a just-restarted router, so that it re-learns their
+/// routes now that its underlay address is set.
+///
+/// TODO: remove once ddmd reconciles routes. `start_router` sets the underlay
+/// address after ddmd starts peering, and underlay routes imported before
+/// that are never installed.
+async fn expire_all_peers(c: &Client) -> Result<()> {
+    let peers = c.get_peers().await?.into_inner();
+    for peer in peers.values().filter_map(|x| x.peer.as_ref()) {
+        c.expire_peer(&peer.addr).await?;
+    }
+    Ok(())
 }
 
 /// The number of routing sessions that have discovered a peer.

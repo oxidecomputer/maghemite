@@ -15,6 +15,29 @@
     }
   },
   "definitions": {
+    "BootstrapUpdate": {
+      "type": "object",
+      "required": [
+        "announce",
+        "withdraw"
+      ],
+      "properties": {
+        "announce": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PathVector"
+          },
+          "uniqueItems": true
+        },
+        "withdraw": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PathVector"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
     "IpNet": {
       "oneOf": [
         {
@@ -89,6 +112,16 @@
     "PullResponse": {
       "type": "object",
       "properties": {
+        "bootstrap": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PathVector"
+          },
+          "uniqueItems": true
+        },
         "tunnel": {
           "type": [
             "array",
@@ -196,6 +229,16 @@
     "Update": {
       "type": "object",
       "properties": {
+        "bootstrap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BootstrapUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tunnel": {
           "anyOf": [
             {

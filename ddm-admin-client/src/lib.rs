@@ -18,6 +18,10 @@ progenitor::generate_api!(
         Duration = std::time::Duration,
         ExternalPeers = ddm_api_types_versions::latest::external_peers::ExternalPeers,
         RackPrefix = ddm_api_types_versions::latest::admin::RackPrefix,
+        LearnedPrefix = ddm_api_types_versions::latest::admin::LearnedPrefix,
+        OriginatedPrefix = ddm_api_types_versions::latest::admin::OriginatedPrefix,
+        PrefixKind = ddm_api_types_versions::latest::admin::PrefixKind,
+        UnderlayAddress = ddm_api_types_versions::latest::admin::UnderlayAddress,
     }
 );
 

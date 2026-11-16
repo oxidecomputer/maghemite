@@ -57,6 +57,7 @@ pub enum AdminEvent {
 #[derive(Debug, Clone)]
 pub enum PrefixSet {
     Underlay(HashSet<Ipv6Net>),
+    Bootstrap(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
     /// The rack prefix, advertised as an underlay route to the peers allowed
     /// to receive it.
@@ -67,13 +68,13 @@ pub enum PrefixSet {
 pub enum PeerEvent {
     /// Upon reception of this event, a state machine is to push the update to
     /// its peer.
-    Push(ddm_protocol::v3::Update),
+    Push(Box<ddm_protocol::v3::Update>),
 
     /// Upon reception of this event, a state machine is to redistribute the
     /// update to it's sibling routers through it's event channels. The state
     /// machine is responsible for maintaining the path vector and performing
     /// loop breaking.
-    Redistribute(ddm_protocol::v3::Update),
+    Redistribute(Box<ddm_protocol::v3::Update>),
 }
 
 #[derive(Debug, Clone)]
@@ -243,7 +244,9 @@ impl Display for PeerIdentity {
 pub struct RouteAdvertisementAllowances {
     /// Originated underlay prefixes.
     pub underlay: bool,
-    /// Originated tunnel endpoints.
+    /// Originated bootstrap prefixes.
+    pub bootstrap: bool,
+    /// Originated tunnel routes.
     pub tunnel: bool,
     /// The originated rack prefix.
     pub rack: bool,
@@ -256,8 +259,8 @@ impl RouteAdvertisementAllowances {
     pub fn tx(local: RouterKind, peer: RouterKind) -> Self {
         use RouterKind::*;
         match (local, peer) {
-            // Server routers originate just underlay routes. All other route
-            // types are disallowed from being sent to peers.
+            // Server routers originate just underlay/bootstrap routes.
+            // All other route types are disallowed from being sent to peers.
             //
             // This upholds the valley-free routing invariant for Servers.
             // i.e.
@@ -265,6 +268,7 @@ impl RouteAdvertisementAllowances {
             // Transit -> Server -> Transit can never happen.
             (Server, _) => Self {
                 underlay: true,
+                bootstrap: true,
                 tunnel: false,
                 rack: false,
                 redistributed: false,
@@ -275,8 +279,10 @@ impl RouteAdvertisementAllowances {
             // learn about our rack address space via a single aggregate /56,
             // and that they know about our external connectivity in case they
             // do not have their own (either due to network design or failures).
+            // Bootstrap routes must never leave the rack, and are not allowed.
             (Transit, Transit) => Self {
                 underlay: false,
+                bootstrap: false,
                 tunnel: true,
                 rack: true,
                 redistributed: false,
@@ -287,8 +293,9 @@ impl RouteAdvertisementAllowances {
             // redistribute any route they have received to a Server router.
             //
             // This ensures that:
-            // 1) Underlay routes from Servers are redistributed across a rack,
-            //    so Server -> Transit -> Server flows work as expected.
+            // 1) Underlay/Bootstrap routes from Servers are redistributed
+            //    across a rack, so Server -> Transit -> Server flows work as
+            //    expected.
             // 2) Tunnel routes learned from mgd are originated to Servers.
             //    This allows Servers to use our connection to the External net.
             // 3) Tunnel routes learned from other racks are redistributed to
@@ -304,6 +311,7 @@ impl RouteAdvertisementAllowances {
             //    Servers. This allows Servers to learn routes to other racks.
             (Transit, Server) => Self {
                 underlay: true,
+                bootstrap: true,
                 tunnel: true,
                 rack: false,
                 redistributed: true,
@@ -377,6 +385,7 @@ pub struct SessionStats {
     pub updates_sent: AtomicU64,
     pub updates_received: AtomicU64,
     pub imported_underlay_prefixes: AtomicU64,
+    pub imported_bootstrap_prefixes: AtomicU64,
     pub imported_tunnel_endpoints: AtomicU64,
     pub update_send_fail: AtomicU64,
 }
@@ -396,6 +405,7 @@ impl SessionStats {
             updates_sent,
             updates_received,
             imported_underlay_prefixes,
+            imported_bootstrap_prefixes,
             imported_tunnel_endpoints,
             update_send_fail,
         } = self;
@@ -412,6 +422,7 @@ impl SessionStats {
             updates_received: get(updates_received),
             update_send_fail: get(update_send_fail),
             imported_underlay_prefixes: get(imported_underlay_prefixes),
+            imported_bootstrap_prefixes: get(imported_bootstrap_prefixes),
             imported_tunnel_endpoints: get(imported_tunnel_endpoints),
         }
     }
@@ -422,7 +433,11 @@ impl SessionStats {
             |c: &AtomicU64, n: usize| c.store(n as u64, Ordering::Relaxed);
         set(
             &self.imported_underlay_prefixes,
-            db.imported_from(peer).len(),
+            db.imported_underlay_from(peer).len(),
+        );
+        set(
+            &self.imported_bootstrap_prefixes,
+            db.imported_bootstrap_from(peer).len(),
         );
         set(
             &self.imported_tunnel_endpoints,
@@ -439,6 +454,7 @@ pub struct SmContext {
     pub event_channels: BTreeMap<String, Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub router_id: String,
+    pub bootstrap_addr: Ipv6Addr,
     pub iface: Arc<InterfaceState>,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
@@ -486,16 +502,19 @@ mod test {
     fn tx_route_advertisement_allowances() {
         // Written out by hand rather than derived from Allow::tx.
         let expected = [
-            (Server, Server, [true, false, false, false]),
-            (Server, Transit, [true, false, false, false]),
-            (Transit, Server, [true, true, false, true]),
-            (Transit, Transit, [false, true, true, false]),
+            (Server, Server, [true, true, false, false, false]),
+            (Server, Transit, [true, true, false, false, false]),
+            (Transit, Server, [true, true, true, false, true]),
+            (Transit, Transit, [false, false, true, true, false]),
         ];
-        for (local, peer, [underlay, tunnel, rack, redistributed]) in expected {
+        for (local, peer, [underlay, bootstrap, tunnel, rack, redistributed]) in
+            expected
+        {
             assert_eq!(
                 Allow::tx(local, peer),
                 Allow {
                     underlay,
+                    bootstrap,
                     tunnel,
                     rack,
                     redistributed
