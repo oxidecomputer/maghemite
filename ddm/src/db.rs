@@ -4,17 +4,16 @@
 
 use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::v3::{self, PathVector};
-use mg_common::lock;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
-use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Db {
-    data: Arc<Mutex<DbData>>,
+    data: watch::Sender<DbData>,
 }
 
 // All state is held in memory only. Sled-agent's DDM reconciler re-advertises
@@ -38,15 +37,21 @@ const _: () = {
 impl Db {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(Mutex::new(DbData::default())),
+            data: watch::Sender::new(DbData::default()),
         }
     }
+
+    /// A receiver that is notified whenever the database changes.
+    pub fn watch(&self) -> watch::Receiver<DbData> {
+        self.data.subscribe()
+    }
+
     pub fn dump(&self) -> DbData {
-        lock!(self.data).clone()
+        self.data.borrow().clone()
     }
 
     pub fn imported(&self) -> HashSet<Route> {
-        lock!(self.data).imported.clone()
+        self.data.borrow().imported.clone()
     }
 
     /// Imported routes for which `filter` returns true.
@@ -54,7 +59,8 @@ impl Db {
         &self,
         filter: impl Fn(&Route) -> bool,
     ) -> HashSet<Route> {
-        lock!(self.data)
+        self.data
+            .borrow()
             .imported
             .iter()
             .filter(|r| filter(r))
@@ -68,7 +74,7 @@ impl Db {
     }
 
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
-        lock!(self.data).imported_tunnel.clone()
+        self.data.borrow().imported_tunnel.clone()
     }
 
     /// Imported tunnel routes learned from the peer at `nexthop`.
@@ -76,7 +82,8 @@ impl Db {
         &self,
         nexthop: Ipv6Addr,
     ) -> HashSet<TunnelRoute> {
-        lock!(self.data)
+        self.data
+            .borrow()
             .imported_tunnel
             .iter()
             .filter(|r| r.nexthop == nexthop)
@@ -85,107 +92,114 @@ impl Db {
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
-        lock!(self.data).imported.extend(r.clone());
+        self.data.send_modify(|d| d.imported.extend(r.clone()));
     }
 
     pub fn import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        lock!(self.data).imported_tunnel.extend(r.clone());
+        self.data
+            .send_modify(|d| d.imported_tunnel.extend(r.clone()));
     }
 
     pub fn delete_import(&self, r: &HashSet<Route>) {
-        let imported = &mut lock!(self.data).imported;
-        for x in r {
-            imported.remove(x);
-        }
+        self.data.send_modify(|d| {
+            for x in r {
+                d.imported.remove(x);
+            }
+        });
     }
 
     pub fn delete_import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        let imported = &mut lock!(self.data).imported_tunnel;
-        for x in r {
-            imported.remove(x);
-        }
+        self.data.send_modify(|d| {
+            for x in r {
+                d.imported_tunnel.remove(x);
+            }
+        });
     }
 
     /// Mark `prefixes` as originated.
     pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) {
-        lock!(self.data).originated.extend(prefixes.iter().copied());
+        self.data
+            .send_modify(|d| d.originated.extend(prefixes.iter().copied()));
     }
 
     /// Mark `origins` as originated.
     pub fn originate_tunnel(&self, origins: &HashSet<TunnelOrigin>) {
-        lock!(self.data)
-            .originated_tunnel
-            .extend(origins.iter().copied());
+        self.data.send_modify(|d| {
+            d.originated_tunnel.extend(origins.iter().copied())
+        });
     }
 
     pub fn originated(&self) -> HashSet<Ipv6Net> {
-        lock!(self.data).originated.clone()
+        self.data.borrow().originated.clone()
     }
 
     pub fn originated_count(&self) -> usize {
-        lock!(self.data).originated.len()
+        self.data.borrow().originated.len()
     }
 
     pub fn originated_tunnel(&self) -> HashSet<TunnelOrigin> {
-        lock!(self.data).originated_tunnel.clone()
+        self.data.borrow().originated_tunnel.clone()
     }
 
     pub fn originated_tunnel_count(&self) -> usize {
-        lock!(self.data).originated_tunnel.len()
+        self.data.borrow().originated_tunnel.len()
     }
 
     /// Stop marking `prefixes` as originated.
     pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) {
-        let originated = &mut lock!(self.data).originated;
-        for p in prefixes {
-            originated.remove(p);
-        }
+        self.data.send_modify(|d| {
+            for p in prefixes {
+                d.originated.remove(p);
+            }
+        });
     }
 
     /// Stop marking `origins` as originated.
     pub fn withdraw_tunnel(&self, origins: &HashSet<TunnelOrigin>) {
-        let originated_tunnel = &mut lock!(self.data).originated_tunnel;
-        for o in origins {
-            originated_tunnel.remove(o);
-        }
+        self.data.send_modify(|d| {
+            for o in origins {
+                d.originated_tunnel.remove(o);
+            }
+        });
     }
 
     /// The originated rack prefix, if one is set.
     pub fn rack_prefix(&self) -> Option<Ipv6Net> {
-        lock!(self.data).rack_prefix
+        self.data.borrow().rack_prefix
     }
 
     /// Set or clear the originated rack prefix, replacing any it holds.
     pub fn set_rack_prefix(&self, prefix: Option<Ipv6Net>) {
-        lock!(self.data).rack_prefix = prefix;
+        self.data.send_modify(|d| d.rack_prefix = prefix);
     }
 
     pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
     ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
-        let mut data = lock!(self.data);
         // Routes are generally held in sets to prevent duplication and provide
         // handy set-algebra operations.
         let mut removed = HashSet::new();
-        for x in &data.imported {
-            if x.nexthop == nexthop {
-                removed.insert(x.clone());
-            }
-        }
-        for x in &removed {
-            data.imported.remove(x);
-        }
-
         let mut tnl_removed = HashSet::new();
-        for x in &data.imported_tunnel {
-            if x.nexthop == nexthop {
-                tnl_removed.insert(x.clone());
+        self.data.send_modify(|d| {
+            for x in &d.imported {
+                if x.nexthop == nexthop {
+                    removed.insert(x.clone());
+                }
             }
-        }
-        for x in &tnl_removed {
-            data.imported_tunnel.remove(x);
-        }
+            for x in &removed {
+                d.imported.remove(x);
+            }
+
+            for x in &d.imported_tunnel {
+                if x.nexthop == nexthop {
+                    tnl_removed.insert(x.clone());
+                }
+            }
+            for x in &tnl_removed {
+                d.imported_tunnel.remove(x);
+            }
+        });
         (removed, tnl_removed)
     }
 
@@ -198,11 +212,17 @@ impl Db {
     }
 
     pub fn get_external_peers(&self) -> BTreeSet<String> {
-        lock!(self.data).external_peers.clone()
+        self.data.borrow().external_peers.clone()
     }
 
     pub fn set_external_peers(&mut self, value: BTreeSet<String>) {
-        lock!(self.data).external_peers = value;
+        self.data.send_modify(|d| d.external_peers = value);
+    }
+}
+
+impl Default for Db {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
