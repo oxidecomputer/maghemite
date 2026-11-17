@@ -1444,6 +1444,7 @@ dependencies = [
  "ddm-api",
  "ddm-api-types",
  "ddm-api-types-versions",
+ "ddm-lower",
  "ddm-protocol",
  "dpd-client",
  "dropshot 0.18.0",

@@ -8,6 +8,8 @@ pub mod defaults;
 pub mod discovery;
 pub mod exchange;
 pub mod oxstats;
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub mod reconciler;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod sys;

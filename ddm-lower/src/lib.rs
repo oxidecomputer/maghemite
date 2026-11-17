@@ -19,7 +19,15 @@ pub mod illumos;
 
 // An illumos ifname
 #[derive(
-    Debug, Clone, Deserialize, Serialize, JsonSchema, Display, PartialEq, Eq,
+    Debug,
+    Clone,
+    Deserialize,
+    Serialize,
+    JsonSchema,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
 )]
 pub struct InterfaceName(String);
 
@@ -34,7 +42,9 @@ impl InterfaceName {
 }
 
 // A route that can be installed in the underlying platform
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash,
+)]
 pub struct Route {
     pub dest: Ipv6Net,
     pub gw: Ipv6Addr,
