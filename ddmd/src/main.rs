@@ -174,6 +174,41 @@ async fn run() {
 
     let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
 
+    #[cfg(all(feature = "backend", target_os = "illumos"))]
+    if !arg.api_only {
+        match arg.kind {
+            RouterKind::Transit => {
+                // The dendrite backend takes a socket address, while dpd
+                // configuration historically allows any hostname.
+                use std::net::ToSocketAddrs;
+                let d = dpd
+                    .as_ref()
+                    .expect("transit routers require --dendrite");
+                let dpd_addr = (d.host.as_str(), d.port)
+                    .to_socket_addrs()
+                    .expect("resolve dpd host")
+                    .find_map(|addr| match addr {
+                        std::net::SocketAddr::V6(v6) => Some(v6),
+                        std::net::SocketAddr::V4(_) => None,
+                    })
+                    .expect("dpd host must resolve to an IPv6 address");
+                ddm::transit_reconciler::TransitReconciler::new(
+                    db.clone(),
+                    dpd_addr,
+                    log.clone(),
+                )
+                .spawn();
+            }
+            RouterKind::Server => {
+                ddm::server_reconciler::ServerReconciler::new(
+                    db.clone(),
+                    log.clone(),
+                )
+                .spawn();
+            }
+        }
+    }
+
     termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
 
     let router_stats = Arc::new(RouterStats::default());

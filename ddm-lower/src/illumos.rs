@@ -154,6 +154,21 @@ impl IllumosBackend {
                         r.gw,
                     );
                 }
+                // The routing socket returns ESRCH when the route is already
+                // gone; don't report it as a failure or callers will keep
+                // retrying the removal. ESRCH has no stable io::ErrorKind
+                // mapping, so match on the raw errno.
+                Err(libnet::route::Error::IoError(e))
+                    if e.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    info!(
+                        self.log,
+                        "[{}] route {} -> {} already removed",
+                        r.ifname,
+                        r.dest,
+                        r.gw,
+                    );
+                }
                 Err(err) => {
                     error!(
                         self.log,

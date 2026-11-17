@@ -78,6 +78,7 @@ rdb = { path = "rdb", features = ["clap"] }
 ddm-api = { path = "ddm-api" }
 ddm-api-types = { path = "ddm-api-types" }
 ddm-api-types-versions = { path = "ddm-api-types/versions" }
+ddm-lower = { path = "ddm-lower" }
 ddm-protocol = { path = "ddm-protocol" }
 
 # External

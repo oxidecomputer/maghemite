@@ -52,14 +52,21 @@ pub enum Error {
 
 /// The dendrite backend for ddm-lower
 pub struct DendriteBackend {
+    client: Client,
     log: Logger,
 }
 
 impl DendriteBackend {
-    pub fn new(log: &Logger) -> Self {
-        Self {
-            log: log.new(o!("backend" => "dendrite")),
-        }
+    pub fn new(dpd_addr: SocketAddrV6, log: &Logger) -> Self {
+        let log = log.new(o!("backend" => "dendrite"));
+        let client_state = ClientState {
+            tag: DDM_DPD_TAG.into(),
+            log: log.clone(),
+        };
+        // The client holds a connection pool, not a connection: failed
+        // requests don't poison it, so it never needs to be rebuilt.
+        let client = Client::new(&format!("http://{dpd_addr}"), client_state);
+        Self { client, log }
     }
 
     /// Add underlay routes to dendrite, returning any errors encountered.
@@ -68,7 +75,6 @@ impl DendriteBackend {
     /// be used by the reconciler for statistics and external reporting.
     pub async fn add_underlay_routes(
         &self,
-        dpd_addr: SocketAddrV6,
         routes: Vec<Route>,
     ) -> Result<(), Vec<Error>> {
         if routes.is_empty() {
@@ -82,14 +88,7 @@ impl DendriteBackend {
             "all routes must be for the same interface"
         );
 
-        debug!(self.log, "[{ifname}] sending route add to dpd: {dpd_addr}");
-
-        let client_state = ClientState {
-            tag: DDM_DPD_TAG.into(),
-            log: self.log.clone(),
-        };
-
-        let client = Client::new(&format!("http://{dpd_addr}"), client_state);
+        debug!(self.log, "[{ifname}] sending route add to dpd");
 
         let mut errors = vec![];
         for r in routes {
@@ -179,7 +178,7 @@ impl DendriteBackend {
                 replace: false,
             };
 
-            match client.route_ipv6_set(&route_set).await {
+            match self.client.route_ipv6_set(&route_set).await {
                 Ok(_) => {
                     info!(
                         self.log,
@@ -221,7 +220,6 @@ impl DendriteBackend {
     // update to the dpd api.
     pub async fn remove_underlay_routes(
         &self,
-        dpd_addr: SocketAddrV6,
         routes: Vec<Route>,
     ) -> Result<(), Vec<Error>> {
         if routes.is_empty() {
@@ -235,17 +233,7 @@ impl DendriteBackend {
             "all routes must be for the same interface"
         );
 
-        debug!(
-            self.log,
-            "[{ifname}] sending route delete to dpd: {dpd_addr}"
-        );
-
-        let client_state = ClientState {
-            tag: DDM_DPD_TAG.into(),
-            log: self.log.clone(),
-        };
-
-        let client = Client::new(&format!("http://{dpd_addr}"), client_state);
+        debug!(self.log, "[{ifname}] sending route delete to dpd");
 
         let mut errors = vec![];
         for r in routes {
@@ -253,11 +241,25 @@ impl DendriteBackend {
                 self.log,
                 "[{}] adding route {} -> {}", r.ifname, r.dest, r.gw,
             );
-            match client.route_ipv6_delete(&r.dest).await {
+            match self.client.route_ipv6_delete(&r.dest).await {
                 Ok(_) => {
                     info!(
                         self.log,
                         "[{}] successfully removed route {} -> {}",
+                        r.ifname,
+                        r.dest,
+                        r.gw,
+                    );
+                }
+                // A missing route is already removed; don't report it as a
+                // failure or callers will keep retrying the removal.
+                Err(err)
+                    if err.status()
+                        == Some(reqwest::StatusCode::NOT_FOUND) =>
+                {
+                    info!(
+                        self.log,
+                        "[{}] route {} -> {} already removed",
                         r.ifname,
                         r.dest,
                         r.gw,
