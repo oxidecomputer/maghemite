@@ -39,10 +39,11 @@ dpd-client.workspace = true
 # illumos-only deps used by the routing state machine and platform sys layer.
 # Gated by the `backend` feature so stub builds (e.g. Linux test fixtures
 # running `ddmd` with `--api-only`) link cleanly.
+ddm-lower = { workspace = true, optional = true }
 libnet = { workspace = true, optional = true }
 opte-ioctl = { workspace = true, optional = true }
 oxide-vpc = { workspace = true, optional = true }
 
 [features]
 default = ["backend"]
-backend = ["dep:libnet", "dep:opte-ioctl", "dep:oxide-vpc"]
+backend = ["dep:ddm-lower", "dep:libnet", "dep:opte-ioctl", "dep:oxide-vpc"]

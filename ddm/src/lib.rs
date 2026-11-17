@@ -5,9 +5,15 @@
 pub mod admin;
 pub mod db;
 pub mod defaults;
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub mod dendrite_reconciler;
 pub mod discovery;
 pub mod exchange;
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub mod illumos_reconciler;
 pub mod oxstats;
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+pub mod reconciler;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod sys;

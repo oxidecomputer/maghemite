@@ -1443,6 +1443,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-lower",
  "ddm-protocol",
  "dpd-client",
  "dropshot 0.18.0",
