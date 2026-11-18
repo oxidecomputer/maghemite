@@ -21,6 +21,7 @@ mg-api-types = { workspace = true, features = ["clap"] }
 mg-api-types-versions.workspace = true
 
 [dev-dependencies]
+mg-api-types-versions = { workspace = true, features = ["testing"] }
 proptest.workspace = true
 
 [features]
