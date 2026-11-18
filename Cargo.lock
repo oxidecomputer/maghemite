@@ -209,7 +209,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -336,7 +336,7 @@ dependencies = [
  "mg-api-types",
  "mg-common",
  "proptest",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rdb",
  "slog",
  "slog-error-chain",
@@ -368,7 +368,7 @@ dependencies = [
  "pretty-hex",
  "pretty_assertions",
  "proptest",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rdb",
  "rhai",
  "schemars 0.8.22",
@@ -544,7 +544,7 @@ dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -802,9 +802,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.7"
+version = "4.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
+checksum = "ac230478587d0269d8d6998b82ae69ea51509d55df66d9e92edd1f986904cd4a"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -825,14 +825,14 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.7"
+version = "4.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c751b79415d4e559e3d1fcf128e09e720eb673a06d26cf6f392d37d75b66e0"
+checksum = "895c9d8d2ac2dd8b8a29f3724a14e72aaaa6debcf8c38c82f97305c6a172767a"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1341,7 +1341,7 @@ checksum = "c839348835bc8a59714d79797f2f1bca237ca043e3d2d5ce4e727606396fb834"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1465,7 +1465,7 @@ dependencies = [
  "ddm-api-types",
  "ddm-api-types-versions",
  "oxnet",
- "progenitor 0.16.0",
+ "progenitor 0.16.1",
  "progenitor-extras 0.4.0",
  "reqwest 0.13.5",
  "serde",
@@ -1681,7 +1681,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1736,7 +1736,7 @@ dependencies = [
  "futures",
  "http",
  "oxnet",
- "progenitor 0.16.0",
+ "progenitor 0.16.1",
  "progenitor-extras 0.4.0",
  "regress 0.11.1",
  "reqwest 0.13.5",
@@ -1964,7 +1964,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_tokenstream 0.3.0",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2249,7 +2249,7 @@ checksum = "ea5190182e6915eb873ddbc16e23b711b6eb1f9c00a0d0a3a91b5f6228475225"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2354,7 +2354,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -3794,7 +3794,7 @@ dependencies = [
  "prettyplease",
  "propolis-client",
  "quote",
- "rand 0.10.3",
+ "rand 0.10.4",
  "regex",
  "reqwest 0.13.5",
  "ron",
@@ -3836,7 +3836,7 @@ dependencies = [
  "nvpair",
  "nvpair-sys",
  "oxnet",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rusty-doors",
  "socket2",
  "thiserror 2.0.21",
@@ -4036,7 +4036,7 @@ dependencies = [
  "colored",
  "mg-api-types-versions",
  "oxnet",
- "progenitor 0.16.0",
+ "progenitor 0.16.1",
  "progenitor-extras 0.4.0",
  "reqwest 0.13.5",
  "schemars 0.8.22",
@@ -4175,7 +4175,7 @@ dependencies = [
  "ddm-admin-client",
  "ddm-api-types-versions",
  "oxnet",
- "rand 0.10.3",
+ "rand 0.10.4",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -4240,7 +4240,7 @@ dependencies = [
  "oxnet",
  "port-file",
  "proptest",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rdb",
  "slog",
  "slog-error-chain",
@@ -4381,7 +4381,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_tokenstream 0.3.0",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -5076,7 +5076,7 @@ dependencies = [
  "cfg-if",
  "illumos-sys-hdrs 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "tabwriter",
  "uuid",
@@ -5749,13 +5749,13 @@ dependencies = [
 
 [[package]]
 name = "progenitor"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f7d37bf1319f2c7abbb95eb340a4be8545b78be1a5d1acde2dcc90b4a04f21d"
+checksum = "34c1ae9a579ea631276daef15ee3b5c872f90860a1b54d5b6df72aa189881fc7"
 dependencies = [
- "progenitor-client 0.16.0",
- "progenitor-impl 0.16.0",
- "progenitor-macro 0.16.0",
+ "progenitor-client 0.16.1",
+ "progenitor-impl 0.16.1",
+ "progenitor-macro 0.16.1",
 ]
 
 [[package]]
@@ -5820,9 +5820,9 @@ dependencies = [
 
 [[package]]
 name = "progenitor-client"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f4df47ce7fa035b40e92b2f23e3df1c6c7147c2412e6fccb5be886b26c47118"
+checksum = "77a5c9bb7a283a09f3ed5fab3a41fc1afb73782b7ca6f701ed26cb457b5fca3f"
 dependencies = [
  "bytes",
  "futures-core",
@@ -5851,7 +5851,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf70fd39ab9e9cbf6cfddcd7da96f36aed98c0ef85226d9a0b7d369f7f1f3472"
 dependencies = [
- "progenitor-client 0.16.0",
+ "progenitor-client 0.16.1",
  "reqwest 0.13.5",
  "slog",
 ]
@@ -5916,7 +5916,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "syn 3.0.3",
+ "syn 3.0.10",
  "thiserror 2.0.21",
  "typify 0.8.0",
  "unicode-ident",
@@ -5924,9 +5924,9 @@ dependencies = [
 
 [[package]]
 name = "progenitor-impl"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bb884f6f3c6e929084116b4745cedf49736240bf783a2f35e058df1f63032c8"
+checksum = "0605947a436e83717c41205dc5c308e845890c424c48d851783ccf04f173bec8"
 dependencies = [
  "heck 0.5.0",
  "http",
@@ -5938,7 +5938,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "syn 3.0.3",
+ "syn 3.0.10",
  "thiserror 2.0.21",
  "typify 0.8.0",
  "unicode-ident",
@@ -5995,25 +5995,25 @@ dependencies = [
  "serde_json",
  "serde_tokenstream 0.3.0",
  "serde_yaml",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
 name = "progenitor-macro"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d3ac585095745668515f7600f3bc656a0f612f8875adf75830eaebdf1e61661"
+checksum = "2eddb119cb80c48f5c0c03b9efa4e8b0d5419df6b65a91c7a938f29485c93255"
 dependencies = [
  "openapiv3",
  "proc-macro2",
- "progenitor-impl 0.16.0",
+ "progenitor-impl 0.16.1",
  "quote",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "serde_tokenstream 0.3.0",
  "serde_yaml",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -6105,7 +6105,7 @@ dependencies = [
  "chacha20 0.10.1",
  "core_detect",
  "num-traits",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -6181,7 +6181,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -6252,9 +6252,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+checksum = "8f6fa277c67e6ea590466f04c3fe82cb509f0864fe470643e5570de9514a9b11"
 dependencies = [
  "chacha20 0.10.1",
  "getrandom 0.4.3",
@@ -6419,7 +6419,7 @@ checksum = "2c9283685feec7d69af75fb0e858d5e7378f33fe4fc699383b2916ab9273e03c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -6999,7 +6999,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7064,7 +7064,7 @@ checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7106,7 +7106,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7190,7 +7190,7 @@ checksum = "a22144e767da4ddd8416dbf383700542ffd8a5dc493dfecedfe1fe3ad03c98ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7831,9 +7831,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7868,7 +7868,7 @@ checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7965,7 +7965,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.59.0",
@@ -8073,7 +8073,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -8240,7 +8240,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -8779,7 +8779,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
- "syn 3.0.3",
+ "syn 3.0.10",
  "thiserror 2.0.21",
  "unicode-ident",
 ]
@@ -8814,7 +8814,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_tokenstream 0.3.0",
- "syn 3.0.3",
+ "syn 3.0.10",
  "typify-impl 0.8.0",
 ]
 
@@ -9104,9 +9104,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.29.2"
+version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -9614,7 +9614,7 @@ checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
  "synstructure 0.14.0",
 ]
 
@@ -9732,7 +9732,7 @@ checksum = "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.10",
 ]
 
 [[package]]
