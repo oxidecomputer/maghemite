@@ -569,11 +569,21 @@ async fn run_trio_tests(
     softnpu_dump!(softnpu);
     zs1.start_router(false)?;
 
+    // After restarting a server router we must re-advertise its prefixes via
+    // the client API. This simulates the omicron ddm reconciler doing its job.
+    wait_for_eq!(
+        s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+            .await
+            .is_ok(),
+        true
+    );
+
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
     softnpu_dump!(softnpu);
 
+    // Re-advertising is idempotent
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
 

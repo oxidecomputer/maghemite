@@ -407,11 +407,7 @@ async fn pull_handler_v2(
             tunnel.insert(tv);
         }
     }
-    let originated = ctx
-        .ctx
-        .db
-        .originated()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated = ctx.ctx.db.originated();
     for prefix in &originated {
         let pv = v3::PathVector {
             destination: *prefix,
@@ -420,11 +416,7 @@ async fn pull_handler_v2(
         underlay.insert(pv);
     }
 
-    let originated_tunnel = ctx
-        .ctx
-        .db
-        .originated_tunnel()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated_tunnel = ctx.ctx.db.originated_tunnel();
     for prefix in &originated_tunnel {
         let tv = v3::TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
@@ -483,11 +475,7 @@ async fn pull_handler(
             tunnel.insert(tv);
         }
     }
-    let originated = ctx
-        .ctx
-        .db
-        .originated()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated = ctx.ctx.db.originated();
     for prefix in &originated {
         let pv = v3::PathVector {
             destination: *prefix,
@@ -496,11 +484,7 @@ async fn pull_handler(
         underlay.insert(pv);
     }
 
-    let originated_tunnel = ctx
-        .ctx
-        .db
-        .originated_tunnel()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated_tunnel = ctx.ctx.db.originated_tunnel();
     for prefix in &originated_tunnel {
         let tv = v3::TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,

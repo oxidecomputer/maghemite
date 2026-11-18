@@ -1455,7 +1455,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "sled",
  "slog",
  "slog-error-chain",
  "socket2",
