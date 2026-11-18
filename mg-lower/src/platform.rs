@@ -267,7 +267,7 @@ impl Dpd for ProductionDpd {
         &self,
         addr: &Ipv6Entry,
     ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
-        self.client.loopback_ipv6_create(addr).await
+        self.client.loopback_ipv6_create(addr).await?.map(|_| ())
     }
 
     async fn link_list_all<'a>(
