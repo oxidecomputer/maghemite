@@ -109,7 +109,7 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 progenitor = "0.16"
 progenitor-extras = "0.4.0"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
-clap = { version = "4.6.7", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.6.8", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.1"
 strum = { version = "0.28", features = ["derive"] }
@@ -127,7 +127,7 @@ camino = "1.2.6"
 cargo_toml = "0.22"
 http = "1.5.0"
 http-body-util = "0.1"
-rand = "0.10.3"
+rand = "0.10.4"
 backoff = "0.4"
 chrono = { version = "0.4.45", features = ["serde"] }
 oxide-tokio-rt = "0.1.6"
