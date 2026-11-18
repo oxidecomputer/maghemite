@@ -2,11 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types_versions::latest;
-use ddm_api_types_versions::v1;
-use ddm_api_types_versions::v2;
-use ddm_api_types_versions::v3;
-use ddm_api_types_versions::v4;
+use ddm_api_types_versions::{latest, v1, v2, v3, v4, v5};
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -29,6 +25,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (6, MULTICAST_INTERFACES),
     (5, MULTICAST_SUPPORT),
     (4, OPENAPI_LINT),
     (3, EXTERNAL_PEERS),
@@ -249,11 +246,33 @@ pub trait DdmAdminApi {
     #[endpoint {
         method = GET,
         path = "/multicast-groups",
-        versions = VERSION_MULTICAST_SUPPORT..
+        versions = VERSION_MULTICAST_INTERFACES..
     }]
     async fn get_multicast_groups(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<latest::db::MulticastRoute>>, HttpError>;
+    ) -> Result<
+        HttpResponseOk<HashSet<latest::db::ImportedMulticastRoute>>,
+        HttpError,
+    >;
+
+    #[endpoint {
+        operation_id = "get_multicast_groups",
+        method = GET,
+        path = "/multicast-groups",
+        versions = VERSION_MULTICAST_SUPPORT..VERSION_MULTICAST_INTERFACES
+    }]
+    async fn get_multicast_groups_v5(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashSet<v5::db::MulticastRoute>>, HttpError>
+    {
+        let resp = Self::get_multicast_groups(ctx).await?;
+        Ok(HttpResponseOk(
+            resp.0
+                .into_iter()
+                .map(v5::db::MulticastRoute::from)
+                .collect(),
+        ))
+    }
 
     #[endpoint {
         method = PUT,
