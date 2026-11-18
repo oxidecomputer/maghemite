@@ -144,7 +144,14 @@ pub fn add_routes_dendrite(
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
     };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
+    let client =
+        match Client::new(&format!("http://{host}:{port}"), client_state) {
+            Ok(client) => client,
+            Err(e) => {
+                err!(log, ifname, "error creating dpd client: {e}");
+                return;
+            }
+        };
 
     for r in routes {
         let cidr = match r.dest {
@@ -187,7 +194,7 @@ pub fn add_routes_dendrite(
                 .and_then(|x| x.parse::<u8>().ok())
             {
                 let port_name = format!("rear{}", egress_port_num);
-                match types::Rear::try_from(&port_name) {
+                match types::Rear::try_from(port_name.as_str()) {
                     Ok(rear) => PortId::Rear(rear),
                     Err(e) => {
                         err!(log, ifname, "bad port name ({port_name}): {e}");
@@ -201,7 +208,7 @@ pub fn add_routes_dendrite(
                 .and_then(|x| x.parse::<u8>().ok())
             {
                 let port_name = format!("qsfp{}", egress_port_num);
-                match types::Qsfp::try_from(&port_name) {
+                match types::Qsfp::try_from(port_name.as_str()) {
                     Ok(qsfp) => PortId::Qsfp(qsfp),
                     Err(e) => {
                         err!(log, ifname, "bad port name ({port_name}): {e}");
@@ -416,7 +423,14 @@ pub fn remove_routes_dendrite(
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
     };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
+    let client =
+        match Client::new(&format!("http://{host}:{port}"), client_state) {
+            Ok(client) => client,
+            Err(e) => {
+                err!(log, ifname, "error creating dpd client: {e}");
+                return;
+            }
+        };
 
     for r in routes {
         let cidr = match r.dest {
@@ -465,7 +479,8 @@ pub fn get_routes_dendrite(
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
     };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
+    let client = Client::new(&format!("http://{host}:{port}"), client_state)
+        .map_err(|e| format!("error creating dpd client: {e}"))?;
 
     let routes = rt
         .block_on(async { client.route_ipv6_list(None, None).await })

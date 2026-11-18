@@ -406,7 +406,7 @@ fn get_port_and_link(
     {
         let (port, link, _vlan) = parse_tfport_name(iface)?;
         let port_name = format!("qsfp{port}");
-        let port_id = types::Qsfp::try_from(&port_name)
+        let port_id = types::Qsfp::try_from(port_name.as_str())
             .map(types::PortId::Qsfp)
             .map_err(|e| {
                 Error::Tfport(format!(
@@ -441,7 +441,7 @@ fn resolve_port_and_link(
 
     let (port, link, _vlan) = parse_tfport_name(&ifname)?;
     let port_name = format!("qsfp{port}");
-    let port_id = types::Qsfp::try_from(&port_name)
+    let port_id = types::Qsfp::try_from(port_name.as_str())
         .map(types::PortId::Qsfp)
         .map_err(|e| {
             Error::Tfport(format!(
@@ -568,7 +568,10 @@ pub(crate) fn get_routes_for_prefix(
 /// Set `addr` to reach a dpd instance assigned elsewhere, e.g., a test fixture
 /// on a random port.
 #[cfg(target_os = "illumos")]
-pub fn new_dpd_client(log: &Logger, addr: SocketAddr) -> DpdClient {
+pub fn new_dpd_client(
+    log: &Logger,
+    addr: SocketAddr,
+) -> reqwest::Result<DpdClient> {
     let client_state = dpd_client::ClientState {
         tag: MG_LOWER_TAG.into(),
         log: log.clone(),
