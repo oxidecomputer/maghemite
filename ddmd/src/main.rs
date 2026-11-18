@@ -290,7 +290,7 @@ fn start_state_machines(
             ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
             exchange_timeout: Duration::from_millis(arg.exchange_timeout),
             exchange_port: arg.exchange_port,
-            aobj_name: name.clone(),
+            addrobj_name: name.clone(),
             if_name: String::new(),
             if_index: 0,
             kind: arg.kind,
@@ -325,7 +325,7 @@ fn start_state_machines(
         // dont give a state machine an event sender to itself.
         sm.ctx.event_channels = event_channels
             .iter()
-            .filter(|(name, _)| **name != sm.ctx.config.aobj_name)
+            .filter(|(name, _)| **name != sm.ctx.config.addrobj_name)
             .map(|(name, tx)| (name.clone(), tx.clone()))
             .collect();
     }
