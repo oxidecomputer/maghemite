@@ -19,8 +19,7 @@ pub struct Db {
 }
 
 // All state is held in memory only. Sled-agent's DDM reconciler re-advertises
-// underlay prefixes, mg-lower re-advertises tunnel endpoints, and the scrimlet
-// DDM reconciler re-applies the rack prefix.
+// underlay prefixes, mg-lower re-advertises tunnel endpoints.
 #[derive(Default, Clone)]
 pub struct DbData {
     pub imported: HashSet<Route>,
@@ -28,7 +27,6 @@ pub struct DbData {
     pub external_peers: BTreeSet<String>,
     pub originated: HashSet<Ipv6Net>,
     pub originated_tunnel: HashSet<TunnelOrigin>,
-    pub rack_prefix: Option<Ipv6Net>,
 }
 
 const _: () = {
@@ -126,16 +124,6 @@ impl Db {
         for o in origins {
             originated_tunnel.remove(o);
         }
-    }
-
-    /// The originated rack prefix, if one is set.
-    pub fn rack_prefix(&self) -> Option<Ipv6Net> {
-        lock!(self.data).rack_prefix
-    }
-
-    /// Set or clear the originated rack prefix, replacing any it holds.
-    pub fn set_rack_prefix(&self, prefix: Option<Ipv6Net>) {
-        lock!(self.data).rack_prefix = prefix;
     }
 
     pub fn remove_nexthop_routes(
