@@ -191,7 +191,8 @@ async fn run(args: RunArgs) {
         let db = ctx.db.clone();
         let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
-            client: mg_lower::new_dpd_client(&log, args.dendrite_addr),
+            client: mg_lower::new_dpd_client(&log, args.dendrite_addr)
+                .expect("failed to create dpd client"),
         };
         let ddm = mg_lower::ProductionDdm {
             client: mg_lower::new_ddm_client(&log, args.ddm_addr)
