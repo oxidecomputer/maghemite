@@ -43,7 +43,7 @@ enum SubCommand {
     /// Get the counters for each peer. Optionally filter by address object.
     PeerStats {
         /// Address object of the session to show. None shows every session.
-        aobj_name: Option<String>,
+        addrobj_name: Option<String>,
     },
 
     /// Expire a peer.
@@ -189,8 +189,8 @@ async fn run() -> Result<()> {
             }
             tw.flush()?;
         }
-        SubCommand::PeerStats { aobj_name } => {
-            let stats: BTreeMap<String, PeerStats> = match aobj_name {
+        SubCommand::PeerStats { addrobj_name } => {
+            let stats: BTreeMap<String, PeerStats> = match addrobj_name {
                 Some(aobj) => {
                     let s = client.get_peer_stats(&aobj).await?.into_inner();
                     [(aobj, s)].into()

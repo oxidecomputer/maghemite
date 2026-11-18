@@ -80,28 +80,28 @@ impl State for Init {
                         return (None, event);
                     }
                     Event::Admin(AdminEvent::NewExternalPeer {
-                        aobj_name,
+                        addrobj_name,
                         tx,
                     }) => {
-                        self.ctx.event_channels.insert(aobj_name, tx);
+                        self.ctx.event_channels.insert(addrobj_name, tx);
                     }
                     _ => {
                         wrn!(
                             self.log,
-                            self.ctx.config.aobj_name,
+                            self.ctx.config.addrobj_name,
                             "event unhandled in init state: {e:?}"
                         );
                     }
                 }
             }
-            let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
+            let info = match get_ipaddr_info(&self.ctx.config.addrobj_name) {
                 Ok(info) => info,
                 Err(e) => {
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
                         "failed to get IPv6 address for interface {}: {}",
-                        &self.ctx.config.aobj_name,
+                        &self.ctx.config.addrobj_name,
                         e
                     );
                     sleep(self.ctx.config.ip_addr_wait);
@@ -115,7 +115,7 @@ impl State for Init {
                         self.log,
                         self.ctx.config.if_name,
                         "specified address {} is not IPv6",
-                        &self.ctx.config.aobj_name
+                        &self.ctx.config.addrobj_name
                     );
                     sleep(self.ctx.config.ip_addr_wait);
                     continue;
@@ -229,8 +229,11 @@ impl State for Solicit {
                         event,
                     );
                 }
-                Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
-                    self.ctx.event_channels.insert(aobj_name, tx);
+                Event::Admin(AdminEvent::NewExternalPeer {
+                    addrobj_name,
+                    tx,
+                }) => {
+                    self.ctx.event_channels.insert(addrobj_name, tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {
@@ -532,7 +535,7 @@ impl State for Exchange {
             self.ctx.first_run = false;
             crate::sm::send(
                 Event::Admin(AdminEvent::NewExternalPeer {
-                    aobj_name: self.ctx.config.aobj_name.clone(),
+                    addrobj_name: self.ctx.config.addrobj_name.clone(),
                     tx: self.ctx.tx.clone(),
                 }),
                 &mut self.ctx.event_channels,
@@ -758,7 +761,10 @@ impl State for Exchange {
                         );
                     }
                 }
-                Event::Admin(AdminEvent::NewExternalPeer { aobj_name, tx }) => {
+                Event::Admin(AdminEvent::NewExternalPeer {
+                    addrobj_name,
+                    tx,
+                }) => {
                     // Send the new peer only the routes learned from our own
                     // peer. Every sibling does the same, so together they send
                     // one copy of the imported tables rather than one each.
@@ -794,7 +800,7 @@ impl State for Exchange {
                     // Register unconditionally, as Init and Solicit do. A
                     // channel whose peer has already shut down is pruned the
                     // first time a fan-out to it fails.
-                    self.ctx.event_channels.insert(aobj_name, tx);
+                    self.ctx.event_channels.insert(addrobj_name, tx);
                 }
                 Event::Admin(AdminEvent::Shutdown) => {
                     if let Some(x) = self.ctx.discovery_stop.as_mut() {

@@ -46,7 +46,7 @@ pub enum AdminEvent {
     /// identified by its address object name, can be reached using the
     /// provided sender.
     NewExternalPeer {
-        aobj_name: String,
+        addrobj_name: String,
         tx: Sender<Event>,
     },
 
@@ -152,7 +152,7 @@ pub struct Config {
 
     /// Address object name the state machine uses for peering. Must correspond
     /// to IPv6 link local address.
-    pub aobj_name: String,
+    pub addrobj_name: String,
 
     /// Link local Ipv6 address this state machine is associated with
     pub addr: Ipv6Addr,
@@ -462,7 +462,7 @@ impl IdOrdItem for SmContext {
     type Key<'a> = &'a str;
 
     fn key(&self) -> Self::Key<'_> {
-        &self.config.aobj_name
+        &self.config.addrobj_name
     }
 
     id_upcast!();

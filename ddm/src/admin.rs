@@ -261,8 +261,10 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 host: p.hostname,
                 kind: p.kind,
             });
-            result
-                .insert(sm.config.aobj_name.clone(), PeerInfo { status, peer });
+            result.insert(
+                sm.config.addrobj_name.clone(),
+                PeerInfo { status, peer },
+            );
         }
         Ok(HttpResponseOk(result))
     }
@@ -298,7 +300,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         Ok(HttpResponseOk(
             ctx.peers
                 .iter()
-                .map(|sm| (sm.config.aobj_name.clone(), sm.peer_stats()))
+                .map(|sm| (sm.config.addrobj_name.clone(), sm.peer_stats()))
                 .collect(),
         ))
     }
@@ -546,7 +548,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             .peers
             .iter()
             .filter(|p| !p.iface.snapshot().external)
-            .map(|p| &p.config.aobj_name)
+            .map(|p| &p.config.addrobj_name)
             .find(|aobj| rq.address_objects.contains(*aobj))
         {
             return Err(AdminError::AddressObjectInUse(aobj.clone()).into());
@@ -583,7 +585,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 ip_addr_wait: ctx.tunables.ip_addr_wait,
                 exchange_timeout: ctx.tunables.exchange_timeout,
                 exchange_port: ctx.tunables.exchange_tcp_port,
-                aobj_name: addr_obj.clone(),
+                addrobj_name: addr_obj.clone(),
                 if_name: String::default(), // initialized in state machine
                 if_index: 0,                // initialized in state machine
                 // External peers are only a thing for transit routers.
@@ -606,7 +608,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 event_channels: ctx
                     .peers
                     .iter()
-                    .map(|p| (p.config.aobj_name.clone(), p.tx.clone()))
+                    .map(|p| (p.config.addrobj_name.clone(), p.tx.clone()))
                     .collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
