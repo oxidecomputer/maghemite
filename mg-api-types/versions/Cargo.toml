@@ -6,9 +6,11 @@ edition = "2024"
 [dependencies]
 chrono.workspace = true
 clap = { workspace = true, optional = true }
+dpd-types-versions.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 oxnet.workspace = true
+proptest = { workspace = true, optional = true }
 schemars.workspace = true
 serde.workspace = true
 slog.workspace = true
@@ -16,7 +18,11 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+dpd-types-versions = { workspace = true, features = ["testing"] }
+proptest.workspace = true
 serde_json.workspace = true
+test-strategy.workspace = true
 
 [features]
 clap = ["dep:clap"]
+testing = ["dep:proptest", "dpd-types-versions/testing"]
