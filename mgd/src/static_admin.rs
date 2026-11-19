@@ -77,6 +77,7 @@ pub async fn static_add_v4_route(
 
     ctx.context()
         .db
+        .router()
         .add_static_routes(&routes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseUpdatedNoContent())
@@ -95,6 +96,7 @@ pub async fn static_remove_v4_route(
         .collect();
     ctx.context()
         .db
+        .router()
         .remove_static_routes(&routes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseDeleted())
@@ -106,6 +108,7 @@ pub async fn static_list_v4_routes(
     let static_db = ctx
         .context()
         .db
+        .router()
         .get_static(Some(AddressFamily::Ipv4))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -137,6 +140,7 @@ pub async fn static_add_v6_route(
 
     ctx.context()
         .db
+        .router()
         .add_static_routes(&routes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseUpdatedNoContent())
@@ -155,6 +159,7 @@ pub async fn static_remove_v6_route(
         .collect();
     ctx.context()
         .db
+        .router()
         .remove_static_routes(&routes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseDeleted())
@@ -166,6 +171,7 @@ pub async fn static_list_v6_routes(
     let static_db = ctx
         .context()
         .db
+        .router()
         .get_static(Some(AddressFamily::Ipv6))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
