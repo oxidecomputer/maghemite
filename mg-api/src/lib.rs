@@ -29,6 +29,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (15, MULTI_ROUTER),
     (14, OPENAPI_LINT),
     (13, HISTORY_BUFFER),
     (12, BFD_NONZERO_DETECT_MULT),
@@ -1910,4 +1911,83 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: Query<latest::ndp::NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<latest::ndp::NdpInterface>, HttpError>;
+
+    // Routers ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    //
+    // Older endpoints operate on the default router.
+
+    /// Apply the complete set of routers.
+    ///
+    /// The set of routers is reconciled, removing missing routers. Routers are
+    /// applied best-effort, meaning that one misconfigured routers doesn't
+    /// invalidate the whole set. Responds with any routers that have not been
+    /// applied successfully.
+    #[endpoint {
+        method = PUT,
+        path = "/routers",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn apply_routers(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::router::ApplyRoutersRequest>,
+    ) -> Result<HttpResponseOk<latest::router::ApplyRoutersResponse>, HttpError>;
+
+    /// List the routers.
+    #[endpoint {
+        method = GET,
+        path = "/routers",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn list_routers(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<latest::router::RouterInfo>>, HttpError>;
+
+    /// Get the imported RIB (rib-in) of a router.
+    #[endpoint {
+        method = GET,
+        path = "/routers/{router}/rib/imported",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_rib_imported(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+        request: Query<latest::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
+
+    /// Get the selected RIB (loc-rib) of a router.
+    #[endpoint {
+        method = GET,
+        path = "/routers/{router}/rib/selected",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_rib_selected(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+        request: Query<latest::rib::RibQuery>,
+    ) -> Result<HttpResponseOk<latest::rib::Rib>, HttpError>;
+
+    /// Get the status of a router's BGP neighbors.
+    #[endpoint {
+        method = GET,
+        path = "/routers/{router}/bgp/status/neighbors",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+    ) -> Result<
+        HttpResponseOk<HashMap<String, latest::bgp::config::PeerInfo>>,
+        HttpError,
+    >;
+
+    /// Get a router's BFD peers and their state.
+    #[endpoint {
+        method = GET,
+        path = "/routers/{router}/bfd/peers",
+        versions = VERSION_MULTI_ROUTER..,
+    }]
+    async fn get_router_bfd_peers(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<latest::router::RouterSelector>,
+    ) -> Result<HttpResponseOk<Vec<latest::bfd::BfdPeerInfo>>, HttpError>;
 }

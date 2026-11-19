@@ -134,7 +134,7 @@ it.
 Each version module's `mod.rs` is a brief doc comment plus
 `pub mod` declarations — no logic, no type definitions. The
 submodule layout corresponds to API areas: `bfd`, `bgp`, `rdb`,
-`rib`, `ndp`, `switch`, `static_routes`. When an area is large,
+`rib`, `ndp`, `router`, `switch`, `static_routes`. When an area is large,
 those split further: `bgp/{config, messages, peer, policy, session}`,
 `rdb/{path, prefix, router, neighbor}`.
 

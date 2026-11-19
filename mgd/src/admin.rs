@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, rib_admin, router_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use camino::Utf8PathBuf;
@@ -27,6 +27,9 @@ use mg_api_types::bgp::session::{
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
     BestpathFanoutRequest, BestpathFanoutResponse, GetRibResult, Rib, RibQuery,
+};
+use mg_api_types::router::{
+    ApplyRoutersRequest, ApplyRoutersResponse, RouterInfo, RouterSelector,
 };
 use mg_api_types::static_routes::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
@@ -60,6 +63,9 @@ pub struct HandlerContext {
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,
+    /// Requests to `PUT /routers`. One task applies them in order, so that
+    /// two applies do not interleave.
+    pub apply_tx: tokio::sync::mpsc::Sender<router_admin::ApplyMessage>,
 }
 
 impl HandlerContext {
@@ -688,6 +694,51 @@ impl MgAdminApi for MgAdminApiImpl {
     ) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
         bgp_admin::get_ndp_interface_detail(ctx, request).await
     }
+
+    // Routers ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    async fn apply_routers(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRoutersRequest>,
+    ) -> Result<HttpResponseOk<ApplyRoutersResponse>, HttpError> {
+        router_admin::apply_routers(ctx, request).await
+    }
+
+    async fn list_routers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
+        router_admin::list_routers(ctx).await
+    }
+
+    async fn get_router_rib_imported(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        router_admin::get_router_rib_imported(ctx, path, request).await
+    }
+
+    async fn get_router_rib_selected(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        router_admin::get_router_rib_selected(ctx, path, request).await
+    }
+
+    async fn get_router_neighbors(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        router_admin::get_router_neighbors(ctx, path).await
+    }
+
+    async fn get_router_bfd_peers(
+        ctx: RequestContext<Self::Context>,
+        path: Path<RouterSelector>,
+    ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {
+        router_admin::get_router_bfd_peers(ctx, path).await
+    }
 }
 
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
@@ -735,6 +786,7 @@ pub(crate) mod test {
             mg_lower_stats: Arc::new(MgLowerStats::default()),
             stats_server_running: Mutex::new(false),
             oximeter_port: 0,
+            apply_tx: tokio::sync::mpsc::channel(1).0,
         })
     }
 }

@@ -199,7 +199,7 @@ pub async fn delete_router(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-async fn do_delete_router(
+pub(crate) async fn do_delete_router(
     ctx: &Arc<HandlerContext>,
     router_db: &rdb::RouterDb,
     asn: u32,
@@ -1328,7 +1328,7 @@ pub async fn bgp_apply(
     do_bgp_apply(ctx, &router_db, request.into_inner()).await
 }
 
-async fn do_bgp_apply(
+pub(crate) async fn do_bgp_apply(
     ctx: &Arc<HandlerContext>,
     router_db: &rdb::RouterDb,
     rq: ApplyRequest,
@@ -2723,6 +2723,66 @@ pub(crate) mod helpers {
         Ok(HttpResponseDeleted())
     }
 
+    /// Reconcile a BGP router's checker/shaper policy with the desired
+    /// sources.
+    pub async fn apply_policy(
+        ctx: &Arc<HandlerContext>,
+        router: RouterId,
+        asn: u32,
+        checker: Option<String>,
+        shaper: Option<String>,
+    ) -> Result<(), HttpError> {
+        let (current_checker, current_shaper) =
+            match lock!(ctx.bgp.router).get(&(router, asn)) {
+                None => {
+                    return Err(HttpError::for_not_found(
+                        None,
+                        String::from("ASN not found"),
+                    ));
+                }
+                Some(rtr) => {
+                    (rtr.policy.checker_source(), rtr.policy.shaper_source())
+                }
+            };
+
+        if checker != current_checker {
+            match checker {
+                Some(code) => {
+                    load_policy(
+                        ctx,
+                        router,
+                        asn,
+                        PolicySource::Checker(code),
+                        true,
+                    )
+                    .await?;
+                }
+                None => {
+                    unload_policy(ctx, router, asn, PolicyKind::Checker)
+                        .await?;
+                }
+            }
+        }
+        if shaper != current_shaper {
+            match shaper {
+                Some(code) => {
+                    load_policy(
+                        ctx,
+                        router,
+                        asn,
+                        PolicySource::Shaper(code),
+                        true,
+                    )
+                    .await?;
+                }
+                None => {
+                    unload_policy(ctx, router, asn, PolicyKind::Shaper).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Calculate exported routes for a single session.
     /// Returns None if the peer is not Established or has no routes to export.
     pub(crate) fn get_exported<Cnx: BgpConnection>(
@@ -2820,7 +2880,7 @@ pub(crate) mod helpers {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{do_bgp_apply, do_delete_router};
     use crate::admin::{DEFAULT_ROUTER_ID, HandlerContext, test::test_ctx};
     use bgp::{BGP_PORT, policy::PolicySource};
@@ -2837,7 +2897,7 @@ mod tests {
         sync::Arc,
     };
 
-    const POLICY_SOURCE: &str = r#"
+    pub(crate) const POLICY_SOURCE: &str = r#"
 fn open(message, asn, addr) {
     CheckerResult::Accept
 }
@@ -2888,7 +2948,11 @@ fn update(message, asn, addr) {
         }
     }
 
-    fn numbered(ip: &str, name: &str, hold_time: u64) -> BgpPeerConfig {
+    pub(crate) fn numbered(
+        ip: &str,
+        name: &str,
+        hold_time: u64,
+    ) -> BgpPeerConfig {
         BgpPeerConfig {
             host: oxnet::SocketAddrJson(SocketAddr::new(
                 ip.parse().unwrap(),

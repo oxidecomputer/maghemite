@@ -40,6 +40,7 @@ mod error;
 mod log;
 mod oxstats;
 mod rib_admin;
+mod router_admin;
 mod signal;
 mod smf;
 mod static_admin;
@@ -157,6 +158,7 @@ async fn run(args: RunArgs) {
     let tep_ula = default_router.tep();
     let bfd = BfdContext::new(log.clone());
 
+    let (apply_tx, apply_rx) = tokio::sync::mpsc::channel(1);
     let context = Arc::new(HandlerContext {
         #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
         tep: tep_ula,
@@ -167,7 +169,9 @@ async fn run(args: RunArgs) {
         db: db.clone(),
         stats_server_running: Mutex::new(false),
         oximeter_port: args.oximeter_port,
+        apply_tx,
     });
+    tokio::spawn(router_admin::run_apply_task(context.clone(), apply_rx));
 
     detect_switch_slot(
         context.clone(),
@@ -591,17 +595,10 @@ fn ensure_default_router(db: &rdb::Db) -> rdb::RouterDb {
         return rdb;
     }
 
-    // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
-    let mut r = [0u8; 7];
-    rand::fill(&mut r);
-    let tep_ula = Ipv6Addr::from([
-        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
-    ]);
-
     db.create_router(rdb::types::RouterInfo {
         id: admin::DEFAULT_ROUTER_ID,
         name: admin::DEFAULT_ROUTER_NAME.to_string(),
-        tep: tep_ula,
+        tep: router_admin::random_tep_ula(),
     })
     .expect("create default router")
 }

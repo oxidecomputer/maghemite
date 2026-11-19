@@ -6,6 +6,7 @@ use crate::admin::HandlerContext;
 use anyhow::Result;
 use bfd::AddPeerError;
 use bfd::Daemon;
+use bfd::Session;
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,
@@ -14,6 +15,7 @@ use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bfd::BfdPeerInfo;
 use mg_api_types::bfd::DeleteBfdPeerPathParams;
 use mg_common::lock;
+use rdb::RouterId;
 use slog::Logger;
 use slog_error_chain::InlineErrorChain;
 use std::net::IpAddr;
@@ -55,23 +57,44 @@ pub(crate) fn get_peers(
             continue;
         }
         result.push(BfdPeerInfo {
-            config: BfdPeerConfig {
-                peer: *addr,
-                required_rx: session.required_rx_micros(),
-                detection_threshold: session.detection_threshold(),
-                listen: daemon
-                    .listen_addr_for_peer(addr)
-                    .ok_or(HttpError::for_internal_error(format!(
-                        "no listener for {addr}"
-                    )))?
-                    .ip(),
-                mode: session.mode(),
-            },
+            config: peer_config(&daemon, addr, session)?,
             state: session.state(),
         });
     }
 
     Ok(result)
+}
+
+fn peer_config(
+    daemon: &Daemon,
+    addr: &IpAddr,
+    session: &Session,
+) -> Result<BfdPeerConfig, HttpError> {
+    Ok(BfdPeerConfig {
+        peer: *addr,
+        required_rx: session.required_rx_micros(),
+        detection_threshold: session.detection_threshold(),
+        listen: daemon
+            .listen_addr_for_peer(addr)
+            .ok_or(HttpError::for_internal_error(format!(
+                "no listener for {addr}"
+            )))?
+            .ip(),
+        mode: session.mode(),
+    })
+}
+
+/// Get all the peers, each with the router it belongs to.
+pub(crate) fn peers(
+    ctx: &HandlerContext,
+) -> Result<Vec<(RouterId, BfdPeerConfig)>, HttpError> {
+    let daemon = lock!(ctx.bfd.daemon);
+    daemon
+        .sessions_iter()
+        .map(|(addr, session)| {
+            Ok((session.router(), peer_config(&daemon, addr, session)?))
+        })
+        .collect()
 }
 
 /// Add a new peer to the daemon. A session for the specified peer will start
@@ -109,7 +132,7 @@ pub(crate) fn add_peer(
 }
 
 /// Remove the specified peer from the daemon. The associated peer session will
-/// be stopped immediately. As a legacy endpoint, it only removes peers from the
+/// be stopped immediately. As a legacy endpoint, it only removes a peer of the
 /// default router.
 pub(crate) async fn remove_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
