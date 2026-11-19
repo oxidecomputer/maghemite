@@ -57,6 +57,7 @@ pub struct Session {
     required_rx_micros: u64,
     detection_threshold: NonZeroU8,
     mode: SessionMode,
+    router: rdb::RouterId,
     state_rx: watch::Receiver<BfdPeerState>,
     counters: Arc<SessionCounters>,
 
@@ -105,6 +106,8 @@ impl Session {
             "unit" => crate::UNIT_PEER,
         ));
 
+        let router = db.id();
+
         // Spawn the three primary tasks for this session.
         let rib_task = tokio::spawn(
             RibTask::new(remote_addr.ip(), state_tx.subscribe()).run(db),
@@ -140,6 +143,7 @@ impl Session {
             required_rx_micros,
             detection_threshold,
             mode,
+            router,
             state_rx,
             counters,
             driver_task,
@@ -166,6 +170,10 @@ impl Session {
 
     pub fn mode(&self) -> SessionMode {
         self.mode
+    }
+
+    pub fn router(&self) -> rdb::RouterId {
+        self.router
     }
 }
 

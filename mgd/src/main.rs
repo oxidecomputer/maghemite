@@ -189,7 +189,7 @@ async fn run(args: RunArgs) {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = context.clone();
         let log = log.clone();
-        let db = default_router.clone();
+        let db = default_router;
         let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
             client: mg_lower::new_dpd_client(&log, args.dendrite_addr),
@@ -207,27 +207,33 @@ async fn run(args: RunArgs) {
             .expect("failed to start mg-lower");
     }
 
-    start_bgp_routers(
-        context.clone(),
-        default_router
-            .get_bgp_routers()
-            .expect("get BGP routers from datastore"),
-        default_router
-            .get_bgp_neighbors()
-            .expect("get BGP neighbors from data store"),
-        default_router
-            .get_unnumbered_bgp_neighbors()
-            .expect("get BGP unnumbered neighbors from data store"),
-    );
+    for info in db.list_routers() {
+        let router_db = db.router(info.id).expect("get router from datastore");
 
-    start_bfd_sessions(
-        context.clone(),
-        default_router
-            .get_bfd_neighbors()
-            .expect("get BFD neighbors from data store"),
-    );
+        start_bgp_routers(
+            context.clone(),
+            &router_db,
+            router_db
+                .get_bgp_routers()
+                .expect("get BGP routers from datastore"),
+            router_db
+                .get_bgp_neighbors()
+                .expect("get BGP neighbors from data store"),
+            router_db
+                .get_unnumbered_bgp_neighbors()
+                .expect("get BGP unnumbered neighbors from data store"),
+        );
 
-    initialize_static_routes(&default_router, &context.log);
+        start_bfd_sessions(
+            context.clone(),
+            &router_db,
+            router_db
+                .get_bfd_neighbors()
+                .expect("get BFD neighbors from data store"),
+        );
+
+        initialize_static_routes(&router_db, &context.log);
+    }
 
     let hostname = hostname::get()
         .expect("failed to get hostname")
@@ -336,6 +342,7 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
 
 fn start_bgp_routers(
     context: Arc<HandlerContext>,
+    router_db: &rdb::RouterDb,
     routers: BTreeMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
     uneighbors: Vec<BgpUnnumberedNeighborInfo>,
@@ -345,6 +352,7 @@ fn start_bgp_routers(
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
             context.clone(),
+            router_db,
             mg_api_types::bgp::config::Router {
                 asn,
                 id: info.id,
@@ -360,6 +368,7 @@ fn start_bgp_routers(
     for nbr in neighbors {
         bgp_admin::helpers::add_neighbor(
             context.clone(),
+            router_db,
             mg_api_types::bgp::config::Neighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
@@ -432,6 +441,7 @@ fn start_bgp_routers(
     for nbr in uneighbors {
         bgp_admin::helpers::add_unnumbered_neighbor(
             context.clone(),
+            router_db,
             mg_api_types::bgp::config::UnnumberedNeighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
@@ -505,11 +515,12 @@ fn start_bgp_routers(
 
 fn start_bfd_sessions(
     context: Arc<HandlerContext>,
+    router_db: &rdb::RouterDb,
     configs: Vec<BfdPeerConfig>,
 ) {
     dlog!(context.log, info, "starting bfd sessions: {configs:#?}");
     for config in configs {
-        bfd_admin::add_peer(context.clone(), config)
+        bfd_admin::add_peer(context.clone(), router_db.clone(), config)
             .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
     }
 }

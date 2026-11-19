@@ -281,8 +281,9 @@ impl Stats {
         let routers = lock!(self.bgp.router);
         let mut router_counters = BTreeMap::new();
         let mut session_count: usize = 0;
-        for (asn, r) in &*routers {
-            let mut session_counters = BTreeMap::new();
+        for ((_, asn), r) in &*routers {
+            let session_counters: &mut BTreeMap<_, _> =
+                router_counters.entry(*asn).or_default();
             for session in r.sessions() {
                 let key = &session.neighbor.peer;
                 // Only include IP-based sessions in metrics (unnumbered sessions use interface names)
@@ -291,7 +292,6 @@ impl Stats {
                     session_count += 1;
                 }
             }
-            router_counters.insert(*asn, session_counters);
         }
         drop(routers);
 

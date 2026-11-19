@@ -16,6 +16,7 @@ use mg_api_types::bfd::DeleteBfdPeerPathParams;
 use mg_common::lock;
 use slog::Logger;
 use slog_error_chain::InlineErrorChain;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 /// Context for Dropshot requests.
@@ -34,13 +35,25 @@ impl BfdContext {
 }
 
 /// Get all the peers and their associated BFD state. Peers are identified by IP
-/// address.
+/// address. As a legacy endpoint, it only sees the default router's peers.
 pub(crate) async fn get_bfd_peers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {
+    let ctx = ctx.context();
+    let router_db = ctx.default_router()?;
+    Ok(HttpResponseOk(get_peers(ctx, &router_db)?))
+}
+
+pub(crate) fn get_peers(
+    ctx: &HandlerContext,
+    router_db: &rdb::RouterDb,
+) -> Result<Vec<BfdPeerInfo>, HttpError> {
     let mut result = Vec::new();
-    let daemon = lock!(ctx.context().bfd.daemon);
+    let daemon = lock!(ctx.bfd.daemon);
     for (addr, session) in daemon.sessions_iter() {
+        if session.router() != router_db.id() {
+            continue;
+        }
         result.push(BfdPeerInfo {
             config: BfdPeerConfig {
                 peer: *addr,
@@ -58,7 +71,7 @@ pub(crate) async fn get_bfd_peers(
         });
     }
 
-    Ok(HttpResponseOk(result))
+    Ok(result)
 }
 
 /// Add a new peer to the daemon. A session for the specified peer will start
@@ -67,17 +80,20 @@ pub(crate) async fn add_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<BfdPeerConfig>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    add_peer(ctx.context().clone(), request.into_inner())?;
+    let ctx = ctx.context();
+    let router_db = ctx.default_router()?;
+    add_peer(ctx.clone(), router_db, request.into_inner())?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
 pub(crate) fn add_peer(
     ctx: Arc<HandlerContext>,
+    router_db: rdb::RouterDb,
     rq: BfdPeerConfig,
 ) -> Result<(), HttpError> {
     let mut daemon = lock!(ctx.bfd.daemon);
     daemon
-        .add_peer(ctx.default_router()?, rq.into())
+        .add_peer(router_db, rq.into())
         .map_err(|err| match err {
             AddPeerError::PeerExists(_) => HttpError::for_client_error(
                 None,
@@ -93,19 +109,32 @@ pub(crate) fn add_peer(
 }
 
 /// Remove the specified peer from the daemon. The associated peer session will
-/// be stopped immediately.
+/// be stopped immediately. As a legacy endpoint, it only removes peers from the
+/// default router.
 pub(crate) async fn remove_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     params: Path<DeleteBfdPeerPathParams>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = params.into_inner();
-    let listener_shutdown_handle = ctx
-        .context()
-        .bfd
-        .daemon
-        .lock()
-        .unwrap()
-        .remove_peer(rq.addr);
+    let ctx = ctx.context();
+    let router_db = ctx.default_router()?;
+    remove_peer(ctx, &router_db, params.into_inner().addr).await;
+    Ok(HttpResponseUpdatedNoContent {})
+}
+
+pub(crate) async fn remove_peer(
+    ctx: &HandlerContext,
+    router_db: &rdb::RouterDb,
+    addr: IpAddr,
+) {
+    let listener_shutdown_handle = {
+        let mut daemon = lock!(ctx.bfd.daemon);
+        match daemon.session(&addr) {
+            Some(session) if session.router() == router_db.id() => {
+                daemon.remove_peer(addr)
+            }
+            _ => None,
+        }
+    };
 
     if let Some(handle) = listener_shutdown_handle {
         // If this was the last peer associated with a given local listening
@@ -120,6 +149,45 @@ pub(crate) async fn remove_bfd_peer(
         // new peer at the same listening address.
         handle.shutdown().await;
     }
+}
 
-    Ok(HttpResponseUpdatedNoContent {})
+#[cfg(test)]
+mod tests {
+    use super::{add_peer, get_peers, remove_peer};
+    use crate::admin::test::test_ctx;
+    use mg_api_types::bfd::{BfdPeerConfig, SessionMode};
+    use mg_common::lock;
+    use rdb::types::{RouterId, RouterInfo};
+    use std::net::{IpAddr, Ipv6Addr};
+    use std::num::NonZeroU8;
+
+    /// The legacy endpoints only operate on the default router.
+    #[tokio::test]
+    async fn legacy_endpoints_only_operate_on_the_default_router() {
+        let ctx =
+            test_ctx("legacy_endpoints_only_operate_on_the_default_router");
+        let default = ctx.default_router().unwrap();
+        let other = ctx
+            .db
+            .create_router(RouterInfo {
+                id: RouterId::new_random(),
+                name: "other".into(),
+                tep: Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1),
+            })
+            .unwrap();
+        let addr: IpAddr = "203.0.113.1".parse().unwrap();
+        // Multihop listens on its own port, apart from the other tests' peers.
+        let peer = BfdPeerConfig {
+            peer: addr,
+            listen: "127.0.0.1".parse().unwrap(),
+            required_rx: 1_000_000,
+            detection_threshold: NonZeroU8::new(3).unwrap(),
+            mode: SessionMode::MultiHop,
+        };
+        add_peer(ctx.clone(), other, peer).unwrap();
+
+        assert!(get_peers(&ctx, &default).unwrap().is_empty());
+        remove_peer(&ctx, &default, addr).await;
+        assert!(lock!(ctx.bfd.daemon).session(&addr).is_some());
+    }
 }
