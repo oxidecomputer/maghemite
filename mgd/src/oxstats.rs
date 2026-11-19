@@ -283,8 +283,8 @@ impl Stats {
         let mut session_count: usize = 0;
         for (asn, r) in &*routers {
             let mut session_counters = BTreeMap::new();
-            let sessions = lock!(r.sessions);
-            for (key, session) in sessions.iter() {
+            for session in r.sessions() {
+                let key = &session.neighbor.peer;
                 // Only include IP-based sessions in metrics (unnumbered sessions use interface names)
                 if let PeerId::Ip(addr) = key {
                     session_counters.insert(*addr, session.counters.clone());

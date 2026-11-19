@@ -968,7 +968,7 @@ pub async fn get_exported_v5(
         }
     } else {
         // No peer filter - iterate all sessions
-        for session in lock!(r.sessions).values() {
+        for session in &r.sessions() {
             if let Some((peer_key, routes)) = helpers::get_exported(
                 session,
                 &orig4,
@@ -1029,7 +1029,7 @@ pub async fn get_exported(
         }
     } else {
         // No peer filter - iterate all sessions
-        for session in lock!(r.sessions).values() {
+        for session in &r.sessions() {
             if let Some((peer_key, routes)) = helpers::get_exported(
                 session,
                 &orig4,
@@ -1088,7 +1088,7 @@ pub async fn get_neighbors_v1(
         .get(&rq.asn)
         .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
-    for s in lock!(r.sessions).values() {
+    for s in &r.sessions() {
         let dur =
             s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
@@ -1156,7 +1156,7 @@ pub async fn get_neighbors_v2(
         .get(&rq.asn)
         .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
-    for s in lock!(r.sessions).values() {
+    for s in &r.sessions() {
         let dur =
             s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
@@ -1223,7 +1223,7 @@ pub async fn get_neighbors_v4(
             None,
             "ASN not found".to_string(),
         ))?;
-        lock!(r.sessions).values().cloned().collect()
+        r.sessions()
     };
 
     for s in sessions.iter() {
@@ -1258,7 +1258,7 @@ pub async fn get_neighbors(
             None,
             "ASN not found".to_string(),
         ))?;
-        lock!(r.sessions).values().cloned().collect()
+        r.sessions()
     };
 
     for s in sessions.iter() {
@@ -1560,22 +1560,26 @@ fn get_message_history_filtered(
 
     // Determine which peers to fetch history for
     let peers_to_query: Vec<PeerId> = if let Some(peer_id) = peer {
-        if lock!(get_router!(ctx, asn)?.sessions).contains_key(&peer_id) {
+        if get_router!(ctx, asn)?
+            .get_session(peer_id.clone())
+            .is_some()
+        {
             vec![peer_id]
         } else {
             vec![]
         }
     } else {
-        lock!(get_router!(ctx, asn)?.sessions)
-            .keys()
-            .cloned()
+        get_router!(ctx, asn)?
+            .sessions()
+            .iter()
+            .map(|s| s.neighbor.peer.clone())
             .collect()
     };
 
     // Fetch history for each peer
     for peer_id in peers_to_query {
         if let Some(session) =
-            lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
+            get_router!(ctx, asn)?.get_session(peer_id.clone())
         {
             let mut history = {
                 let buffers = lock!(session.message_history);
@@ -1616,7 +1620,8 @@ pub async fn message_history_v1(
 
     let mut result = HashMap::new();
 
-    for (key, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+    for session in get_router!(ctx, rq.asn)?.sessions() {
+        let key = &session.neighbor.peer;
         // Only include IP-based sessions in the history
         if let PeerId::Ip(addr) = key {
             let mh = lock!(session.message_history).all.clone();
@@ -1751,7 +1756,7 @@ fn get_fsm_history_filtered(
 
     if let Some(peer_id) = peer {
         if let Some(session) =
-            lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
+            get_router!(ctx, asn)?.get_session(peer_id.clone())
         {
             let full_history = lock!(session.fsm_event_history).clone();
             let events = if use_all_buffer {
@@ -1762,8 +1767,8 @@ fn get_fsm_history_filtered(
             result.insert(peer_id.to_string(), events);
         }
     } else {
-        for (peer_id, session) in lock!(get_router!(ctx, asn)?.sessions).iter()
-        {
+        for session in get_router!(ctx, asn)?.sessions() {
+            let peer_id = &session.neighbor.peer;
             let full_history = lock!(session.fsm_event_history).clone();
             let events = if use_all_buffer {
                 full_history.all.into_iter().collect()
@@ -1953,7 +1958,11 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
-        ctx.db.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
+        // Only remove routes learned from this peer if the session belonged
+        // to this router.
+        if get_router!(&ctx, asn).is_ok_and(|r| r.get_session(addr).is_some()) {
+            ctx.db.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
+        }
         ctx.db.remove_bgp_neighbor(asn.into(), addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
@@ -1973,11 +1982,14 @@ pub(crate) mod helpers {
 
         // Delete the BGP session for this unnumbered neighbor.
         // Unnumbered sessions are keyed by interface name, not IP address.
-        get_router!(&ctx, asn)?
+        let belonged_to_router = get_router!(&ctx, asn)?
             .delete_session(PeerId::Interface(interface.to_string()));
 
-        // Unregister the interface from NDP peer discovery
-        ctx.bgp.unnumbered_manager.remove_interface(interface)?;
+        // Unregister the interface from NDP peer discovery if it belonged to
+        // this router.
+        if belonged_to_router {
+            ctx.bgp.unnumbered_manager.remove_interface(interface)?;
+        }
 
         // And now clear out the top level database entry
         ctx.db
