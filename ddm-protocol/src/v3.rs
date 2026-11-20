@@ -19,14 +19,64 @@ pub struct Update {
 }
 
 impl Update {
-    /// Build an `Update` whose underlay/tunnel halves carry the announcements
-    /// from `pr`. Used by [`pull`] to project a pull response back into the
-    /// update event stream.
-    pub fn announce(pr: PullResponse) -> Self {
+    /// This update without the announcements that have `router_id` in their
+    /// path, because they have already gone through that router.
+    pub fn break_loops(&self, router_id: &str) -> Self {
+        // compilation barrier. a new route class must be checked here.
+        let Self { underlay, tunnel } = self;
         Self {
-            underlay: pr.underlay.map(UnderlayUpdate::announce),
-            tunnel: pr.tunnel.map(TunnelUpdate::announce),
+            underlay: underlay.as_ref().map(|u| u.break_loops(router_id)),
+            tunnel: tunnel.as_ref().map(|t| t.break_loops(router_id)),
         }
+    }
+
+    /// The update that turns the routes we hold from a peer into the routes in
+    /// its pull response `pr`: announce what is new and withdraw what is
+    /// missing. A pull response is the peer's complete advertisement, not an
+    /// incremental one.
+    pub fn from_pull_response(
+        pr: PullResponse,
+        held_underlay: &HashSet<PathVector>,
+        held_tunnel: &HashSet<TunnelOrigin>,
+    ) -> Self {
+        // An absent half means the peer advertises nothing of that kind, which
+        // withdraws everything we hold from it.
+        let pulled_underlay = pr.underlay.unwrap_or_default();
+        let pulled_tunnel = pr.tunnel.unwrap_or_default();
+
+        let underlay = UnderlayUpdate {
+            announce: pulled_underlay
+                .difference(held_underlay)
+                .cloned()
+                .collect(),
+            withdraw: held_underlay
+                .difference(&pulled_underlay)
+                .cloned()
+                .collect(),
+        };
+        let tunnel = TunnelUpdate {
+            announce: pulled_tunnel.difference(held_tunnel).cloned().collect(),
+            withdraw: held_tunnel.difference(&pulled_tunnel).cloned().collect(),
+        };
+
+        // Leave out halves with no changes, so that handle_update doesn't run
+        // their handlers with empty sets.
+        let mut update = Self::default();
+        if !underlay.announce.is_empty() || !underlay.withdraw.is_empty() {
+            update.underlay = Some(underlay);
+        }
+        if !tunnel.announce.is_empty() || !tunnel.withdraw.is_empty() {
+            update.tunnel = Some(tunnel);
+        }
+        update
+    }
+
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        // compilation barrier. a new route class must be checked here.
+        let Self { underlay, tunnel } = self;
+        underlay.as_ref().is_none_or(UnderlayUpdate::is_empty)
+            && tunnel.as_ref().is_none_or(TunnelUpdate::is_empty)
     }
 }
 
@@ -49,6 +99,11 @@ pub struct TunnelUpdate {
 }
 
 impl TunnelUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
     pub fn announce(prefixes: HashSet<TunnelOrigin>) -> Self {
         Self {
             announce: prefixes,
@@ -59,6 +114,36 @@ impl TunnelUpdate {
         Self {
             withdraw: prefixes,
             ..Default::default()
+        }
+    }
+
+    /// This update with `element` appended to the path of every announced
+    /// and withdrawn route. A router appends its own ID before it advertises
+    /// routes it learned.
+    pub fn with_path_element(&self, element: &str) -> Self {
+        let push = |x: &TunnelOrigin| {
+            let mut t = x.clone();
+            t.path.push(element.to_owned());
+            t
+        };
+        Self {
+            announce: self.announce.iter().map(push).collect(),
+            withdraw: self.withdraw.iter().map(push).collect(),
+        }
+    }
+
+    /// This update without the announcements that have `hostname` in their
+    /// path, because they have already gone through that router. Withdrawals
+    /// are kept as they are.
+    pub fn break_loops(&self, hostname: &str) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .filter(|x| !x.path.iter().any(|h| h == hostname))
+                .cloned()
+                .collect(),
+            withdraw: self.withdraw.clone(),
         }
     }
 }
@@ -72,7 +157,7 @@ pub struct PathVector {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelOrigin {
     pub overlay_prefix: IpNet,
@@ -80,9 +165,17 @@ pub struct TunnelOrigin {
     pub vni: u32,
     #[serde(default)]
     pub metric: u64,
+    /// The routers this route was advertised through, starting with its
+    /// originator. Each router appends itself before advertising the route.
+    pub path: Vec<String>,
 }
 
 impl UnderlayUpdate {
+    /// Whether this update announces or withdraws nothing.
+    pub fn is_empty(&self) -> bool {
+        self.announce.is_empty() && self.withdraw.is_empty()
+    }
+
     pub fn announce(prefixes: HashSet<PathVector>) -> Self {
         Self {
             announce: prefixes,
@@ -117,12 +210,12 @@ impl UnderlayUpdate {
                 .collect(),
         }
     }
-    pub fn break_loops(&self, hostname: &String) -> Self {
+    pub fn break_loops(&self, hostname: &str) -> Self {
         Self {
             announce: self
                 .announce
                 .iter()
-                .filter(|x| !x.path.contains(hostname))
+                .filter(|x| !x.path.iter().any(|h| h == hostname))
                 .cloned()
                 .collect(),
             withdraw: self.withdraw.clone(),
@@ -168,5 +261,127 @@ mod test {
             "tests/output/ddm_v3_protocol.json",
             &serde_json::to_string_pretty(&schema).unwrap(),
         );
+    }
+
+    fn path_vector(destination: &str, path: &[&str]) -> PathVector {
+        PathVector {
+            destination: destination.parse().unwrap(),
+            path: path.iter().map(|x| x.to_string()).collect(),
+        }
+    }
+
+    fn tunnel_origin(metric: u64) -> TunnelOrigin {
+        TunnelOrigin {
+            overlay_prefix: "0.0.0.0/0".parse().unwrap(),
+            boundary_addr: "fd00:a::1".parse().unwrap(),
+            vni: 99,
+            metric,
+            path: vec!["peer".to_string()],
+        }
+    }
+
+    // A received update loses the announcements that already passed through
+    // this router, and redistribution appends the router to the rest.
+    // Withdrawals are passed on as they are, since a router never imported a
+    // route whose path contains itself.
+    #[test]
+    fn tunnel_update_breaks_loops_then_extends_paths() {
+        let mut looped = tunnel_origin(0);
+        looped.path =
+            vec!["t0".to_string(), "me".to_string(), "t1".to_string()];
+        let mut fresh = tunnel_origin(0);
+        fresh.path = vec!["t0".to_string(), "me2".to_string()];
+        let update = TunnelUpdate {
+            announce: HashSet::from([looped.clone(), fresh.clone()]),
+            withdraw: HashSet::from([looped.clone()]),
+        };
+
+        let sent = update.break_loops("me").with_path_element("me");
+
+        fresh.path.push("me".to_string());
+        looped.path.push("me".to_string());
+        assert_eq!(sent.announce, HashSet::from([fresh]));
+        assert_eq!(sent.withdraw, HashSet::from([looped]));
+    }
+
+    // https://github.com/oxidecomputer/maghemite/issues/993: routes we hold
+    // from a peer that its pull response no longer carries must be withdrawn,
+    // not kept.
+    #[test]
+    fn pull_response_withdraws_routes_missing_from_reply() {
+        // We hold X and Y from the peer, and it now advertises Y and Z.
+        let x = path_vector("fd00:1::/64", &["peer"]);
+        let y = path_vector("fd00:2::/64", &["peer"]);
+        let z = path_vector("fd00:3::/64", &["peer"]);
+        // We hold a tunnel origin from the peer, and it now advertises none.
+        let t = tunnel_origin(0);
+        let pr = PullResponse {
+            underlay: Some(HashSet::from([y.clone(), z.clone()])),
+            tunnel: None,
+        };
+
+        let update = Update::from_pull_response(
+            pr,
+            &HashSet::from([x.clone(), y]),
+            &HashSet::from([t.clone()]),
+        );
+
+        let underlay = update.underlay.expect("underlay changes");
+        assert_eq!(underlay.announce, HashSet::from([z]));
+        assert_eq!(underlay.withdraw, HashSet::from([x]));
+        let tunnel = update.tunnel.expect("tunnel changes");
+        assert_eq!(tunnel.announce, HashSet::new());
+        assert_eq!(tunnel.withdraw, HashSet::from([t]));
+    }
+
+    // A route whose path or metric changed is a different route: the old one
+    // is withdrawn and the new one announced, even though the destination or
+    // overlay prefix is the same.
+    #[test]
+    fn pull_response_replaces_changed_routes() {
+        let old_path = path_vector("fd00:1::/64", &["peer"]);
+        let new_path = path_vector("fd00:1::/64", &["far", "peer"]);
+        let old_metric = tunnel_origin(0);
+        let new_metric = tunnel_origin(100);
+        let pr = PullResponse {
+            underlay: Some(HashSet::from([new_path.clone()])),
+            tunnel: Some(HashSet::from([new_metric.clone()])),
+        };
+
+        let update = Update::from_pull_response(
+            pr,
+            &HashSet::from([old_path.clone()]),
+            &HashSet::from([old_metric.clone()]),
+        );
+
+        let underlay = update.underlay.expect("underlay changes");
+        assert_eq!(underlay.announce, HashSet::from([new_path]));
+        assert_eq!(underlay.withdraw, HashSet::from([old_path]));
+        let tunnel = update.tunnel.expect("tunnel changes");
+        assert_eq!(tunnel.announce, HashSet::from([new_metric]));
+        assert_eq!(tunnel.withdraw, HashSet::from([old_metric]));
+    }
+
+    // The peer's pull response has the same routes we already hold from it,
+    // so nothing changed. The returned Update must have `underlay: None` and
+    // `tunnel: None`, so that handle_update skips the underlay and tunnel
+    // handlers instead of running them with empty sets.
+    #[test]
+    fn pull_response_without_changes_returns_empty_update() {
+        let pv = path_vector("fd00:1::/64", &["peer"]);
+        let t = tunnel_origin(100);
+        let pr = PullResponse {
+            underlay: Some(HashSet::from([pv.clone()])),
+            tunnel: Some(HashSet::from([t.clone()])),
+        };
+
+        let update = Update::from_pull_response(
+            pr,
+            &HashSet::from([pv]),
+            &HashSet::from([t]),
+        );
+
+        assert!(update.underlay.is_none());
+        assert!(update.tunnel.is_none());
     }
 }

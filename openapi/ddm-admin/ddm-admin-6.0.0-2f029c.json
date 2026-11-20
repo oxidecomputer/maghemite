@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "4.0.0"
+    "version": "6.0.0"
   },
   "paths": {
     "/disable-stats": {
@@ -156,6 +156,8 @@
     },
     "/peers": {
       "get": {
+        "summary": "Get the routing session on each address object, keyed by address",
+        "description": "object name, including sessions that have not discovered a peer.",
         "operationId": "get_peers",
         "responses": {
           "200": {
@@ -299,6 +301,138 @@
         }
       }
     },
+    "/rack-prefix": {
+      "get": {
+        "summary": "Get the rack prefix this router originates.",
+        "description": "Returns 404 if none is set. Only supported on transit routers.",
+        "operationId": "get_rack_prefix",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RackPrefix"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Set the rack prefix this router originates.",
+        "description": "Replaces any previous rack prefix. Only supported on transit routers.",
+        "operationId": "set_rack_prefix",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RackPrefix"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Stop originating a rack prefix.",
+        "description": "Succeeds if none is set. Only supported on transit routers.",
+        "operationId": "clear_rack_prefix",
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/stats/peer/{aobj_name}": {
+      "get": {
+        "summary": "Get the counters of the routing session on one address object.",
+        "description": "Address object names contain a `/` (e.g. `tfportqsfp0_0/v6`), which must be percent-encoded as `%2F` in the path. Returns 404 if no session uses the address object.",
+        "operationId": "get_peer_stats",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "aobj_name",
+            "description": "Address object name of the routing session.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerStats"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/stats/peers": {
+      "get": {
+        "summary": "Get the counters of the routing session on each address object, keyed",
+        "description": "by address object name.",
+        "operationId": "get_peers_stats",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerStats",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerStats"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/sync": {
       "put": {
         "operationId": "sync",
@@ -377,6 +511,8 @@
     },
     "/tunnel-endpoints": {
       "get": {
+        "summary": "Get the tunnel routes imported from peers.",
+        "description": "Each route carries the path it was advertised along.",
         "operationId": "get_tunnel_endpoints",
         "responses": {
           "200": {
@@ -543,8 +679,8 @@
           "path"
         ]
       },
-      "PeerInfo": {
-        "description": "Information about a DDM peer.",
+      "Peer": {
+        "description": "A discovered DDM peer.",
         "type": "object",
         "properties": {
           "addr": {
@@ -556,16 +692,112 @@
           },
           "kind": {
             "$ref": "#/components/schemas/RouterKind"
+          }
+        },
+        "required": [
+          "addr",
+          "host",
+          "kind"
+        ]
+      },
+      "PeerInfo": {
+        "description": "The routing session on one address object, and its peer if one has been discovered.",
+        "type": "object",
+        "properties": {
+          "peer": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Peer"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/PeerStatus"
           }
         },
         "required": [
-          "addr",
-          "host",
-          "kind",
           "status"
+        ]
+      },
+      "PeerStats": {
+        "description": "Counters for the routing session on one address object. The imported counts are the routes currently imported from this session's peer.",
+        "type": "object",
+        "properties": {
+          "advertisements_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "advertisements_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_tunnel_endpoints": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "imported_underlay_prefixes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_address_changes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "solicitations_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_send_fail": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "advertisements_received",
+          "advertisements_sent",
+          "imported_tunnel_endpoints",
+          "imported_underlay_prefixes",
+          "peer_address_changes",
+          "peer_established",
+          "peer_expirations",
+          "solicitations_received",
+          "solicitations_sent",
+          "update_send_fail",
+          "updates_received",
+          "updates_sent"
         ]
       },
       "PeerStatus": {
@@ -645,6 +877,18 @@
           }
         ]
       },
+      "RackPrefix": {
+        "description": "The prefix a transit router originates on behalf of its whole rack.\n\nIt is advertised to transit peers as an underlay route, so routers in other racks learn it as an ordinary underlay prefix.",
+        "type": "object",
+        "properties": {
+          "prefix": {
+            "$ref": "#/components/schemas/Ipv6Net"
+          }
+        },
+        "required": [
+          "prefix"
+        ]
+      },
       "RouterKind": {
         "type": "integer",
         "enum": [
@@ -681,19 +925,29 @@
         ]
       },
       "TunnelRoute": {
+        "description": "A tunnel route imported from a peer.",
         "type": "object",
         "properties": {
           "nexthop": {
+            "description": "The address of the peer the route was learned from.",
             "type": "string",
             "format": "ipv6"
           },
           "origin": {
             "$ref": "#/components/schemas/TunnelOrigin"
+          },
+          "path": {
+            "description": "The routers the route was advertised through, starting with its originator and ending with the peer it was learned from.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
           "nexthop",
-          "origin"
+          "origin",
+          "path"
         ]
       }
     },

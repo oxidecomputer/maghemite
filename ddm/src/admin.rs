@@ -14,13 +14,18 @@ use crate::sm::{
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
 use ddm_api::ddm_admin_api_mod;
-use ddm_api_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
-use ddm_api_types::db::{PeerInfo, RouterKind, TunnelRoute};
+use ddm_api_types::admin::{
+    EnableStatsRequest, ExpirePathParams, PeerStatsPathParams, PrefixMap,
+    RackPrefix,
+};
+use ddm_api_types::db::{Peer, PeerInfo, PeerStats, RouterKind, TunnelRoute};
 use ddm_api_types::exchange::PathVector;
 use ddm_api_types::external_peers::ExternalPeers;
 use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types_versions::v4;
 use dropshot::ApiDescription;
 use dropshot::ApiDescriptionBuildErrors;
+use dropshot::ClientErrorStatusCode;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
@@ -30,16 +35,17 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use iddqd::IdOrdMap;
 use mg_common::lock;
 use oxnet::Ipv6Net;
-use slog::{Logger, debug, error, info, o};
+use slog::{Logger, error, info, o, warn};
 use slog_error_chain::InlineErrorChain;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{SendError, Sender, channel};
 use std::time::Duration;
 use tokio::spawn;
 use tokio::task::JoinHandle;
@@ -59,7 +65,7 @@ pub struct RouterStats {
 pub struct HandlerContext {
     pub db: Db,
     pub stats: Arc<RouterStats>,
-    pub peers: Vec<SmContext>,
+    pub peers: IdOrdMap<SmContext>,
     pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub tunables: Tunables,
     pub router_kind: RouterKind,
@@ -72,6 +78,68 @@ pub struct HandlerContext {
 impl HandlerContext {
     pub fn event_channels(&self) -> impl Iterator<Item = &Sender<Event>> {
         self.peers.iter().map(|x| &x.tx)
+    }
+
+    /// Reject the request unless this router is of kind `kind`.
+    fn require_router_kind(&self, kind: RouterKind) -> Result<(), AdminError> {
+        if self.router_kind != kind {
+            return Err(AdminError::UnsupportedRouterKind(kind));
+        }
+        Ok(())
+    }
+}
+
+/// Errors returned by admin API handlers.
+#[derive(Debug, thiserror::Error)]
+enum AdminError {
+    #[error("only supported for {0} routers")]
+    UnsupportedRouterKind(RouterKind),
+
+    #[error("address object {0} is in use by a non-external peer")]
+    AddressObjectInUse(String),
+
+    #[error("no routing session on address object {0}")]
+    UnknownAddressObject(String),
+
+    #[error("no rack prefix is set")]
+    NoRackPrefix,
+
+    #[error("admin event send: sending on a closed channel")]
+    EventSend,
+
+    #[error("failed to start stats server")]
+    StatsServer(#[source] anyhow::Error),
+}
+
+// `SendError` only carries the unsent event back to the caller; the error
+// itself always means the receiver hung up.
+impl From<SendError<Event>> for AdminError {
+    fn from(_: SendError<Event>) -> Self {
+        Self::EventSend
+    }
+}
+
+impl From<AdminError> for HttpError {
+    fn from(e: AdminError) -> Self {
+        let msg = InlineErrorChain::new(&e).to_string();
+        match e {
+            AdminError::UnsupportedRouterKind(_)
+            | AdminError::AddressObjectInUse(_) => {
+                Self::for_bad_request(None, msg)
+            }
+            AdminError::UnknownAddressObject(_) | AdminError::NoRackPrefix => {
+                // Unlike for_not_found, this sends the message to the
+                // client, so it learns which name was not found.
+                Self::for_client_error(
+                    None,
+                    ClientErrorStatusCode::NOT_FOUND,
+                    msg,
+                )
+            }
+            AdminError::EventSend | AdminError::StatsServer(_) => {
+                Self::for_internal_error(msg)
+            }
+        }
     }
 }
 
@@ -180,10 +248,30 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
-        for sm in &ctx.peers {
+        for sm in ctx.peers.iter() {
+            // Compute status first so peer_status() never runs while we hold
+            // any of the InterfaceState mutexes below.
+            let status = sm.iface.peer_status();
+            let peer = lock!(sm.iface.peer_identity).clone().map(|p| Peer {
+                addr: p.addr,
+                host: p.hostname,
+                kind: p.kind,
+            });
+            result
+                .insert(sm.config.aobj_name.clone(), PeerInfo { status, peer });
+        }
+        Ok(HttpResponseOk(result))
+    }
+
+    async fn get_peers_v4(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<u32, v4::db::PeerInfo>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        let mut result = HashMap::new();
+        for sm in ctx.peers.iter() {
             // Compute status first so peer_status() never runs while we hold
             // any of the InterfaceState mutexes below.
             let status = sm.iface.peer_status();
@@ -193,7 +281,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             };
             result.insert(
                 if_index,
-                PeerInfo {
+                v4::db::PeerInfo {
                     status,
                     addr: peer.addr,
                     host: peer.hostname,
@@ -202,6 +290,31 @@ impl DdmAdminApi for DdmAdminApiImpl {
             );
         }
         Ok(HttpResponseOk(result))
+    }
+
+    async fn get_peers_stats(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerStats>>, HttpError> {
+        let ctx = lock!(ctx.context());
+        Ok(HttpResponseOk(
+            ctx.peers
+                .iter()
+                .map(|sm| (sm.config.aobj_name.clone(), sm.stats.snapshot()))
+                .collect(),
+        ))
+    }
+
+    async fn get_peer_stats(
+        ctx: RequestContext<Self::Context>,
+        params: Path<PeerStatsPathParams>,
+    ) -> Result<HttpResponseOk<PeerStats>, HttpError> {
+        let aobj = params.into_inner().aobj_name;
+        let ctx = lock!(ctx.context());
+        let sm = ctx
+            .peers
+            .get(aobj.as_str())
+            .ok_or(AdminError::UnknownAddressObject(aobj))?;
+        Ok(HttpResponseOk(sm.stats.snapshot()))
     }
 
     async fn expire_peer(
@@ -213,11 +326,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         for e in ctx.event_channels() {
             e.send(Event::Admin(AdminEvent::Expire(addr)))
-                .map_err(|e| {
-                    HttpError::for_internal_error(format!(
-                        "admin event send: {e}"
-                    ))
-                })?;
+                .map_err(AdminError::from)?;
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -269,7 +378,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
     ) -> Result<HttpResponseOk<HashSet<TunnelRoute>>, HttpError> {
         let ctx = lock!(ctx.context());
         let imported = ctx.db.imported_tunnel();
-        Ok(HttpResponseOk(imported))
+        Ok(HttpResponseOk(
+            imported.into_iter().map(Into::into).collect(),
+        ))
     }
 
     async fn advertise_prefixes(
@@ -284,9 +395,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
                 prefixes.clone(),
             ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            .map_err(AdminError::from)?;
         }
 
         ctx.stats
@@ -301,6 +410,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
         ctx.db.originate_tunnel(&endpoints);
@@ -309,9 +419,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                 endpoints.clone(),
             ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            .map_err(AdminError::from)?;
         }
 
         ctx.stats
@@ -332,9 +440,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
                 prefixes.clone(),
             ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            .map_err(AdminError::from)?;
         }
 
         ctx.stats
@@ -349,6 +455,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<HashSet<TunnelOrigin>>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
         let endpoints = request.into_inner();
         slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
         ctx.db.withdraw_tunnel(&endpoints);
@@ -357,9 +464,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
             e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                 endpoints.clone(),
             ))))
-            .map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            .map_err(AdminError::from)?;
         }
 
         ctx.stats
@@ -375,9 +480,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
 
         for e in ctx.event_channels() {
-            e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
-                HttpError::for_internal_error(format!("admin event send: {e}"))
-            })?;
+            e.send(Event::Admin(AdminEvent::Sync))
+                .map_err(AdminError::from)?;
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -408,11 +512,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                     rq.sled_id,
                     log,
                 )
-                .map_err(|e| {
-                    HttpError::for_internal_error(format!(
-                        "failed to start stats server: {e}"
-                    ))
-                })?,
+                .map_err(AdminError::StatsServer)?,
             );
         }
 
@@ -437,15 +537,21 @@ impl DdmAdminApi for DdmAdminApiImpl {
         request: TypedBody<ExternalPeers>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         let mut ctx = lock!(ctx.context());
-
-        if ctx.router_kind != RouterKind::Transit {
-            return Err(HttpError::for_bad_request(
-                None,
-                "external peers only supported for transit routers".into(),
-            ));
-        }
+        ctx.require_router_kind(RouterKind::Transit)?;
 
         let rq = request.into_inner();
+
+        // State machines are identified by address object name, so an
+        // external peer must not reuse one belonging to a static peer.
+        if let Some(aobj) = ctx
+            .peers
+            .iter()
+            .filter(|p| !p.iface.external)
+            .map(|p| &p.config.aobj_name)
+            .find(|aobj| rq.address_objects.contains(*aobj))
+        {
+            return Err(AdminError::AddressObjectInUse(aobj.clone()).into());
+        }
 
         let current = ctx.db.get_external_peers();
         let to_create = rq.address_objects.difference(&current);
@@ -460,6 +566,15 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx.db.set_external_peers(rq.address_objects.clone());
 
         for addr_obj in to_create.into_iter() {
+            if ctx.peers.get(addr_obj.as_str()).is_some() {
+                // this should not be possible given we still hold the ctx lock
+                error!(
+                    ctx.log,
+                    "BUG: state machine for address object {addr_obj} already exists"
+                );
+                continue;
+            }
+
             let (tx, rx) = channel();
 
             let config = crate::sm::Config {
@@ -489,7 +604,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
             let sm_ctx = SmContext {
                 config,
                 db: ctx.db.clone(),
-                event_channels: ctx.event_channels().cloned().collect(),
+                event_channels: ctx
+                    .peers
+                    .iter()
+                    .map(|p| (p.config.aobj_name.clone(), p.tx.clone()))
+                    .collect(),
                 tx: tx.clone(),
                 log: ctx.log.clone(),
                 router_id: ctx.router_id.clone(),
@@ -506,32 +625,22 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
             sm.run().unwrap();
 
-            ctx.peers.push(sm_ctx.clone());
+            ctx.peers.insert_overwrite(sm_ctx);
         }
-
-        // Ensure our indices are unique and ordered.
-        let mut remove_idx = BTreeSet::default();
 
         for aobj in to_remove.into_iter() {
-            for (i, p) in ctx.peers.iter().enumerate() {
-                if p.iface.external {
-                    if &p.config.aobj_name == aobj {
-                        let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
-                        remove_idx.insert(i);
-                        info!(
-                            ctx.log,
-                            "removing external peeer for address object {aobj}"
-                        );
-                    } else {
-                        debug!(ctx.log, "{aobj} != {}", p.config.aobj_name);
-                    }
-                }
-            }
-        }
-        // remove peers back to front so we don't shift the order out from under
-        // ourselves for the indexes we just gathered.
-        for i in remove_idx.iter().rev() {
-            ctx.peers.remove(*i);
+            let Some(p) =
+                ctx.peers.get(aobj.as_str()).filter(|p| p.iface.external)
+            else {
+                warn!(
+                    ctx.log,
+                    "failed to find external peer {aobj} during removal"
+                );
+                continue;
+            };
+            let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
+            info!(ctx.log, "removing external peer for address object {aobj}");
+            ctx.peers.remove(aobj.as_str());
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -541,17 +650,70 @@ impl DdmAdminApi for DdmAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<ExternalPeers>, HttpError> {
         let ctx = lock!(ctx.context());
-
-        if ctx.router_kind != RouterKind::Transit {
-            return Err(HttpError::for_bad_request(
-                None,
-                "external peers only supported for transit routers".into(),
-            ));
-        }
+        ctx.require_router_kind(RouterKind::Transit)?;
 
         Ok(HttpResponseOk(ExternalPeers {
             address_objects: ctx.db.get_external_peers(),
         }))
+    }
+
+    async fn get_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<RackPrefix>, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+        let prefix = ctx.db.rack_prefix().ok_or(AdminError::NoRackPrefix)?;
+        Ok(HttpResponseOk(RackPrefix { prefix }))
+    }
+
+    async fn set_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<RackPrefix>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+        let RackPrefix { prefix } = request.into_inner();
+
+        let old = ctx.db.rack_prefix();
+        if old == Some(prefix) {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+        ctx.db.set_rack_prefix(Some(prefix));
+        info!(ctx.log, "set rack prefix"; "prefix" => %prefix, "old" => ?old);
+
+        // Announce the new prefix before withdrawing the old one, so peers
+        // are never left without a route to the rack.
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Rack(prefix))))
+                .map_err(AdminError::from)?;
+            if let Some(old) = old {
+                e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(
+                    old,
+                ))))
+                .map_err(AdminError::from)?;
+            }
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    async fn clear_rack_prefix(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        let ctx = lock!(ctx.context());
+        ctx.require_router_kind(RouterKind::Transit)?;
+        let Some(old) = ctx.db.rack_prefix() else {
+            return Ok(HttpResponseUpdatedNoContent());
+        };
+        ctx.db.set_rack_prefix(None);
+        info!(ctx.log, "clear rack prefix"; "old" => %old);
+
+        for e in ctx.event_channels() {
+            e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Rack(old))))
+                .map_err(AdminError::from)?;
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
     }
 }
 

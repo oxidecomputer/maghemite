@@ -1434,6 +1434,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
  "dropshot 0.18.0",
@@ -1441,9 +1442,11 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "iddqd 0.5.0",
  "ispf",
  "libnet",
  "mg-common",
+ "num_enum 0.7.6",
  "omicron-common",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
@@ -1500,6 +1503,7 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
+ "oxnet",
  "schemars 0.8.22",
  "serde",
  "serde_repr",

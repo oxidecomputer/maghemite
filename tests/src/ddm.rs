@@ -5,6 +5,8 @@
 use anyhow::{Result, anyhow};
 use client_common::{eprintln_nopipe, println_nopipe};
 use ddm_admin_client::Client;
+use ddm_api_types_versions::latest::admin::RackPrefix;
+use ddm_api_types_versions::latest::db::PeerStatus;
 use ddm_api_types_versions::latest::external_peers::ExternalPeers;
 use ddm_api_types_versions::latest::net::TunnelOrigin;
 use oxnet::Ipv6Net;
@@ -14,7 +16,7 @@ use std::env;
 use std::net::Ipv6Addr;
 use std::ops::{Deref, DerefMut};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use zone::Zlogin;
 use ztest::*;
 
@@ -521,9 +523,9 @@ async fn run_trio_tests(
     let t1 = Client::new("http://10.0.0.3:8000", log.clone())?;
 
     // If we never get a response from a server, return 99 as a sentinel value.
-    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 2);
+    wait_for_eq!(peer_count(&s1).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&s2).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&t1).await.unwrap_or(99), 2);
 
     println_nopipe!("initial peering test passed");
 
@@ -617,7 +619,7 @@ async fn run_trio_tests(
     let peers = t1.get_peers().await?;
     let p0: Ipv6Addr = peers
         .values()
-        .next()
+        .find_map(|x| x.peer.as_ref())
         .ok_or(anyhow!("expected transit peer"))?
         .addr;
 
@@ -825,10 +827,10 @@ async fn run_quartet_tests(
     let t1 = Client::new("http://10.0.0.4:8000", log.clone())?;
 
     // If we never get a response from a server, return 99 as a sentinel value.
-    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s3.get_peers().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
+    wait_for_eq!(peer_count(&s1).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&s2).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&s3).await.unwrap_or(99), 1);
+    wait_for_eq!(peer_count(&t1).await.unwrap_or(99), 3);
 
     println_nopipe!("initial peering test passed");
 
@@ -1103,8 +1105,14 @@ async fn run_sextet_tests(
                     if let Ok(peers) = c.get_peers().await {
                         println_nopipe!("peers: {peers:#?}");
                     }
+                    if let Ok(stats) = c.get_peers_stats().await {
+                        println_nopipe!("peer stats: {stats:#?}");
+                    }
                     if let Ok(prefixes) = c.get_prefixes().await {
                         println_nopipe!("prefixes: {prefixes:#?}");
+                    }
+                    if let Ok(tunnel) = c.get_tunnel_endpoints().await {
+                        println_nopipe!("tunnel endpoints: {tunnel:#?}");
                     }
                 });
             });
@@ -1144,13 +1152,15 @@ async fn run_sextet_tests(
         }
     }
 
-    struct PeerReachablePrefixes {
-        s1: BTreeSet<Ipv6Net>,
-        s2: BTreeSet<Ipv6Net>,
-        s3: BTreeSet<Ipv6Net>,
-        s4: BTreeSet<Ipv6Net>,
-        t1: BTreeSet<Ipv6Net>,
-        t2: BTreeSet<Ipv6Net>,
+    /// Something expected of each router.
+    #[derive(Default)]
+    struct PerRouter<T> {
+        s1: T,
+        s2: T,
+        s3: T,
+        s4: T,
+        t1: T,
+        t2: T,
     }
 
     drop_dump!(s1, "http://10.0.0.1:8000");
@@ -1171,10 +1181,7 @@ async fn run_sextet_tests(
                 stringify!($client),
                 $count
             );
-            wait_for_eq!(
-                $client.get_peers().await.map(|x| x.len()).ok(),
-                Some($count)
-            );
+            wait_for_eq!(peer_count(&$client).await.ok(), Some($count));
         }};
     }
 
@@ -1226,6 +1233,39 @@ async fn run_sextet_tests(
         }};
     }
 
+    macro_rules! assert_each {
+        ($check:ident, $r:expr) => {{
+            $check!(s1, $r.s1.clone());
+            $check!(s2, $r.s2.clone());
+            $check!(s3, $r.s3.clone());
+            $check!(s4, $r.s4.clone());
+            $check!(t1, $r.t1.clone());
+            $check!(t2, $r.t2.clone());
+        }};
+    }
+
+    // The paths of the imported tunnel routes.
+    macro_rules! assert_tunnel_paths {
+        ($client:expr, $expected:expr) => {{
+            println_nopipe!(
+                "ensure {} has tunnel paths {:?}",
+                stringify!($client),
+                $expected
+            );
+            wait_for_eq!(
+                $client
+                    .get_tunnel_endpoints()
+                    .await
+                    .map(|x| x
+                        .iter()
+                        .map(|y| y.path.clone())
+                        .collect::<BTreeSet<_>>())
+                    .ok(),
+                Some($expected)
+            );
+        }};
+    }
+
     macro_rules! assert_nexthops_are_peers {
         ($client:expr) => {{
             let pfx_nexthops =
@@ -1235,12 +1275,37 @@ async fn run_sextet_tests(
                 .await
                 .expect("get peers")
                 .values()
+                .filter_map(|x| x.peer.as_ref())
                 .map(|x| x.addr.to_string())
                 .collect::<Vec<_>>();
 
             for p in pfx_nexthops.keys() {
                 assert!(peers.contains(p), "nexthop {p} is not a peer");
             }
+        }};
+    }
+
+    macro_rules! assert_session_imports_match_prefixes {
+        ($client:expr) => {{
+            println_nopipe!(
+                "ensure {} session imports match its prefixes",
+                stringify!($client),
+            );
+            wait_for_eq!(
+                reported_imports(&$client).await.expect("get peer stats"),
+                held_imports(&$client).await.expect("get held imports")
+            );
+        }};
+    }
+
+    macro_rules! assert_all_session_imports_match_prefixes {
+        () => {{
+            assert_session_imports_match_prefixes!(s1);
+            assert_session_imports_match_prefixes!(s2);
+            assert_session_imports_match_prefixes!(s3);
+            assert_session_imports_match_prefixes!(s4);
+            assert_session_imports_match_prefixes!(t1);
+            assert_session_imports_match_prefixes!(t2);
         }};
     }
 
@@ -1263,12 +1328,12 @@ async fn run_sextet_tests(
     let s2_origin: Vec<Ipv6Net> = [ip6_net!("fd00:2::/64")].into();
     let s3_origin: Vec<Ipv6Net> = [ip6_net!("fd00:3::/64")].into();
     let s4_origin: Vec<Ipv6Net> = [ip6_net!("fd00:4::/64")].into();
-    let t1_origin: Vec<Ipv6Net> = s1_origin
+    let t1_imported: Vec<Ipv6Net> = s1_origin
         .clone()
         .into_iter()
         .chain(s2_origin.clone())
         .collect();
-    let t2_origin: Vec<Ipv6Net> = s3_origin
+    let t2_imported: Vec<Ipv6Net> = s3_origin
         .clone()
         .into_iter()
         .chain(s4_origin.clone())
@@ -1280,10 +1345,61 @@ async fn run_sextet_tests(
     s4.advertise_prefixes(&s4_origin).await?;
 
     //
+    // Each transit router originates a prefix for its rack, and t1 a tunnel
+    // endpoint. Rack A's prefix alternates between two values in the sweep
+    // below, so that rounds replace it, and rack B's is set and cleared.
+    //
+
+    let rack_a = [ip6_net!("fd00:a::/56"), ip6_net!("fd00:a::/52")];
+    let rack_b = ip6_net!("fd00:b::/56");
+    let rack_prefixes: BTreeSet<Ipv6Net> =
+        rack_a.into_iter().chain([rack_b]).collect();
+    // The paths of the imported routes to any rack prefix, as (prefix, path).
+    macro_rules! assert_rack_paths {
+        ($client:expr, $expected:expr) => {{
+            println_nopipe!(
+                "ensure {} has rack prefix paths {:?}",
+                stringify!($client),
+                $expected
+            );
+            wait_for_eq!(
+                $client
+                    .get_prefixes()
+                    .await
+                    .map(|x| x
+                        .values()
+                        .flatten()
+                        .filter(|y| rack_prefixes.contains(&y.destination))
+                        .map(|y| (y.destination, y.path.clone()))
+                        .collect::<BTreeSet<_>>())
+                    .ok(),
+                Some($expected)
+            );
+        }};
+    }
+
+    t1.set_rack_prefix(&RackPrefix { prefix: rack_a[0] })
+        .await?;
+    t2.set_rack_prefix(&RackPrefix { prefix: rack_b }).await?;
+
+    t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
+        overlay_prefix: "203.0.113.0/24".parse()?,
+        boundary_addr: "fd00:1701::1".parse()?,
+        vni: 47,
+        metric: 0,
+    }])
+    .await?;
+
+    //
     // Starting out we should have just the backplane peers.
     //
 
     assert_peer_counts!(PeerCounts::default().server(1).transit(2));
+
+    // Paths name routers by router ID, which each server sees as its transit
+    // peer's host.
+    let t1_id = only_peer_host(&s1).await?;
+    let t2_id = only_peer_host(&s3).await?;
 
     //
     // Specifying two external peers should result in two additional peers for
@@ -1376,45 +1492,129 @@ async fn run_sextet_tests(
         PeerCounts::default().server(1).transit(ext_count)
     }
 
-    let expected_reachable_prefixes =
-        |x: &ExternalPeers, y: &ExternalPeers| -> PeerReachablePrefixes {
-            let counts = expected_external_peerings(x, y);
-            // Servers can always see the originated prefixes of other routers
-            // reachable over a single hop transit router path (e.g. in the same
-            // rack). Transit routers can always see the originated prefixes of
-            // their directly connected server routers.
-            let mut reach = PeerReachablePrefixes {
-                s1: s2_origin.iter().cloned().collect(),
-                s2: s1_origin.iter().cloned().collect(),
-                s3: s4_origin.iter().cloned().collect(),
-                s4: s3_origin.iter().cloned().collect(),
-                t1: t1_origin.iter().cloned().collect(),
-                t2: t2_origin.iter().cloned().collect(),
+    // Server prefixes stay within their rack: transit routers do not
+    // redistribute to each other. Each transit router learns the other rack's
+    // prefix, if it is set, from a transit peer and passes it on to its own
+    // servers, but never sends its own rack prefix to them.
+    let expected_reachable_prefixes = |peered: bool,
+                                       rack_a: Ipv6Net,
+                                       rack_b: Option<Ipv6Net>|
+     -> PerRouter<BTreeSet<Ipv6Net>> {
+        let mut reach: PerRouter<BTreeSet<Ipv6Net>> = PerRouter {
+            s1: s2_origin.iter().cloned().collect(),
+            s2: s1_origin.iter().cloned().collect(),
+            s3: s4_origin.iter().cloned().collect(),
+            s4: s3_origin.iter().cloned().collect(),
+            t1: t1_imported.iter().cloned().collect(),
+            t2: t2_imported.iter().cloned().collect(),
+        };
+        if peered {
+            for r in [&mut reach.s1, &mut reach.s2, &mut reach.t1] {
+                r.extend(rack_b);
+            }
+            for r in [&mut reach.s3, &mut reach.s4, &mut reach.t2] {
+                r.insert(rack_a);
+            }
+        }
+        reach
+    };
+
+    // Paths start at the originator. A rack prefix reaches the other transit
+    // router directly and that router's servers through it.
+    type RackPaths = BTreeSet<(Ipv6Net, Vec<String>)>;
+    let expected_rack_paths = |peered: bool,
+                               rack_a: Ipv6Net,
+                               rack_b: Option<Ipv6Net>|
+     -> PerRouter<RackPaths> {
+        if !peered {
+            return PerRouter::default();
+        }
+        let a = |path: &[&String]| -> RackPaths {
+            [(rack_a, path.iter().map(|x| x.to_string()).collect())].into()
+        };
+        let b = |path: &[&String]| -> RackPaths {
+            rack_b
+                .map(|p| (p, path.iter().map(|x| x.to_string()).collect()))
+                .into_iter()
+                .collect()
+        };
+        PerRouter {
+            s1: b(&[&t2_id, &t1_id]),
+            s2: b(&[&t2_id, &t1_id]),
+            t1: b(&[&t2_id]),
+            s3: a(&[&t1_id, &t2_id]),
+            s4: a(&[&t1_id, &t2_id]),
+            t2: a(&[&t1_id]),
+        }
+    };
+
+    // t1's tunnel endpoint reaches its own servers, and when the transit
+    // routers peer, t2 and t2's servers. It never comes back to t1.
+    let expected_tunnel_paths =
+        |peered: bool| -> PerRouter<BTreeSet<Vec<String>>> {
+            let path = |p: &[&String]| -> BTreeSet<Vec<String>> {
+                [p.iter().map(|x| x.to_string()).collect()].into()
             };
-            // If there is any peering between transit routers, each server router
-            // should see prefixes originated from the router adjacent to their
-            // transit router.
-            if counts.t1 > 2 || counts.t2 > 2 {
-                // Origins from servers connected to t2 propagating to servers
-                // connected to t1.
-                reach.s1.extend(&s3_origin);
-                reach.s1.extend(&s4_origin);
-                reach.s2.extend(&s3_origin);
-                reach.s2.extend(&s4_origin);
-
-                // Origins from servers connected to t1 propagating to servers
-                // connected to t2.
-                reach.s3.extend(&s1_origin);
-                reach.s3.extend(&s2_origin);
-                reach.s4.extend(&s1_origin);
-                reach.s4.extend(&s2_origin);
-
-                // Origins from transit routers propagate to each other.
-                reach.t1.extend(&t2_origin);
-                reach.t2.extend(&t1_origin);
+            let mut reach = PerRouter {
+                s1: path(&[&t1_id]),
+                s2: path(&[&t1_id]),
+                ..Default::default()
+            };
+            if peered {
+                reach.t2 = path(&[&t1_id]);
+                reach.s3 = path(&[&t1_id, &t2_id]);
+                reach.s4 = path(&[&t1_id, &t2_id]);
             }
             reach
         };
+
+    //
+    // Clear rack B and set it again while one session between the transit
+    // routers stays up. Then only t2's withdraw and announce can remove and
+    // restore the route. In the sweep below, a session that goes down also
+    // removes the routes it carried, which would hide a lost withdraw.
+    //
+
+    t1.set_external_peers(&ext_peers_qsfp0).await?;
+    t2.set_external_peers(&ext_peers_qsfp1).await?;
+    assert_peer_counts!(expected_external_peerings(
+        &ext_peers_qsfp0,
+        &ext_peers_qsfp1
+    ));
+    assert_reach!(expected_reachable_prefixes(true, rack_a[0], Some(rack_b)));
+    assert_each!(
+        assert_rack_paths,
+        expected_rack_paths(true, rack_a[0], Some(rack_b))
+    );
+
+    let start = Instant::now();
+    for rack_b_now in [None, Some(rack_b)] {
+        match rack_b_now {
+            Some(prefix) => t2.set_rack_prefix(&RackPrefix { prefix }).await?,
+            None => t2.clear_rack_prefix().await?,
+        };
+        assert_reach!(expected_reachable_prefixes(true, rack_a[0], rack_b_now));
+        assert_each!(
+            assert_rack_paths,
+            expected_rack_paths(true, rack_a[0], rack_b_now)
+        );
+    }
+
+    // The session must have been in Exchange since before the clear.
+    for (c, addr_obj) in [(&t1, QSFP0), (&t2, QSFP1)] {
+        let min = start.elapsed();
+        let status = c
+            .get_peers()
+            .await?
+            .into_inner()
+            .remove(addr_obj)
+            .map(|x| x.status);
+        assert!(
+            matches!(status, Some(PeerStatus::Exchange(d)) if d >= min),
+            "session on {addr_obj} restarted during the rack B clear: \
+             {status:?}, expected Exchange for at least {min:?}",
+        );
+    }
 
     // The choices we have for each switch are none, one or both peers where the
     // one case can be either of the peers.
@@ -1439,6 +1639,15 @@ async fn run_sextet_tests(
         let x = &choices[a];
         let y = &choices[b];
 
+        let rack_a_now = rack_a[i % 2];
+        t1.set_rack_prefix(&RackPrefix { prefix: rack_a_now })
+            .await?;
+        let rack_b_now = (i % 3 != 0).then_some(rack_b);
+        match rack_b_now {
+            Some(prefix) => t2.set_rack_prefix(&RackPrefix { prefix }).await?,
+            None => t2.clear_rack_prefix().await?,
+        };
+
         t1.set_external_peers(x).await?;
         t2.set_external_peers(y).await?;
         let counts = expected_external_peerings(x, y);
@@ -1450,10 +1659,27 @@ async fn run_sextet_tests(
         assert_eq!(x, &xx, "t1 reports different peers than we set");
         assert_eq!(y, &yy, "t2 reports different peers than we set");
 
-        let reach = expected_reachable_prefixes(x, y);
+        assert_eq!(t1.get_rack_prefix().await?.into_inner().prefix, rack_a_now);
+        match t2.get_rack_prefix().await {
+            Ok(r) => assert_eq!(Some(r.into_inner().prefix), rack_b_now),
+            Err(e) => {
+                assert_eq!(rack_b_now, None, "get t2 rack prefix: {e}");
+                assert_eq!(e.status().map(|s| s.as_u16()), Some(404));
+            }
+        }
+
+        let peered = counts.t1 > 2 || counts.t2 > 2;
+        let reach = expected_reachable_prefixes(peered, rack_a_now, rack_b_now);
         assert_reach!(reach);
+        assert_each!(
+            assert_rack_paths,
+            expected_rack_paths(peered, rack_a_now, rack_b_now)
+        );
+        assert_each!(assert_tunnel_paths, expected_tunnel_paths(peered));
 
         assert_all_nexthops_are_peers!();
+
+        assert_all_session_imports_match_prefixes!();
     }
 
     Ok(())
@@ -1465,6 +1691,52 @@ async fn prefix_count(c: &Client) -> Result<usize> {
         .values()
         .map(|x| x.len())
         .sum::<usize>())
+}
+
+/// Each session's imported underlay prefix count, as its stats report it.
+async fn reported_imports(c: &Client) -> Result<BTreeMap<String, u64>> {
+    let stats = c.get_peers_stats().await?.into_inner();
+    Ok(stats
+        .into_iter()
+        .map(|(aobj, s)| (aobj, s.imported_underlay_prefixes))
+        .collect())
+}
+
+/// Each session's imported underlay prefix count, counted from the routes the
+/// router holds via the session's peer. A session without a peer holds none.
+async fn held_imports(c: &Client) -> Result<BTreeMap<String, u64>> {
+    let prefixes = c.get_prefixes().await?.into_inner();
+    let mut held = BTreeMap::new();
+    for (aobj, info) in c.get_peers().await?.into_inner() {
+        let count = match info.peer {
+            Some(p) => prefixes.get(&p.addr.to_string()).map_or(0, |r| r.len()),
+            None => 0,
+        };
+        held.insert(aobj, count as u64);
+    }
+    Ok(held)
+}
+
+/// The number of routing sessions that have discovered a peer.
+async fn peer_count(c: &Client) -> Result<usize> {
+    Ok(c.get_peers()
+        .await?
+        .values()
+        .filter(|x| x.peer.is_some())
+        .count())
+}
+
+/// The host of the peer on a router's only routing session.
+async fn only_peer_host(c: &Client) -> Result<String> {
+    let peers = c.get_peers().await?.into_inner();
+    let [peer] = peers
+        .values()
+        .filter_map(|x| x.peer.as_ref())
+        .collect::<Vec<_>>()[..]
+    else {
+        return Err(anyhow!("expected exactly one peer: {peers:#?}"));
+    };
+    Ok(peer.host.clone())
 }
 
 async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
