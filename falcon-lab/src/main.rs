@@ -22,7 +22,7 @@ mod scenario;
 mod topo;
 mod util;
 
-const DEFAULT_NPUVM_COMMIT: &str = "fd2c726815cdb03c2687e1bf2912a9184905557b";
+const DEFAULT_NPUVM_COMMIT: &str = "a6a878533f9eae542552ef66223a37443f931149";
 
 /// The dendrite revision the workspace pins `dpd-client` to (see `build.rs`),
 /// used unless `--dendrite-commit` overrides it.

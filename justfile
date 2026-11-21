@@ -112,5 +112,17 @@ openapi-check target='all':
     cargo build {{ api(target) }}
     cargo xtask openapi check
 
+# Lint buildomat job scripts with the same flags CI uses
+# (.github/buildomat/jobs/shellcheck.sh). This is skipped
+# when shellcheck is not installed.
+shellcheck:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v shellcheck >/dev/null 2>&1; then
+        echo "shellcheck not installed, skipping" >&2
+        exit 0
+    fi
+    shellcheck -x -o all .github/buildomat/jobs/*.sh
+
 # Run all verification checks for a target (default: all).
-verify target='all': (clippy target) fmt-check (openapi-check target)
+verify target='all': (clippy target) fmt-check (openapi-check target) shellcheck

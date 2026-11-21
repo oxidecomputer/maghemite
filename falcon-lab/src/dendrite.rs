@@ -55,7 +55,7 @@ impl DendriteNode {
         Ok(Client::new(
             &format!("http://{addr}:{}", dpd_client::default_port()),
             client_state,
-        ))
+        )?)
     }
 
     pub async fn npuvm(
