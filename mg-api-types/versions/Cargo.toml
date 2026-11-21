@@ -10,7 +10,6 @@ dpd-types-versions.workspace = true
 nom.workspace = true
 num_enum.workspace = true
 oxnet.workspace = true
-proptest = { workspace = true, optional = true }
 schemars.workspace = true
 serde.workspace = true
 slog.workspace = true
@@ -25,4 +24,3 @@ test-strategy.workspace = true
 
 [features]
 clap = ["dep:clap"]
-testing = ["dep:proptest", "dpd-types-versions/testing"]
