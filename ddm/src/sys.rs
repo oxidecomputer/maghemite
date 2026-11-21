@@ -4,11 +4,11 @@
 
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use ddm_api_types::db::TunnelRoute;
+use ddm_api_types::net::TunnelOrigin;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use dpd_client::types;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -30,67 +30,23 @@ pub struct Route {
     pub dest: IpAddr,
     pub prefix_len: u8,
     pub gw: IpAddr,
-    pub egress_port: u16,
     pub ifname: String,
+    pub source: Ipv6Addr,
 }
 
 impl Route {
-    pub fn new(dest: IpAddr, prefix_len: u8, gw: IpAddr) -> Self {
+    pub fn new(
+        dest: IpAddr,
+        prefix_len: u8,
+        gw: IpAddr,
+        source: Ipv6Addr,
+    ) -> Self {
         Self {
             dest,
             prefix_len,
             gw,
-            egress_port: 0,
             ifname: String::new(),
-        }
-    }
-}
-
-impl From<crate::db::Route> for Route {
-    fn from(r: crate::db::Route) -> Self {
-        Self {
-            dest: r.destination.addr().into(),
-            prefix_len: r.destination.width(),
-            gw: r.nexthop.into(),
-            egress_port: 0,
-            ifname: r.ifname,
-        }
-    }
-}
-
-impl From<libnet::route::Route> for Route {
-    fn from(r: libnet::route::Route) -> Self {
-        Self {
-            dest: r.dest,
-            prefix_len: r.mask.try_into().unwrap(),
-            gw: r.gw,
-            egress_port: 0,
-            ifname: r.ifx.unwrap_or_default(),
-        }
-    }
-}
-
-impl From<Route> for libnet::route::Route {
-    fn from(r: Route) -> libnet::route::Route {
-        libnet::route::Route {
-            dest: r.dest,
-            mask: r.prefix_len as u32,
-            gw: r.gw,
-            delay: 0,
-            ifx: if !r.ifname.is_empty() {
-                Some(r.ifname)
-            } else {
-                None
-            },
-        }
-    }
-}
-
-impl From<Route> for IpNet {
-    fn from(r: Route) -> IpNet {
-        match r.dest {
-            IpAddr::V4(a) => Ipv4Net::new(a, r.prefix_len).unwrap().into(),
-            IpAddr::V6(a) => Ipv6Net::new(a, r.prefix_len).unwrap().into(),
+            source,
         }
     }
 }
@@ -252,14 +208,14 @@ pub fn add_routes_dendrite(
 
 #[cfg(target_os = "illumos")]
 fn tunnel_route_update_map(
-    routes: &HashSet<TunnelRoute>,
+    origins: &HashSet<TunnelOrigin>,
 ) -> HashMap<IpNet, Vec<TunnelEndpoint>> {
     let mut m: HashMap<IpNet, Vec<TunnelEndpoint>> = HashMap::new();
-    for r in routes {
-        let pfx = r.origin.overlay_prefix;
+    for o in origins {
+        let pfx = o.overlay_prefix;
         let tep = TunnelEndpoint {
-            ip: r.origin.boundary_addr.into(),
-            vni: oxide_vpc::api::Vni::new(r.origin.vni).unwrap(),
+            ip: o.boundary_addr.into(),
+            vni: oxide_vpc::api::Vni::new(o.vni).unwrap(),
         };
         match m.get_mut(&pfx) {
             Some(entry) => {
@@ -277,7 +233,7 @@ fn tunnel_route_update_map(
 pub fn add_tunnel_routes(
     _log: &Logger,
     _ifname: &str,
-    _routes: &HashSet<TunnelRoute>,
+    _origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     todo!();
 }
@@ -286,7 +242,7 @@ pub fn add_tunnel_routes(
 pub fn add_tunnel_routes(
     log: &Logger,
     ifname: &str,
-    routes: &HashSet<TunnelRoute>,
+    origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
         IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
@@ -294,7 +250,7 @@ pub fn add_tunnel_routes(
     };
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
 
-    for (pfx, tep) in tunnel_route_update_map(routes) {
+    for (pfx, tep) in tunnel_route_update_map(origins) {
         for t in &tep {
             inf!(
                 log,
@@ -328,7 +284,7 @@ pub fn add_tunnel_routes(
 pub fn remove_tunnel_routes(
     _log: &Logger,
     _ifname: &str,
-    _routes: &HashSet<TunnelRoute>,
+    _origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     todo!()
 }
@@ -337,14 +293,14 @@ pub fn remove_tunnel_routes(
 pub fn remove_tunnel_routes(
     log: &Logger,
     ifname: &str,
-    routes: &HashSet<TunnelRoute>,
+    origins: &HashSet<TunnelOrigin>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
         ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
         Ipv6PrefixLen,
     };
     let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
-    for (pfx, tep) in tunnel_route_update_map(routes) {
+    for (pfx, tep) in tunnel_route_update_map(origins) {
         for t in &tep {
             inf!(
                 log,
@@ -455,72 +411,6 @@ pub fn remove_routes_dendrite(
     }
 }
 
-pub fn get_routes_dendrite(
-    host: String,
-    port: u16,
-    rt: &Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<Vec<Route>, String> {
-    let client_state = ClientState {
-        tag: DDM_DPD_TAG.into(),
-        log: log.clone(),
-    };
-    let client = Client::new(&format!("http://{host}:{port}"), client_state);
-
-    let routes = rt
-        .block_on(async { client.route_ipv6_list(None, None).await })
-        .map_err(|e| format!("dpd route list: {}", e))?
-        .items
-        .to_vec();
-
-    let mut result = Vec::new();
-
-    for r in routes {
-        for target in r.targets {
-            let egress_port = match &target.port_id {
-                PortId::Rear(rear) => match rear.parse::<u16>() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        slog::warn!(
-                            log,
-                            "Found invalid rear port ({}): {:?}",
-                            target.port_id,
-                            e
-                        );
-                        continue;
-                    }
-                },
-                _ => continue,
-            };
-
-            result.push(Route {
-                dest: r.cidr.prefix().into(),
-                prefix_len: r.cidr.width(),
-                gw: target.tgt_ip.into(),
-                egress_port,
-                ifname: String::new(),
-            });
-        }
-    }
-
-    Ok(result)
-}
-
-pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
-    let mut result = Vec::new();
-
-    let routes = match libnet::get_routes() {
-        Ok(rs) => rs,
-        Err(e) => return Err(format!("get routes: {}", e)),
-    };
-
-    for r in routes {
-        result.push(r.into());
-    }
-
-    Ok(result)
-}
-
 pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
     for r in routes {
         let gw = r.gw;
@@ -541,17 +431,23 @@ pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
                 err!(
                     log,
                     ifname,
-                    "error forming route destination: {:?}, {}",
-                    r,
-                    e
+                    "error forming route destination: {r:?}, {e}",
                 );
                 continue;
             }
         };
 
-        if let Err(e) =
-            libnet::ensure_route_present(dst, gw, Some(ifname.into()))
-        {
+        let (IpNet::V6(dst), IpAddr::V6(gw)) = (dst, gw) else {
+            err!(log, ifname, "libnet route must be IPv6 via IPv6: {r:?}");
+            continue;
+        };
+
+        if let Err(e) = libnet::ensure_route_present::<libnet::Ipv6>(
+            dst,
+            gw,
+            Some(ifname.into()),
+            Some(r.source),
+        ) {
             err!(log, ifname, "set route: {}", e);
         }
     }
@@ -586,8 +482,16 @@ pub fn remove_routes_illumos(log: &Logger, ifname: &str, routes: Vec<Route>) {
                 continue;
             }
         };
-        if let Err(e) = libnet::delete_route(dst, gw, Some(r.ifname.clone())) {
-            err!(log, ifname, "set route: {e}");
+        let (IpNet::V6(dst), IpAddr::V6(gw)) = (dst, gw) else {
+            err!(log, ifname, "libnet route must be IPv6 via IPv6: {r:?}");
+            continue;
+        };
+        if let Err(e) = libnet::delete_route::<libnet::Ipv6>(
+            dst,
+            gw,
+            Some(r.ifname.clone()),
+        ) {
+            err!(log, ifname, "remove route: {e}");
             continue;
         }
     }

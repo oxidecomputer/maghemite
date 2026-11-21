@@ -9,83 +9,128 @@ use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 pub mod v2;
 pub mod v3;
 
-impl From<v2::Update> for v3::Update {
-    fn from(value: v2::Update) -> Self {
+// DDMv2 tunnel routes carry no path, so converting them to DDMv3 needs the
+// peer they were received from. They are treated as originated by that peer.
+// DDMv2 also does not distinguish bootstrap routes from underlay routes.
+// Conversions handle this by mapping both bootstrap/underlay -> underlay during
+// downgrade and by handling all v2 underlay routes as underlay.
+// All conversions use manual destructuring to prevent compilation if types are
+// modified, which should never happen after a DDM version is published.
+
+impl v3::Update {
+    /// Convert an update received from the DDMv2 peer `peer`.
+    pub fn from_v2(value: v2::Update, peer: &str) -> Self {
+        let v2::Update { underlay, tunnel } = value;
         Self {
-            tunnel: value.tunnel.map(v3::TunnelUpdate::from),
-            underlay: value.underlay.map(v3::UnderlayUpdate::from),
+            underlay: underlay.map(v3::UnderlayUpdate::from),
+            bootstrap: None,
+            tunnel: tunnel.map(|t| v3::TunnelUpdate::from_v2(t, peer)),
         }
     }
 }
 
 impl From<v3::Update> for v2::Update {
     fn from(value: v3::Update) -> Self {
+        let v3::Update {
+            underlay,
+            bootstrap,
+            tunnel,
+        } = value;
+        let underlay = match (underlay, bootstrap) {
+            (None, None) => None,
+            (None, Some(b)) => Some(v3::UnderlayUpdate {
+                announce: b.announce,
+                withdraw: b.withdraw,
+            }),
+            (Some(u), None) => Some(u),
+            (Some(mut u), Some(b)) => {
+                u.announce.extend(b.announce);
+                u.withdraw.extend(b.withdraw);
+                Some(u)
+            }
+        }
+        .map(v2::UnderlayUpdate::from);
         Self {
-            tunnel: value.tunnel.map(v2::TunnelUpdate::from),
-            underlay: value.underlay.map(v2::UnderlayUpdate::from),
+            tunnel: tunnel.map(v2::TunnelUpdate::from),
+            underlay,
         }
     }
 }
 
-impl From<v2::PullResponse> for v3::PullResponse {
-    fn from(value: v2::PullResponse) -> Self {
+impl v3::PullResponse {
+    /// Convert a pull response received from the DDMv2 peer `peer`.
+    pub fn from_v2(value: v2::PullResponse, peer: &str) -> Self {
+        let v2::PullResponse { underlay, tunnel } = value;
         Self {
-            underlay: value
-                .underlay
+            underlay: underlay
                 .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
-            tunnel: value
-                .tunnel
-                .map(|x| x.into_iter().map(v3::TunnelOrigin::from).collect()),
+            bootstrap: None,
+            tunnel: tunnel.map(|x| {
+                x.into_iter()
+                    .map(|t| v3::TunnelOrigin::from_v2(t, peer))
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl From<v3::PullResponse> for v2::PullResponse {
+    fn from(value: v3::PullResponse) -> Self {
+        let v3::PullResponse {
+            underlay,
+            bootstrap,
+            tunnel,
+        } = value;
+        let underlay = match (underlay, bootstrap) {
+            (None, None) => None,
+            (None, Some(b)) => Some(b),
+            (Some(u), None) => Some(u),
+            (Some(mut u), Some(b)) => {
+                u.extend(b);
+                Some(u)
+            }
+        };
+        Self {
+            underlay: underlay
+                .map(|x| x.into_iter().map(v2::PathVector::from).collect()),
+            tunnel: tunnel
+                .map(|x| x.into_iter().map(v2::TunnelOrigin::from).collect()),
         }
     }
 }
 
 impl From<v3::UnderlayUpdate> for v2::UnderlayUpdate {
     fn from(value: v3::UnderlayUpdate) -> Self {
+        let v3::UnderlayUpdate { announce, withdraw } = value;
         Self {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v2::PathVector::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v2::PathVector::from)
-                .collect(),
+            announce: announce.into_iter().map(v2::PathVector::from).collect(),
+            withdraw: withdraw.into_iter().map(v2::PathVector::from).collect(),
         }
     }
 }
 
 impl From<v2::UnderlayUpdate> for v3::UnderlayUpdate {
     fn from(value: v2::UnderlayUpdate) -> Self {
+        let v2::UnderlayUpdate { announce, withdraw } = value;
         Self {
-            announce: value
-                .announce
-                .into_iter()
-                .map(v3::PathVector::from)
-                .collect(),
-            withdraw: value
-                .withdraw
-                .into_iter()
-                .map(v3::PathVector::from)
-                .collect(),
+            announce: announce.into_iter().map(v3::PathVector::from).collect(),
+            withdraw: withdraw.into_iter().map(v3::PathVector::from).collect(),
         }
     }
 }
 
-impl From<v2::TunnelUpdate> for v3::TunnelUpdate {
-    fn from(value: v2::TunnelUpdate) -> Self {
-        v3::TunnelUpdate {
-            announce: value
-                .announce
+impl v3::TunnelUpdate {
+    /// Convert a tunnel update received from the DDMv2 peer `peer`.
+    pub fn from_v2(value: v2::TunnelUpdate, peer: &str) -> Self {
+        let v2::TunnelUpdate { announce, withdraw } = value;
+        Self {
+            announce: announce
                 .into_iter()
-                .map(v3::TunnelOrigin::from)
+                .map(|t| v3::TunnelOrigin::from_v2(t, peer))
                 .collect(),
-            withdraw: value
-                .withdraw
+            withdraw: withdraw
                 .into_iter()
-                .map(v3::TunnelOrigin::from)
+                .map(|t| v3::TunnelOrigin::from_v2(t, peer))
                 .collect(),
         }
     }
@@ -93,14 +138,13 @@ impl From<v2::TunnelUpdate> for v3::TunnelUpdate {
 
 impl From<v3::TunnelUpdate> for v2::TunnelUpdate {
     fn from(value: v3::TunnelUpdate) -> Self {
+        let v3::TunnelUpdate { announce, withdraw } = value;
         Self {
-            announce: value
-                .announce
+            announce: announce
                 .into_iter()
                 .map(v2::TunnelOrigin::from)
                 .collect(),
-            withdraw: value
-                .withdraw
+            withdraw: withdraw
                 .into_iter()
                 .map(v2::TunnelOrigin::from)
                 .collect(),
@@ -110,34 +154,31 @@ impl From<v3::TunnelUpdate> for v2::TunnelUpdate {
 
 impl From<v2::PathVector> for v3::PathVector {
     fn from(value: v2::PathVector) -> Self {
+        let v2::PathVector { destination, path } = value;
         Self {
-            destination: Ipv6Net::new_unchecked(
-                value.destination.addr,
-                value.destination.len,
-            ),
-            path: value.path,
+            destination: destination.into(),
+            path,
         }
     }
 }
 
 impl From<v3::PathVector> for v2::PathVector {
     fn from(value: v3::PathVector) -> Self {
+        let v3::PathVector { destination, path } = value;
         Self {
             destination: v2::Ipv6Prefix {
-                addr: value.destination.addr(),
-                len: value.destination.width(),
+                addr: destination.addr(),
+                len: destination.width(),
             },
-            path: value.path,
+            path,
         }
     }
 }
 
-impl From<v2::TunnelOrigin> for v3::TunnelOrigin {
-    fn from(value: v2::TunnelOrigin) -> Self {
-        // TunnelOriginV2 is the DDMv2 wire shape, frozen by protocol
-        // contract. If this destructure stops compiling, the V2
-        // contract has been violated upstream — there is no
-        // #[serde(skip)] escape valve for a wire-format type.
+impl v3::TunnelOrigin {
+    /// Convert a tunnel origin received from the DDMv2 peer `peer`, which is
+    /// taken to be its originator.
+    pub fn from_v2(value: v2::TunnelOrigin, peer: &str) -> Self {
         let v2::TunnelOrigin {
             overlay_prefix,
             boundary_addr,
@@ -149,20 +190,19 @@ impl From<v2::TunnelOrigin> for v3::TunnelOrigin {
             boundary_addr,
             vni,
             metric,
+            path: vec![peer.to_owned()],
         }
     }
 }
 
 impl From<v3::TunnelOrigin> for v2::TunnelOrigin {
     fn from(value: v3::TunnelOrigin) -> Self {
-        // Compile barrier: adding a TunnelOrigin (latest API) field
-        // fails to bind here, forcing a decision about whether the new
-        // field is representable in the V2 wire form.
         let v3::TunnelOrigin {
             overlay_prefix,
             boundary_addr,
             vni,
             metric,
+            path: _,
         } = value;
         Self {
             overlay_prefix: overlay_prefix.into(),
@@ -217,5 +257,43 @@ impl From<v2::IpPrefix> for IpNet {
             v2::IpPrefix::V4(x) => IpNet::V4(x.into()),
             v2::IpPrefix::V6(x) => IpNet::V6(x.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::collections::HashSet;
+
+    // DDMv2 tunnel routes carry no path. One received from a DDMv2 peer is
+    // taken to be originated by that peer, and the path is dropped again when
+    // sending to one.
+    #[test]
+    fn v2_tunnel_origins_are_originated_by_the_peer() {
+        let v2_origin = v2::TunnelOrigin {
+            overlay_prefix: v2::IpPrefix::V4(v2::Ipv4Prefix {
+                addr: "10.0.0.0".parse().unwrap(),
+                len: 8,
+            }),
+            boundary_addr: "fd00:a::1".parse().unwrap(),
+            vni: 99,
+            metric: 7,
+        };
+        let pr = v2::PullResponse {
+            underlay: None,
+            tunnel: Some(HashSet::from([v2_origin])),
+        };
+
+        let pr = v3::PullResponse::from_v2(pr, "peer");
+
+        let expected = v3::TunnelOrigin {
+            overlay_prefix: "10.0.0.0/8".parse().unwrap(),
+            boundary_addr: "fd00:a::1".parse().unwrap(),
+            vni: 99,
+            metric: 7,
+            path: vec!["peer".to_string()],
+        };
+        assert_eq!(pr.tunnel, Some(HashSet::from([expected.clone()])));
+        assert_eq!(v2::TunnelOrigin::from(expected), v2_origin);
     }
 }

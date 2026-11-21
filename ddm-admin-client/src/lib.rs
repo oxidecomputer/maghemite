@@ -11,10 +11,17 @@ progenitor::generate_api!(
     },
     replace = {
         TunnelOrigin = ddm_api_types_versions::latest::net::TunnelOrigin,
+        Peer = ddm_api_types_versions::latest::db::Peer,
         PeerInfo = ddm_api_types_versions::latest::db::PeerInfo,
+        PeerStats = ddm_api_types_versions::latest::db::PeerStats,
         PeerStatus = ddm_api_types_versions::latest::db::PeerStatus,
         Duration = std::time::Duration,
         ExternalPeers = ddm_api_types_versions::latest::external_peers::ExternalPeers,
+        RackPrefix = ddm_api_types_versions::latest::admin::RackPrefix,
+        LearnedPrefix = ddm_api_types_versions::latest::admin::LearnedPrefix,
+        OriginatedPrefix = ddm_api_types_versions::latest::admin::OriginatedPrefix,
+        PrefixKind = ddm_api_types_versions::latest::admin::PrefixKind,
+        UnderlayAddress = ddm_api_types_versions::latest::admin::UnderlayAddress,
     }
 );
 
