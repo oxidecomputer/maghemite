@@ -1445,7 +1445,6 @@ dependencies = [
  "ddm-api-types",
  "ddm-lower",
  "ddm-protocol",
- "dpd-client",
  "dropshot 0.18.0",
  "hostname 0.4.2",
  "http-body-util",
@@ -1455,8 +1454,6 @@ dependencies = [
  "libnet",
  "mg-common",
  "omicron-common",
- "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -1523,7 +1520,6 @@ dependencies = [
  "ddm-api-types",
  "derive_more 2.1.1",
  "dpd-client",
- "iddqd 0.5.0",
  "libc",
  "libnet",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
@@ -1532,11 +1528,9 @@ dependencies = [
  "reqwest 0.13.5",
  "schemars 0.8.22",
  "serde",
- "serde_json",
  "slog",
  "slog-error-chain",
  "thiserror 2.0.21",
- "tokio",
 ]
 
 [[package]]

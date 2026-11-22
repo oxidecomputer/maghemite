@@ -153,7 +153,7 @@ impl Db {
 
             for x in &d.imported_tunnel {
                 if x.nexthop == nexthop {
-                    tnl_removed.insert(x.clone());
+                    tnl_removed.insert(*x);
                 }
             }
             for x in &tnl_removed {

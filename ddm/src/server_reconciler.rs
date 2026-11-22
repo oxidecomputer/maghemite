@@ -147,7 +147,7 @@ impl ServerReconciler {
                     },
                 ));
             }
-            // Add failures automatically get retried from the desried state on
+            // Add failures automatically get retried from the desired state on
             // next reconciliation. No need to track.
             let _ = backend.add_underlay_routes(
                 desired.underlay.iter().cloned().collect(),
@@ -157,7 +157,7 @@ impl ServerReconciler {
             // individually. We add before removing so that we never leave a
             // prefix without a TEP unnecessarily.
             if !desired.tunnel.is_empty() {
-                // Add failures automatically get retried from the desried state
+                // Add failures automatically get retried from the desired state
                 // on next reconciliation. No need to track.
                 let _ = backend.add_tunnel_routes(
                     InterfaceName::new(LOG_TAG),

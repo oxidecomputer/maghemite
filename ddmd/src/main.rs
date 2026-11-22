@@ -11,9 +11,9 @@ use ddm::defaults::{
     EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
 };
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
+use ddm::sm::{InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::sm::{SmContext, StateMachine};
 use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::db::RouterKind;
 use mg_common::lock;
@@ -130,12 +130,6 @@ struct Arg {
     admin_port_file: Option<Utf8PathBuf>,
 }
 
-#[derive(Debug, Parser, Clone)]
-struct Dendrite {
-    host: String,
-    port: u16,
-}
-
 fn main() {
     oxide_tokio_rt::run(run())
 }
@@ -151,14 +145,6 @@ async fn run() {
 
     let db = Db::new();
 
-    let dpd = match arg.dendrite {
-        true => Some(DpdConfig {
-            host: arg.dpd_host.clone(),
-            port: arg.dpd_port,
-        }),
-        false => None,
-    };
-
     let rt = Arc::new(tokio::runtime::Handle::current());
     let hostname = hostname::get()
         .expect("failed to get hostname")
@@ -170,7 +156,7 @@ async fn run() {
         None => hostname.clone(),
     };
 
-    let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
+    let sms = start_state_machines(&arg, &db, &router_id, &rt, &log);
 
     #[cfg(all(feature = "backend", target_os = "illumos"))]
     if !arg.api_only {
@@ -179,9 +165,8 @@ async fn run() {
                 // The dendrite backend takes a socket address, while dpd
                 // configuration historically allows any hostname.
                 use std::net::ToSocketAddrs;
-                let d =
-                    dpd.as_ref().expect("transit routers require --dendrite");
-                let dpd_addr = (d.host.as_str(), d.port)
+                assert!(arg.dendrite, "transit routers require --dendrite");
+                let dpd_addr = (arg.dpd_host.as_str(), arg.dpd_port)
                     .to_socket_addrs()
                     .expect("resolve dpd host")
                     .find_map(|addr| match addr {
@@ -225,9 +210,6 @@ async fn run() {
             ),
             ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
             exchange_timeout: Duration::from_millis(arg.exchange_timeout),
-            dendrite: arg.dendrite,
-            dpd_port: arg.dpd_port,
-            dpd_host: arg.dpd_host.clone(),
             exchange_tcp_port: arg.exchange_port,
         },
         log: log.clone(),
@@ -285,7 +267,6 @@ async fn run() {
 fn start_state_machines(
     arg: &Arg,
     db: &Db,
-    dpd: &Option<DpdConfig>,
     router_id: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
@@ -313,7 +294,6 @@ fn start_state_machines(
             if_name: String::new(),
             if_index: 0,
             kind: arg.kind,
-            dpd: dpd.clone(),
             addr: Ipv6Addr::UNSPECIFIED,
             sled_id: arg.sled_uuid,
             rack_id: arg.rack_uuid,
@@ -364,7 +344,6 @@ fn start_state_machines(
 fn start_state_machines(
     _arg: &Arg,
     _db: &Db,
-    _dpd: &Option<DpdConfig>,
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,

@@ -173,20 +173,11 @@ pub struct Config {
     /// TCP port to use for prefix exchange.
     pub exchange_port: u16,
 
-    /// Dendrite dpd config
-    pub dpd: Option<DpdConfig>,
-
     /// Rack ID
     pub rack_id: Option<Uuid>,
 
     /// Sled ID
     pub sled_id: Option<Uuid>,
-}
-
-#[derive(Clone)]
-pub struct DpdConfig {
-    pub host: String,
-    pub port: u16,
 }
 
 #[derive(Clone, Debug)]

@@ -81,7 +81,7 @@ impl IllumosBackend {
         // Filter out all local routes.
         // An error here is fatal. We'll try again on the next reconciliation.
         let local_addrs = Self::read_local_addrs().map_err(|e| vec![e])?;
-        routes.retain(|r| !Self::route_is_local(&r, &local_addrs));
+        routes.retain(|r| !Self::route_is_local(r, &local_addrs));
 
         let mut errors = vec![];
         for r in routes {
@@ -320,7 +320,7 @@ fn create_tunnel_routes(
     let mut prefix_map = BTreeMap::<IpNet, Vec<TunnelEndpoint>>::new();
     for o in origins {
         let Ok(vni) = Vni::new(o.vni) else {
-            errors.push(Error::VniTooLarge(o.clone()));
+            errors.push(Error::VniTooLarge(*o));
             continue;
         };
         let tep = TunnelEndpoint {
