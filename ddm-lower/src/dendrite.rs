@@ -238,6 +238,7 @@ impl DendriteBackend {
 //
 // TODO this is gross, use link type properties rather than futzing
 // around with strings.
+// See https://github.com/oxidecomputer/maghemite/issues/1033
 //
 // The error size comes from the ProgenitorError variants on `Error`; this
 // internal helper isn't worth boxing over.
