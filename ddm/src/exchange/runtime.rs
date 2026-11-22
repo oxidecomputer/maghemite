@@ -571,7 +571,7 @@ fn handle_tunnel_update(
     db.delete_import_tunnel(&remove);
 
     ctx.stats
-        .imported_underlay_prefixes
+        .imported_tunnel_endpoints
         .store(ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
