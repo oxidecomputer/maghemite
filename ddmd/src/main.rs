@@ -136,6 +136,21 @@ fn main() {
 
 async fn run() {
     let arg = Arg::parse();
+
+    // `required_if_eq` can't express this: `dendrite` is a flag with an
+    // implicit default, which clap won't allow to be required. And an
+    // api-only transit router never starts the reconciler, so it doesn't
+    // need dendrite at all.
+    if arg.kind == RouterKind::Transit && !arg.api_only && !arg.dendrite {
+        use clap::CommandFactory;
+        Arg::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--kind transit requires --dendrite",
+            )
+            .exit();
+    }
+
     let log = init_logger();
 
     let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
@@ -162,10 +177,11 @@ async fn run() {
     if !arg.api_only {
         match arg.kind {
             RouterKind::Transit => {
+                // --dendrite is guaranteed by the arg validation in run().
+                //
                 // The dendrite backend takes a socket address, while dpd
                 // configuration historically allows any hostname.
                 use std::net::ToSocketAddrs;
-                assert!(arg.dendrite, "transit routers require --dendrite");
                 let dpd_addr = (arg.dpd_host.as_str(), arg.dpd_port)
                     .to_socket_addrs()
                     .expect("resolve dpd host")
