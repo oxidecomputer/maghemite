@@ -201,8 +201,7 @@ impl DendriteBackend {
                 // A missing route is already removed; don't report it as a
                 // failure or callers will keep retrying the removal.
                 Err(err)
-                    if err.status()
-                        == Some(reqwest::StatusCode::NOT_FOUND) =>
+                    if err.status() == Some(reqwest::StatusCode::NOT_FOUND) =>
                 {
                     info!(
                         self.log,

@@ -31,9 +31,7 @@ fn group_by_ifname(
 
 /// The routes whose removal failed, which must be folded back into the next
 /// pass's state so the removal is retried.
-fn removal_retries(
-    errors: Vec<DendriteError>,
-) -> impl Iterator<Item = Route> {
+fn removal_retries(errors: Vec<DendriteError>) -> impl Iterator<Item = Route> {
     errors.into_iter().filter_map(|e| match e {
         DendriteError::RemoveRoute { route, .. } => Some(route),
         _ => None,

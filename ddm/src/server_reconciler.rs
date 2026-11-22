@@ -6,8 +6,8 @@
 //! OPTE. See [`crate::reconciler`] for the overall design.
 
 use crate::db::{Db, DbData, effective_route_set};
-use crate::reconciler::{RECONCILE_INTERVAL, desired_underlay};
 use crate::dbg;
+use crate::reconciler::{RECONCILE_INTERVAL, desired_underlay};
 use ddm_api_types::net::TunnelOrigin;
 use ddm_lower::illumos::{Error as IllumosError, IllumosBackend};
 use ddm_lower::{InterfaceName, Route};
