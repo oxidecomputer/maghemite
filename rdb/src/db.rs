@@ -992,6 +992,13 @@ impl Db {
         Ok(())
     }
 
+    /// Persist static unicast routes to sled and add them to the loc_rib.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a sled tree failure. IPv4 routes are written before
+    /// IPv6 ones, and an IPv6 failure preserves the IPv4 routes already in
+    /// place (that still are notified).
     pub fn add_static_routes(
         &self,
         routes: &[StaticRouteKey],
@@ -1008,18 +1015,20 @@ impl Db {
             },
         );
 
-        {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            self.add_static_routes_to_tree(tree, &routes4, &mut pcn)?;
-        }
+        let res = (|| {
+            for (tree, routes) in
+                [(STATIC4_ROUTES, routes4), (STATIC6_ROUTES, routes6)]
+            {
+                let tree = self.persistent.open_tree(tree)?;
+                self.add_static_routes_to_tree(tree, &routes, &mut pcn)?;
+            }
+            Ok(())
+        })();
 
-        {
-            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-            self.add_static_routes_to_tree(tree, &routes6, &mut pcn)?;
+        if res.is_ok() || !pcn.changed.is_empty() {
+            self.notify(pcn);
         }
-
-        self.notify(pcn);
-        Ok(())
+        res
     }
 
     pub fn add_bgp_prefixes(&self, prefixes: &[IpNet], path: Path) {
