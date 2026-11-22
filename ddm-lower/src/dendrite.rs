@@ -90,6 +90,18 @@ impl DendriteBackend {
 
         debug!(self.log, "[{ifname}] sending route add to dpd");
 
+        let port_id = match port_id_for_ifname(&ifname) {
+            Ok(port_id) => port_id,
+            Err(error) => {
+                error!(
+                    self.log,
+                    "failed to parse ifname to add route";
+                    &error
+                );
+                return Err(vec![error]);
+            }
+        };
+
         let mut errors = vec![];
         for r in routes {
             info!(
@@ -97,77 +109,12 @@ impl DendriteBackend {
                 "[{}] adding route {} -> {}", r.ifname, r.dest, r.gw,
             );
 
-            // TODO this is gross, use link type properties rather than futzing
-            // around with strings.
-            let port_id = {
-                if let Some(egress_port_num) = ifname
-                    .as_str()
-                    .strip_prefix("tfportrear")
-                    .and_then(|x| x.strip_suffix("_0"))
-                    .map(|x| x.trim())
-                    .and_then(|x| x.parse::<u8>().ok())
-                {
-                    let port_name = format!("rear{}", egress_port_num);
-                    match Rear::try_from(&port_name) {
-                        Ok(rear) => PortId::Rear(rear),
-                        Err(err) => {
-                            let error = Error::InvalidRearPortName {
-                                ifname: ifname.clone(),
-                                port_name,
-                                err,
-                            };
-                            error!(
-                                self.log,
-                                "failed to parse ifname to add route";
-                                &error
-                            );
-                            errors.push(error);
-                            continue;
-                        }
-                    }
-                } else if let Some(egress_port_num) = ifname
-                    .as_str()
-                    .strip_prefix("tfportqsfp")
-                    .and_then(|x| x.strip_suffix("_0"))
-                    .map(|x| x.trim())
-                    .and_then(|x| x.parse::<u8>().ok())
-                {
-                    let port_name = format!("qsfp{}", egress_port_num);
-                    match Qsfp::try_from(&port_name) {
-                        Ok(qsfp) => PortId::Qsfp(qsfp),
-                        Err(err) => {
-                            let error = Error::InvalidFrontPortName {
-                                ifname: ifname.clone(),
-                                port_name,
-                                err,
-                            };
-                            error!(
-                                self.log,
-                                "failed to parse ifname to add route";
-                                &error
-                            );
-                            errors.push(error);
-                            continue;
-                        }
-                    }
-                } else {
-                    let error = Error::InvalidPortPrefix(ifname.clone());
-                    error!(
-                        self.log,
-                        "failed to parse ifname to add route";
-                        &error
-                    );
-                    errors.push(error);
-                    continue;
-                }
-            };
-
             // TODO breakout considerations
             let link_id = LinkId(0);
 
             let target = Ipv6Route {
                 tag: DDM_DPD_TAG.into(),
-                port_id,
+                port_id: port_id.clone(),
                 link_id,
                 tgt_ip: r.gw,
                 vlan_id: None,
@@ -283,6 +230,116 @@ impl DendriteBackend {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+}
+
+/// Map a tfport interface name (`tfport{rear,qsfp}{N}_0`) to the dendrite
+/// switch port it fronts.
+//
+// TODO this is gross, use link type properties rather than futzing
+// around with strings.
+//
+// The error size comes from the ProgenitorError variants on `Error`; this
+// internal helper isn't worth boxing over.
+#[allow(clippy::result_large_err)]
+fn port_id_for_ifname(ifname: &InterfaceName) -> Result<PortId, Error> {
+    if let Some(egress_port_num) = ifname
+        .as_str()
+        .strip_prefix("tfportrear")
+        .and_then(|x| x.strip_suffix("_0"))
+        .map(|x| x.trim())
+        .and_then(|x| x.parse::<u8>().ok())
+    {
+        let port_name = format!("rear{}", egress_port_num);
+        match Rear::try_from(&port_name) {
+            Ok(rear) => Ok(PortId::Rear(rear)),
+            Err(err) => Err(Error::InvalidRearPortName {
+                ifname: ifname.clone(),
+                port_name,
+                err,
+            }),
+        }
+    } else if let Some(egress_port_num) = ifname
+        .as_str()
+        .strip_prefix("tfportqsfp")
+        .and_then(|x| x.strip_suffix("_0"))
+        .map(|x| x.trim())
+        .and_then(|x| x.parse::<u8>().ok())
+    {
+        let port_name = format!("qsfp{}", egress_port_num);
+        match Qsfp::try_from(&port_name) {
+            Ok(qsfp) => Ok(PortId::Qsfp(qsfp)),
+            Err(err) => Err(Error::InvalidFrontPortName {
+                ifname: ifname.clone(),
+                port_name,
+                err,
+            }),
+        }
+    } else {
+        Err(Error::InvalidPortPrefix(ifname.clone()))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn ifname(s: &str) -> InterfaceName {
+        InterfaceName::new(s)
+    }
+
+    #[test]
+    fn test_port_id_for_ifname() {
+        assert_eq!(
+            port_id_for_ifname(&ifname("tfportrear0_0"))
+                .unwrap()
+                .to_string(),
+            "rear0"
+        );
+        assert_eq!(
+            port_id_for_ifname(&ifname("tfportrear31_0"))
+                .unwrap()
+                .to_string(),
+            "rear31"
+        );
+        assert_eq!(
+            port_id_for_ifname(&ifname("tfportqsfp7_0"))
+                .unwrap()
+                .to_string(),
+            "qsfp7"
+        );
+
+        // A port number that parses as u8 but is out of range for the switch
+        // is a port-name error, not a prefix error.
+        assert!(matches!(
+            port_id_for_ifname(&ifname("tfportrear255_0")),
+            Err(Error::InvalidRearPortName { .. })
+        ));
+        assert!(matches!(
+            port_id_for_ifname(&ifname("tfportqsfp255_0")),
+            Err(Error::InvalidFrontPortName { .. })
+        ));
+
+        // Everything else falls through to the prefix error, including
+        // non-numeric and out-of-u8 port numbers and missing/other link
+        // suffixes.
+        for bad in [
+            "igb0",
+            "tfport0_0",
+            "tfportrear0",
+            "tfportrearX_0",
+            "tfportrear0_1",
+            "tfportrear300_0",
+        ] {
+            assert!(
+                matches!(
+                    port_id_for_ifname(&ifname(bad)),
+                    Err(Error::InvalidPortPrefix(_))
+                ),
+                "{bad}"
+            );
         }
     }
 }

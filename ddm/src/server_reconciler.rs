@@ -39,6 +39,15 @@ impl Desired {
     }
 }
 
+/// The routes whose removal failed, which must be folded back into the next
+/// pass's state so the removal is retried.
+fn removal_retries(errors: Vec<IllumosError>) -> impl Iterator<Item = Route> {
+    errors.into_iter().filter_map(|e| match e {
+        IllumosError::RemoveRoute { route, .. } => Some(route),
+        _ => None,
+    })
+}
+
 /// A reconciler for server routers that applies the desired underlay routes
 /// from the database to the illumos kernel and the desired tunnel routes to
 /// OPTE.
@@ -137,15 +146,9 @@ impl ServerReconciler {
                 && let Err(errors) =
                     backend.remove_underlay_routes(underlay_remove)
             {
-                next.underlay.extend(errors.into_iter().filter_map(
-                    |e| match e {
-                        // We log this in the backend. No need to duplicate
-                        // here, although we may want to collect stats in the
-                        // future.
-                        IllumosError::RemoveRoute { route, .. } => Some(route),
-                        _ => None,
-                    },
-                ));
+                // We log this in the backend. No need to duplicate here,
+                // although we may want to collect stats in the future.
+                next.underlay.extend(removal_retries(errors));
             }
             // Add failures automatically get retried from the desired state on
             // next reconciliation. No need to track.
@@ -186,5 +189,42 @@ impl ServerReconciler {
         // nothing cancels the blocking task. The join can only fail while the
         // runtime is already shutting down.
         result.expect("reconcile pass failed")
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_removal_retries() {
+        let r = Route {
+            dest: "fd00:1::/64".parse().unwrap(),
+            gw: "fe80::1".parse().unwrap(),
+            ifname: InterfaceName::new("cxgbe0"),
+        };
+        let errors = vec![
+            IllumosError::RemoveRoute {
+                route: r.clone(),
+                err: libnet::route::Error::DoesNotExist,
+            },
+            // An add failure also carries a route, but add failures retry
+            // from the desired state and must not be folded back in.
+            IllumosError::AddRoute {
+                route: Route {
+                    dest: "fd00:2::/64".parse().unwrap(),
+                    gw: "fe80::2".parse().unwrap(),
+                    ifname: InterfaceName::new("cxgbe0"),
+                },
+                err: libnet::route::Error::Exists,
+            },
+        ];
+
+        // Only failed removals are retried; other errors carry no route.
+        let retries: Vec<Route> = removal_retries(errors).collect();
+        assert_eq!(retries, vec![r]);
+
+        assert_eq!(removal_retries(Vec::new()).count(), 0);
     }
 }

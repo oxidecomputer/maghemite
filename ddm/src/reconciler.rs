@@ -41,3 +41,32 @@ pub(crate) fn desired_underlay(data: &DbData) -> HashSet<Route> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_desired_underlay_collapses_paths() {
+        let mut data = DbData::default();
+        // Two imported routes that differ only in path map to the same
+        // dataplane route.
+        for path in [vec!["a".to_string()], vec!["b".to_string()]] {
+            data.imported.insert(crate::db::Route {
+                destination: "fd00:1::/64".parse().unwrap(),
+                nexthop: "fe80::1".parse().unwrap(),
+                ifname: "cxgbe0".to_string(),
+                path,
+            });
+        }
+
+        let desired = desired_underlay(&data);
+        let expected = HashSet::from([Route {
+            dest: "fd00:1::/64".parse().unwrap(),
+            gw: "fe80::1".parse().unwrap(),
+            ifname: InterfaceName::new("cxgbe0"),
+        }]);
+        assert_eq!(desired, expected);
+    }
+}

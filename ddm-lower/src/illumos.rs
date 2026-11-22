@@ -347,3 +347,56 @@ fn create_tunnel_routes(
     });
     (tunnel_routes, errors)
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn origin(prefix: &str, boundary: &str, vni: u32) -> TunnelOrigin {
+        TunnelOrigin {
+            overlay_prefix: prefix.parse().unwrap(),
+            boundary_addr: boundary.parse().unwrap(),
+            vni,
+            metric: 0,
+        }
+    }
+
+    #[test]
+    fn test_create_tunnel_routes_aggregates_endpoints() {
+        let origins = HashSet::from([
+            origin("0.0.0.0/0", "fd00:a::1", 99),
+            origin("0.0.0.0/0", "fd00:b::1", 99),
+            origin("fd01::/64", "fd00:a::1", 100),
+        ]);
+        let (routes, errors) = create_tunnel_routes(&origins);
+        assert!(errors.is_empty());
+
+        let routes: BTreeMap<String, Vec<TunnelEndpoint>> = routes
+            .map(|(cidr, teps)| (cidr.to_string(), teps))
+            .collect();
+        assert_eq!(routes.len(), 2);
+        // Origins sharing an overlay prefix aggregate into one route with
+        // multiple tunnel endpoints.
+        assert_eq!(routes["0.0.0.0/0"].len(), 2);
+        assert_eq!(routes["fd01::/64"].len(), 1);
+        assert_eq!(routes["fd01::/64"][0].vni, Vni::new(100u32).unwrap());
+    }
+
+    #[test]
+    fn test_create_tunnel_routes_vni_too_large() {
+        let bad = origin("fd01::/64", "fd00:a::1", 1 << 24);
+        let good = origin("fd02::/64", "fd00:b::1", 99);
+        let origins = HashSet::from([bad, good]);
+
+        // The oversized VNI is reported, and the remaining origins still
+        // convert.
+        let (routes, errors) = create_tunnel_routes(&origins);
+        assert!(
+            matches!(errors.as_slice(), [Error::VniTooLarge(o)] if *o == bad)
+        );
+        let routes: Vec<_> = routes.collect();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].0.to_string(), "fd02::/64");
+    }
+}
