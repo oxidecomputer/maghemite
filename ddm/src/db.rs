@@ -53,20 +53,6 @@ impl Db {
         self.data.borrow().imported.len()
     }
 
-    /// Imported routes for which `filter` returns true.
-    fn imported_matching(
-        &self,
-        filter: impl Fn(&Route) -> bool,
-    ) -> HashSet<Route> {
-        self.data
-            .borrow()
-            .imported
-            .iter()
-            .filter(|r| filter(r))
-            .cloned()
-            .collect()
-    }
-
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
         self.data.borrow().imported_tunnel.clone()
     }
@@ -175,14 +161,6 @@ impl Db {
             }
         });
         (removed, tnl_removed)
-    }
-
-    pub fn routes_by_vector(
-        &self,
-        dst: Ipv6Net,
-        nexthop: Ipv6Addr,
-    ) -> HashSet<Route> {
-        self.imported_matching(|r| r.destination == dst && r.nexthop == nexthop)
     }
 
     pub fn get_external_peers(&self) -> BTreeSet<String> {

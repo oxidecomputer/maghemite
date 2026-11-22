@@ -14,8 +14,6 @@ use ddm::defaults::{
 use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sys::Route;
 use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::db::RouterKind;
 use mg_common::lock;
@@ -181,9 +179,8 @@ async fn run() {
                 // The dendrite backend takes a socket address, while dpd
                 // configuration historically allows any hostname.
                 use std::net::ToSocketAddrs;
-                let d = dpd
-                    .as_ref()
-                    .expect("transit routers require --dendrite");
+                let d =
+                    dpd.as_ref().expect("transit routers require --dendrite");
                 let dpd_addr = (d.host.as_str(), d.port)
                     .to_socket_addrs()
                     .expect("resolve dpd host")
@@ -209,7 +206,7 @@ async fn run() {
         }
     }
 
-    termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
+    termination_handler();
 
     let router_stats = Arc::new(RouterStats::default());
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
@@ -375,46 +372,19 @@ fn start_state_machines(
     Vec::new()
 }
 
-/// Install a Ctrl-C handler that withdraws ddmd's imported routes from the
-/// kernel before exiting. On non-illumos builds there are no kernel routes
-/// to withdraw, so the handler just exits cleanly.
-fn termination_handler(
-    db: Db,
-    dendrite: Option<DpdConfig>,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) {
+/// Install a Ctrl-C handler that exits the process. Dataplane state is left
+/// in place: a restarted ddmd converges it via the reconcilers, which heal
+/// drift rather than requiring a clean slate.
+///
+/// Note that neither the reconciler, nor this handler is capable of preventing
+/// route removal failures from becoming stale, and so we leave that for future
+/// design work.
+fn termination_handler() {
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
             .await
             .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
-
-        #[cfg(all(feature = "backend", target_os = "illumos"))]
-        {
-            let imported = db.imported();
-            let routes: Vec<Route> =
-                imported.iter().map(|x| (x.clone()).into()).collect();
-            ddm::sys::remove_underlay_routes(
-                &log,
-                "shutdown-all",
-                &dendrite,
-                routes,
-                &rt,
-            );
-
-            let imported_tnl = db.imported_tunnel();
-            if let Err(e) = ddm::sys::remove_tunnel_routes(
-                &log,
-                "shutdown-all",
-                &imported_tnl,
-            ) {
-                error!(log, "shutdown tunnel routes: {e}");
-            }
-        }
-        #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-        let _ = (db, dendrite, rt, log);
-
         std::process::exit(SIGTERM_EXIT);
     });
 }

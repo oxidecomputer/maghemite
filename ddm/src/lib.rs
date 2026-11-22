@@ -14,8 +14,6 @@ pub mod reconciler;
 pub mod server_reconciler;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-pub mod sys;
-#[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod transit_reconciler;
 
 pub const COMPONENT_DDM: &str = "ddm";
