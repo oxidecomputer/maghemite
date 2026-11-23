@@ -19,7 +19,7 @@ use ddm_protocol::v4::{
 use slog::Logger;
 
 use super::{HandlerContext, push_update};
-use crate::db::MulticastRibChange;
+use crate::db::{McastUpdateOutcome, McastUpdateSource, MulticastRibChange};
 use crate::discovery::Version;
 use crate::exchange::ExchangeError;
 use crate::sm::{Config, SmContext};
@@ -136,19 +136,21 @@ pub(super) fn apply_multicast_update(
     ctx: &SmContext,
     import: HashSet<MulticastRoute>,
     remove: &HashSet<MulticastRoute>,
-    imported_before: Option<u64>,
-) -> AppliedMulticastUpdate {
+    source: McastUpdateSource,
+) -> Option<AppliedMulticastUpdate> {
     let batch = MulticastRibChange {
         import: &import,
         remove,
-        imported_before,
+        source,
     };
 
-    let removed = ctx.db.update_imported_mcast(batch);
-    AppliedMulticastUpdate {
-        imported: import,
-        removed,
-        hop: MulticastPathHop::new(ctx.router_id.clone(), ctx.config.addr),
+    match ctx.db.update_imported_mcast(batch) {
+        McastUpdateOutcome::Applied(removed) => Some(AppliedMulticastUpdate {
+            imported: import,
+            removed,
+            hop: MulticastPathHop::new(ctx.router_id.clone(), ctx.config.addr),
+        }),
+        McastUpdateOutcome::Superseded => None,
     }
 }
 
@@ -173,10 +175,10 @@ pub(super) fn partition_multicast_update(
     // invalidating its old route through the sender. A clean vector for
     // the same (origin, peer) takes precedence.
     for path_vector in &update.announce {
-        let route = MulticastRoute {
+        let mut route = MulticastRoute {
             origin: path_vector.origin.clone(),
             nexthop: peer_addr,
-            path: path_vector.path.clone(),
+            path: Vec::new(),
         };
         if !path_vector
             .path
@@ -185,6 +187,7 @@ pub(super) fn partition_multicast_update(
         {
             // Cancel an earlier looped vector's removal (unordered input).
             remove.remove(&route);
+            route.path = path_vector.path.clone();
             import.insert(route);
         } else if !import.contains(&route) {
             dbg!(
@@ -224,8 +227,7 @@ pub(super) fn partition_multicast_update(
             path: Vec::new(),
         });
     }
-    // A simultaneous import would receive a sequence number above the pull
-    // cutoff.
+    // A withdrawal takes precedence for the same (origin, nexthop).
     import.retain(|route| !remove.contains(route));
 
     (import, remove)
@@ -246,7 +248,7 @@ mod tests {
     use slog::{Discard, Logger, o};
 
     use super::partition_multicast_update;
-    use crate::db::{Db, MulticastRibChange};
+    use crate::db::{Db, McastUpdateOutcome, MulticastRibChange};
 
     const PEER: Ipv6Addr = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0xa);
     const LOCAL: &str = "local";
@@ -316,10 +318,7 @@ mod tests {
         let (import, remove) = partition(&update);
         assert!(import.is_empty());
         assert_eq!(remove, HashSet::from([route(1)]));
-        assert_eq!(
-            remove.iter().next().unwrap().path,
-            vec![hop("a"), hop(LOCAL)],
-        );
+        assert!(remove.iter().next().unwrap().path.is_empty());
     }
 
     #[test]
@@ -353,15 +352,17 @@ mod tests {
         let db = Db::new();
         let existing = HashSet::from([route(1)]);
         db.update_imported_mcast(MulticastRibChange::new(
+            PEER,
             &existing,
             &HashSet::new(),
         ));
 
         let (import, remove) = partition(&update);
-        let removed =
-            db.update_imported_mcast(MulticastRibChange::new(&import, &remove));
+        let outcome = db.update_imported_mcast(MulticastRibChange::new(
+            PEER, &import, &remove,
+        ));
 
-        assert_eq!(removed, existing);
+        assert_eq!(outcome, McastUpdateOutcome::Applied(existing));
         assert!(db.imported_mcast().is_empty());
         assert!(import.is_empty());
     }

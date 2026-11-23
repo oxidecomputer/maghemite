@@ -133,6 +133,16 @@ mod tests {
         )
     }
 
+    fn import(db: &Db, routes: &HashSet<MulticastRoute>) {
+        for route in routes {
+            db.update_imported_mcast(MulticastRibChange::new(
+                route.nexthop,
+                &HashSet::from([route.clone()]),
+                &HashSet::new(),
+            ));
+        }
+    }
+
     /// Build a `McastPathSnapshot` through `Db`.
     fn snapshot(
         imported: HashSet<MulticastRoute>,
@@ -142,10 +152,7 @@ mod tests {
         if !originated.is_empty() {
             db.originate_mcast(&originated);
         }
-        db.update_imported_mcast(MulticastRibChange::new(
-            &imported,
-            &HashSet::new(),
-        ));
+        import(&db, &imported);
 
         let origins = imported
             .iter()
@@ -433,7 +440,8 @@ mod tests {
         let other_hop = hop("other", 3);
         let local_hop = hop("local", 2);
         let withdrawn_hop = hop("withdrawn", 4);
-        db.update_imported_mcast(MulticastRibChange::new(
+        import(
+            &db,
             &HashSet::from([
                 MulticastRoute {
                     origin: alternate.clone(),
@@ -451,8 +459,7 @@ mod tests {
                     path: vec![target_hop.clone()],
                 },
             ]),
-            &HashSet::new(),
-        ));
+        );
         let paths = db.snapshot_mcast_paths(
             [&alternate, &target_only],
             &target_hop.router_id,

@@ -13,7 +13,7 @@ use super::{
 };
 use crate::db::RemovedNexthopRoutes;
 use crate::discovery::Version;
-use crate::exchange::UpdateMode;
+use crate::exchange::{PullSections, UpdateMode};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate};
@@ -206,15 +206,26 @@ enum Next {
 /// longer serves the negotiated exchange, and the worker requests expiry,
 /// while transport and decode errors are left to the next request.
 fn run_pull_worker(
-    mut pull: impl FnMut(UpdateMode) -> Result<(), exchange::ExchangeError>,
+    mut pull: impl FnMut(
+        UpdateMode,
+        PullSections,
+    ) -> Result<(), exchange::ExchangeError>,
     expire: impl Fn(),
     signals: &PullSignals,
     interval: Duration,
     log: &Logger,
     if_name: &str,
 ) {
+    let mut sects = PullSections::All;
     if retry_initial_pull(
-        || pull(UpdateMode::Redistribute),
+        || {
+            let res = pull(UpdateMode::Redistribute, sects);
+            if matches!(res, Err(exchange::ExchangeError::McastPullSuperseded))
+            {
+                sects = PullSections::Multicast;
+            }
+            res
+        },
         &expire,
         &signals.stop,
         interval,
@@ -226,7 +237,11 @@ fn run_pull_worker(
     }
 
     while let Some(mode) = wait_for_request(signals) {
-        if pull_once(|| pull(mode), log, if_name) && !signals.stopped() {
+        let sects = match mode {
+            UpdateMode::ImportOnly => PullSections::Multicast,
+            UpdateMode::Redistribute => PullSections::All,
+        };
+        if pull_once(|| pull(mode, sects), log, if_name) && !signals.stopped() {
             expire();
             return;
         }
@@ -673,7 +688,7 @@ impl Exchange {
                         if_name,
                     };
                     run_pull_worker(
-                        |mode| {
+                        |mode, sects| {
                             crate::exchange::pull(
                                 &ctx,
                                 peer,
@@ -681,6 +696,7 @@ impl Exchange {
                                 rt.clone(),
                                 stop.clone(),
                                 mode,
+                                sects,
                             )
                         },
                         || {
@@ -1646,7 +1662,7 @@ mod tests {
         PullWorker, is_current_session, next_decode_backoff,
         retry_initial_pull, run_pull_worker,
     };
-    use crate::exchange::{ExchangeError, UpdateMode};
+    use crate::exchange::{ExchangeError, PullSections, UpdateMode};
     use crate::sm::{Event, PeerEvent};
     use hyper::StatusCode;
     use slog::{Discard, Logger, o};
@@ -1711,6 +1727,13 @@ mod tests {
             Ok(()),
         ];
         assert_eq!(run(results, &stop), (PullOutcome::Imported, 4, 0));
+    }
+
+    #[test]
+    fn superseded_pulls_retry_without_expiry() {
+        let stop = AtomicBool::new(false);
+        let results = vec![Err(ExchangeError::McastPullSuperseded), Ok(())];
+        assert_eq!(run(results, &stop), (PullOutcome::Imported, 2, 0));
     }
 
     #[test]
@@ -1845,7 +1868,7 @@ mod tests {
     struct TestWorker {
         worker: PullWorker,
         expiries: Arc<AtomicUsize>,
-        pulled: std::sync::mpsc::Receiver<UpdateMode>,
+        pulled: std::sync::mpsc::Receiver<(UpdateMode, PullSections)>,
         release: std::sync::mpsc::Sender<()>,
     }
 
@@ -1863,8 +1886,8 @@ mod tests {
                 let log = Logger::root(Discard, o!());
                 let mut results: VecDeque<_> = results.into();
                 run_pull_worker(
-                    |mode| {
-                        pulled_tx.send(mode).unwrap();
+                    |mode, sects| {
+                        pulled_tx.send((mode, sects)).unwrap();
                         release_rx.recv().unwrap();
                         results.pop_front().expect("pull called too many times")
                     },
@@ -1889,6 +1912,10 @@ mod tests {
 
     impl TestWorker {
         fn wait_for_pull(&self) -> UpdateMode {
+            self.wait_for_pull_sections().0
+        }
+
+        fn wait_for_pull_sections(&self) -> (UpdateMode, PullSections) {
             self.pulled
                 .recv_timeout(Duration::from_secs(5))
                 .expect("worker did not start a pull")
@@ -1956,7 +1983,7 @@ mod tests {
                     if_name: "test0",
                 };
                 run_pull_worker(
-                    |_| -> Result<(), ExchangeError> {
+                    |_, _| -> Result<(), ExchangeError> {
                         panic!("pull worker died")
                     },
                     || {},
@@ -2003,6 +2030,25 @@ mod tests {
 
         w.request();
         assert_eq!(w.wait_for_pull(), UpdateMode::ImportOnly);
+        w.finish_pull();
+
+        assert_eq!(w.stop(), 0);
+    }
+
+    #[test]
+    fn superseded_initial_pull_retries_only_multicast() {
+        let w =
+            spawn_worker(vec![Err(ExchangeError::McastPullSuperseded), Ok(())]);
+
+        assert_eq!(
+            w.wait_for_pull_sections(),
+            (UpdateMode::Redistribute, PullSections::All)
+        );
+        w.finish_pull();
+        assert_eq!(
+            w.wait_for_pull_sections(),
+            (UpdateMode::Redistribute, PullSections::Multicast)
+        );
         w.finish_pull();
 
         assert_eq!(w.stop(), 0);

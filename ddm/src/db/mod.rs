@@ -6,6 +6,7 @@ use ddm_api_types::db::{MulticastRoute, TunnelRoute};
 use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use ddm_protocol::v3::PathVector;
 use mg_common::lock;
+use omicron_common::api::external::Generation;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,10 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) mod mcast;
 
-pub use mcast::{ImportedMcast, McastPathSnapshot, MulticastRibChange};
+pub use mcast::{
+    ImportedMcast, McastPathSnapshot, McastUpdateOutcome, McastUpdateSource,
+    MulticastRibChange,
+};
 
 #[derive(Clone, Default)]
 pub struct Db {
@@ -28,10 +32,12 @@ pub struct Db {
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
-    /// Imported multicast routes, each paired with the value of
-    /// `mcast_seq` at its most recent import.
+    /// Imported multicast routes, keyed by origin and then by nexthop.
     pub imported_mcast: ImportedMcast,
-    pub mcast_seq: u64,
+    /// Sequence of the most recent multicast push.
+    pub mcast_seq: Option<Generation>,
+    /// Sequence of the last multicast push recorded for each nexthop.
+    pub mcast_push_seq: HashMap<Ipv6Addr, Generation>,
     pub external_peers: BTreeSet<String>,
     pub originated: HashSet<Ipv6Net>,
     pub originated_tunnel: HashSet<TunnelOrigin>,
@@ -148,6 +154,7 @@ impl Db {
             .extract_if(|x| x.nexthop == nexthop)
             .collect();
         let multicast = data.imported_mcast.extract_nexthop(nexthop);
+        data.mcast_push_seq.remove(&nexthop);
 
         RemovedNexthopRoutes {
             underlay,
