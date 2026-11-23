@@ -1702,7 +1702,7 @@ mod tests {
     }
 
     #[test]
-    fn transient_errors_retry_until_success() {
+    fn transient_errors_retry() {
         let stop = AtomicBool::new(false);
         let results = vec![
             status(StatusCode::SERVICE_UNAVAILABLE),
@@ -1721,7 +1721,7 @@ mod tests {
     }
 
     #[test]
-    fn client_error_expires_once() {
+    fn client_error_expires() {
         let stop = AtomicBool::new(false);
         assert_eq!(
             run(vec![status(StatusCode::NOT_FOUND)], &stop),
@@ -1730,7 +1730,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_status_after_transient_expires() {
+    fn persistent_status_expires() {
         let stop = AtomicBool::new(false);
         let results = vec![
             status(StatusCode::BAD_GATEWAY),
@@ -1993,7 +1993,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_parks_after_initial_pull_until_requested() {
+    fn initial_pull_parks_worker() {
         let w = spawn_worker(vec![Ok(()), Ok(())]);
 
         assert_eq!(w.wait_for_pull(), UpdateMode::Redistribute);
@@ -2166,7 +2166,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_after_peer_address_change_is_ignored() {
+    fn stale_address_failure_gets_ignored() {
         let session = Arc::new(AtomicBool::new(false));
         let (event, peer) = failed_pull_event(&session, PEER_A);
         assert!(!is_current_session(&event, peer, &session, PEER_B));

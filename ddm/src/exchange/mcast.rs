@@ -58,7 +58,7 @@ pub(crate) fn reconcile_multicast_update(
     let preferred = |origin: &MulticastOrigin| {
         paths
             .originated()
-            .and_then(|originated| originated.get(origin))
+            .get(origin)
             .map(|local_origin| MulticastPathVector {
                 origin: local_origin.clone(),
                 path: vec![local_hop.clone()],
@@ -89,10 +89,6 @@ pub(crate) fn reconcile_multicast_update(
             Some(replacement) => {
                 update.announce.insert(replacement);
             }
-            // A failed origin read cannot confirm the final withdrawal.
-            // We keep the route around until a complete resync, as a false
-            // withdrawal can remove the peer's only path through this router.
-            None if paths.originated().is_none() => {}
             None => {
                 withdrawal.path.push(local_hop.clone());
                 update.withdraw.insert(withdrawal);
@@ -108,16 +104,13 @@ mod tests {
     use std::collections::HashSet;
     use std::net::Ipv6Addr;
 
-    use camino_tempfile::Utf8TempDir;
     use ddm_api_types::db::MulticastRoute;
     use ddm_api_types::net::{
         MulticastOrigin, OverlayMulticast, UnderlayMulticastIpv6, Vni,
     };
     use ddm_protocol::RouterId;
-    use slog::Logger;
 
     use super::*;
-    use crate::db::mcast::tests::corrupt_mcast_origin_store;
     use crate::db::{Db, McastPathSnapshot, MulticastRibChange};
 
     const NO_PEER: RouterId = RouterId::new(String::new());
@@ -140,16 +133,14 @@ mod tests {
         )
     }
 
-    /// Build a `McastPathSnapshot` through `Db` persistence.
+    /// Build a `McastPathSnapshot` through `Db`.
     fn snapshot(
         imported: HashSet<MulticastRoute>,
         originated: HashSet<MulticastOrigin>,
     ) -> McastPathSnapshot {
-        let dir = Utf8TempDir::new().unwrap();
-        let log = Logger::root(slog::Discard, slog::o!());
-        let db = Db::new(dir.path().as_str(), log).unwrap();
+        let db = Db::new();
         if !originated.is_empty() {
-            db.originate_mcast(&originated).unwrap();
+            db.originate_mcast(&originated);
         }
         db.update_imported_mcast(MulticastRibChange::new(
             &imported,
@@ -429,63 +420,10 @@ mod tests {
         assert!(update.withdraw.is_empty());
     }
 
-    #[test]
-    fn unknown_origins_suppress_final_withdrawals() {
-        let dir = Utf8TempDir::new().unwrap();
-        let log = Logger::root(slog::Discard, slog::o!());
-        let db = Db::new(dir.path().as_str(), log).unwrap();
-
-        let still_imported = origin("233.252.0.1", "ff04::1", 10);
-        let local_origin = origin("233.252.0.2", "ff04::2", 10);
-        let remaining_hop = hop("remaining", 2);
-        db.update_imported_mcast(MulticastRibChange::new(
-            &HashSet::from([MulticastRoute {
-                origin: still_imported.clone(),
-                nexthop: "fe80::2".parse().unwrap(),
-                path: vec![remaining_hop.clone()],
-            }]),
-            &HashSet::new(),
-        ));
-        db.originate_mcast(&HashSet::from([local_origin.clone()]))
-            .unwrap();
-        corrupt_mcast_origin_store(&db, &local_origin);
-        let paths =
-            db.snapshot_mcast_paths([&still_imported, &local_origin], &NO_PEER);
-        assert!(paths.originated().is_none());
-
-        let local_hop = hop("local", 3);
-        let withdrawals = HashSet::from([
-            MulticastPathVector {
-                origin: still_imported.clone(),
-                path: vec![hop("withdrawn", 1)],
-            },
-            MulticastPathVector {
-                origin: local_origin,
-                path: vec![hop("withdrawn", 1)],
-            },
-        ]);
-        let update = reconcile_multicast_update(
-            MulticastUpdate::withdraw(withdrawals),
-            &paths,
-            &local_hop,
-        );
-
-        assert!(update.withdraw.is_empty());
-        assert_eq!(
-            update.announce,
-            HashSet::from([MulticastPathVector {
-                origin: still_imported,
-                path: vec![remaining_hop, local_hop],
-            }]),
-        );
-    }
-
     /// A replacement path never goes through the peer receiving it.
     #[test]
     fn replacement_excludes_the_target_peer() {
-        let dir = Utf8TempDir::new().unwrap();
-        let log = Logger::root(slog::Discard, slog::o!());
-        let db = Db::new(dir.path().as_str(), log).unwrap();
+        let db = Db::new();
 
         // Has a route via another peer, so its withdrawal is replaced.
         let alternate = origin("233.252.0.1", "ff04::1", 10);

@@ -33,11 +33,13 @@ run_proptests() {
 	local name=$1
 	local dir=$2
 	pushd "${dir}"
-	PROPTEST_CASES=1000000 cargo nextest run --lib proptest || status=$?
+	PROPTEST_CASES=1000000 cargo nextest run --lib proptest || status=1
 	cp ./*.log /work/ 2>/dev/null || true
 	if [[ -d proptest-regressions ]]; then
-		mkdir -p "/work/proptest-regressions/${name}"
-		cp -r proptest-regressions/. "/work/proptest-regressions/${name}/"
+		mkdir -p "/work/proptest-regressions/${name}" &&
+			cp -r proptest-regressions/. \
+				"/work/proptest-regressions/${name}/" ||
+			status=1
 	fi
 	popd
 }

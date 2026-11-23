@@ -16,7 +16,6 @@ use ddm_protocol::RouterId;
 use ddm_protocol::v4::{
     MulticastPathHop, MulticastPathVector, MulticastUpdate,
 };
-use dropshot::HttpError;
 use slog::Logger;
 
 use super::{HandlerContext, push_update};
@@ -59,7 +58,7 @@ pub(crate) fn withdraw_multicast(
 /// peer never reads its own announcements back through this router.
 pub(super) fn collect_multicast(
     ctx: &HandlerContext,
-) -> Result<HashSet<MulticastPathVector>, HttpError> {
+) -> HashSet<MulticastPathVector> {
     let mut multicast = HashSet::new();
     let hop =
         MulticastPathHop::new(ctx.ctx.router_id.clone(), ctx.ctx.config.addr);
@@ -86,11 +85,7 @@ pub(super) fn collect_multicast(
         );
     }
 
-    let originated_mcast = ctx
-        .ctx
-        .db
-        .originated_mcast()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated_mcast = ctx.ctx.db.originated_mcast();
     multicast.extend(originated_mcast.into_iter().map(|origin| {
         MulticastPathVector {
             origin,
@@ -98,7 +93,7 @@ pub(super) fn collect_multicast(
         }
     }));
 
-    Ok(multicast)
+    multicast
 }
 
 /// The import and removal state after applying a multicast update, along with
@@ -355,9 +350,7 @@ mod tests {
             // Route 2 was never imported -> its removal is not reported.
             withdraw: HashSet::from([vector(1, &["a"]), vector(2, &["a"])]),
         };
-        let dir = camino_tempfile::tempdir().unwrap();
-        let log = Logger::root(Discard, o!());
-        let db = Db::new(dir.path().as_str(), log).unwrap();
+        let db = Db::new();
         let existing = HashSet::from([route(1)]);
         db.update_imported_mcast(MulticastRibChange::new(
             &existing,

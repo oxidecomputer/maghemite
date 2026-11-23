@@ -673,7 +673,7 @@ async fn push_handler_common(
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
-    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context())?;
+    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context());
     Ok(HttpResponseOk(v2::PullResponse {
         underlay: non_empty(underlay)
             .map(|s| s.into_iter().map(v2::PathVector::from).collect()),
@@ -689,7 +689,7 @@ fn non_empty<T>(set: HashSet<T>) -> Option<HashSet<T>> {
 /// Collect underlay and tunnel routes for pull responses.
 fn collect_underlay_tunnel(
     ctx: &HandlerContext,
-) -> Result<(HashSet<PathVector>, HashSet<TunnelOrigin>), HttpError> {
+) -> (HashSet<PathVector>, HashSet<TunnelOrigin>) {
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
 
@@ -721,25 +721,17 @@ fn collect_underlay_tunnel(
         );
     }
 
-    let originated = ctx
-        .ctx
-        .db
-        .originated()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated = ctx.ctx.db.originated();
 
     underlay.extend(originated.into_iter().map(|dst| PathVector {
         destination: dst,
         path: vec![ctx.ctx.router_id.to_string()],
     }));
 
-    let originated_tunnel = ctx
-        .ctx
-        .db
-        .originated_tunnel()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated_tunnel = ctx.ctx.db.originated_tunnel();
     tunnel.extend(originated_tunnel);
 
-    Ok((underlay, tunnel))
+    (underlay, tunnel)
 }
 
 #[endpoint {
@@ -749,7 +741,7 @@ fn collect_underlay_tunnel(
 async fn pull_handler_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
-    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context())?;
+    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context());
     Ok(HttpResponseOk(v3::PullResponse {
         underlay: non_empty(underlay),
         tunnel: non_empty(tunnel),
@@ -768,7 +760,7 @@ async fn pull_handler_v4(
     let ctx = ctx.context();
 
     let (underlay, tunnel) = if scan.sections == PullSections::All {
-        collect_underlay_tunnel(ctx)?
+        collect_underlay_tunnel(ctx)
     } else {
         (HashSet::new(), HashSet::new())
     };
@@ -776,7 +768,7 @@ async fn pull_handler_v4(
     Ok(HttpResponseOk(PullResponse {
         underlay: non_empty(underlay),
         tunnel: non_empty(tunnel),
-        multicast: non_empty(collect_multicast(ctx)?),
+        multicast: non_empty(collect_multicast(ctx)),
     }))
 }
 
@@ -1275,14 +1267,12 @@ mod tests {
     struct ExchangeFixture {
         ctx: SmContext,
         _events: Receiver<Event>,
-        _dir: camino_tempfile::Utf8TempDir,
     }
 
     impl ExchangeFixture {
         fn new(rt: &Runtime) -> Self {
-            let dir = camino_tempfile::tempdir().unwrap();
             let log = Logger::root(Discard, o!());
-            let db = Db::new(dir.path().as_str(), log.clone()).unwrap();
+            let db = Db::new();
             let (tx, events) = channel();
             let iface = Arc::new(InterfaceState::default());
             *iface.peer_identity.lock().unwrap() = Some(PeerIdentity {
@@ -1320,7 +1310,6 @@ mod tests {
                     first_run: true,
                 },
                 _events: events,
-                _dir: dir,
             }
         }
 

@@ -19,9 +19,9 @@ clap = { workspace = true, optional = true }
 oxnet.workspace = true
 mg-api-types = { workspace = true, features = ["clap"] }
 mg-api-types-versions.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-mg-api-types-versions = { workspace = true, features = ["testing"] }
 proptest.workspace = true
 
 [features]

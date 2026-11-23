@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Imported multicast routes and sequence numbers, persisted local origins,
+//! Imported multicast routes and sequence numbers, local origins,
 //! and path snapshots used for update reconciliation.
 
 use std::collections::{HashMap, HashSet};
@@ -12,12 +12,8 @@ use ddm_api_types::db::MulticastRoute;
 use ddm_api_types::net::MulticastOrigin;
 use ddm_protocol::RouterId;
 use mg_common::lock;
-use slog::error;
 
-use super::{Db, Error, RemovedNexthopRoutes};
-
-/// Persistent tree for locally originated multicast groups.
-const MCAST_ORIGINATE: &str = "mcast_originate";
+use super::{Db, DbData, RemovedNexthopRoutes};
 
 impl Db {
     pub fn imported_mcast(&self) -> HashSet<MulticastRoute> {
@@ -65,54 +61,28 @@ impl Db {
             .collect()
     }
 
-    /// Persist multicast origins to advertise to peers.
-    pub fn originate_mcast(
-        &self,
-        origins: &HashSet<MulticastOrigin>,
-    ) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+    /// Mark multicast origins to advertise to peers.
+    pub fn originate_mcast(&self, origins: &HashSet<MulticastOrigin>) {
+        let originated = &mut lock!(self.data).originated_mcast;
         for origin in origins {
-            // Keep metric in the value; re-origination can update it.
-            tree.insert(
-                mcast_origin_key(origin)?.as_str(),
-                serde_json::to_string(origin)?.as_str(),
-            )?;
+            // Replace rather than insert here because re-origination can
+            // update the metric.
+            originated.replace(origin.clone());
         }
-        tree.flush()?;
-        Ok(())
     }
 
     /// Read the locally originated multicast origins.
-    ///
-    /// Bypassing an unreadable entry could cause a false withdrawal during
-    /// reconciliation, so we fail the entire read to avoid this situation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tree cannot be opened or if any entry fails to
-    /// read or parse.
-    pub fn originated_mcast(&self) -> Result<HashSet<MulticastOrigin>, Error> {
-        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
-        tree.iter()
-            .map(|item| {
-                let (_key, value) = item?;
-                Ok(serde_json::from_slice(&value)?)
-            })
-            .collect()
+    pub fn originated_mcast(&self) -> HashSet<MulticastOrigin> {
+        lock!(self.data).originated_mcast.clone()
     }
 
-    /// Remove persisted multicast origins.
-    pub fn withdraw_mcast(
-        &self,
-        origins: &HashSet<MulticastOrigin>,
-    ) -> Result<(), Error> {
-        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
+    /// Stop advertising multicast origins.
+    pub fn withdraw_mcast(&self, origins: &HashSet<MulticastOrigin>) {
+        let originated = &mut lock!(self.data).originated_mcast;
         for origin in origins {
             // Withdraw by identity, regardless of the supplied metric.
-            tree.remove(mcast_origin_key(origin)?.as_str())?;
+            originated.remove(origin);
         }
-        tree.flush()?;
-        Ok(())
     }
 
     /// Snapshot multicast paths through local origins and imported routes.
@@ -122,17 +92,15 @@ impl Db {
         peer_router_id: &RouterId,
     ) -> McastPathSnapshot {
         let origins: Vec<_> = origins.into_iter().collect();
-        let imported = {
-            let data = lock!(self.data);
-            origins
-                .iter()
-                .filter_map(|origin| {
-                    data.imported_mcast.shortest_path(origin, peer_router_id)
-                })
-                .map(|route| (route.origin.clone(), route.clone()))
-                .collect()
-        };
-        self.path_snapshot(&origins, imported)
+        let data = lock!(self.data);
+        let imported = origins
+            .iter()
+            .filter_map(|origin| {
+                data.imported_mcast.shortest_path(origin, peer_router_id)
+            })
+            .map(|route| (route.origin.clone(), route.clone()))
+            .collect();
+        Self::path_snapshot(&data, &origins, imported)
     }
 
     /// Snapshot multicast paths through local origins only.
@@ -141,7 +109,8 @@ impl Db {
         origins: impl IntoIterator<Item = &'a MulticastOrigin>,
     ) -> McastPathSnapshot {
         let origins: Vec<_> = origins.into_iter().collect();
-        self.path_snapshot(&origins, HashMap::new())
+        let data = lock!(self.data);
+        Self::path_snapshot(&data, &origins, HashMap::new())
     }
 
     /// Remove multicast routes via `nexthop` on a downgrade below V4.
@@ -174,42 +143,20 @@ impl Db {
     }
 
     /// Read local origins to complete the snapshot of `imported`.
-    ///
-    /// NOTE: Callers must not hold the data lock because local origins are read
-    /// from the persistent store without it. This makes the snapshot
-    /// non-atomic: `imported` was read under the lock, and the two halves
-    /// could diverge.
-    ///
-    /// A failed origin read leaves `originated` as `None`.
     fn path_snapshot(
-        &self,
+        data: &DbData,
         origins: &[&MulticastOrigin],
         imported: HashMap<MulticastOrigin, MulticastRoute>,
     ) -> McastPathSnapshot {
-        let originated = self
-            .lookup_originated_mcast(origins)
-            .inspect_err(|e| {
-                error!(self.log, "lookup originated multicast origins: {e}");
-            })
-            .ok();
+        let originated = origins
+            .iter()
+            .filter_map(|origin| data.originated_mcast.get(*origin))
+            .cloned()
+            .collect();
         McastPathSnapshot {
             imported,
             originated,
         }
-    }
-
-    fn lookup_originated_mcast(
-        &self,
-        origins: &[&MulticastOrigin],
-    ) -> Result<HashSet<MulticastOrigin>, Error> {
-        let tree = self.persistent_data.open_tree(MCAST_ORIGINATE)?;
-        let mut originated = HashSet::new();
-        for origin in origins {
-            if let Some(value) = tree.get(mcast_origin_key(origin)?.as_str())? {
-                originated.insert(serde_json::from_slice(&value)?);
-            }
-        }
-        Ok(originated)
     }
 }
 
@@ -355,16 +302,6 @@ impl ImportedMcast {
     }
 }
 
-/// Persistent origin key, excluding metric as in `PartialEq` and `Hash`.
-fn mcast_origin_key(origin: &MulticastOrigin) -> Result<String, Error> {
-    Ok(serde_json::to_string(&(
-        origin.overlay_group(),
-        origin.underlay_group(),
-        origin.vni(),
-        origin.source(),
-    ))?)
-}
-
 /// A batch of multicast imports and removals.
 #[derive(Debug, Clone, Copy)]
 pub struct MulticastRibChange<'a> {
@@ -394,7 +331,7 @@ impl<'a> MulticastRibChange<'a> {
 #[derive(Debug, Clone)]
 pub struct McastPathSnapshot {
     imported: HashMap<MulticastOrigin, MulticastRoute>,
-    originated: Option<HashSet<MulticastOrigin>>,
+    originated: HashSet<MulticastOrigin>,
 }
 
 impl McastPathSnapshot {
@@ -405,34 +342,24 @@ impl McastPathSnapshot {
         self.imported.get(origin)
     }
 
-    /// Local origins, or `None` on a failed read.
-    /// An unreadable origin set cannot establish a final withdrawal.
-    pub fn originated(&self) -> Option<&HashSet<MulticastOrigin>> {
-        self.originated.as_ref()
+    /// Local origins among the snapshot's requested origins.
+    pub fn originated(&self) -> &HashSet<MulticastOrigin> {
+        &self.originated
     }
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use camino_tempfile::Utf8TempDir;
+mod tests {
     use ddm_api_types::db::TunnelRoute;
     use ddm_api_types::net::{
         OverlayMulticast, TunnelOrigin, UnderlayMulticastIpv6, Vni,
     };
     use ddm_protocol::v4::MulticastPathHop;
     use pretty_assertions::assert_eq;
-    use slog::Logger;
 
     use super::*;
 
     const NO_PEER: RouterId = RouterId::new(String::new());
-
-    fn test_db() -> (Utf8TempDir, Db) {
-        let dir = Utf8TempDir::new().unwrap();
-        let log = Logger::root(slog::Discard, slog::o!());
-        let db = Db::new(dir.path().as_str(), log).unwrap();
-        (dir, db)
-    }
 
     fn mcast_origin(overlay: &str, underlay: &str) -> MulticastOrigin {
         MulticastOrigin::new(
@@ -462,67 +389,20 @@ pub(crate) mod tests {
         ));
     }
 
-    pub(crate) fn corrupt_mcast_origin_store(
-        db: &Db,
-        origin: &MulticastOrigin,
-    ) {
-        let tree = db.persistent_data.open_tree(MCAST_ORIGINATE).unwrap();
-        tree.insert(
-            mcast_origin_key(origin).unwrap().as_str(),
-            "not-an-origin",
-        )
-        .unwrap();
-        tree.flush().unwrap();
-    }
-
-    /// A corrupt origin entry fails on reads that touch it, while other origins
-    /// and imported routes remain available to read.
-    #[test]
-    fn corrupt_origin_store_fails_closed() {
-        let (_dir, db) = test_db();
-        let good = mcast_origin("233.252.0.1", "ff04::1");
-        let bad = mcast_origin("233.252.0.2", "ff04::2");
-        let route = MulticastRoute {
-            origin: bad.clone(),
-            nexthop: "fe80::a".parse().unwrap(),
-            path: Vec::new(),
-        };
-        db.originate_mcast(&HashSet::from([good.clone()])).unwrap();
-        db.update_imported_mcast(MulticastRibChange::new(
-            &HashSet::from([route.clone()]),
-            &HashSet::new(),
-        ));
-        assert_eq!(db.originated_mcast().unwrap().len(), 1);
-
-        corrupt_mcast_origin_store(&db, &bad);
-
-        assert!(db.originated_mcast().is_err());
-
-        let paths = db.snapshot_mcast_paths([&bad], &NO_PEER);
-        assert!(paths.originated().is_none());
-        assert_eq!(paths.imported(&bad), Some(&route));
-
-        assert_eq!(
-            db.snapshot_mcast_paths([&good], &NO_PEER).originated(),
-            Some(&HashSet::from([good])),
-        );
-    }
-
-    /// A path snapshot includes persisted local origins and current imports.
+    /// A path snapshot includes local origins and current imports.
     #[test]
     fn snapshot_mcast_paths_reads_both_sources() {
-        let (_dir, db) = test_db();
+        let db = Db::new();
 
         // Distinct overlay/underlay groups so identity-based equality on
-        // `MulticastOrigin` keeps the persisted and imported origins apart.
+        // `MulticastOrigin` keeps the local and imported origins apart.
         let local_origin =
             mcast_origin("233.252.0.1", "ff04::1").with_metric(10);
         let imported_origin =
             mcast_origin("233.252.0.2", "ff04::2").with_metric(20);
         let route = route(imported_origin, "fe80::2");
 
-        db.originate_mcast(&HashSet::from([local_origin.clone()]))
-            .unwrap();
+        db.originate_mcast(&HashSet::from([local_origin.clone()]));
         db.update_imported_mcast(MulticastRibChange::new(
             &HashSet::from([route.clone()]),
             &HashSet::new(),
@@ -534,32 +414,30 @@ pub(crate) mod tests {
         assert_eq!(imported, &route);
         assert_eq!(imported.origin.metric(), 20);
         assert_eq!(imported.path, route.path);
-        let originated = paths.originated().unwrap();
+        let originated = paths.originated();
         assert_eq!(originated.get(&local_origin).unwrap().metric(), 10);
         assert_eq!(originated, &HashSet::from([local_origin]));
     }
 
-    /// The origin store keys on identity, meaning that metric can
-    /// never split an entry.
+    /// Originated multicast origins are keyed on identity (`metric` can
+    /// never split an entry).
     #[test]
-    fn origin_store_keys_on_identity_not_metric() {
-        let (_dir, db) = test_db();
+    fn originated_mcast_keys_on_identity_not_metric() {
+        let db = Db::new();
 
         // Re-originating with a changed metric overwrites the stored entry.
         db.originate_mcast(&HashSet::from([mcast_origin(
             "233.252.0.1",
             "ff04::1",
         )
-        .with_metric(10)]))
-            .unwrap();
+        .with_metric(10)]));
         db.originate_mcast(&HashSet::from([mcast_origin(
             "233.252.0.1",
             "ff04::1",
         )
-        .with_metric(20)]))
-            .unwrap();
+        .with_metric(20)]));
 
-        let stored = db.originated_mcast().unwrap();
+        let stored = db.originated_mcast();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored.iter().next().unwrap().metric(), 20);
 
@@ -567,15 +445,14 @@ pub(crate) mod tests {
         db.withdraw_mcast(&HashSet::from([mcast_origin(
             "233.252.0.1",
             "ff04::1",
-        )]))
-        .unwrap();
-        assert!(db.originated_mcast().unwrap().is_empty());
+        )]));
+        assert!(db.originated_mcast().is_empty());
     }
 
     /// Only the multicast routes via the given nexthop are removed.
     #[test]
     fn remove_nexthop_mcast_routes_is_scoped_to_the_peer() {
-        let (_dir, db) = test_db();
+        let db = Db::new();
 
         // `a` and `a2` go via the removed nexthop. `b` is another peer's and
         // stays.
@@ -622,7 +499,7 @@ pub(crate) mod tests {
 
     #[test]
     fn remove_nexthop_routes_removes_every_family_for_a_peer() {
-        let (_dir, db) = test_db();
+        let db = Db::new();
 
         let multicast_a =
             route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::a");
@@ -675,7 +552,7 @@ pub(crate) mod tests {
     /// imports.
     #[test]
     fn stale_mcast_by_nexthop_filters() {
-        let (_dir, db) = test_db();
+        let db = Db::new();
         let peer: Ipv6Addr = "fe80::a".parse().unwrap();
 
         let announced =
@@ -709,7 +586,7 @@ pub(crate) mod tests {
     /// after it.
     #[test]
     fn stale_removal_skips_routes_imported_after_the_cutoff() {
-        let (_dir, db) = test_db();
+        let db = Db::new();
 
         let prev = route(mcast_origin("233.252.0.1", "ff04::1"), "fe80::a");
         let refreshed =
@@ -748,7 +625,7 @@ pub(crate) mod tests {
 
     #[test]
     fn shortest_path_falls_back_after_removal_and_expiry() {
-        let (_dir, db) = test_db();
+        let db = Db::new();
         let origin = mcast_origin("233.252.0.1", "ff04::1");
         let other = mcast_origin("233.252.0.2", "ff04::2");
         let low = route(origin.clone(), "fe80::1");
