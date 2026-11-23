@@ -9,13 +9,13 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
 };
 use mg_api_types::mrib::{
-    MribAddStaticRequest, MribDeleteStaticRequest, MribQuery, MulticastRoute,
+    MribAddStaticRequest, MribDeleteStaticGroupRequest,
+    MribDeleteStaticRequest, MribQuery, MulticastRoute,
     MulticastSourceProtocol,
 };
 use rdb::{Db, MribTableExt};
 
 use crate::admin::HandlerContext;
-use crate::error::Error;
 
 /// Which MRIB table a query targets: imported routes (`mrib_in`) or
 /// selected routes (`mrib_loc`).
@@ -68,17 +68,14 @@ pub async fn static_add_mcast_route(
         .into_inner()
         .routes
         .into_iter()
-        .map(|input| {
-            MulticastRoute::new(
-                input.key,
-                input.underlay_group,
-                MulticastSourceProtocol::Static,
-            )
+        .map(|input| MulticastRoute {
+            key: input.key,
+            underlay_group: input.underlay_group,
+            source: MulticastSourceProtocol::Static,
+            group_id: Some(input.group_id),
         })
         .collect();
-    ctx.db
-        .add_static_mcast_routes(&routes)
-        .map_err(Error::from)?;
+    ctx.db.add_static_mcast_routes(&routes);
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -86,10 +83,22 @@ pub async fn static_remove_mcast_route(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MribDeleteStaticRequest>,
 ) -> Result<HttpResponseDeleted, HttpError> {
-    let ctx = rqctx.context();
-    ctx.db
-        .remove_static_mcast_routes(&request.into_inner().keys)
-        .map_err(Error::from)?;
+    let request = request.into_inner();
+    rqctx
+        .context()
+        .db
+        .remove_group_static_mcast_routes(request.group_id, &request.keys);
+    Ok(HttpResponseDeleted())
+}
+
+pub async fn static_remove_mcast_group(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<MribDeleteStaticGroupRequest>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    rqctx
+        .context()
+        .db
+        .remove_static_mcast_groups(&request.into_inner().groups);
     Ok(HttpResponseDeleted())
 }
 
@@ -97,8 +106,7 @@ pub async fn static_list_mcast_routes(
     rqctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let ctx = rqctx.context();
-    let routes = ctx.db.get_static_mcast_routes().map_err(Error::from)?;
-    Ok(HttpResponseOk(routes))
+    Ok(HttpResponseOk(ctx.db.get_static_mcast_routes()))
 }
 
 #[cfg(test)]
@@ -136,8 +144,7 @@ mod tests {
             key,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        )])
-        .expect("add route");
+        )]);
         key
     }
 
@@ -272,8 +279,7 @@ mod tests {
             sg_key,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        )])
-        .expect("add route");
+        )]);
 
         for table in [MribTable::Imported, MribTable::Selected] {
             assert_eq!(
@@ -341,6 +347,7 @@ mod tests {
         let source = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
         let sg_key =
             MulticastRouteKey::new(Some(source), sg_group, vni()).expect("key");
+        let group_id = uuid::Uuid::new_v4();
 
         client
             .static_add_mcast_route(&MribAddStaticRequest {
@@ -349,6 +356,7 @@ mod tests {
                     .map(|key| StaticMulticastRoute {
                         key,
                         underlay_group: underlay_group(),
+                        group_id,
                     })
                     .collect(),
             })
@@ -407,6 +415,25 @@ mod tests {
         client
             .static_remove_mcast_route(&MribDeleteStaticRequest {
                 keys: vec![any_key, sg_key],
+                group_id: uuid::Uuid::new_v4(),
+            })
+            .await
+            .expect("remove routes for another group");
+        assert_eq!(
+            client
+                .static_list_mcast_routes()
+                .await
+                .expect("list static routes")
+                .into_inner()
+                .len(),
+            2,
+            "a remove for another group must not touch these routes"
+        );
+
+        client
+            .static_remove_mcast_route(&MribDeleteStaticRequest {
+                keys: vec![any_key, sg_key],
+                group_id,
             })
             .await
             .expect("remove routes");
@@ -416,12 +443,6 @@ mod tests {
             .expect("list imported")
             .into_inner();
         assert!(imported.is_empty());
-        let removed = client
-            .get_mrib_imported(None, Some(&any_group), None, None, None)
-            .await
-            .expect("filter removed group")
-            .into_inner();
-        assert!(removed.is_empty());
 
         server.shutdown().await;
     }
@@ -456,15 +477,18 @@ mod tests {
 
         let ssm_without_source = concat!(
             r#"{"routes":[{"key":{"v4":{"group":"232.1.1.1","source":null,"#,
-            r#""vni":77}},"underlay_group":"ff04::1"}]}"#,
+            r#""vni":77}},"underlay_group":"ff04::1","#,
+            r#""group_id":"00000000-0000-4000-8000-000000000001"}]}"#,
         );
         let bad_underlay = concat!(
             r#"{"routes":[{"key":{"v4":{"group":"239.1.1.1","source":null,"#,
-            r#""vni":77}},"underlay_group":"ff05::1"}]}"#,
+            r#""vni":77}},"underlay_group":"ff05::1","#,
+            r#""group_id":"00000000-0000-4000-8000-000000000001"}]}"#,
         );
         let missing_vni = concat!(
             r#"{"routes":[{"key":{"v4":{"group":"239.1.1.1","source":null}},"#,
-            r#""underlay_group":"ff04::1"}]}"#,
+            r#""underlay_group":"ff04::1","#,
+            r#""group_id":"00000000-0000-4000-8000-000000000001"}]}"#,
         );
         for body in [ssm_without_source, bad_underlay, missing_vni] {
             assert_eq!(

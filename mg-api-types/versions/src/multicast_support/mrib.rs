@@ -34,6 +34,7 @@ use dpd_types_versions::v15::mcast::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::v14::rdb::rib::AddressFamily;
 
@@ -828,6 +829,14 @@ impl MulticastRouteKey {
             Self::V6(k) => k.vni,
         }
     }
+
+    /// Return the group and VNI of this key.
+    pub const fn group_key(&self) -> MulticastGroupKey {
+        MulticastGroupKey {
+            group: self.group(),
+            vni: self.vni(),
+        }
+    }
 }
 
 /// Multicast route entry, consisting of a key, underlay group, and metadata.
@@ -850,6 +859,13 @@ pub struct MulticastRoute {
     pub underlay_group: UnderlayMulticastIpv6,
     /// Protocol that originated the route.
     pub source: MulticastSourceProtocol,
+    /// ID of the Nexus multicast group that installed this route.
+    ///
+    /// Group-scoped removes only match routes with the same ID. A stale remove
+    /// for an earlier group cannot delete a later group's routes at the same
+    /// `(G, VNI)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
 }
 
 impl MulticastRoute {
@@ -863,6 +879,7 @@ impl MulticastRoute {
             key,
             underlay_group,
             source,
+            group_id: None,
         }
     }
 }
@@ -884,6 +901,8 @@ pub struct StaticMulticastRoute {
     pub key: MulticastRouteKey,
     /// Underlay multicast group address (`ff04::/64`).
     pub underlay_group: UnderlayMulticastIpv6,
+    /// ID of the Nexus multicast group that owns this route.
+    pub group_id: Uuid,
 }
 
 /// Request body for adding static multicast routes to the MRIB.
@@ -898,6 +917,39 @@ pub struct MribAddStaticRequest {
 pub struct MribDeleteStaticRequest {
     /// List of route keys to delete.
     pub keys: Vec<MulticastRouteKey>,
+    /// Only routes installed under this group ID are removed.
+    pub group_id: Uuid,
+}
+
+/// A multicast group and its VNI. It matches all sources of the group.
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash,
+)]
+pub struct MulticastGroupKey {
+    /// Overlay multicast group address.
+    pub group: MulticastAddr,
+    /// VNI the group belongs to.
+    pub vni: Vni,
+}
+
+/// A [`MulticastGroupKey`] scoped to the Nexus group that owns its routes.
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash,
+)]
+pub struct StaticMulticastGroupKey {
+    /// The group and VNI.
+    #[serde(flatten)]
+    pub key: MulticastGroupKey,
+    /// ID of the Nexus multicast group.
+    pub group_id: Uuid,
+}
+
+/// Request body for deleting every static route of a multicast group.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribDeleteStaticGroupRequest {
+    /// Groups to delete. Each covers `(*,G)` and every `(S,G)` installed under
+    /// its group ID.
+    pub groups: Vec<StaticMulticastGroupKey>,
 }
 
 /// Filter for multicast route origin.
@@ -1085,7 +1137,7 @@ impl JsonSchema for MribQuery {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 mod arbitrary_impls {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 

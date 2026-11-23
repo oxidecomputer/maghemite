@@ -1956,6 +1956,17 @@ pub trait MgAdminApi {
         request: TypedBody<latest::mrib::MribDeleteStaticRequest>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
+    /// For any source, remove every static multicast route of a group.
+    #[endpoint {
+        method = DELETE,
+        path = "/static/mroute/group",
+        versions = VERSION_MULTICAST_SUPPORT..,
+    }]
+    async fn static_remove_mcast_group(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<latest::mrib::MribDeleteStaticGroupRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
     /// List all configured static multicast routes.
     #[endpoint {
         method = GET,
