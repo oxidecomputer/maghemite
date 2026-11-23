@@ -31,8 +31,8 @@ pub(crate) use mcast::reconcile_multicast_update;
 
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub(crate) use runtime::{
-    announce_multicast, announce_tunnel, announce_underlay, handler,
-    probe_exchange_server, pull, withdraw_multicast, withdraw_tunnel,
+    PullSections, announce_multicast, announce_tunnel, announce_underlay,
+    handler, probe_exchange_server, pull, withdraw_multicast, withdraw_tunnel,
     withdraw_underlay,
 };
 
@@ -82,6 +82,9 @@ pub enum ExchangeError {
     /// An exchange request URI could not be constructed.
     #[error("invalid exchange request URI: {0}")]
     InvalidUri(String),
+
+    #[error("multicast pull snapshot superseded by a push")]
+    McastPullSuperseded,
 }
 
 #[cfg(any(test, all(feature = "backend", target_os = "illumos")))]
@@ -91,7 +94,8 @@ impl ExchangeError {
             Self::Io(_)
             | Self::Hyper(_)
             | Self::HyperClient(_)
-            | Self::Timeout(_) => true,
+            | Self::Timeout(_)
+            | Self::McastPullSuperseded => true,
             Self::Status(status) => {
                 status.is_server_error()
                     || *status == hyper::StatusCode::REQUEST_TIMEOUT

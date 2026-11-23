@@ -1706,6 +1706,33 @@
         }
       }
     },
+    "/static/mroute/group": {
+      "delete": {
+        "summary": "For any source, remove every static multicast route of a group.",
+        "operationId": "static_remove_mcast_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribDeleteStaticGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/static/route4": {
       "get": {
         "operationId": "static_list_v4_routes",
@@ -4138,10 +4165,31 @@
           "routes"
         ]
       },
+      "MribDeleteStaticGroupRequest": {
+        "description": "Request body for deleting every static route of a multicast group.",
+        "type": "object",
+        "properties": {
+          "groups": {
+            "description": "Groups to delete. Each covers `(*,G)` and every `(S,G)` installed under its group ID.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticMulticastGroupKey"
+            }
+          }
+        },
+        "required": [
+          "groups"
+        ]
+      },
       "MribDeleteStaticRequest": {
         "description": "Request body for deleting static multicast routes from the MRIB.",
         "type": "object",
         "properties": {
+          "group_id": {
+            "description": "Only routes installed under this group ID are removed.",
+            "type": "string",
+            "format": "uuid"
+          },
           "keys": {
             "description": "List of route keys to delete.",
             "type": "array",
@@ -4151,8 +4199,14 @@
           }
         },
         "required": [
+          "group_id",
           "keys"
         ]
+      },
+      "MulticastAddr": {
+        "description": "A validated IPv4 or IPv6 multicast group address.",
+        "type": "string",
+        "format": "ip"
       },
       "MulticastAddrV4": {
         "description": "A validated IPv4 multicast address.\n\nIPv4 admits the multicast range apart from the local network control block of `224.0.0.0/24` and the SSM null address of `232.0.0.0` (RFC 4607 §4.3). Routers do not forward the control block off link (RFC 5771 §4), and its base address of `224.0.0.0` is never assigned to a group (RFC 1112 §4).",
@@ -4168,6 +4222,12 @@
         "description": "Multicast route entry, consisting of a key, underlay group, and metadata.",
         "type": "object",
         "properties": {
+          "group_id": {
+            "nullable": true,
+            "description": "ID of the Nexus multicast group that installed this route.\n\nGroup-scoped removes only match routes with the same ID. A stale remove for an earlier group cannot delete a later group's routes at the same `(G, VNI)`.",
+            "type": "string",
+            "format": "uuid"
+          },
           "key": {
             "description": "The multicast route key `(S,G)` or `(*,G)`.",
             "allOf": [
@@ -5879,10 +5939,47 @@
           "code"
         ]
       },
+      "StaticMulticastGroupKey": {
+        "description": "A [`MulticastGroupKey`] scoped to the Nexus group that owns its routes.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "description": "Overlay multicast group address.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MulticastAddr"
+              }
+            ]
+          },
+          "group_id": {
+            "description": "ID of the Nexus multicast group.",
+            "type": "string",
+            "format": "uuid"
+          },
+          "vni": {
+            "description": "VNI the group belongs to.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Vni"
+              }
+            ]
+          }
+        },
+        "required": [
+          "group",
+          "group_id",
+          "vni"
+        ]
+      },
       "StaticMulticastRoute": {
         "description": "A static multicast route.",
         "type": "object",
         "properties": {
+          "group_id": {
+            "description": "ID of the Nexus multicast group that owns this route.",
+            "type": "string",
+            "format": "uuid"
+          },
           "key": {
             "description": "The multicast route key `(S,G)` or `(*,G)`.",
             "allOf": [
@@ -5901,6 +5998,7 @@
           }
         },
         "required": [
+          "group_id",
           "key",
           "underlay_group"
         ]
@@ -6460,11 +6558,6 @@
             ]
           }
         ]
-      },
-      "MulticastAddr": {
-        "description": "A validated IPv4 or IPv6 multicast group address.",
-        "type": "string",
-        "format": "ip"
       },
       "RouteOriginFilter": {
         "description": "Filter for multicast route origin.",

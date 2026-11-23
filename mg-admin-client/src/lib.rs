@@ -59,6 +59,7 @@ progenitor::generate_api!(
 
         // MRIB shapes.
         MribAddStaticRequest = mg_api_types_versions::latest::mrib::MribAddStaticRequest,
+        MribDeleteStaticGroupRequest = mg_api_types_versions::latest::mrib::MribDeleteStaticGroupRequest,
         MribDeleteStaticRequest = mg_api_types_versions::latest::mrib::MribDeleteStaticRequest,
         MulticastAddr = mg_api_types_versions::latest::mrib::MulticastAddr,
         MulticastAddrV4 = mg_api_types_versions::latest::mrib::MulticastAddrV4,
@@ -69,6 +70,7 @@ progenitor::generate_api!(
         MulticastRouteKeyV6 = mg_api_types_versions::latest::mrib::MulticastRouteKeyV6,
         MulticastSourceProtocol = mg_api_types_versions::latest::mrib::MulticastSourceProtocol,
         RouteOriginFilter = mg_api_types_versions::latest::mrib::RouteOriginFilter,
+        StaticMulticastGroupKey = mg_api_types_versions::latest::mrib::StaticMulticastGroupKey,
         StaticMulticastRoute = mg_api_types_versions::latest::mrib::StaticMulticastRoute,
         UnderlayMulticastIpv6 = mg_api_types_versions::latest::mrib::UnderlayMulticastIpv6,
         UnicastAddrV4 = mg_api_types_versions::latest::mrib::UnicastAddrV4,

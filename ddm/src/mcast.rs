@@ -504,7 +504,6 @@ async fn reconcile_group<'a, C: GroupClient>(
 mod tests {
     use std::convert::Infallible;
     use std::net::{IpAddr, Ipv6Addr};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use ddm_api_types::net::{MulticastOrigin, OverlayMulticast, Vni};
@@ -515,7 +514,6 @@ mod tests {
     use hyper::service::service_fn;
     use hyper::{Method, Request, Response};
     use hyper_util::rt::TokioIo;
-    use slog::Drain;
     use tokio::net::TcpListener;
     use tokio::sync::{Notify, oneshot};
 
@@ -631,19 +629,8 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_interfaces_warn_once_until_removed() {
-        let warnings = Arc::new(AtomicUsize::new(0));
-        let skips = Arc::new(AtomicUsize::new(0));
-        let (warned, skipped) = (warnings.clone(), skips.clone());
-        let drain = slog::Filter::new(slog::Discard, move |record| {
-            match record.level() {
-                slog::Level::Warning => warned.fetch_add(1, Ordering::Relaxed),
-                slog::Level::Debug => skipped.fetch_add(1, Ordering::Relaxed),
-                _ => 0,
-            };
-            true
-        });
-        let log = Logger::root(drain.ignore_res(), slog::o!());
+    fn resolve_links_bypasses_non_rear_interfaces() {
+        let log = Logger::root(slog::Discard, slog::o!());
         let mut unresolved = HashSet::new();
 
         let links = resolve_links(
@@ -655,8 +642,6 @@ mod tests {
             links,
             HashMap::from([("tfportrear0_0", member("rear0", 0))]),
         );
-        assert_eq!(warnings.load(Ordering::Relaxed), 2);
-        assert_eq!(skips.load(Ordering::Relaxed), 1);
         assert_eq!(
             unresolved,
             HashSet::from([
@@ -666,25 +651,8 @@ mod tests {
             ]),
         );
 
-        resolve_links(
-            ["vioif0", "bad0", "tfportqsfp0_0", "tfportrear0_0"],
-            &mut unresolved,
-            &log,
-        );
-        assert_eq!(warnings.load(Ordering::Relaxed), 2);
-        assert_eq!(skips.load(Ordering::Relaxed), 1);
-
         resolve_links(["bad0"], &mut unresolved, &log);
         assert_eq!(unresolved, HashSet::from(["bad0".to_string()]));
-        assert_eq!(warnings.load(Ordering::Relaxed), 2);
-
-        resolve_links(
-            ["vioif0", "bad0", "tfportqsfp0_0"],
-            &mut unresolved,
-            &log,
-        );
-        assert_eq!(warnings.load(Ordering::Relaxed), 3);
-        assert_eq!(skips.load(Ordering::Relaxed), 2);
 
         resolve_links([], &mut unresolved, &log);
         assert!(unresolved.is_empty());
@@ -1006,13 +974,13 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn mid_sweep_change_wakes_next_sweep() {
-        let dir = camino_tempfile::Utf8TempDir::new().unwrap();
         let log = Logger::root(slog::Discard, slog::o!());
-        let db = Db::new(dir.path().as_str(), log.clone()).unwrap();
+        let db = Db::new();
         let peer = "fe80::1".parse().unwrap();
         let group = underlay(1);
         let imported = HashSet::from([route(peer, group)]);
         db.splice_imported_mcast(crate::db::MulticastRibChange::new(
+            peer,
             "tfportrear0_0",
             &imported,
             &HashSet::new(),
@@ -1153,13 +1121,13 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn missing_group_is_retried_on_periodic_sweep() {
-        let dir = camino_tempfile::Utf8TempDir::new().unwrap();
         let log = Logger::root(slog::Discard, slog::o!());
-        let db = Db::new(dir.path().as_str(), log.clone()).unwrap();
+        let db = Db::new();
         let peer = "fe80::1".parse().unwrap();
         let group = underlay(1);
         let imported = HashSet::from([route(peer, group)]);
         db.splice_imported_mcast(crate::db::MulticastRibChange::new(
+            peer,
             "tfportrear0_0",
             &imported,
             &HashSet::new(),

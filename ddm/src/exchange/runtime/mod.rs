@@ -6,14 +6,14 @@
 //! Requires illumos for [`crate::sys`].
 
 use super::{ExchangeError, UpdateMode};
-use crate::db::{Route, effective_route_set};
+use crate::db::{McastUpdateSource, Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, ExchangeSession, PeerEvent, SmContext};
-use crate::{dbg, err, inf, wrn};
+use crate::{err, inf, wrn};
 use ddm_api_types::db::{RouterKind, TunnelRoute};
 use ddm_protocol::v3::{PathVector, TunnelOrigin};
 use ddm_protocol::v4::{
-    MulticastOrigin, MulticastPathVector, MulticastUpdate, PullResponse, Update,
+    MulticastPathVector, MulticastUpdate, PullResponse, Update,
 };
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
@@ -75,12 +75,21 @@ const MAX_PULL_BODY_BYTES: usize = 64 * 1024 * 1024;
     Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
-enum PullSections {
+pub(crate) enum PullSections {
     #[default]
     All,
     /// Disregard underlay and tunnel sections, as periodic resyncs repair only
     /// the multicast section.
     Multicast,
+}
+
+impl PullSections {
+    fn retain(self, pr: &mut PullResponse) {
+        if self == PullSections::Multicast {
+            pr.underlay = None;
+            pr.tunnel = None;
+        }
+    }
 }
 
 /// Query parameters for a pull at V4 and later.
@@ -101,7 +110,7 @@ struct PullScanParams {
 }
 
 /// Query selecting [`PullSections::Multicast`].
-const MULTICAST_ONLY_QUERY: &str = "sections=multicast";
+const PULL_MULTICAST_SECTIONS_QUERY: &str = "sections=multicast";
 
 #[derive(Clone)]
 pub struct HandlerContext {
@@ -162,17 +171,18 @@ pub(crate) fn withdraw_tunnel(
     push_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
-/// Fetch the peer's full snapshot at `version`, converted to the latest
+/// Fetch the peer's snapshot at `version` and convert it to the latest
 /// [`PullResponse`].
 ///
-/// At V4 and later, `multicast_only` asks the peer to leave out the underlay
-/// and tunnel sections. Earlier versions always return the full set.
+/// At V4 and later, [`PullSections::Multicast`] asks the peer to leave out
+/// the underlay and tunnel sections. Earlier versions return all supported
+/// sections.
 fn do_pull(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     version: Version,
     rt: &Arc<tokio::runtime::Handle>,
-    multicast_only: bool,
+    sections: PullSections,
 ) -> Result<PullResponse, ExchangeError> {
     let if_index = ctx.config.if_index;
     let port = ctx.config.exchange_port;
@@ -183,8 +193,8 @@ fn do_pull(
         Version::V4 => "v4",
     };
     let mut uri = format!("http://[{addr}%{if_index}]:{port}/{path}/pull");
-    if version >= Version::V4 && multicast_only {
-        uri = format!("{uri}?{MULTICAST_ONLY_QUERY}");
+    if version >= Version::V4 && sections == PullSections::Multicast {
+        uri = format!("{uri}?{PULL_MULTICAST_SECTIONS_QUERY}");
     }
 
     let body = fetch_pull_body(uri, timeout, MAX_PULL_BODY_BYTES, rt)?;
@@ -335,20 +345,25 @@ fn fetch_pull_body(
     })
 }
 
-/// Pull the peer's routes and import them all.
+/// Pull and import routes from a peer.
 ///
-/// Initial and admin pulls import all sections and redistribute on transit
-/// routers. Periodic pulls import only multicast and do not redistribute.
-/// Other peers learn these routes through their own pulls. A periodic pull
-/// asks the peer to disregard the underlay and tunnel sections, ensuring
-/// that a resync does not transfer or reprogram unmodified unicast routes.
+/// Initial and admin pulls request all sections and redistribute imports on
+/// transit routers. Periodic pulls import only multicast and do not
+/// redistribute. Other peers learn these routes through their own pulls. A
+/// periodic pull asks the peer to disregard the underlay and tunnel sections,
+/// ensuring that a resync does not transfer or reprogram unmodified unicast
+/// routes.
 ///
-/// Withdrawals are synthesized only after the complete snapshot has been
-/// imported. A failed pull imports nothing and synthesizes no withdrawals.
+/// The multicast sequence is read before sending the request. If a multicast
+/// push from the same peer was recorded at or after it, the snapshot is
+/// discarded and the pull returns [`ExchangeError::McastPullSuperseded`].
+/// Only the multicast section is discarded.
 ///
-/// `pull_seq` is recorded before reading routes from the peer. A route
-/// updated during the read stays out of stale-route removal, including a
-/// refresh after the scan.
+/// A full pull still applies its underlay and tunnel routes, meaning that
+/// we only need to repair multicast after this error occurs.
+///
+/// Otherwise the multicast snapshot replaces this peer's multicast routes in
+/// one DB operation. At V4, an absent multicast section is an empty snapshot.
 ///
 /// Underlay and tunnel withdrawals remain push-only at every version.
 pub(crate) fn pull(
@@ -358,64 +373,34 @@ pub(crate) fn pull(
     rt: Arc<tokio::runtime::Handle>,
     stop: Arc<AtomicBool>,
     mode: UpdateMode,
+    sects: PullSections,
 ) -> Result<(), ExchangeError> {
     let version = session.version;
-    let pull_seq = ctx.db.next_mcast_seq();
-
+    let started_at = ctx.db.next_mcast_seq();
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
 
-    let multicast_only = mode == UpdateMode::ImportOnly;
-    let mut pr = do_pull(ctx, &addr, version, &rt, multicast_only)?;
+    let mut pr = do_pull(ctx, &addr, version, &rt, sects)?;
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
-    if multicast_only {
-        pr.underlay = None;
-        pr.tunnel = None;
+
+    sects.retain(&mut pr);
+    if version >= Version::V4 && pr.multicast.is_none() {
+        pr.multicast = Some(HashSet::new());
     }
 
     let update = Update::announce(pr);
-    handle_update(&update, ctx, addr, mode, None, session);
-    let announced: HashSet<MulticastOrigin> = update
-        .multicast
-        .into_iter()
-        .flat_map(|multicast| multicast.announce)
-        .map(|pv| pv.origin)
-        .collect();
+    let source = McastUpdateSource::Pull {
+        nexthop: addr,
+        ifname: &ctx.config.if_name,
+        started_at,
+    };
 
-    if stop.load(Ordering::Relaxed) {
-        return Ok(());
+    if handle_update(&update, ctx, addr, mode, source, session) {
+        return Err(ExchangeError::McastPullSuperseded);
     }
-
-    let withdraw: HashSet<MulticastPathVector> = ctx
-        .db
-        .stale_mcast_by_nexthop(addr, &ctx.config.if_name, pull_seq, &announced)
-        .into_iter()
-        .map(|origin| MulticastPathVector {
-            origin,
-            path: Vec::new(),
-        })
-        .collect();
-
-    if !withdraw.is_empty() {
-        dbg!(
-            ctx.log,
-            ctx.config.if_name,
-            "pull reconcile: withdrawing {} stale multicast routes",
-            withdraw.len(),
-        );
-        handle_update(
-            &MulticastUpdate::withdraw(withdraw).into(),
-            ctx,
-            addr,
-            mode,
-            Some(pull_seq),
-            session,
-        );
-    }
-
     Ok(())
 }
 
@@ -655,7 +640,10 @@ async fn push_handler_common(
             &ctx.ctx,
             ctx.peer,
             UpdateMode::Redistribute,
-            None,
+            McastUpdateSource::Push {
+                nexthop: ctx.peer,
+                ifname: &ctx.ctx.config.if_name,
+            },
             &session,
         );
     })
@@ -674,7 +662,7 @@ async fn push_handler_common(
 async fn pull_handler_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
-    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context())?;
+    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context());
     Ok(HttpResponseOk(v2::PullResponse {
         underlay: non_empty(underlay)
             .map(|s| s.into_iter().map(v2::PathVector::from).collect()),
@@ -690,7 +678,7 @@ fn non_empty<T>(set: HashSet<T>) -> Option<HashSet<T>> {
 /// Collect underlay and tunnel routes for pull responses.
 fn collect_underlay_tunnel(
     ctx: &HandlerContext,
-) -> Result<(HashSet<PathVector>, HashSet<TunnelOrigin>), HttpError> {
+) -> (HashSet<PathVector>, HashSet<TunnelOrigin>) {
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
 
@@ -722,25 +710,17 @@ fn collect_underlay_tunnel(
         );
     }
 
-    let originated = ctx
-        .ctx
-        .db
-        .originated()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated = ctx.ctx.db.originated();
 
     underlay.extend(originated.into_iter().map(|dst| PathVector {
         destination: dst,
         path: vec![ctx.ctx.router_id.to_string()],
     }));
 
-    let originated_tunnel = ctx
-        .ctx
-        .db
-        .originated_tunnel()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    let originated_tunnel = ctx.ctx.db.originated_tunnel();
     tunnel.extend(originated_tunnel);
 
-    Ok((underlay, tunnel))
+    (underlay, tunnel)
 }
 
 #[endpoint {
@@ -750,7 +730,7 @@ fn collect_underlay_tunnel(
 async fn pull_handler_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
-    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context())?;
+    let (underlay, tunnel) = collect_underlay_tunnel(ctx.context());
     Ok(HttpResponseOk(v3::PullResponse {
         underlay: non_empty(underlay),
         tunnel: non_empty(tunnel),
@@ -769,7 +749,7 @@ async fn pull_handler_v4(
     let ctx = ctx.context();
 
     let (underlay, tunnel) = if scan.sections == PullSections::All {
-        collect_underlay_tunnel(ctx)?
+        collect_underlay_tunnel(ctx)
     } else {
         (HashSet::new(), HashSet::new())
     };
@@ -777,19 +757,21 @@ async fn pull_handler_v4(
     Ok(HttpResponseOk(PullResponse {
         underlay: non_empty(underlay),
         tunnel: non_empty(tunnel),
-        multicast: non_empty(collect_multicast(ctx)?),
+        multicast: non_empty(collect_multicast(ctx)),
     }))
 }
 
 /// Apply a peer update and queue redistribution on transit routers.
+///
+/// Returns `true` if a pulled multicast section was superseded.
 fn handle_update(
     update: &Update,
     ctx: &SmContext,
     peer_addr: Ipv6Addr,
     mode: UpdateMode,
-    imported_before: Option<u64>,
+    source: McastUpdateSource,
     session: &Arc<ExchangeSession>,
-) {
+) -> bool {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
     let underlay_change = update.underlay.as_ref().map(|underlay_update| {
@@ -835,7 +817,7 @@ fn handle_update(
             ctx.config.if_name,
             "discarding update from stale peer {peer_addr}",
         );
-        return;
+        return false;
     }
 
     let _update_guard = session.update_guard();
@@ -844,9 +826,11 @@ fn handle_update(
     let tunnel_change =
         tunnel_change.map(|change| import_tunnel_update(change, ctx));
     let mcast_applied = mcast_change.map(|(import, remove)| {
-        apply_multicast_update(ctx, import, &remove, imported_before)
+        apply_multicast_update(ctx, import, &remove, source)
     });
     drop(current_session);
+    let superseded = matches!(mcast_applied, Some(None));
+    let mcast_applied = mcast_applied.flatten();
 
     if let Some(change) = underlay_change {
         apply_underlay_update(change, ctx, session);
@@ -880,7 +864,7 @@ fn handle_update(
             redistribute = redistribute.withdrawals_only();
         }
         if redistribute.is_empty() {
-            return;
+            return superseded;
         }
 
         if let Err(e) = ctx.tx.send(Event::Peer(PeerEvent::Redistribute {
@@ -895,6 +879,8 @@ fn handle_update(
             );
         }
     }
+
+    superseded
 }
 
 struct TunnelChange {
@@ -1115,12 +1101,13 @@ fn apply_underlay_update(
 mod tests {
     use super::{
         ExchangeError, HandlerContext, MAX_PULL_BODY_BYTES,
-        MULTICAST_ONLY_QUERY, PullScanParams, PullSections, api_description,
-        decode_v4_pull, fetch_pull_body,
+        PULL_MULTICAST_SECTIONS_QUERY, PullScanParams, PullSections,
+        api_description, decode_v4_pull, fetch_pull_body, handle_update,
     };
-    use crate::db::Db;
+    use crate::db::{Db, McastUpdateSource};
     use crate::defaults::EXCHANGE_TIMEOUT;
     use crate::discovery::Version;
+    use crate::exchange::UpdateMode;
     use crate::sm::{
         Config, Event, ExchangeSession, InterfaceState, PeerEvent,
         PeerIdentity, SessionStats, SmContext,
@@ -1276,14 +1263,12 @@ mod tests {
     struct ExchangeFixture {
         ctx: SmContext,
         events: Receiver<Event>,
-        _dir: camino_tempfile::Utf8TempDir,
     }
 
     impl ExchangeFixture {
         fn new(rt: &Runtime) -> Self {
-            let dir = camino_tempfile::tempdir().unwrap();
             let log = Logger::root(Discard, o!());
-            let db = Db::new(dir.path().as_str(), log.clone()).unwrap();
+            let db = Db::new();
             let (tx, events) = channel();
             let iface = Arc::new(InterfaceState::default());
             *iface.peer_identity.lock().unwrap() = Some(PeerIdentity {
@@ -1321,7 +1306,6 @@ mod tests {
                     first_run: true,
                 },
                 events,
-                _dir: dir,
             }
         }
 
@@ -1480,7 +1464,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_push_cannot_restore_multicast_after_session_replacement() {
+    fn stale_push_cannot_restore_multicast() {
         let rt = Runtime::new().unwrap();
         let _guard = rt.enter();
         let fixture = ExchangeFixture::new(&rt);
@@ -1561,6 +1545,53 @@ mod tests {
     }
 
     #[test]
+    fn push_during_pull_supersedes_the_pulled_snapshot() {
+        let rt = Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let fixture = ExchangeFixture::new(&rt);
+        let ctx = &fixture.ctx;
+        let session = publish(ctx, Version::V4);
+        let server = fixture.server(session.clone());
+        let (announce, _) = multicast_announcement();
+        push_v4(&rt, &server, &announce);
+
+        let started_at = ctx.db.next_mcast_seq();
+        let withdraw: v4::Update = v4::MulticastUpdate::withdraw(
+            announce
+                .multicast
+                .clone()
+                .unwrap()
+                .announce
+                .into_iter()
+                .map(|pv| v4::MulticastPathVector {
+                    origin: pv.origin,
+                    path: Vec::new(),
+                })
+                .collect(),
+        )
+        .into();
+        push_v4(&rt, &server, &withdraw);
+        assert!(ctx.db.imported_mcast_links().is_empty());
+
+        let source = McastUpdateSource::Pull {
+            nexthop: PEER,
+            ifname: &ctx.config.if_name,
+            started_at,
+        };
+        assert!(handle_update(
+            &announce,
+            ctx,
+            PEER,
+            UpdateMode::ImportOnly,
+            source,
+            &session,
+        ));
+        assert!(ctx.db.imported_mcast_links().is_empty());
+
+        rt.block_on(server.teardown());
+    }
+
+    #[test]
     fn canceled_session_rejects_updates() {
         let rt = Runtime::new().unwrap();
         let _guard = rt.enter();
@@ -1578,9 +1609,9 @@ mod tests {
     }
 
     #[test]
-    fn multicast_only_query_selects_multicast_sections() {
+    fn multicast_sections_query_selects_mcast_sections() {
         let scan: PullScanParams =
-            serde_urlencoded::from_str(MULTICAST_ONLY_QUERY).unwrap();
+            serde_urlencoded::from_str(PULL_MULTICAST_SECTIONS_QUERY).unwrap();
         assert_eq!(scan.sections, PullSections::Multicast);
 
         let scan: PullScanParams = serde_urlencoded::from_str("").unwrap();

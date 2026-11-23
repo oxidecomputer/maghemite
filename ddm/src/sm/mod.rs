@@ -469,7 +469,7 @@ mod tests {
     use super::InterfaceState;
 
     #[test]
-    fn session_lock_recovers_from_a_panic_while_held() {
+    fn session_lock_recovers_from_panic() {
         let iface = InterfaceState::default();
         let res =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

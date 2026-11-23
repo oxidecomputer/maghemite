@@ -17,7 +17,6 @@ use tokio::sync::watch;
 struct ImportedEntry {
     route: MulticastRoute,
     ifname: String,
-    seq: u64,
 }
 
 /// A type wrapper over the set of imported multicast routes, keyed by origin
@@ -27,7 +26,7 @@ struct ImportedEntry {
 /// origin's routes are sorted by nexthop and then by interface, with the
 /// lowest-nexthop route first.
 ///
-/// Per-peer work (e.g., stale-route scans, expiry) visits each origin just
+/// Per-peer work (e.g., pull replacement, expiry) visits each origin just
 /// once.
 // Note: We use a sorted `Vec` here over a `BTreeMap` because an origin rarely
 // has more than a few nexthops.
@@ -114,29 +113,6 @@ impl ImportedMcast {
             })
             .map(|entry| &entry.route)
     }
-
-    /// Return origins imported via `nexthop` on `ifname` before a `seq`
-    /// that are not contained in `announced`.
-    pub(in crate::db) fn stale(
-        &self,
-        nexthop: Ipv6Addr,
-        ifname: &str,
-        seq: u64,
-        announced: &HashSet<MulticastOrigin>,
-    ) -> Vec<MulticastOrigin> {
-        self.0
-            .values()
-            .filter_map(|nexthops| {
-                find_link(nexthops, nexthop, ifname)
-                    .ok()
-                    .map(|i| &nexthops[i])
-            })
-            .filter(|entry| {
-                entry.seq < seq && !announced.contains(&entry.route.origin)
-            })
-            .map(|entry| entry.route.origin.clone())
-            .collect()
-    }
 }
 
 /// The effect of [`ImportedMcastEdit::insert`] on the imported set.
@@ -161,9 +137,9 @@ pub(in crate::db) struct ImportedMcastEdit<'a> {
 }
 
 impl ImportedMcastEdit<'_> {
-    /// Insert or refresh a `route` at `seq` number, reporting whether it added
-    /// a new `(origin, nexthop, ifname)` entry, changed an existing entry's
-    /// path or metric, or left it unchanged.
+    /// Insert or refresh a `route`, reporting whether it added a new
+    /// `(origin, nexthop, ifname)` entry, modified an existing entry's path or
+    /// metric, or left it completely unchanged.
     ///
     /// Only a new entry wakes the sweep, because multicast membership depends
     /// only on which `(nexthop, ifname)` links import a group.
@@ -171,13 +147,11 @@ impl ImportedMcastEdit<'_> {
         &mut self,
         route: &MulticastRoute,
         ifname: &str,
-        seq: u64,
     ) -> Inserted {
         let nexthops = self.imported.0.entry(route.origin.clone()).or_default();
         let inserted = match find_link(nexthops, route.nexthop, ifname) {
             Ok(idx) => {
                 let entry = &mut nexthops[idx];
-                entry.seq = seq;
                 if entry.route.path != route.path
                     || entry.route.origin.metric() != route.origin.metric()
                 {
@@ -195,7 +169,6 @@ impl ImportedMcastEdit<'_> {
                     ImportedEntry {
                         route: route.clone(),
                         ifname: ifname.to_string(),
-                        seq,
                     },
                 );
                 Inserted::New
@@ -209,13 +182,9 @@ impl ImportedMcastEdit<'_> {
         &mut self,
         route: &MulticastRoute,
         ifname: &str,
-        imported_before: Option<u64>,
     ) -> Option<MulticastRoute> {
         let nexthops = self.imported.0.get_mut(&route.origin)?;
         let idx = find_link(nexthops, route.nexthop, ifname).ok()?;
-        if imported_before.is_some_and(|seq| nexthops[idx].seq >= seq) {
-            return None;
-        }
         let entry = nexthops.remove(idx);
         if nexthops.is_empty() {
             self.imported.0.remove(&route.origin);
@@ -229,9 +198,20 @@ impl ImportedMcastEdit<'_> {
         nexthop: Ipv6Addr,
         ifname: &str,
     ) -> HashSet<MulticastRoute> {
+        self.extract_link_if(nexthop, ifname, |_| true)
+    }
+
+    pub(in crate::db) fn extract_link_if(
+        &mut self,
+        nexthop: Ipv6Addr,
+        ifname: &str,
+        mut should_extract: impl FnMut(&MulticastOrigin) -> bool,
+    ) -> HashSet<MulticastRoute> {
         let mut extracted = HashSet::new();
-        self.imported.0.retain(|_, nexthops| {
-            if let Ok(idx) = find_link(nexthops, nexthop, ifname) {
+        self.imported.0.retain(|origin, nexthops| {
+            if let Ok(idx) = find_link(nexthops, nexthop, ifname)
+                && should_extract(origin)
+            {
                 extracted.insert(nexthops.remove(idx).route);
             }
             !nexthops.is_empty()

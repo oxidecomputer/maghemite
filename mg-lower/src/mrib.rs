@@ -266,12 +266,9 @@ mod tests {
             .unwrap()
             .push(origin(&removed));
 
-        db.add_static_mcast_routes(std::slice::from_ref(&removed))
-            .expect("add initial route");
-        db.add_static_mcast_routes(std::slice::from_ref(&added))
-            .expect("add replacement route");
-        db.remove_static_mcast_routes(&[removed.key])
-            .expect("remove initial route");
+        db.add_static_mcast_routes(std::slice::from_ref(&removed));
+        db.add_static_mcast_routes(std::slice::from_ref(&added));
+        db.remove_static_mcast_routes(&[removed.key]);
         rx.try_recv().expect("queued change notification");
 
         sync_pending(&db, &ddm, &log, &handle, &rx).expect("sync burst");
@@ -282,8 +279,7 @@ mod tests {
             vec![origin(&added)]
         );
 
-        db.remove_static_mcast_routes(&[added.key])
-            .expect("remove remaining route");
+        db.remove_static_mcast_routes(&[added.key]);
         rx.try_recv().expect("subsequent change notification");
 
         sync_pending(&db, &ddm, &log, &handle, &rx)
@@ -299,8 +295,7 @@ mod tests {
         let log = discard_logger();
         let db = get_test_db("mrib_sync_add", log.clone()).expect("db");
         let route = asm_route(225, 1, 1, 1);
-        db.add_static_mcast_routes(std::slice::from_ref(&route))
-            .expect("add route");
+        db.add_static_mcast_routes(std::slice::from_ref(&route));
 
         let ddm = TestDdm::default();
         sync(&db, &ddm, &log, &handle).expect("sync");
@@ -316,8 +311,7 @@ mod tests {
         let db = get_test_db("mrib_sync_v6", log.clone()).expect("db");
         let v4 = asm_route(225, 1, 1, 1);
         let v6 = asm_route_v6(1);
-        db.add_static_mcast_routes(&[v4.clone(), v6.clone()])
-            .expect("add routes");
+        db.add_static_mcast_routes(&[v4.clone(), v6.clone()]);
 
         let ddm = TestDdm::default();
         sync(&db, &ddm, &log, &handle).expect("sync");
@@ -352,8 +346,7 @@ mod tests {
         let log = discard_logger();
         let db = get_test_db("mrib_sync_noop", log.clone()).expect("db");
         let route = asm_route(225, 5, 5, 5);
-        db.add_static_mcast_routes(std::slice::from_ref(&route))
-            .expect("add route");
+        db.add_static_mcast_routes(std::slice::from_ref(&route));
 
         let ddm = TestDdm::default();
         ddm.multicast_originated
@@ -377,8 +370,7 @@ mod tests {
         let log = discard_logger();
         let db = get_test_db("mrib_sync_mixed", log.clone()).expect("db");
         let keep = asm_route(225, 1, 1, 1);
-        db.add_static_mcast_routes(std::slice::from_ref(&keep))
-            .expect("add route");
+        db.add_static_mcast_routes(std::slice::from_ref(&keep));
 
         let ddm = TestDdm::default();
         let stale = asm_route(225, 2, 2, 2);
@@ -400,14 +392,12 @@ mod tests {
         let db = get_test_db("mrib_sync_withdraw", log.clone()).expect("db");
         let removed = asm_route(225, 1, 1, 1);
         let other = asm_route(225, 2, 2, 2);
-        db.add_static_mcast_routes(&[removed.clone(), other.clone()])
-            .expect("add routes");
+        db.add_static_mcast_routes(&[removed.clone(), other.clone()]);
 
         let ddm = TestDdm::default();
         sync(&db, &ddm, &log, &handle).expect("sync");
 
-        db.remove_static_mcast_routes(&[removed.key])
-            .expect("remove route");
+        db.remove_static_mcast_routes(&[removed.key]);
         sync(&db, &ddm, &log, &handle).expect("sync");
 
         let originated = ddm.multicast_originated.lock().unwrap();
