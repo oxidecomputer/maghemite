@@ -1085,7 +1085,7 @@ impl JsonSchema for MribQuery {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 mod arbitrary_impls {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 

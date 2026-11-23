@@ -11,8 +11,15 @@
 //!
 //! ## Selection
 //!
-//! `(*,G)` routes don't need to check sources and are always selected.
-//! Source-specific `(S,G)` routes are selected by source reachability:
+//! `(*,G)` goes directly into `mrib_loc` because there's no source to resolve.
+//! The multicast lower half advertises the selected group via DDM for underlay
+//! replication.
+//!
+//! `(S,G)` routes use the longest prefix in the unicast loc-rib that covers
+//! S and has a nonempty path set (default included). A shutdown-only match
+//! still counts because unicast [bestpath] continues to select those paths.
+//!
+//! [bestpath]: crate::bestpath::bestpaths
 //!
 //! ```text
 //! mrib_in: configured (G,VNI) and (S,G,VNI) routes
@@ -22,7 +29,7 @@
 //!   +-- (S,G) --> group keys by source S
 //!   |               for each chunk of up to 64 keys:
 //!   |                 hold the IP family's loc-rib lock
-//!   |                 longest match for S has an active path?
+//!   |                 covering prefix for S with a nonempty path set?
 //!   |                   yes: mrib_in -> mrib_loc
 //!   |                   no:  mrib_loc -= keys
 //!   |
@@ -33,17 +40,27 @@
 //! entries that receive that selection decision. No RPF neighbor or incoming
 //! interface is derived.
 //!
+//! ## Updates and Notifications
+//!
+//! Static adds and removes update `mrib_in` and the source index one batch at
+//! a time. An add selects its `(*,G)` routes in the same step. `(S,G)`
+//! selection after an add rereads `mrib_in` and only selects keys still
+//! present there. Readers can see a partly updated `mrib_loc` during `(S,G)`
+//! selection.
+//!
+//! Concurrent operations can notify in a different order from their updates.
+//! Notifications list changed keys. Watchers should reread the current tables.
+//!
 //! ## Lock Ordering
 //!
 //! Acquire multiple locks in this order:
 //!
-//! 1. `Db::static_mcast_store` (static add, remove, load, and list)
-//! 2. `Db::rib4_in` or `Db::rib6_in`, when a unicast path also modifies the
+//! 1. `Db::rib4_in` or `Db::rib6_in`, when a unicast path also modifies the
 //!    loc-rib
-//! 3. `Db::rib4_loc` or `Db::rib6_loc`, held across an `(S,G)` source check
+//! 2. `Db::rib4_loc` or `Db::rib6_loc`, held across an `(S,G)` source check
 //!    and its `mrib_loc` update
-//! 4. `Mrib::state` (`mrib_in`, `mrib_loc`, and the source index)
-//! 5. `Mrib::watchers`, taken after `Mrib::state` is released
+//! 3. `Mrib::state` (`mrib_in`, `mrib_loc`, and the source index)
+//! 4. `Mrib::watchers`, taken after `Mrib::state` is released
 //!
 //! Unicast paths release every RIB lock before notifying `Db::watchers` or
 //! revalidating the MRIB.
@@ -65,8 +82,6 @@ use crate::types::{
     MribChangeNotification, MulticastRoute, MulticastRouteKey,
     MulticastSourceProtocol, RouteOriginFilter,
 };
-
-pub(crate) mod store;
 
 /// Log unit for MRIB operations.
 const UNIT_MRIB: &str = "mrib";
@@ -107,16 +122,15 @@ impl MribTableExt for MribTable {
 /// In-memory multicast routing tables and the watchers notified of their
 /// changes. This follows the unicast RIB pattern.
 ///
-/// Persistence is handled by [`crate::Db`].
-///
 /// The MRIB maintains two tables:
 ///
 /// - `mrib_in`: All configured multicast routes (currently static only).
 /// - `mrib_loc`: Routes that passed selection.
-///   - A `(*,G)` wildcard route is always selected.
-///   - An `(S,G)` route is selected when the longest unicast match for
-///     source S has at least one path not marked for shutdown. A default
-///     route is accepted.
+///   - A `(*,G)` wildcard route passes selection directly.
+///   - An `(S,G)` route is selected when the unicast loc-rib has a prefix
+///     that covers source S and has a nonempty path set. The lookup stops at
+///     the longest prefix like this (default included), even if all its paths
+///     are marked for shutdown.
 ///
 ///     This is a next-hop reachability rule in the vein of
 ///     [RFC 4271 §9.1.2.1][RFC 4271], and not an RPF check. We do not currently
@@ -128,7 +142,7 @@ impl MribTableExt for MribTable {
 /// In that case, `mrib_in` will need to track each origin's contribution and
 /// keep the rest when an origin is withdrawn. `mrib_loc` will still hold at
 /// most one selected route per key. Origin tracking does not change the route
-/// key or the persisted static key encoding.
+/// key.
 ///
 /// [RFC 4271]: https://www.rfc-editor.org/rfc/rfc4271.html#section-9.1.2.1
 #[derive(Clone)]
@@ -192,9 +206,6 @@ fn unindex(
 
 /// Insert or refresh `route` in `mrib_loc`.
 ///
-/// An existing entry is replaced only if it differs from `route` in a field
-/// other than its timestamps.
-///
 /// Returns `true` if `mrib_loc` was modified.
 fn install(mrib_loc: &mut MribTable, route: &MulticastRoute) -> bool {
     match mrib_loc.entry(route.key) {
@@ -239,9 +250,8 @@ impl Mrib {
 
     /// Notify all watchers of MRIB changes.
     ///
-    /// [`Self::add_route`], [`Self::remove_routes`],
-    /// [`Self::select_any_source`], and [`Self::set_source_reachable`] do not
-    /// trigger notifications.
+    /// [`Self::add_routes`], [`Self::remove_routes`], and
+    /// [`Self::set_source_reachable`] do not trigger notifications.
     ///
     /// [`crate::Db`] collects the keys a logical operation modifies
     /// and calls this once with the entire set.
@@ -326,21 +336,6 @@ impl Mrib {
         lock!(self.state).mrib_loc.get(key).cloned()
     }
 
-    /// Select a `(*,G)` route from `mrib_in` into `mrib_loc`.
-    ///
-    /// The route is read from `mrib_in` and installed under one table lock.
-    ///
-    /// Returns `true` if `mrib_loc` was modified.
-    pub(crate) fn select_any_source(&self, key: &MulticastRouteKey) -> bool {
-        let mut state = lock!(self.state);
-        let MribState {
-            mrib_in, mrib_loc, ..
-        } = &mut *state;
-        mrib_in
-            .get(key)
-            .is_some_and(|route| install(mrib_loc, route))
-    }
-
     /// Select or withdraw `(S,G)` routes according to their shared source's
     /// reachability.
     ///
@@ -373,40 +368,54 @@ impl Mrib {
         changed
     }
 
-    /// Add or update a multicast route in `mrib_in`.
+    /// Add or update a batch of multicast routes in `mrib_in`.
     ///
-    /// Upserts compare every field except timestamps.
+    /// The same state lock covers the whole batch here and in
+    /// [`Self::remove_routes`].
     ///
-    /// An idempotent upsert leaves the entry untouched. A non-idempotent
-    /// upsert keeps the existing [`MulticastRoute::created`] and takes
-    /// [`MulticastRoute::updated`] from `route`. By this point, the caller
-    /// has already merged both timestamps against the persisted entry.
+    /// An upsert of an unchanged route leaves the entry untouched. Otherwise,
+    /// the upsert replaces the existing entry with the new route. If `routes`
+    /// has a key more than once, the last entry wins.
     ///
-    /// The route is added to `mrib_in` only. The caller (`Db`) is responsible
-    /// for selecting the route into `mrib_loc`.
+    /// With no source to resolve, `(*,G)` routes are also selected (directly) into
+    /// `mrib_loc` under the same lock. The caller (`Db`) is responsible for
+    /// selecting `(S,G)` routes.
     ///
-    /// Returns `true` if `mrib_in` was modified.
-    pub(crate) fn add_route(&self, route: MulticastRoute) -> bool {
+    /// Returns the keys whose `mrib_in` or `mrib_loc` entry was modified.
+    pub(crate) fn add_routes(
+        &self,
+        routes: impl IntoIterator<Item = MulticastRoute>,
+    ) -> BTreeSet<MulticastRouteKey> {
         let mut state = lock!(self.state);
         let MribState {
-            mrib_in, sources, ..
+            mrib_in,
+            mrib_loc,
+            sources,
         } = &mut *state;
-        match mrib_in.entry(route.key) {
-            Entry::Occupied(mut e) => {
-                let changed = *e.get() != route;
-                if changed {
-                    e.insert(route);
+        let mut changed = BTreeSet::new();
+        for route in routes {
+            let key = route.key;
+            let entry = match mrib_in.entry(key) {
+                Entry::Occupied(mut e) => {
+                    if *e.get() != route {
+                        e.insert(route);
+                        changed.insert(key);
+                    }
+                    e.into_mut()
                 }
-                changed
-            }
-            Entry::Vacant(e) => {
-                if let Some(source) = route.key.source() {
-                    sources.entry(source).or_default().insert(route.key);
+                Entry::Vacant(e) => {
+                    if let Some(source) = key.source() {
+                        sources.entry(source).or_default().insert(key);
+                    }
+                    changed.insert(key);
+                    e.insert(route)
                 }
-                e.insert(route);
-                true
+            };
+            if key.source().is_none() && install(mrib_loc, entry) {
+                changed.insert(key);
             }
         }
+        changed
     }
 
     /// Remove multicast routes from both `mrib_in` and `mrib_loc`.
@@ -515,7 +524,7 @@ mod tests {
         );
 
         // The caller batches notifications after updating the tables.
-        assert!(mrib.add_route(route));
+        assert!(mrib.add_routes([route]).contains(&key));
         assert!(mrib.remove_routes(&[key]).contains(&key));
         assert!(rx.try_recv().is_err());
 
@@ -592,7 +601,7 @@ mod tests {
             MulticastSourceProtocol::Static,
         );
 
-        mrib.add_route(route);
+        mrib.add_routes([route]);
 
         let source = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 1))
             .expect("valid unicast");
@@ -600,23 +609,18 @@ mod tests {
             .expect("valid mcast");
         let key_sg =
             MulticastRouteKey::source_specific_v4(source, group_v4, vni());
-        mrib.add_route(MulticastRoute::new(
+        mrib.add_routes([MulticastRoute::new(
             key_sg,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        ));
-
-        assert_eq!(mrib.full_mrib(None).len(), 2);
-        assert_eq!(mrib.loc_mrib(None).len(), 0);
-        assert!(mrib.get_route(&key).is_some());
-        assert!(mrib.get_selected_route(&key).is_none());
-
-        assert!(mrib.select_any_source(&key));
+        )]);
 
         assert_eq!(mrib.full_mrib(None).len(), 2);
         assert_eq!(mrib.loc_mrib(None).len(), 1);
         assert!(mrib.get_route(&key).is_some());
         assert!(mrib.get_selected_route(&key).is_some());
+        assert!(mrib.get_route(&key_sg).is_some());
+        assert!(mrib.get_selected_route(&key_sg).is_none());
 
         assert!(mrib.remove_routes(&[key]).contains(&key));
         assert_eq!(mrib.full_mrib(None).len(), 1);
@@ -646,11 +650,11 @@ mod tests {
                 })
                 .collect();
         for key in &keys {
-            mrib.add_route(MulticastRoute::new(
+            mrib.add_routes([MulticastRoute::new(
                 *key,
                 underlay_group(),
                 MulticastSourceProtocol::Static,
-            ));
+            )]);
         }
         let any_source = MulticastRouteKey::any_source(
             MulticastAddr::new("225.1.1.1".parse().unwrap())
@@ -658,11 +662,11 @@ mod tests {
             vni(),
         )
         .expect("ASM group");
-        mrib.add_route(MulticastRoute::new(
+        mrib.add_routes([MulticastRoute::new(
             any_source,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        ));
+        )]);
 
         assert_eq!(mrib.source_specific_keys(None).len(), 2);
 
@@ -699,11 +703,11 @@ mod tests {
         .expect("valid mcast");
         let v6_key =
             MulticastRouteKey::source_specific_v6(v6_source, v6_group, vni());
-        mrib.add_route(MulticastRoute::new(
+        mrib.add_routes([MulticastRoute::new(
             v6_key,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        ));
+        )]);
 
         let mixed: BTreeSet<IpNet> = BTreeSet::from([
             "10.1.0.0/16".parse().unwrap(),
@@ -739,7 +743,7 @@ mod tests {
             MulticastSourceProtocol::Static,
         );
 
-        mrib.add_route(route);
+        mrib.add_routes([route]);
         assert!(mrib.get_selected_route(&key).is_none());
 
         mrib.set_source_reachable(&[key], true);
@@ -774,7 +778,7 @@ mod tests {
             MulticastSourceProtocol::Static,
         );
 
-        mrib.add_route(route);
+        mrib.add_routes([route]);
         assert!(mrib.get_route(&key).is_some());
 
         // IPv6 source-specific multicast route (S,G)
@@ -792,14 +796,14 @@ mod tests {
             MulticastSourceProtocol::Static,
         );
 
-        mrib.add_route(route_sg);
+        mrib.add_routes([route_sg]);
         assert_eq!(mrib.full_mrib(None).len(), 2);
 
         let v6_routes = mrib.full_mrib(Some(AddressFamily::Ipv6));
         assert_eq!(v6_routes.len(), 2);
         let v4_routes = mrib.full_mrib(Some(AddressFamily::Ipv4));
         assert!(v4_routes.is_empty());
-        assert!(mrib.loc_mrib(None).is_empty());
+        assert_eq!(mrib.loc_mrib(None).len(), 1);
 
         let v4_key = MulticastRouteKey::any_source(
             MulticastAddr::new("225.1.1.1".parse().unwrap())
@@ -807,19 +811,17 @@ mod tests {
             vni(),
         )
         .expect("ASM group");
-        mrib.add_route(MulticastRoute::new(
+        mrib.add_routes([MulticastRoute::new(
             v4_key,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        ));
+        )]);
         assert_eq!(mrib.full_mrib(None).len(), 3);
         assert_eq!(mrib.full_mrib(Some(AddressFamily::Ipv6)).len(), 2);
         let v4_routes = mrib.full_mrib(Some(AddressFamily::Ipv4));
         assert_eq!(v4_routes.len(), 1);
         assert!(v4_routes.contains_key(&v4_key));
 
-        assert!(mrib.select_any_source(&key));
-        assert!(mrib.select_any_source(&v4_key));
         assert_eq!(mrib.loc_mrib(None).len(), 2);
         let v6_selected = mrib.loc_mrib(Some(AddressFamily::Ipv6));
         assert_eq!(v6_selected.len(), 1);

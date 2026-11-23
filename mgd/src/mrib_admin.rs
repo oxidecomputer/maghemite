@@ -15,7 +15,6 @@ use mg_api_types::mrib::{
 use rdb::{Db, MribTableExt};
 
 use crate::admin::HandlerContext;
-use crate::error::Error;
 
 /// Which MRIB table a query targets: imported routes (`mrib_in`) or
 /// selected routes (`mrib_loc`).
@@ -76,9 +75,7 @@ pub async fn static_add_mcast_route(
             )
         })
         .collect();
-    ctx.db
-        .add_static_mcast_routes(&routes)
-        .map_err(Error::from)?;
+    ctx.db.add_static_mcast_routes(&routes);
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -88,8 +85,7 @@ pub async fn static_remove_mcast_route(
 ) -> Result<HttpResponseDeleted, HttpError> {
     let ctx = rqctx.context();
     ctx.db
-        .remove_static_mcast_routes(&request.into_inner().keys)
-        .map_err(Error::from)?;
+        .remove_static_mcast_routes(&request.into_inner().keys);
     Ok(HttpResponseDeleted())
 }
 
@@ -97,8 +93,7 @@ pub async fn static_list_mcast_routes(
     rqctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let ctx = rqctx.context();
-    let routes = ctx.db.get_static_mcast_routes().map_err(Error::from)?;
-    Ok(HttpResponseOk(routes))
+    Ok(HttpResponseOk(ctx.db.get_static_mcast_routes()))
 }
 
 #[cfg(test)]
@@ -136,8 +131,7 @@ mod tests {
             key,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        )])
-        .expect("add route");
+        )]);
         key
     }
 
@@ -272,8 +266,7 @@ mod tests {
             sg_key,
             underlay_group(),
             MulticastSourceProtocol::Static,
-        )])
-        .expect("add route");
+        )]);
 
         for table in [MribTable::Imported, MribTable::Selected] {
             assert_eq!(
