@@ -378,8 +378,25 @@ fn termination_handler(
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
             let imported = db.imported_underlay();
-            let routes: Vec<Route> =
-                imported.iter().map(|x| (x.clone()).into()).collect();
+            let routes: Vec<Route> = imported
+                .iter()
+                .map(|x| {
+                    // Route removal does not use the source address.
+                    let mut r = Route::new(
+                        x.destination.addr().into(),
+                        x.destination.width(),
+                        x.nexthop.into(),
+                        Ipv6Addr::UNSPECIFIED,
+                    );
+                    // An illumos address object is named <interface>/<tag>.
+                    r.ifname = x
+                        .addrobj_name
+                        .split_once('/')
+                        .map_or(x.addrobj_name.as_str(), |(ifname, _)| ifname)
+                        .to_string();
+                    r
+                })
+                .collect();
             ddm::sys::remove_underlay_routes(
                 &log,
                 "shutdown-all",

@@ -709,8 +709,8 @@ fn handle_tunnel_update(
 
 fn handle_standard_update(
     kind: PrefixKind,
-    announce: &HashSet<PathVector>,
-    withdraw: &HashSet<PathVector>,
+    announce: &HashSet<v3::PathVector>,
+    withdraw: &HashSet<v3::PathVector>,
     ctx: &SmContext,
     peer: &PeerIdentity,
 ) {
