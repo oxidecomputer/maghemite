@@ -80,8 +80,9 @@ use uuid::Uuid;
 
 use crate::log::rdb_log;
 use crate::types::{
-    MribChangeNotification, MulticastRoute, MulticastRouteKey,
-    MulticastSourceProtocol, RouteOriginFilter, StaticMulticastGroupKey,
+    MribChangeNotification, MulticastGroupKey, MulticastRoute,
+    MulticastRouteKey, MulticastSourceProtocol, RouteOriginFilter,
+    StaticMulticastGroupKey,
 };
 
 /// Log unit for MRIB operations.
@@ -176,6 +177,24 @@ struct MribState {
     /// A unicast prefix mutation finds the routes it affects via a range
     /// query over the prefix's addresses, instead of scanning every route.
     sources: BTreeMap<IpAddr, BTreeSet<MulticastRouteKey>>,
+
+    tombstones: Option<MribTombstones>,
+}
+
+/// MRIB deletes that still need to be reconciled with DDM.
+///
+/// Deletes are recorded even when the MRIB has no matching route. After an
+/// `mgd` restart, `ddmd` can still have the old advertisement.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MribTombstones {
+    pub keys: HashSet<MulticastRouteKey>,
+    pub groups: HashSet<MulticastGroupKey>,
+}
+
+impl MribTombstones {
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty() && self.groups.is_empty()
+    }
 }
 
 struct MribWatcher {
@@ -316,6 +335,10 @@ impl Mrib {
         Self::filter_routes(&state.mrib_in, af)
     }
 
+    pub(crate) fn mrib_in_keys(&self) -> Vec<MulticastRouteKey> {
+        lock!(self.state).mrib_in.keys().copied().collect()
+    }
+
     /// Get the selected MRIB table, optionally filtered by address family.
     pub(crate) fn loc_mrib(&self, af: Option<AddressFamily>) -> MribTable {
         let state = lock!(self.state);
@@ -417,6 +440,7 @@ impl Mrib {
             mrib_in,
             mrib_loc,
             sources,
+            ..
         } = &mut *state;
         let mut changed = BTreeSet::new();
         for route in routes {
@@ -451,7 +475,11 @@ impl Mrib {
         &self,
         keys: &[MulticastRouteKey],
     ) -> BTreeSet<MulticastRouteKey> {
-        lock!(self.state).remove_keys(keys)
+        let mut state = lock!(self.state);
+        if let Some(tombstones) = state.tombstones.as_mut() {
+            tombstones.keys.extend(keys.iter().copied());
+        }
+        state.remove_keys(keys)
     }
 
     /// Remove the `keys` that were installed under `group_id`.
@@ -463,6 +491,9 @@ impl Mrib {
         keys: &[MulticastRouteKey],
     ) -> BTreeSet<MulticastRouteKey> {
         let mut state = lock!(self.state);
+        if let Some(tombstones) = state.tombstones.as_mut() {
+            tombstones.keys.extend(keys.iter().copied());
+        }
         let keys: Vec<MulticastRouteKey> = keys
             .iter()
             .filter(|key| {
@@ -498,7 +529,33 @@ impl Mrib {
                 groups.contains(&group).then_some(*key)
             })
             .collect();
+        if let Some(tombstones) = state.tombstones.as_mut() {
+            tombstones.groups.extend(groups.iter().map(|g| g.key));
+        }
         state.remove_keys(&keys)
+    }
+
+    pub(crate) fn track_tombstones(&self) {
+        lock!(self.state).tombstones.get_or_insert_default();
+    }
+
+    pub(crate) fn tracks_tombstones(&self) -> bool {
+        lock!(self.state).tombstones.is_some()
+    }
+
+    pub(crate) fn take_tombstones(&self) -> MribTombstones {
+        lock!(self.state)
+            .tombstones
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn requeue_tombstones(&self, batch: MribTombstones) {
+        if let Some(pending) = lock!(self.state).tombstones.as_mut() {
+            pending.keys.extend(batch.keys);
+            pending.groups.extend(batch.groups);
+        }
     }
 
     /// Group the `(S,G)` keys in `mrib_in` by source.

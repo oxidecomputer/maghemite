@@ -12,7 +12,7 @@
 use crate::bestpath::bestpaths;
 use crate::error::Error;
 use crate::log::rdb_log;
-use crate::mrib::{Mrib, MribTable};
+use crate::mrib::{Mrib, MribTable, MribTombstones};
 use crate::types::*;
 use chrono::Utc;
 use mg_api_types::bfd::BfdPeerConfig;
@@ -1641,7 +1641,7 @@ impl Db {
 
     /// Remove static multicast routes from both `mrib_in` and `mrib_loc`.
     pub fn remove_static_mcast_routes(&self, keys: &[MulticastRouteKey]) {
-        self.notify_mrib(self.mrib.remove_routes(keys));
+        self.notify_mrib_removal(self.mrib.remove_routes(keys));
     }
 
     /// Remove static multicast routes installed under `group_id`.
@@ -1650,7 +1650,7 @@ impl Db {
         group_id: uuid::Uuid,
         keys: &[MulticastRouteKey],
     ) {
-        self.notify_mrib(self.mrib.remove_group_routes(group_id, keys));
+        self.notify_mrib_removal(self.mrib.remove_group_routes(group_id, keys));
     }
 
     /// Remove every static route of each group installed under its group ID.
@@ -1658,7 +1658,38 @@ impl Db {
         &self,
         groups: &[StaticMulticastGroupKey],
     ) {
-        self.notify_mrib(self.mrib.remove_groups(groups));
+        self.notify_mrib_removal(self.mrib.remove_groups(groups));
+    }
+
+    fn notify_mrib_removal(&self, removed: BTreeSet<MulticastRouteKey>) {
+        if removed.is_empty() && self.mrib.tracks_tombstones() {
+            self.mrib.notify(MribChangeNotification::default());
+        } else {
+            self.notify_mrib(removed);
+        }
+    }
+
+    /// Start tracking tombstones for static multicast removals.
+    ///
+    /// Removals before this call record no tombstones. Once tracking is
+    /// enabled, removals that match no routes also notify MRIB watchers.
+    pub fn track_mcast_tombstones(&self) {
+        self.mrib.track_tombstones();
+    }
+
+    /// Take the pending multicast tombstones.
+    ///
+    /// Returns an empty set if tracking is off.
+    pub fn take_mcast_tombstones(&self) -> MribTombstones {
+        self.mrib.take_tombstones()
+    }
+
+    /// Merge taken tombstones back into the pending set.
+    ///
+    /// A failed sync pass requeues its batch here. Anything recorded since the
+    /// take is kept.
+    pub fn requeue_mcast_tombstones(&self, batch: MribTombstones) {
+        self.mrib.requeue_tombstones(batch);
     }
 
     /// Get all static multicast routes from `mrib_in`.
@@ -1683,6 +1714,12 @@ impl Db {
     /// `None` includes both address families.
     pub fn full_mrib(&self, af: Option<AddressFamily>) -> MribTable {
         self.mrib.full_mrib(af)
+    }
+
+    /// Get the keys of every route in `mrib_in`, whether they
+    /// are selected or not.
+    pub fn mrib_in_keys(&self) -> Vec<MulticastRouteKey> {
+        self.mrib.mrib_in_keys()
     }
 
     /// Get the selected MRIB table, optionally filtered by address family.
@@ -1786,6 +1823,7 @@ mod test {
     use mg_api_types::rdb::rib::AddressFamily;
     use mg_common::log::*;
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+    use std::collections::HashSet;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
     use std::sync::{Barrier, mpsc};
@@ -2544,6 +2582,7 @@ mod test {
         let log = init_file_logger("mrib_remove_groups.log");
         let db = crate::test::get_test_db("mrib_remove_groups", log)
             .expect("create db");
+        db.track_mcast_tombstones();
 
         let group = MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, 1))
             .expect("valid mcast");
@@ -2622,9 +2661,14 @@ mod test {
             assert!(db.get_mcast_route(key).is_some(), "{key} removed");
         }
 
+        let tombstoned: HashSet<_> = groups.iter().map(|g| g.key).collect();
+        assert_eq!(db.take_mcast_tombstones().groups, tombstoned);
+
         db.remove_static_mcast_groups(&groups);
+        assert!(rx.try_recv().unwrap().changed.is_empty());
         assert!(rx.try_recv().is_err());
         assert_eq!(db.get_static_mcast_routes().len(), kept.len());
+        assert_eq!(db.take_mcast_tombstones().groups, tombstoned);
     }
 
     #[test]
@@ -2632,6 +2676,7 @@ mod test {
         let log = init_file_logger("mrib_remove_group_routes.log");
         let db = crate::test::get_test_db("mrib_remove_group_routes", log)
             .expect("create db");
+        db.track_mcast_tombstones();
         let key = MulticastRouteKey::any_source(
             MulticastAddr::new("225.7.7.7".parse().unwrap())
                 .expect("valid mcast"),
@@ -2648,9 +2693,40 @@ mod test {
 
         db.remove_group_static_mcast_routes(uuid::Uuid::new_v4(), &[key]);
         assert!(db.get_mcast_route(&key).is_some());
+        assert_eq!(db.take_mcast_tombstones().keys, HashSet::from([key]));
 
         db.remove_group_static_mcast_routes(group_id, &[key]);
         assert!(db.get_mcast_route(&key).is_none());
+        assert_eq!(db.take_mcast_tombstones().keys, HashSet::from([key]));
+    }
+
+    #[test]
+    fn test_mrib_requeue_merges_tombstones() {
+        let log = init_file_logger("mrib_requeue_tombstones.log");
+        let db = crate::test::get_test_db("mrib_requeue_tombstones", log)
+            .expect("create db");
+        let key = |octet| {
+            MulticastRouteKey::any_source(
+                MulticastAddr::new(Ipv4Addr::new(225, 8, 8, octet).into())
+                    .expect("valid mcast"),
+                vni(),
+            )
+            .expect("ASM group")
+        };
+
+        db.remove_static_mcast_routes(&[key(1)]);
+        assert!(db.take_mcast_tombstones().is_empty());
+
+        db.track_mcast_tombstones();
+        db.remove_static_mcast_routes(&[key(1)]);
+        let batch = db.take_mcast_tombstones();
+        db.remove_static_mcast_routes(&[key(2)]);
+        db.requeue_mcast_tombstones(batch);
+
+        assert_eq!(
+            db.take_mcast_tombstones().keys,
+            HashSet::from([key(1), key(2)])
+        );
     }
 
     #[test]

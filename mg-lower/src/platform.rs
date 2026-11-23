@@ -502,6 +502,7 @@ pub(crate) mod test {
 
     use super::*;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::{collections::HashMap, net::IpAddr};
 
     // helper macros for forming dropshot responses
@@ -765,12 +766,22 @@ pub(crate) mod test {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum MulticastCall {
+        Advertise(Vec<MulticastOrigin>),
+        Withdraw(Vec<MulticastOrigin>),
+    }
+
     /// A stateful mock ddm implementation. Carries just enough state to be
     /// useful for tests.
     pub(crate) struct TestDdm {
         pub(crate) tunnel_originated: Mutex<Vec<TunnelOrigin>>,
         pub(crate) originated: Mutex<Vec<oxnet::Ipv6Net>>,
         pub(crate) multicast_originated: Mutex<Vec<MulticastOrigin>>,
+        pub(crate) multicast_calls: Mutex<Vec<MulticastCall>>,
+        pub(crate) fail_multicast_withdraw: AtomicBool,
+        pub(crate) fail_multicast_advertise: AtomicBool,
+        pub(crate) fail_multicast_get: AtomicBool,
     }
 
     impl Default for TestDdm {
@@ -779,6 +790,10 @@ pub(crate) mod test {
                 tunnel_originated: Mutex::new(Vec::default()),
                 originated: Mutex::new(Vec::default()),
                 multicast_originated: Mutex::new(Vec::default()),
+                multicast_calls: Mutex::new(Vec::default()),
+                fail_multicast_withdraw: AtomicBool::new(false),
+                fail_multicast_advertise: AtomicBool::new(false),
+                fail_multicast_get: AtomicBool::new(false),
             }
         }
     }
@@ -846,6 +861,11 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<MulticastOrigin>>,
             ddm_admin_client::Error<DdmError>,
         > {
+            if self.fail_multicast_get.load(Ordering::SeqCst) {
+                return Err(ddm_admin_client::Error::InvalidRequest(
+                    "injected get failure".into(),
+                ));
+            }
             Ok(ddm_response_ok!(
                 self.multicast_originated.lock().unwrap().clone()
             ))
@@ -858,10 +878,20 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
+            self.multicast_calls
+                .lock()
+                .unwrap()
+                .push(MulticastCall::Advertise(body.clone()));
             self.multicast_originated
                 .lock()
                 .unwrap()
                 .extend(body.clone());
+
+            if self.fail_multicast_advertise.load(Ordering::SeqCst) {
+                return Err(ddm_admin_client::Error::InvalidRequest(
+                    "injected advertise failure".into(),
+                ));
+            }
             Ok(ddm_response_ok!(()))
         }
 
@@ -872,6 +902,15 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<()>,
             ddm_admin_client::Error<DdmError>,
         > {
+            self.multicast_calls
+                .lock()
+                .unwrap()
+                .push(MulticastCall::Withdraw(body.clone()));
+            if self.fail_multicast_withdraw.load(Ordering::SeqCst) {
+                return Err(ddm_admin_client::Error::InvalidRequest(
+                    "injected withdraw failure".into(),
+                ));
+            }
             self.multicast_originated
                 .lock()
                 .unwrap()
