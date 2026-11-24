@@ -14,7 +14,6 @@ use ddm::defaults::{
 use ddm::reconciler::{ServerReconciler, TransitReconciler};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sm::InterfaceState;
-#[cfg(target_os = "illumos")]
 use ddm::sm::{SmContext, StateMachine};
 use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::db::RouterKind;
