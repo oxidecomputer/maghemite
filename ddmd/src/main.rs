@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use camino::Utf8PathBuf;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use ddm::admin::{HandlerContext, RouterStats, Tunables};
 use ddm::db::Db;
 use ddm::defaults::{
@@ -33,6 +33,11 @@ mod smf;
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
+#[command(group(
+    ArgGroup::new("transit_backend")
+        .args(["dendrite", "api_only"])
+        .multiple(true)
+))]
 struct Arg {
     /// Address objects to route over.
     #[arg(short, long = "addr", name = "addr")]
@@ -69,8 +74,13 @@ struct Arg {
     #[arg(long, default_value_t = DEFAULT_ADMIN_PORT)]
     admin_port: u16,
 
-    /// Kind of router to run.
-    #[arg(long, default_value_t = RouterKind::Server)]
+    /// Kind of router to run. A transit router requires a backend: either
+    /// --dendrite or --api-only.
+    #[arg(
+        long,
+        default_value_t = RouterKind::Server,
+        requires_if("transit", "transit_backend")
+    )]
     kind: RouterKind,
 
     /// The tcp port to listen on for exchange messages.
@@ -138,20 +148,6 @@ fn main() {
 
 async fn run() {
     let arg = Arg::parse();
-
-    // `required_if_eq` can't express this: `dendrite` is a flag with an
-    // implicit default, which clap won't allow to be required. And an
-    // api-only transit router never starts the reconciler, so it doesn't
-    // need dendrite at all.
-    if arg.kind == RouterKind::Transit && !arg.api_only && !arg.dendrite {
-        use clap::CommandFactory;
-        Arg::command()
-            .error(
-                clap::error::ErrorKind::MissingRequiredArgument,
-                "--kind transit requires --dendrite",
-            )
-            .exit();
-    }
 
     let log = init_logger();
 
