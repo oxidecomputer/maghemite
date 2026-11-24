@@ -776,7 +776,7 @@ pub(crate) fn start_server(
         start_time: chrono::offset::Utc::now(),
         bfd: context.bfd.clone(),
         bgp: context.bgp.clone(),
-        db: context.db.router().clone(),
+        db: context.default_router()?,
         mg_lower_stats: context.mg_lower_stats.clone(),
         log: log.clone(),
     };

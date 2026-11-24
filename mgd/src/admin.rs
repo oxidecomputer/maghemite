@@ -48,6 +48,8 @@ use tokio::task::JoinHandle;
 
 const UNIT_API_SERVER: &str = "api_server";
 
+pub use rdb::{DEFAULT_ROUTER_ID, DEFAULT_ROUTER_NAME};
+
 pub struct HandlerContext {
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     pub tep: Ipv6Addr, // tunnel endpoint address
@@ -58,6 +60,13 @@ pub struct HandlerContext {
     pub mg_lower_stats: Arc<MgLowerStats>,
     pub stats_server_running: Mutex<bool>,
     pub oximeter_port: u16,
+}
+
+impl HandlerContext {
+    /// The default router's database. Legacy endpoints operate on it.
+    pub fn default_router(&self) -> Result<rdb::RouterDb, crate::error::Error> {
+        Ok(self.db.router(DEFAULT_ROUTER_ID)?)
+    }
 }
 
 pub fn start_server(

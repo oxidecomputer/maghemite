@@ -376,8 +376,12 @@ where
         let _ = std::fs::remove_dir_all(&db_path);
         let db = rdb::Db::new(&db_path, log.clone())
             .expect("create db")
-            .router()
-            .clone();
+            .create_router(rdb::types::RouterInfo {
+                id: rdb::types::RouterId::new_random(),
+                name: logical_router.name.clone(),
+                tep: std::net::Ipv6Addr::UNSPECIFIED,
+            })
+            .expect("create router");
 
         // Create shared session map
         let sessions: Arc<Mutex<SessionMap<Cnx>>> =

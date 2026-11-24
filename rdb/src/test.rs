@@ -4,6 +4,7 @@
 
 //! Test utilities for rdb tests.
 
+use crate::types::RouterInfo;
 use crate::{Db, RouterDb, error::Error};
 use client_common::eprintln_nopipe;
 use slog::Logger;
@@ -16,8 +17,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// If the test panics (fails), the database is left in /tmp for debugging.
 /// This allows you to examine the database state after a test failure.
 ///
-/// The wrapper implements `Deref` to the [`RouterDb`], so you can use it like
-/// a regular `RouterDb`.
+/// The wrapper holds a [`Db`] with a single `"default"` router and implements
+/// `Deref` to that router's [`RouterDb`], so you can use it like a regular
+/// `RouterDb`.
 ///
 /// Cloning a `TestDb` clones the underlying `Db` (which is cheap since `Db`
 /// uses `Arc` internally) but shares the same database path. Only the last
@@ -25,6 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Clone)]
 pub struct TestDb {
     db: Db,
+    router: RouterDb,
     path: String,
 }
 
@@ -34,9 +37,9 @@ impl TestDb {
         &self.db
     }
 
-    /// Get the router's RouterDb reference
+    /// Get the default router's RouterDb reference
     pub fn router(&self) -> &RouterDb {
-        self.db.router()
+        &self.router
     }
 
     /// Get the database path
@@ -49,7 +52,7 @@ impl Deref for TestDb {
     type Target = RouterDb;
 
     fn deref(&self) -> &Self::Target {
-        self.db.router()
+        &self.router
     }
 }
 
@@ -134,5 +137,14 @@ pub fn get_test_db(test_name: &str, log: Logger) -> Result<TestDb, Error> {
     }
 
     let db = Db::new(&db_path, log)?;
-    Ok(TestDb { db, path: db_path })
+    let router = db.create_router(RouterInfo {
+        id: crate::DEFAULT_ROUTER_ID,
+        name: crate::DEFAULT_ROUTER_NAME.to_string(),
+        tep: std::net::Ipv6Addr::UNSPECIFIED,
+    })?;
+    Ok(TestDb {
+        db,
+        router,
+        path: db_path,
+    })
 }

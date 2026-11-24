@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
+use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
@@ -67,12 +68,13 @@ const STATIC4_ROUTES: &str = "static4_routes";
 /// The handle used to open a persistent key-value tree for IPv6 static routes.
 const STATIC6_ROUTES: &str = "static6_routes";
 
-/// Key used in settings tree for tunnel endpoint setting
-const TEP_KEY: &str = "tep";
-
 /// The handle used to open a persistent key-value tree for BFD neighbor
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
+
+/// The handle used to open the routers' persistent key-value tree.
+/// Keys are [`RouterId`]. Values are [`RouterInfo`].
+const ROUTER: &str = "router";
 
 /// Key used in settings tree for bestpath fanout setting
 const BESTPATH_FANOUT: &str = "bestpath_fanout";
@@ -82,12 +84,16 @@ const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 use crate::rib::{Rib, Rib4, Rib6};
 
-/// The routing database of a switch. Holds the state that belongs to the
-/// switch as a whole, and the router's state ([`RouterDb`]).
+/// The routing database of a switch. Holds the routers, each with its own
+/// [`RouterDb`] and the switch slot. Each router has their own tree in the
+/// database.
 #[derive(Clone)]
 pub struct Db {
-    /// The routing tables and configuration of the router.
-    router: RouterDb,
+    /// A sled database handle where persistent routing information is stored.
+    persistent: sled::Db,
+
+    /// The routers, keyed by id.
+    routers: Arc<RwLock<IdOrdMap<RouterDb>>>,
 
     /// Switch slot reported from MGS.
     /// Information is not available until first successful communication with MGS.
@@ -100,8 +106,17 @@ pub struct Db {
 /// information is managed through this structure.
 #[derive(Clone)]
 pub struct RouterDb {
-    /// A sled database handle where persistent routing information is stored.
-    persistent: sled::Db,
+    /// This router's part of the sled database.
+    persistent: RouterStore,
+
+    /// This router's UUID.
+    id: RouterId,
+
+    /// This router's name.
+    name: String,
+
+    /// Tunnel endpoint address.
+    tep: Ipv6Addr,
 
     /// IPv4 Unicast routes learned from BGP update messages or administratively
     /// added static routes. These are volatile.
@@ -119,16 +134,51 @@ pub struct RouterDb {
     /// added to the lower half forwarding plane.
     rib6_loc: Arc<Mutex<Rib6>>,
 
-    /// A generation number for the overall data store.
+    /// A generation number for this router's data.
     generation: Arc<AtomicU64>,
 
-    /// A set of watchers that are notified when changes to the data store occur.
+    /// A set of watchers that are notified when changes to this router's RIB
+    /// occur.
     watchers: Arc<RwLock<Vec<Watcher>>>,
 
     /// Reaps expired routes from the local RIB.
     reaper: Arc<Reaper>,
 
     log: Logger,
+}
+
+impl IdOrdItem for RouterDb {
+    type Key<'a> = RouterId;
+
+    fn key(&self) -> Self::Key<'_> {
+        self.id
+    }
+
+    id_upcast!();
+}
+
+/// A router's part of the sled database. A router's trees have its id in
+/// front of their name.
+#[derive(Clone)]
+struct RouterStore {
+    db: sled::Db,
+    id: RouterId,
+}
+
+impl RouterStore {
+    fn open_tree(&self, name: &str) -> sled::Result<Tree> {
+        self.db.open_tree(format!("{}/{name}", self.id))
+    }
+
+    fn clear(&self) -> sled::Result<()> {
+        let prefix = format!("{}/", self.id);
+        for name in self.db.tree_names() {
+            if name.starts_with(prefix.as_bytes()) {
+                self.db.drop_tree(name)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 const _: () = {
@@ -173,27 +223,137 @@ struct Watcher {
 impl Db {
     /// Create a new routing database that stores persistent data at `path`.
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
-        let rib_loc = Arc::new(Mutex::new(Rib::new()));
-        Ok(Self {
-            router: RouterDb {
-                persistent: sled::open(path)?,
-                rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
-                rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
-                rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
-                rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
-                generation: Arc::new(AtomicU64::new(0)),
-                watchers: Arc::new(RwLock::new(Vec::new())),
-                reaper: Reaper::new(rib_loc),
-                log: log.clone(),
-            },
+        let persistent = sled::open(path)?;
+        let db = Self {
+            persistent,
+            routers: Arc::new(RwLock::new(IdOrdMap::new())),
             slot: Arc::new(RwLock::new(None)),
             log,
-        })
+        };
+        db.load_routers()?;
+        Ok(db)
     }
 
-    /// Get a handle to the router's part of the database.
-    pub fn router(&self) -> &RouterDb {
-        &self.router
+    /// Load the saved routers. Router that cannot be read are skipped.
+    fn load_routers(&self) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(ROUTER)?;
+        let mut routers = write_lock!(self.routers);
+        for item in tree.iter() {
+            match Self::read_router(item) {
+                Ok(info) => {
+                    routers.insert_overwrite(self.router_db(info));
+                }
+                Err(e) => rdb_log!(
+                    self,
+                    error,
+                    "error reading router entry: {e}";
+                    "unit" => UNIT_PERSISTENT
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    fn read_router(
+        item: sled::Result<(sled::IVec, sled::IVec)>,
+    ) -> Result<RouterInfo, Error> {
+        let (_, value) = item?;
+        let info: RouterInfo = serde_json::from_slice(&value)?;
+        if info.name == crate::DEFAULT_ROUTER_NAME
+            && info.id != crate::DEFAULT_ROUTER_ID
+        {
+            return Err(Error::DbValue(format!(
+                "router {} has the default router's name",
+                info.id
+            )));
+        }
+        Ok(info)
+    }
+
+    fn router_db(&self, info: RouterInfo) -> RouterDb {
+        let rib_loc = Arc::new(Mutex::new(Rib::new()));
+        RouterDb {
+            persistent: RouterStore {
+                db: self.persistent.clone(),
+                id: info.id,
+            },
+            log: self.log.new(slog::o!(
+                "router_id" => info.id.to_string(),
+            )),
+            id: info.id,
+            name: info.name,
+            tep: info.tep,
+            rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
+            rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
+            rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
+            rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
+            generation: Arc::new(AtomicU64::new(0)),
+            watchers: Arc::new(RwLock::new(Vec::new())),
+            reaper: Reaper::new(rib_loc),
+        }
+    }
+
+    /// Create a router. Fails on name or id conflicts.
+    pub fn create_router(&self, info: RouterInfo) -> Result<RouterDb, Error> {
+        let mut routers = write_lock!(self.routers);
+        if routers.contains_key(&info.id) {
+            return Err(Error::Conflict(format!(
+                "router id {} already exists",
+                info.id
+            )));
+        }
+        for r in routers.iter() {
+            if r.name == info.name {
+                return Err(Error::Conflict(format!(
+                    "router {} already exists",
+                    info.name
+                )));
+            }
+        }
+        self.persist_router(&info)?;
+        let rdb = self.router_db(info);
+        rdb.persistent.clear()?;
+        routers.insert_overwrite(rdb.clone());
+        Ok(rdb)
+    }
+
+    fn persist_router(&self, info: &RouterInfo) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(ROUTER)?;
+        tree.insert(info.id.as_bytes(), serde_json::to_string(info)?.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    /// Delete a router and its saved state.
+    pub fn delete_router(&self, id: RouterId) -> Result<(), Error> {
+        let Some(router) = write_lock!(self.routers).remove(id) else {
+            return Err(Error::NotFound(format!("router {id}")));
+        };
+        router.persistent.clear()?;
+        let tree = self.persistent.open_tree(ROUTER)?;
+        tree.remove(id.as_bytes())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    /// List the routers.
+    pub fn list_routers(&self) -> Vec<RouterInfo> {
+        read_lock!(self.routers)
+            .iter()
+            .map(|r| RouterInfo {
+                id: r.id,
+                name: r.name.clone(),
+                tep: r.tep,
+            })
+            .collect()
+    }
+
+    /// Get a router's database.
+    pub fn router(&self, id: RouterId) -> Result<RouterDb, Error> {
+        read_lock!(self.routers)
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("router {id}")))
     }
 
     pub fn slot(&self) -> Option<u16> {
@@ -219,6 +379,14 @@ impl RouterDb {
 
     pub fn set_reaper_stale_max(&self, stale_max: chrono::Duration) {
         *lock!(self.reaper.stale_max) = stale_max;
+    }
+
+    pub fn id(&self) -> RouterId {
+        self.id
+    }
+
+    pub fn tep(&self) -> Ipv6Addr {
+        self.tep
     }
 
     /// Register a routing databse watcher.
@@ -1390,31 +1558,6 @@ impl RouterDb {
         self.generation.load(Ordering::SeqCst)
     }
 
-    pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let result = tree.get(TEP_KEY)?;
-        let value = match result {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-        let octets: [u8; 16] = (*value).try_into().map_err(|_| {
-            Error::DbValue(format!(
-                "rdb: tep length error exepcted 16 bytes found {}",
-                value.len(),
-            ))
-        })?;
-
-        Ok(Some(Ipv6Addr::from(octets)))
-    }
-
-    pub fn set_tep_addr(&self, addr: Ipv6Addr) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(SETTINGS)?;
-        let key = addr.octets();
-        tree.insert(TEP_KEY, &key)?;
-        tree.flush()?;
-        Ok(())
-    }
-
     pub fn get_bestpath_fanout(&self) -> Result<NonZeroU8, Error> {
         let tree = self.persistent.open_tree(SETTINGS)?;
         let fan = match tree.get(BESTPATH_FANOUT)? {
@@ -1513,11 +1656,14 @@ impl Reaper {
     }
 
     fn run(self: &Arc<Self>) {
-        let s = self.clone();
+        let s = Arc::downgrade(self);
         spawn(move || {
-            loop {
+            // Stops once the router's database is dropped.
+            while let Some(s) = s.upgrade() {
                 s.reap();
-                sleep(*lock!(s.interval));
+                let interval = *lock!(s.interval);
+                drop(s);
+                sleep(interval);
             }
         });
     }
@@ -1549,7 +1695,8 @@ impl Reaper {
 mod test {
     use crate::{
         StaticRouteKey, db::RouterDb, test::TestDb, types::Asn,
-        types::PrefixDbKey, types::test_helpers::path_vecs_equal,
+        types::PrefixDbKey, types::RouterId, types::RouterInfo,
+        types::test_helpers::path_vecs_equal,
     };
     use client_common::eprintln_nopipe;
     use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
@@ -1694,8 +1841,12 @@ mod test {
         let _ = std::fs::remove_dir_all(&db_path);
         let db = Db::new(&db_path, log.clone())
             .expect("create db")
-            .router()
-            .clone();
+            .create_router(crate::types::RouterInfo {
+                id: crate::DEFAULT_ROUTER_ID,
+                name: crate::DEFAULT_ROUTER_NAME.to_string(),
+                tep: Ipv6Addr::UNSPECIFIED,
+            })
+            .expect("create router");
 
         // Start test cases
 
@@ -2552,5 +2703,85 @@ mod test {
             SessionMode::MultiHop => {}
             SessionMode::SingleHop => panic!("expected MultiHop, got {mode:?}"),
         }
+    }
+
+    #[test]
+    fn test_multi_router_isolation() {
+        let db = get_test_db();
+        let r1 = db.router().clone();
+        let r2_info = RouterInfo {
+            id: RouterId::new_random(),
+            name: "r2".to_string(),
+            tep: Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 2),
+        };
+        let r2 = db.db().create_router(r2_info.clone()).expect("create r2");
+
+        // Both routers hold a route for the same prefix.
+        let prefix: IpNet = "10.0.0.0/24".parse().unwrap();
+        let route1 = StaticRouteKey {
+            prefix,
+            nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        let route2 = StaticRouteKey {
+            nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 2, 1)),
+            ..route1
+        };
+        r1.add_static_routes(&[route1]).unwrap();
+        r2.add_static_routes(&[route2]).unwrap();
+
+        assert_eq!(r1.get_static(None).unwrap(), vec![route1]);
+        assert_eq!(r2.get_static(None).unwrap(), vec![route2]);
+        let nexthops = |rdb: &RouterDb| -> Vec<IpAddr> {
+            rdb.loc_rib(None)[&prefix]
+                .iter()
+                .map(|p| p.nexthop)
+                .collect()
+        };
+        assert_eq!(nexthops(&r1), vec![route1.nexthop]);
+        assert_eq!(nexthops(&r2), vec![route2.nexthop]);
+
+        // Deleting a router leaves the other router unchanged.
+        db.db().delete_router(r2_info.id).expect("delete r2");
+        assert!(db.db().router(r2_info.id).is_err());
+        assert_eq!(r1.get_static(None).unwrap(), vec![route1]);
+
+        // Recreating with the same ID doesn't revive the route.
+        let r2 = db.db().create_router(r2_info).expect("create r2 again");
+        assert!(r2.get_static(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_routers_are_saved() {
+        use crate::db::Db;
+        let log = init_file_logger("rib.log");
+        let db_path = format!("/tmp/routers_saved_{}.db", std::process::id());
+        let _ = std::fs::remove_dir_all(&db_path);
+        let routers = vec![
+            RouterInfo {
+                id: crate::DEFAULT_ROUTER_ID,
+                name: crate::DEFAULT_ROUTER_NAME.to_string(),
+                tep: Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1),
+            },
+            RouterInfo {
+                id: RouterId::new_random(),
+                name: "r2".to_string(),
+                tep: Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 2),
+            },
+        ];
+
+        let db = Db::new(&db_path, log.clone()).expect("create db");
+        for info in &routers {
+            db.create_router(info.clone()).expect("create router");
+        }
+        drop(db);
+
+        // The routers are there when the database is opened again.
+        let db = Db::new(&db_path, log).expect("open db");
+        assert_eq!(db.list_routers(), routers);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&db_path);
     }
 }

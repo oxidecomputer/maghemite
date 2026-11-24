@@ -24,4 +24,7 @@ pub enum Error {
 
     #[error("Parsing error {0}")]
     Parsing(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
 }

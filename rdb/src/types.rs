@@ -320,6 +320,46 @@ impl Display for PrefixChangeNotification {
     }
 }
 
+/// The id of a router.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
+#[serde(transparent)]
+pub struct RouterId(pub uuid::Uuid);
+
+impl RouterId {
+    pub fn new_random() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        self.0.as_bytes()
+    }
+}
+
+impl Display for RouterId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Name, id and tunnel endpoint (TEP) address of a router.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouterInfo {
+    pub id: RouterId,
+    pub name: String,
+    pub tep: Ipv6Addr,
+}
+
 #[cfg(test)]
 pub mod test_helpers {
     use super::Path;
