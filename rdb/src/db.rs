@@ -1644,6 +1644,23 @@ impl Db {
         self.notify_mrib(self.mrib.remove_routes(keys));
     }
 
+    /// Remove static multicast routes installed under `group_id`.
+    pub fn remove_group_static_mcast_routes(
+        &self,
+        group_id: uuid::Uuid,
+        keys: &[MulticastRouteKey],
+    ) {
+        self.notify_mrib(self.mrib.remove_group_routes(group_id, keys));
+    }
+
+    /// Remove every static route of each group installed under its group ID.
+    pub fn remove_static_mcast_groups(
+        &self,
+        groups: &[StaticMulticastGroupKey],
+    ) {
+        self.notify_mrib(self.mrib.remove_groups(groups));
+    }
+
     /// Get all static multicast routes from `mrib_in`.
     pub fn get_static_mcast_routes(&self) -> Vec<MulticastRoute> {
         self.mrib
@@ -1759,8 +1776,8 @@ mod test {
         types::{
             Asn, MulticastAddr, MulticastAddrV4, MulticastAddrV6,
             MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
-            PrefixDbKey, UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
-            test_helpers::path_vecs_equal,
+            PrefixDbKey, StaticMulticastGroupKey, UnderlayMulticastIpv6,
+            UnicastAddrV4, UnicastAddrV6, Vni, test_helpers::path_vecs_equal,
         },
     };
     use client_common::eprintln_nopipe;
@@ -2520,6 +2537,120 @@ mod test {
             v6_star_g_key,
             v6_sg_key,
         ]);
+    }
+
+    #[test]
+    fn test_mrib_remove_static_groups() {
+        let log = init_file_logger("mrib_remove_groups.log");
+        let db = crate::test::get_test_db("mrib_remove_groups", log)
+            .expect("create db");
+
+        let group = MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, 1))
+            .expect("valid mcast");
+        let other_vni = Vni::new(78).expect("valid vni");
+        let source = |last| {
+            UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, last))
+                .expect("valid unicast")
+        };
+        let asm_group = MulticastAddr::new("225.6.6.6".parse().unwrap())
+            .expect("valid mcast");
+        let selected =
+            MulticastRouteKey::any_source(asm_group, vni()).expect("ASM group");
+        let removed = [
+            MulticastRouteKey::source_specific_v4(source(1), group, vni()),
+            MulticastRouteKey::source_specific_v4(source(2), group, vni()),
+            selected,
+        ];
+        let kept = [
+            MulticastRouteKey::source_specific_v4(source(1), group, other_vni),
+            MulticastRouteKey::source_specific_v4(source(3), group, vni()),
+            MulticastRouteKey::source_specific_v4(source(4), group, vni()),
+            MulticastRouteKey::any_source(
+                MulticastAddr::new("225.5.5.5".parse().unwrap())
+                    .expect("valid mcast"),
+                vni(),
+            )
+            .expect("ASM group"),
+        ];
+        let ssm_id = "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        let asm_id = "00000000-0000-0000-0000-000000000002".parse().unwrap();
+        let replacement_id =
+            "00000000-0000-0000-0000-000000000003".parse().unwrap();
+        let routes: Vec<_> = removed
+            .into_iter()
+            .zip([Some(ssm_id), Some(ssm_id), Some(asm_id)])
+            .chain(kept.into_iter().zip([
+                Some(ssm_id),
+                Some(replacement_id),
+                None,
+                None,
+            ]))
+            .map(|(key, group_id)| MulticastRoute {
+                key,
+                underlay_group: underlay_group(),
+                source: MulticastSourceProtocol::Static,
+                group_id,
+            })
+            .collect();
+        db.add_static_mcast_routes(&routes);
+        assert!(db.get_selected_mcast_route(&selected).is_some());
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+        let groups = [
+            StaticMulticastGroupKey {
+                key: removed[0].group_key(),
+                group_id: ssm_id,
+            },
+            StaticMulticastGroupKey {
+                key: selected.group_key(),
+                group_id: asm_id,
+            },
+        ];
+        db.remove_static_mcast_groups(&groups);
+
+        assert_eq!(
+            rx.try_recv().expect("notification").changed,
+            removed.iter().copied().collect(),
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(db.get_selected_mcast_route(&selected).is_none());
+        for key in &removed {
+            assert!(db.get_mcast_route(key).is_none(), "{key} not removed");
+        }
+        for key in &kept {
+            assert!(db.get_mcast_route(key).is_some(), "{key} removed");
+        }
+
+        db.remove_static_mcast_groups(&groups);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(db.get_static_mcast_routes().len(), kept.len());
+    }
+
+    #[test]
+    fn test_mrib_remove_group_static_routes() {
+        let log = init_file_logger("mrib_remove_group_routes.log");
+        let db = crate::test::get_test_db("mrib_remove_group_routes", log)
+            .expect("create db");
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new("225.7.7.7".parse().unwrap())
+                .expect("valid mcast"),
+            vni(),
+        )
+        .expect("ASM group");
+        let group_id = uuid::Uuid::new_v4();
+        db.add_static_mcast_routes(&[MulticastRoute {
+            key,
+            underlay_group: underlay_group(),
+            source: MulticastSourceProtocol::Static,
+            group_id: Some(group_id),
+        }]);
+
+        db.remove_group_static_mcast_routes(uuid::Uuid::new_v4(), &[key]);
+        assert!(db.get_mcast_route(&key).is_some());
+
+        db.remove_group_static_mcast_routes(group_id, &[key]);
+        assert!(db.get_mcast_route(&key).is_none());
     }
 
     #[test]

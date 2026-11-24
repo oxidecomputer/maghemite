@@ -66,7 +66,7 @@
 //! revalidating the MRIB.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::net::IpAddr;
 use std::ops::RangeInclusive;
 use std::sync::mpsc::Sender;
@@ -76,11 +76,12 @@ use mg_api_types::rdb::rib::AddressFamily;
 use mg_common::{lock, read_lock, write_lock};
 use oxnet::IpNet;
 use slog::Logger;
+use uuid::Uuid;
 
 use crate::log::rdb_log;
 use crate::types::{
     MribChangeNotification, MulticastRoute, MulticastRouteKey,
-    MulticastSourceProtocol, RouteOriginFilter,
+    MulticastSourceProtocol, RouteOriginFilter, StaticMulticastGroupKey,
 };
 
 /// Log unit for MRIB operations.
@@ -201,6 +202,31 @@ fn unindex(
         if e.get().is_empty() {
             e.remove();
         }
+    }
+}
+
+impl MribState {
+    fn remove_keys(
+        &mut self,
+        keys: &[MulticastRouteKey],
+    ) -> BTreeSet<MulticastRouteKey> {
+        let Self {
+            mrib_in,
+            mrib_loc,
+            sources,
+            ..
+        } = self;
+        keys.iter()
+            .filter(|key| {
+                let removed_in = mrib_in.remove(key).is_some();
+                let removed_loc = mrib_loc.remove(key).is_some();
+                if removed_in {
+                    unindex(sources, key);
+                }
+                removed_in || removed_loc
+            })
+            .copied()
+            .collect()
     }
 }
 
@@ -425,24 +451,54 @@ impl Mrib {
         &self,
         keys: &[MulticastRouteKey],
     ) -> BTreeSet<MulticastRouteKey> {
+        lock!(self.state).remove_keys(keys)
+    }
+
+    /// Remove the `keys` that were installed under `group_id`.
+    ///
+    /// Returns the keys removed from either table for which the `keys` exist.
+    pub(crate) fn remove_group_routes(
+        &self,
+        group_id: Uuid,
+        keys: &[MulticastRouteKey],
+    ) -> BTreeSet<MulticastRouteKey> {
         let mut state = lock!(self.state);
-        let MribState {
-            mrib_in,
-            mrib_loc,
-            sources,
-        } = &mut *state;
-        let mut removed = BTreeSet::new();
-        for key in keys {
-            let removed_in = mrib_in.remove(key).is_some();
-            let removed_loc = mrib_loc.remove(key).is_some();
-            if removed_in {
-                unindex(sources, key);
-            }
-            if removed_in || removed_loc {
-                removed.insert(*key);
-            }
-        }
-        removed
+        let keys: Vec<MulticastRouteKey> = keys
+            .iter()
+            .filter(|key| {
+                state
+                    .mrib_in
+                    .get(key)
+                    .is_some_and(|route| route.group_id == Some(group_id))
+            })
+            .copied()
+            .collect();
+        state.remove_keys(&keys)
+    }
+
+    /// Remove each group's routes that were installed under the group's ID.
+    ///
+    /// Returns the keys removed from either table.
+    pub(crate) fn remove_groups(
+        &self,
+        groups: &[StaticMulticastGroupKey],
+    ) -> BTreeSet<MulticastRouteKey> {
+        let groups: HashSet<StaticMulticastGroupKey> =
+            groups.iter().copied().collect();
+        let mut state = lock!(self.state);
+        let keys: Vec<MulticastRouteKey> = state
+            .mrib_in
+            .iter()
+            .filter_map(|(key, route)| {
+                let group_id = route.group_id?;
+                let group = StaticMulticastGroupKey {
+                    key: key.group_key(),
+                    group_id,
+                };
+                groups.contains(&group).then_some(*key)
+            })
+            .collect();
+        state.remove_keys(&keys)
     }
 
     /// Group the `(S,G)` keys in `mrib_in` by source.

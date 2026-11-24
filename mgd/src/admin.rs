@@ -25,7 +25,8 @@ use mg_api_types::bgp::session::{
     MessageHistoryRequest, MessageHistoryResponse,
 };
 use mg_api_types::mrib::{
-    MribAddStaticRequest, MribDeleteStaticRequest, MribQuery, MulticastRoute,
+    MribAddStaticRequest, MribDeleteStaticGroupRequest,
+    MribDeleteStaticRequest, MribQuery, MulticastRoute,
 };
 use mg_api_types::ndp::{NdpInterface, NdpInterfaceSelector, NdpManagerState};
 use mg_api_types::rib::{
@@ -717,6 +718,13 @@ impl MgAdminApi for MgAdminApiImpl {
         request: TypedBody<MribDeleteStaticRequest>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         mrib_admin::static_remove_mcast_route(rqctx, request).await
+    }
+
+    async fn static_remove_mcast_group(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribDeleteStaticGroupRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        mrib_admin::static_remove_mcast_group(rqctx, request).await
     }
 
     async fn static_list_mcast_routes(
