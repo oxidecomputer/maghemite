@@ -6,8 +6,10 @@
 //! dendrite. See [`crate::reconciler`] for the overall design.
 
 use crate::db::Db;
-use crate::dbg;
-use crate::reconciler::{RECONCILE_INTERVAL, desired_underlay};
+use crate::reconciler::{
+    RECONCILE_INTERVAL, ReconcilerTrigger, desired_underlay,
+};
+use crate::{dbg, inf};
 use ddm_lower::dendrite::{DendriteBackend, Error as DendriteError};
 use ddm_lower::{InterfaceName, Route};
 use slog::Logger;
@@ -62,7 +64,7 @@ impl TransitReconciler {
     async fn run(self) {
         let mut rx = self.db.watch();
         let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         // The previous pass's desired state. Removals are computed against
         // this rather than against the dataplane, so the reconciler never
@@ -70,17 +72,26 @@ impl TransitReconciler {
         let mut last = HashSet::new();
 
         loop {
-            tokio::select! {
-                _ = ticker.tick() => {}
+            let trigger = tokio::select! {
+                _ = ticker.tick() => {
+                    ReconcilerTrigger::Timeout
+
+                }
                 changed = rx.changed() => {
                     if changed.is_err() {
                         // The Db was dropped; nothing left to reconcile.
+                        inf!(
+                            self.log,
+                            LOG_TAG,
+                            "exiting due to db drop (shutdown)"
+                        );
                         return;
                     }
+                    ReconcilerTrigger::WatchNotification
                 }
-            }
+            };
             let desired = desired_underlay(&rx.borrow_and_update());
-            last = self.reconcile(last, desired).await;
+            last = self.reconcile(last, desired, trigger).await;
         }
     }
 
@@ -107,13 +118,15 @@ impl TransitReconciler {
         &self,
         last: HashSet<Route>,
         desired: HashSet<Route>,
+        trigger: ReconcilerTrigger,
     ) -> HashSet<Route> {
         let remove: Vec<Route> = last.difference(&desired).cloned().collect();
 
         dbg!(
             self.log,
             LOG_TAG,
-            "pass: {} underlay desired, removing {}",
+            "{} pass: {} underlay desired, removing {}",
+            trigger,
             desired.len(),
             remove.len(),
         );

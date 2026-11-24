@@ -6,8 +6,10 @@
 //! OPTE. See [`crate::reconciler`] for the overall design.
 
 use crate::db::{Db, DbData, effective_route_set};
-use crate::dbg;
-use crate::reconciler::{RECONCILE_INTERVAL, desired_underlay};
+use crate::reconciler::{
+    RECONCILE_INTERVAL, ReconcilerTrigger, desired_underlay,
+};
+use crate::{dbg, inf};
 use ddm_api_types::net::TunnelOrigin;
 use ddm_lower::illumos::{Error as IllumosError, IllumosBackend};
 use ddm_lower::{InterfaceName, Route};
@@ -74,7 +76,7 @@ impl ServerReconciler {
     async fn run(self) {
         let mut rx = self.db.watch();
         let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         // The previous pass's desired state.
         //
@@ -86,17 +88,23 @@ impl ServerReconciler {
         let mut last = Desired::default();
 
         loop {
-            tokio::select! {
-                _ = ticker.tick() => {}
+            let trigger = tokio::select! {
+                _ = ticker.tick() => { ReconcilerTrigger::Timeout}
                 changed = rx.changed() => {
                     if changed.is_err() {
                         // The Db was dropped; nothing left to reconcile.
+                        inf!(
+                            self.log,
+                            LOG_TAG,
+                            "exiting due to db drop (shutdown)"
+                        );
                         return;
                     }
+                    ReconcilerTrigger::WatchNotification
                 }
-            }
+            };
             let desired = Desired::new(&rx.borrow_and_update());
-            last = self.reconcile(last, desired).await;
+            last = self.reconcile(last, desired, trigger).await;
         }
     }
 
@@ -119,7 +127,12 @@ impl ServerReconciler {
     /// tradeoff for the lack of recording in the reconciler, and is better than
     /// the alternative of removing routes that are not owned by the reconciler,
     /// if we blindly deleted routes not in the current desired state.
-    async fn reconcile(&self, last: Desired, desired: Desired) -> Desired {
+    async fn reconcile(
+        &self,
+        last: Desired,
+        desired: Desired,
+        trigger: ReconcilerTrigger,
+    ) -> Desired {
         let underlay_remove: Vec<Route> = last
             .underlay
             .difference(&desired.underlay)
@@ -131,7 +144,8 @@ impl ServerReconciler {
         dbg!(
             self.log,
             LOG_TAG,
-            "pass: {} underlay / {} tunnel desired, removing {} / {}",
+            "{} pass: {} underlay / {} tunnel desired, removing {} / {}",
+            trigger,
             desired.underlay.len(),
             desired.tunnel.len(),
             underlay_remove.len(),

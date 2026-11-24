@@ -16,8 +16,15 @@
 
 use crate::db::DbData;
 use ddm_lower::{InterfaceName, Route};
+use derive_more::Display;
 use std::collections::HashSet;
 use std::time::Duration;
+
+mod server;
+mod transit;
+
+pub use self::server::ServerReconciler;
+pub use self::transit::TransitReconciler;
 
 /// The delay between reconciliation passes when the database is quiet.
 ///
@@ -40,6 +47,14 @@ pub(crate) fn desired_underlay(data: &DbData) -> HashSet<Route> {
             ifname: InterfaceName::new(r.ifname.clone()),
         })
         .collect()
+}
+
+// Did the database change trigger a watch notification or did we reach a
+// periodic timeout.
+#[derive(Debug, Clone, Display)]
+enum ReconcilerTrigger {
+    WatchNotification,
+    Timeout,
 }
 
 #[cfg(test)]

@@ -11,8 +11,10 @@ use ddm::defaults::{
     EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
 };
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{InterfaceState, SmContext, StateMachine};
-#[cfg(not(all(feature = "backend", target_os = "illumos")))]
+use ddm::reconciler::{ServerReconciler, TransitReconciler};
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use ddm::sm::InterfaceState;
+#[cfg(target_os = "illumos")]
 use ddm::sm::{SmContext, StateMachine};
 use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::db::RouterKind;
@@ -190,19 +192,11 @@ async fn run() {
                         std::net::SocketAddr::V4(_) => None,
                     })
                     .expect("dpd host must resolve to an IPv6 address");
-                ddm::transit_reconciler::TransitReconciler::new(
-                    db.clone(),
-                    dpd_addr,
-                    log.clone(),
-                )
-                .spawn();
+                TransitReconciler::new(db.clone(), dpd_addr, log.clone())
+                    .spawn();
             }
             RouterKind::Server => {
-                ddm::server_reconciler::ServerReconciler::new(
-                    db.clone(),
-                    log.clone(),
-                )
-                .spawn();
+                ServerReconciler::new(db.clone(), log.clone()).spawn();
             }
         }
     }

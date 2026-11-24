@@ -8,33 +8,34 @@ pretty_assertions.workspace = true
 dpd-client.workspace = true
 
 [dependencies]
-slog.workspace = true
-slog-error-chain.workspace = true
-socket2.workspace = true
-ispf.workspace = true
-serde.workspace = true
-hostname.workspace = true
-thiserror.workspace = true
-dropshot.workspace = true
-schemars.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 camino.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
-http-body-util.workspace = true
-serde_json.workspace = true
-mg-common.workspace = true
-port-file.workspace = true
+chrono.workspace = true
+ddm-api.workspace = true
 ddm-api-types.workspace = true
 ddm-protocol.workspace = true
-chrono.workspace = true
+derive_more.workspace = true
+dropshot.workspace = true
+hostname.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+ispf.workspace = true
+mg-common.workspace = true
 omicron-common.workspace = true
 oximeter.workspace = true
 oximeter-producer.workspace = true
 oxnet.workspace = true
+port-file.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slog.workspace = true
+slog-error-chain.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
 uuid.workspace = true
-ddm-api.workspace = true
 
 # illumos-only deps used by the routing state machine and reconcilers.
 # Gated by the `backend` feature so stub builds (e.g. Linux test fixtures

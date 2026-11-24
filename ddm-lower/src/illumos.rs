@@ -70,6 +70,7 @@ impl IllumosBackend {
             log: log.new(o!("backend" => "illumos")),
         }
     }
+
     /// Add underlay routes to illumos, returning any errors encountered.
     ///
     /// We log any errors inside here, but we also return them so that they can
@@ -78,9 +79,9 @@ impl IllumosBackend {
         &self,
         mut routes: Vec<Route>,
     ) -> Result<(), Vec<Error>> {
-        // Filter out all local routes.
-        // An error here is fatal. We'll try again on the next reconciliation.
-        let local_addrs = Self::read_local_addrs().map_err(|e| vec![e])?;
+        // An error here prevents us from doing anything else at this time.
+        // We'll try again on the next reconciliation.
+        let local_addrs = Self::read_local_ipv6_addrs().map_err(|e| vec![e])?;
         routes.retain(|r| !Self::route_is_local(r, &local_addrs));
 
         let mut errors = vec![];
@@ -286,8 +287,8 @@ impl IllumosBackend {
         }
     }
 
-    /// Read all the IP addresses known to illumos
-    fn read_local_addrs() -> Result<BTreeSet<Ipv6Addr>, Error> {
+    /// Read all the IPv6 addresses known to illumos
+    fn read_local_ipv6_addrs() -> Result<BTreeSet<Ipv6Addr>, Error> {
         let local_addrs = libnet::get_ipaddrs()
             .map_err(Error::GetIpAddrs)?
             .values()

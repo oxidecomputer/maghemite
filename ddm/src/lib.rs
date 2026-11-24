@@ -10,11 +10,7 @@ pub mod exchange;
 pub mod oxstats;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 pub mod reconciler;
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-pub mod server_reconciler;
 pub mod sm;
-#[cfg(all(feature = "backend", target_os = "illumos"))]
-pub mod transit_reconciler;
 
 pub const COMPONENT_DDM: &str = "ddm";
 pub const MOD_ADMIN: &str = "admin";

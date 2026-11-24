@@ -1445,6 +1445,7 @@ dependencies = [
  "ddm-api-types",
  "ddm-lower",
  "ddm-protocol",
+ "derive_more 2.1.1",
  "dpd-client",
  "dropshot 0.18.0",
  "hostname 0.4.2",
