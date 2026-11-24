@@ -12,7 +12,7 @@ use dpd_client::types::{
 };
 use dpd_client::{Client, ClientState};
 use slog::Logger;
-use slog::{debug, error, info, o};
+use slog::{error, info, o};
 use slog_error_chain::SlogInlineError;
 use std::net::SocketAddrV6;
 
@@ -77,33 +77,21 @@ impl DendriteBackend {
         &self,
         routes: Vec<Route>,
     ) -> Result<(), Vec<Error>> {
-        if routes.is_empty() {
-            return Ok(());
-        }
-
-        // All interfaces must be the same for a given set of routes
-        let ifname = routes.first().unwrap().ifname.clone();
-        assert!(
-            routes.iter().all(|r| r.ifname == ifname),
-            "all routes must be for the same interface"
-        );
-
-        debug!(self.log, "[{ifname}] sending route add to dpd");
-
-        let port_id = match port_id_for_ifname(&ifname) {
-            Ok(port_id) => port_id,
-            Err(error) => {
-                error!(
-                    self.log,
-                    "failed to parse ifname to add route";
-                    &error
-                );
-                return Err(vec![error]);
-            }
-        };
-
         let mut errors = vec![];
         for r in routes {
+            let port_id = match port_id_for_ifname(&r.ifname) {
+                Ok(port_id) => port_id,
+                Err(error) => {
+                    error!(
+                        self.log,
+                        "failed to parse ifname to add route";
+                        &error
+                    );
+                    errors.push(error);
+                    continue;
+                }
+            };
+
             info!(
                 self.log,
                 "[{}] adding route {} -> {}", r.ifname, r.dest, r.gw,
@@ -114,7 +102,7 @@ impl DendriteBackend {
 
             let target = Ipv6Route {
                 tag: DDM_DPD_TAG.into(),
-                port_id: port_id.clone(),
+                port_id,
                 link_id,
                 tgt_ip: r.gw,
                 vlan_id: None,
@@ -169,24 +157,11 @@ impl DendriteBackend {
         &self,
         routes: Vec<Route>,
     ) -> Result<(), Vec<Error>> {
-        if routes.is_empty() {
-            return Ok(());
-        }
-
-        // All interfaces must be the same for a given set of routes
-        let ifname = routes.first().unwrap().ifname.clone();
-        assert!(
-            routes.iter().all(|r| r.ifname == ifname),
-            "all routes must be for the same interface"
-        );
-
-        debug!(self.log, "[{ifname}] sending route delete to dpd");
-
         let mut errors = vec![];
         for r in routes {
             info!(
                 self.log,
-                "[{}] adding route {} -> {}", r.ifname, r.dest, r.gw,
+                "[{}] removing route {} -> {}", r.ifname, r.dest, r.gw,
             );
             match self.client.route_ipv6_delete(&r.dest).await {
                 Ok(_) => {
