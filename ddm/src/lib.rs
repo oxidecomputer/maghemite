@@ -8,9 +8,9 @@ pub mod defaults;
 pub mod discovery;
 pub mod exchange;
 pub mod oxstats;
-pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-pub mod sys;
+pub mod reconciler;
+pub mod sm;
 
 pub const COMPONENT_DDM: &str = "ddm";
 pub const MOD_ADMIN: &str = "admin";

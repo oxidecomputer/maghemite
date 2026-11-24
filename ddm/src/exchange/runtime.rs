@@ -3,12 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Runtime helpers for the ddm prefix exchange protocol: HTTP push/pull
-//! initiators and dropshot endpoint handlers, and the route programming
-//! plumbing that drains received updates into the local DB and the
-//! forwarding platform via [`crate::sys`]. illumos-only.
+//! initiators and dropshot endpoint handlers, and the plumbing that drains
+//! received updates into the local DB, where the reconcilers pick them up
+//! and converge the forwarding platform. illumos-only.
 
 use super::ExchangeError;
-use crate::db::{Route, effective_route_set};
+use crate::db::Route;
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{err, inf, wrn};
@@ -544,8 +544,6 @@ fn handle_tunnel_update(
     let mut remove = HashSet::new();
     let db = &ctx.db;
 
-    let before = effective_route_set(&db.imported_tunnel());
-
     for x in &update.announce {
         import.insert(TunnelRoute {
             origin: v3::TunnelOrigin {
@@ -572,35 +570,8 @@ fn handle_tunnel_update(
     }
     db.delete_import_tunnel(&remove);
 
-    let after = effective_route_set(&db.imported_tunnel());
-
-    let to_add = after.difference(&before).copied().collect();
-    let to_del = before.difference(&after).copied().collect();
-
-    if let Err(e) =
-        crate::sys::add_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_add)
-    {
-        err!(
-            ctx.log,
-            ctx.config.if_name,
-            "add tunnel routes: {e}: {:#?}",
-            import,
-        )
-    }
-
-    if let Err(e) =
-        crate::sys::remove_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_del)
-    {
-        err!(
-            ctx.log,
-            ctx.config.if_name,
-            "remove tunnel routes: {e}: {:#?}",
-            import,
-        )
-    }
-
     ctx.stats
-        .imported_underlay_prefixes
+        .imported_tunnel_endpoints
         .store(ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
@@ -610,7 +581,6 @@ fn handle_underlay_update(
     peer_addr: Ipv6Addr,
 ) {
     let mut import = HashSet::new();
-    let mut add = Vec::new();
     let db = &ctx.db;
 
     for prefix in &update.announce {
@@ -625,16 +595,8 @@ fn handle_underlay_update(
             ifname: ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
-        let mut r = crate::sys::Route::new(
-            prefix.destination.addr().into(),
-            prefix.destination.width(),
-            peer_addr.into(),
-        );
-        r.ifname.clone_from(&ctx.config.if_name);
-        add.push(r);
     }
     db.import(&import);
-    crate::sys::add_underlay_routes(&ctx.log, &ctx.config, add, &ctx.rt);
 
     let mut withdraw = HashSet::new();
     for prefix in &update.withdraw {
@@ -646,34 +608,6 @@ fn handle_underlay_update(
         });
     }
     db.delete_import(&withdraw);
-
-    // We cannot simply delete withdrawn routes here. If we have other paths to
-    // the destination with the same nexthop, we'll be left with a route in the
-    // DB but not the underlying forwarding platform. We cannot delete a
-    // (destination, nexthop) pair until all path-vector routes with that tuple
-    // are gone. Another way to say this is that while we track routes by path,
-    // the underlying forwarding platform only knows about a vector. And since
-    // there can be many paths along vector, we can only delete a route from the
-    // forwarding platform if the complete vector is gone.
-    let mut del = Vec::new();
-    for w in &withdraw {
-        if db.routes_by_vector(w.destination, w.nexthop).is_empty() {
-            let mut r = crate::sys::Route::new(
-                w.destination.addr().into(),
-                w.destination.width(),
-                w.nexthop.into(),
-            );
-            r.ifname.clone_from(&ctx.config.if_name);
-            del.push(r);
-        }
-    }
-    crate::sys::remove_underlay_routes(
-        &ctx.log,
-        &ctx.config.if_name,
-        &ctx.config.dpd,
-        del,
-        &ctx.rt,
-    );
 
     ctx.stats
         .imported_underlay_prefixes

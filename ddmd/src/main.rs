@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use camino::Utf8PathBuf;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use ddm::admin::{HandlerContext, RouterStats, Tunables};
 use ddm::db::Db;
 use ddm::defaults::{
@@ -11,11 +11,10 @@ use ddm::defaults::{
     EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
 };
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
-#[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::reconciler::{ServerReconciler, TransitReconciler};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sys::Route;
+use ddm::sm::InterfaceState;
+use ddm::sm::{SmContext, StateMachine};
 use ddm_api_types::DEFAULT_ADMIN_PORT;
 use ddm_api_types::db::RouterKind;
 use mg_common::lock;
@@ -33,6 +32,11 @@ mod smf;
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
+#[command(group(
+    ArgGroup::new("transit_backend")
+        .args(["dendrite", "api_only"])
+        .multiple(true)
+))]
 struct Arg {
     /// Address objects to route over.
     #[arg(short, long = "addr", name = "addr")]
@@ -69,8 +73,13 @@ struct Arg {
     #[arg(long, default_value_t = DEFAULT_ADMIN_PORT)]
     admin_port: u16,
 
-    /// Kind of router to run.
-    #[arg(long, default_value_t = RouterKind::Server)]
+    /// Kind of router to run. A transit router requires a backend: either
+    /// --dendrite or --api-only.
+    #[arg(
+        long,
+        default_value_t = RouterKind::Server,
+        requires_if("transit", "transit_backend")
+    )]
     kind: RouterKind,
 
     /// The tcp port to listen on for exchange messages.
@@ -132,18 +141,13 @@ struct Arg {
     admin_port_file: Option<Utf8PathBuf>,
 }
 
-#[derive(Debug, Parser, Clone)]
-struct Dendrite {
-    host: String,
-    port: u16,
-}
-
 fn main() {
     oxide_tokio_rt::run(run())
 }
 
 async fn run() {
     let arg = Arg::parse();
+
     let log = init_logger();
 
     let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
@@ -152,14 +156,6 @@ async fn run() {
         .expect("set up refresh signal handler");
 
     let db = Db::new();
-
-    let dpd = match arg.dendrite {
-        true => Some(DpdConfig {
-            host: arg.dpd_host.clone(),
-            port: arg.dpd_port,
-        }),
-        false => None,
-    };
 
     let rt = Arc::new(tokio::runtime::Handle::current());
     let hostname = hostname::get()
@@ -172,9 +168,35 @@ async fn run() {
         None => hostname.clone(),
     };
 
-    let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
+    let sms = start_state_machines(&arg, &db, &router_id, &rt, &log);
 
-    termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
+    #[cfg(all(feature = "backend", target_os = "illumos"))]
+    if !arg.api_only {
+        match arg.kind {
+            RouterKind::Transit => {
+                // --dendrite is guaranteed by the arg validation in run().
+                //
+                // The dendrite backend takes a socket address, while dpd
+                // configuration historically allows any hostname.
+                use std::net::ToSocketAddrs;
+                let dpd_addr = (arg.dpd_host.as_str(), arg.dpd_port)
+                    .to_socket_addrs()
+                    .expect("resolve dpd host")
+                    .find_map(|addr| match addr {
+                        std::net::SocketAddr::V6(v6) => Some(v6),
+                        std::net::SocketAddr::V4(_) => None,
+                    })
+                    .expect("dpd host must resolve to an IPv6 address");
+                TransitReconciler::new(db.clone(), dpd_addr, log.clone())
+                    .spawn();
+            }
+            RouterKind::Server => {
+                ServerReconciler::new(db.clone(), log.clone()).spawn();
+            }
+        }
+    }
+
+    termination_handler();
 
     let router_stats = Arc::new(RouterStats::default());
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
@@ -193,9 +215,6 @@ async fn run() {
             ),
             ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
             exchange_timeout: Duration::from_millis(arg.exchange_timeout),
-            dendrite: arg.dendrite,
-            dpd_port: arg.dpd_port,
-            dpd_host: arg.dpd_host.clone(),
             exchange_tcp_port: arg.exchange_port,
         },
         log: log.clone(),
@@ -253,7 +272,6 @@ async fn run() {
 fn start_state_machines(
     arg: &Arg,
     db: &Db,
-    dpd: &Option<DpdConfig>,
     router_id: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
@@ -281,7 +299,6 @@ fn start_state_machines(
             if_name: String::new(),
             if_index: 0,
             kind: arg.kind,
-            dpd: dpd.clone(),
             addr: Ipv6Addr::UNSPECIFIED,
             sled_id: arg.sled_uuid,
             rack_id: arg.rack_uuid,
@@ -332,7 +349,6 @@ fn start_state_machines(
 fn start_state_machines(
     _arg: &Arg,
     _db: &Db,
-    _dpd: &Option<DpdConfig>,
     _hostname: &str,
     _rt: &Arc<tokio::runtime::Handle>,
     _log: &Logger,
@@ -340,46 +356,19 @@ fn start_state_machines(
     Vec::new()
 }
 
-/// Install a Ctrl-C handler that withdraws ddmd's imported routes from the
-/// kernel before exiting. On non-illumos builds there are no kernel routes
-/// to withdraw, so the handler just exits cleanly.
-fn termination_handler(
-    db: Db,
-    dendrite: Option<DpdConfig>,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) {
+/// Install a Ctrl-C handler that exits the process. Dataplane state is left
+/// in place: a restarted ddmd converges it via the reconcilers, which heal
+/// drift rather than requiring a clean slate.
+///
+/// Note that neither the reconciler, nor this handler is capable of preventing
+/// route removal failures from becoming stale, and so we leave that for future
+/// design work.
+fn termination_handler() {
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
             .await
             .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
-
-        #[cfg(all(feature = "backend", target_os = "illumos"))]
-        {
-            let imported = db.imported();
-            let routes: Vec<Route> =
-                imported.iter().map(|x| (x.clone()).into()).collect();
-            ddm::sys::remove_underlay_routes(
-                &log,
-                "shutdown-all",
-                &dendrite,
-                routes,
-                &rt,
-            );
-
-            let imported_tnl = db.imported_tunnel();
-            if let Err(e) = ddm::sys::remove_tunnel_routes(
-                &log,
-                "shutdown-all",
-                &imported_tnl,
-            ) {
-                error!(log, "shutdown tunnel routes: {e}");
-            }
-        }
-        #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-        let _ = (db, dendrite, rt, log);
-
         std::process::exit(SIGTERM_EXIT);
     });
 }

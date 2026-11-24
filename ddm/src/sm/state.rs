@@ -3,9 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Routing state machine implementation. The `Init` -> `Solicit` ->
-//! `Exchange` lifecycle drives kernel route programming via [`crate::sys`]
-//! and reads interface addressing through `libnet`. This module is
-//! illumos-only.
+//! `Exchange` lifecycle maintains the desired routes in the [`crate::db`],
+//! which the reconcilers converge the dataplane onto, and reads interface
+//! addressing through `libnet`. This module is illumos-only.
 
 use super::{
     AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
@@ -358,31 +358,6 @@ impl Exchange {
         self.ctx.iface.clear_peer();
         let (mut to_remove, to_remove_tnl) =
             self.ctx.db.remove_nexthop_routes(self.peer);
-        let mut routes: Vec<crate::sys::Route> = Vec::new();
-        for x in &to_remove {
-            let mut r: crate::sys::Route = x.clone().into();
-            r.ifname.clone_from(&self.ctx.config.if_name);
-            routes.push(r);
-        }
-        crate::sys::remove_underlay_routes(
-            &self.log,
-            &self.ctx.config.if_name,
-            &self.ctx.config.dpd,
-            routes,
-            &self.ctx.rt,
-        );
-        if let Err(e) = crate::sys::remove_tunnel_routes(
-            &self.log,
-            &self.ctx.config.if_name,
-            &to_remove_tnl,
-        ) {
-            err!(
-                self.log,
-                self.ctx.config.if_name,
-                "failed to remove tunnel routes: {:#?} {e}",
-                to_remove_tnl
-            );
-        }
         // if we're a transit router propagate withdraws for the
         // expired peer.
         if self.ctx.config.kind == RouterKind::Transit {

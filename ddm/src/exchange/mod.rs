@@ -17,9 +17,8 @@
 //!
 //! The wire types ([`Update`], [`UnderlayUpdate`], [`TunnelUpdate`], and
 //! their versioned counterparts) are platform-agnostic and stay in this
-//! module. The runtime helpers that drive the HTTP exchange protocol and
-//! program forwarding state live in the [`runtime`] submodule and are
-//! illumos-only, since they call into [`crate::sys`] to install routes.
+//! module. The runtime helpers that drive the HTTP exchange protocol live
+//! in the [`runtime`] submodule and are illumos-only.
 
 use thiserror::Error;
 

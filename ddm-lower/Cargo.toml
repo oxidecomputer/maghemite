@@ -1,0 +1,31 @@
+[package]
+name = "ddm-lower"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[dependencies]
+derive_more.workspace = true
+ddm-api-types.workspace = true
+dpd-client.workspace = true
+libc.workspace = true
+oxnet.workspace = true
+reqwest.workspace = true
+schemars.workspace = true
+serde.workspace = true
+slog.workspace = true
+slog-error-chain.workspace = true
+thiserror.workspace = true
+
+# illumos-only deps used by the dataplane backends. Gated by the `backend`
+# feature so stub builds (e.g. Linux test fixtures running `ddmd` with
+# `--api-only`) link cleanly.
+libnet = { workspace = true, optional = true }
+opte-ioctl = { workspace = true, optional = true }
+oxide-vpc = { workspace = true, optional = true }
+
+[features]
+default = ["backend"]
+backend = ["dep:libnet", "dep:opte-ioctl", "dep:oxide-vpc"]

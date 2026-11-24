@@ -626,12 +626,32 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
+    // Make sure the route is actually present before we remove it
+    wait_for_eq!(zs1.zexec("netstat -nrf inet6 | grep fd00:2 | wc -l")?, "1");
+    wait_for_eq!(
+        zt1.zexec(
+            "/opt/oxide/dendrite/bin/swadm route list | grep fd00:2 | wc -l"
+        )?,
+        "1"
+    );
+
     s2.withdraw_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
         .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 1);
+
+    // Ensure the route actually got deleted
+    wait_for_eq!(zs1.zexec("netstat -nrf inet6 | grep fd00:2 | wc -l")?, "0");
+    wait_for_eq!(
+        zt1.zexec(
+            "/opt/oxide/dendrite/bin/swadm route list | grep fd00:2 | wc -l"
+        )?,
+        "0"
+    );
+
+    println_nopipe!("withdraw dataplane removal passed");
 
     s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
         .await?;

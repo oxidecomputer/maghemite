@@ -4,8 +4,8 @@
 
 //! State machine type definitions and the [`StateMachine`] handle. The
 //! routing state machine implementation (discovery, solicit, exchange) lives
-//! in the [`state`] submodule and is illumos-only, since it programs kernel
-//! routes via [`crate::sys`] and reads interface addressing through `libnet`.
+//! in the [`state`] submodule and is illumos-only, since it reads interface
+//! addressing through `libnet`.
 
 use crate::db::Db;
 use crate::discovery::{self, Version};
@@ -173,20 +173,11 @@ pub struct Config {
     /// TCP port to use for prefix exchange.
     pub exchange_port: u16,
 
-    /// Dendrite dpd config
-    pub dpd: Option<DpdConfig>,
-
     /// Rack ID
     pub rack_id: Option<Uuid>,
 
     /// Sled ID
     pub sled_id: Option<Uuid>,
-}
-
-#[derive(Clone)]
-pub struct DpdConfig {
-    pub host: String,
-    pub port: u16,
 }
 
 #[derive(Clone, Debug)]

@@ -486,7 +486,7 @@ dependencies = [
  "camino",
  "chacha20poly1305",
  "ciborium",
- "derive_more",
+ "derive_more 0.99.20",
  "hex",
  "hkdf",
  "omicron-ledger",
@@ -861,7 +861,7 @@ dependencies = [
  "camino-tempfile",
  "chrono",
  "daft",
- "derive_more",
+ "derive_more 0.99.20",
  "expectorate",
  "iddqd 0.4.6",
  "itertools 0.14.0",
@@ -881,7 +881,7 @@ dependencies = [
  "anyhow",
  "camino",
  "clap",
- "derive_more",
+ "derive_more 0.99.20",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -1069,6 +1069,15 @@ name = "convert_case"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
+
+[[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "cookie"
@@ -1434,7 +1443,9 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-lower",
  "ddm-protocol",
+ "derive_more 2.1.1",
  "dpd-client",
  "dropshot 0.18.0",
  "hostname 0.4.2",
@@ -1445,8 +1456,6 @@ dependencies = [
  "libnet",
  "mg-common",
  "omicron-common",
- "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
- "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -1504,6 +1513,27 @@ dependencies = [
  "serde",
  "serde_repr",
  "uuid",
+]
+
+[[package]]
+name = "ddm-lower"
+version = "0.1.0"
+dependencies = [
+ "ddm-api-types",
+ "derive_more 2.1.1",
+ "dpd-client",
+ "libc",
+ "libnet",
+ "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
+ "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
+ "oxnet",
+ "pretty_assertions",
+ "reqwest 0.13.5",
+ "schemars 0.8.22",
+ "serde",
+ "slog",
+ "slog-error-chain",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1643,11 +1673,34 @@ version = "0.99.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
 dependencies = [
- "convert_case",
+ "convert_case 0.4.0",
  "proc-macro2",
  "quote",
  "rustc_version 0.4.1",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "convert_case 0.10.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version 0.4.1",
+ "syn 2.0.119",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -4437,7 +4490,7 @@ dependencies = [
  "cookie",
  "daft",
  "derive-where",
- "derive_more",
+ "derive_more 0.99.20",
  "dropshot 0.17.1",
  "either",
  "ereport-types",
@@ -8611,7 +8664,7 @@ dependencies = [
  "chacha20poly1305",
  "ciborium",
  "daft",
- "derive_more",
+ "derive_more 0.99.20",
  "gfss",
  "hex",
  "hkdf",
@@ -8651,7 +8704,7 @@ source = "git+https://github.com/oxidecomputer/omicron?branch=main#d6fba551d0d87
 dependencies = [
  "byte-wrapper",
  "daft",
- "derive_more",
+ "derive_more 0.99.20",
  "gfss",
  "iddqd 0.4.6",
  "omicron-uuid-kinds",

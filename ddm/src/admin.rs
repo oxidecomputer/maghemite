@@ -82,9 +82,6 @@ pub struct Tunables {
     pub discovery_read_timeout: Duration,
     pub ip_addr_wait: Duration,
     pub exchange_timeout: Duration,
-    pub dendrite: bool,
-    pub dpd_port: u16,
-    pub dpd_host: String,
     pub exchange_tcp_port: u16,
 }
 
@@ -96,10 +93,7 @@ impl Default for Tunables {
             discovery_read_timeout: DISCOVERY_READ_TIMEOUT,
             ip_addr_wait: IP_ADDR_WAIT,
             exchange_timeout: EXCHANGE_TIMEOUT,
-            dpd_port: dpd_client::default_port(),
-            dpd_host: "localhost".into(),
             exchange_tcp_port: EXCHANGE_TCP_PORT,
-            dendrite: true,
         }
     }
 }
@@ -474,14 +468,6 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 if_index: 0,                // initialized in state machine
                 // External peers are only a thing for transit routers.
                 kind: RouterKind::Transit,
-                dpd: if ctx.tunables.dendrite {
-                    Some(crate::sm::DpdConfig {
-                        host: ctx.tunables.dpd_host.clone(),
-                        port: ctx.tunables.dpd_port,
-                    })
-                } else {
-                    None
-                },
                 addr: Ipv6Addr::UNSPECIFIED,
                 rack_id: ctx.rack_id,
                 sled_id: ctx.sled_id,
