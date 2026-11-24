@@ -200,7 +200,8 @@ impl IllumosBackend {
         ifname: InterfaceName,
         origins: &HashSet<TunnelOrigin>,
     ) -> Result<(), Vec<Error>> {
-        // An error here is fatal. We'll try again on the next reconciliation.
+        // An error here prevents us from doing anything else at this time.
+        // We'll try again on the next reconciliation.
         let hdl = OpteHdl::open().map_err(|e| vec![Error::OpteOpenHdl(e)])?;
         let (tunnel_routes, mut errors) = create_tunnel_routes(origins);
 
@@ -248,7 +249,8 @@ impl IllumosBackend {
         ifname: InterfaceName,
         origins: &HashSet<TunnelOrigin>,
     ) -> Result<(), Vec<Error>> {
-        // An error here is fatal. We'll try again on the next reconciliation.
+        // An error here prevents us from doing anything else at this time.
+        // We'll try again on the next reconciliation.
         let hdl = OpteHdl::open().map_err(|e| vec![Error::OpteOpenHdl(e)])?;
         let (tunnel_routes, mut errors) = create_tunnel_routes(origins);
 
