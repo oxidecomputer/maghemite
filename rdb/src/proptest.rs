@@ -2,11 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Property-based tests for Prefix types using proptest
+//! Property tests for prefixes and BGP configuration.
 //!
-//! These tests verify key invariants of the Prefix types to ensure
-//! correctness and consistency of prefix operations (excluding wire format
-//! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
+//! BGP wire-format tests live in `bgp/src/proptest.rs`.
 
 use crate::types::StaticRouteKey;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpNeighborParameters};

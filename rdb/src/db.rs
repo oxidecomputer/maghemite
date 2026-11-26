@@ -12,6 +12,7 @@
 use crate::bestpath::bestpaths;
 use crate::error::Error;
 use crate::log::rdb_log;
+use crate::mrib::{Mrib, MribTable};
 use crate::types::*;
 use chrono::Utc;
 use mg_api_types::bfd::BfdPeerConfig;
@@ -34,8 +35,12 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{sleep, spawn};
 
-const UNIT_PERSISTENT: &str = "persistent";
+/// Log unit for persistence operations.
+pub(crate) const UNIT_PERSISTENT: &str = "persistent";
 const UNIT_RIB: &str = "rib";
+
+/// Maximum number of `(S,G)` keys processed while a loc-rib lock is held.
+const MRIB_SOURCE_CHUNK: usize = 64;
 
 /// The handle used to open a persistent key-value tree for BGP IPv4 origin
 /// information.
@@ -105,6 +110,9 @@ pub struct Db {
     /// added to the lower half forwarding plane.
     rib6_loc: Arc<Mutex<Rib6>>,
 
+    /// Multicast routing information base (MRIB).
+    mrib: Mrib,
+
     /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
 
@@ -170,6 +178,7 @@ impl Db {
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
+            mrib: Mrib::new(log.clone()),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
@@ -205,6 +214,14 @@ impl Db {
                 );
             }
         }
+
+        // Deliver unicast notifications before MRIB work to avoid delaying
+        // unicast consumers.
+        //
+        // MRIB selection may still be pending when they wake. Multicast
+        // consumers should watch MRIB notifications rather than infer MRIB
+        // state from unicast notifications.
+        self.revalidate_mrib(Some(&n.changed));
     }
 
     fn loc_rib4(&self) -> Rib4 {
@@ -701,7 +718,7 @@ impl Db {
         }
     }
 
-    pub fn update_rib4_loc(
+    fn update_rib4_loc(
         &self,
         rib_in: &Rib4,
         rib_loc: &mut Rib4,
@@ -738,7 +755,7 @@ impl Db {
         }
     }
 
-    pub fn update_rib6_loc(
+    fn update_rib6_loc(
         &self,
         rib_in: &Rib6,
         rib_loc: &mut Rib6,
@@ -824,6 +841,8 @@ impl Db {
                 }
             }
         }
+
+        self.revalidate_mrib(None);
     }
 
     fn update_rib_loc<P: Ord + Copy>(
@@ -840,6 +859,32 @@ impl Db {
                 rib_loc.remove(prefix);
             }
         }
+    }
+
+    /// Whether or not any of `candidates` has a nonempty path set in `rib`.
+    ///
+    /// `candidates` runs from the longest prefix width to the shortest, so the
+    /// first hit is the longest covering prefix with a nonempty path set.
+    /// A prefix present with an empty path set is skipped, as mg-lower does
+    /// not install it and forwarding falls through to a shorter prefix.
+    /// For a W-bit address, there are at most W + 1 exact-key lookups. With
+    /// N loc-rib entries, the cost is O(W log N).
+    ///
+    /// Shutdown paths count here, as unicast bestpath continues to select
+    /// them when no active path exists.
+    ///
+    /// This relies on loc-rib keys having their host bits unset.
+    // TODO: Enforce canonical loc-rib keys in rdb by normalizing or
+    // rejecting host bits in `add_static_routes`, `remove_static_routes`,
+    // and `add_bgp_prefixes`. Preserve removal of legacy persisted keys
+    // with the host bits set.
+    fn has_covering_route<P: Ord>(
+        rib: &BTreeMap<P, BTreeSet<Path>>,
+        mut candidates: impl Iterator<Item = P>,
+    ) -> bool {
+        candidates.any(|prefix| {
+            rib.get(&prefix).is_some_and(|paths| !paths.is_empty())
+        })
     }
 
     fn add_prefix4_path(
@@ -878,7 +923,7 @@ impl Db {
         self.update_rib6_loc(rib_in, rib_loc, p6);
     }
 
-    pub fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
+    fn add_prefix_path(&self, prefix: &IpNet, path: &Path) {
         match prefix {
             IpNet::V4(p4) => {
                 let mut rib_in = lock!(self.rib4_in);
@@ -922,6 +967,13 @@ impl Db {
         Ok(())
     }
 
+    /// Persist static unicast routes to sled and add them to the loc_rib.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a sled tree failure. IPv4 routes are written before
+    /// IPv6 ones, and an IPv6 failure preserves the IPv4 routes already in
+    /// place (that still are notified).
     pub fn add_static_routes(
         &self,
         routes: &[StaticRouteKey],
@@ -938,18 +990,20 @@ impl Db {
             },
         );
 
-        {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            self.add_static_routes_to_tree(tree, &routes4, &mut pcn)?;
-        }
+        let res = (|| {
+            for (tree, routes) in
+                [(STATIC4_ROUTES, routes4), (STATIC6_ROUTES, routes6)]
+            {
+                let tree = self.persistent.open_tree(tree)?;
+                self.add_static_routes_to_tree(tree, &routes, &mut pcn)?;
+            }
+            Ok(())
+        })();
 
-        {
-            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-            self.add_static_routes_to_tree(tree, &routes6, &mut pcn)?;
+        if res.is_ok() || !pcn.changed.is_empty() {
+            self.notify(pcn);
         }
-
-        self.notify(pcn);
-        Ok(())
+        res
     }
 
     pub fn add_bgp_prefixes(&self, prefixes: &[IpNet], path: Path) {
@@ -1218,7 +1272,7 @@ impl Db {
         }
     }
 
-    pub fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
+    fn remove_path_for_prefixes<F>(&self, prefixes: &[IpNet], prefix_cmp: F)
     where
         F: Fn(&Path) -> bool,
     {
@@ -1467,6 +1521,177 @@ impl Db {
         *value = slot;
     }
 
+    /// Select or withdraw the `(S,G)` routes in `keys` by the reachability of
+    /// their shared `source` in the unicast loc-rib.
+    ///
+    /// A source is considered reachable when some covering prefix in the
+    /// loc-rib has a nonempty path set. A default route qualifies, as
+    /// does a match with only shutdown paths.
+    ///
+    /// Keys are processed in chunks of [`MRIB_SOURCE_CHUNK`]. Each chunk is
+    /// checked and applied while the IP family's loc-rib lock is held.
+    /// Updates to the same key follow the order of their reachability checks.
+    /// Reachability is rechecked on each chunk, as the loc-rib may change
+    /// between chunks.
+    ///
+    /// NOTE: Selection of a source is not atomic. Between chunks, readers of
+    /// `mrib_loc` can see some of the source's keys updated and others still
+    /// pending. The caller notifies after processing all chunks. A watcher
+    /// handling an earlier notification can still observe a partial update.
+    ///
+    /// Returns the keys whose `mrib_loc` entry was modified.
+    fn select_by_source(
+        &self,
+        source: IpAddr,
+        keys: &[MulticastRouteKey],
+    ) -> BTreeSet<MulticastRouteKey> {
+        let mut changed = BTreeSet::new();
+        for chunk in keys.chunks(MRIB_SOURCE_CHUNK) {
+            let selected = match source {
+                IpAddr::V4(addr) => {
+                    let rib = lock!(self.rib4_loc);
+                    let host = Ipv4Net::host_net(addr);
+                    let reachable = Self::has_covering_route(
+                        &rib,
+                        (0..=host.width())
+                            .rev()
+                            .filter_map(|width| host.resize(width, 0).ok()),
+                    );
+                    self.mrib.set_source_reachable(chunk, reachable)
+                }
+                IpAddr::V6(addr) => {
+                    let rib = lock!(self.rib6_loc);
+                    let host = Ipv6Net::host_net(addr);
+                    let reachable = Self::has_covering_route(
+                        &rib,
+                        (0..=host.width())
+                            .rev()
+                            .filter_map(|width| host.resize(width, 0).ok()),
+                    );
+                    self.mrib.set_source_reachable(chunk, reachable)
+                }
+            };
+            changed.extend(selected);
+        }
+        changed
+    }
+
+    fn notify_mrib(&self, changed: BTreeSet<MulticastRouteKey>) {
+        if !changed.is_empty() {
+            self.mrib.notify(MribChangeNotification { changed });
+        }
+    }
+
+    /// Re-run `(S,G)` selection via [`Self::select_by_source`] after the
+    /// unicast loc-rib changes.
+    ///
+    /// Callers must not hold `rib4_loc` or `rib6_loc` because reachability
+    /// checks acquire them per chunk.
+    ///
+    /// With `Some(changed)`, only sources covered by changed prefixes of the
+    /// same IP family are revisited. Changes outside those ranges cannot alter
+    /// a source's longest-prefix match. An empty set does no work.
+    ///
+    /// Affected routes are discovered via a range query over the MRIB's source
+    /// index. Routes sharing a source use one reachability check per chunk of
+    /// [`MRIB_SOURCE_CHUNK`] keys.
+    ///
+    /// A `changed` value of `None` revisits every `(S,G)` route after a
+    /// bestpath rerun.
+    fn revalidate_mrib(&self, changed: Option<&BTreeSet<IpNet>>) {
+        if changed.is_some_and(BTreeSet::is_empty) {
+            return;
+        }
+
+        let mut updated = BTreeSet::new();
+        for (source, keys) in self.mrib.source_specific_keys(changed) {
+            updated.extend(self.select_by_source(source, &keys));
+        }
+
+        self.notify_mrib(updated);
+    }
+
+    /// Apply static multicast routes to the MRIB.
+    ///
+    /// The last occurrence of a key in `routes` supplies its configuration.
+    /// Selection reruns for every key in the batch.
+    pub fn add_static_mcast_routes(&self, routes: &[MulticastRoute]) {
+        let routes: BTreeMap<_, _> =
+            routes.iter().map(|route| (route.key, route)).collect();
+        let updates = routes.values().copied().map(|route| {
+            // TODO: Handle dynamically learned origins (IGMP, MLD) when they
+            // are added to `MulticastSourceProtocol`.
+            let MulticastSourceProtocol::Static = route.source;
+            route.clone()
+        });
+
+        let mut changed = self.mrib.add_routes(updates);
+        let mut by_source: BTreeMap<IpAddr, Vec<MulticastRouteKey>> =
+            BTreeMap::new();
+        for key in routes.into_keys() {
+            if let Some(source) = key.source() {
+                by_source.entry(source).or_default().push(key);
+            }
+        }
+        for (source, keys) in by_source {
+            changed.extend(self.select_by_source(source, &keys));
+        }
+        self.notify_mrib(changed);
+    }
+
+    /// Remove static multicast routes from both `mrib_in` and `mrib_loc`.
+    pub fn remove_static_mcast_routes(&self, keys: &[MulticastRouteKey]) {
+        self.notify_mrib(self.mrib.remove_routes(keys));
+    }
+
+    /// Get all static multicast routes from `mrib_in`.
+    pub fn get_static_mcast_routes(&self) -> Vec<MulticastRoute> {
+        self.mrib
+            .full_mrib(None)
+            .into_values()
+            .filter(|route| route.source == MulticastSourceProtocol::Static)
+            .collect()
+    }
+
+    /// Get a multicast route from `mrib_in`.
+    pub fn get_mcast_route(
+        &self,
+        key: &MulticastRouteKey,
+    ) -> Option<MulticastRoute> {
+        self.mrib.get_route(key)
+    }
+
+    /// Get the MRIB input table, optionally filtered by address family.
+    ///
+    /// `None` includes both address families.
+    pub fn full_mrib(&self, af: Option<AddressFamily>) -> MribTable {
+        self.mrib.full_mrib(af)
+    }
+
+    /// Get the selected MRIB table, optionally filtered by address family.
+    ///
+    /// `None` includes both address families.
+    pub fn loc_mrib(&self, af: Option<AddressFamily>) -> MribTable {
+        self.mrib.loc_mrib(af)
+    }
+
+    /// Get a specific multicast route from `mrib_loc` (selected routes).
+    pub fn get_selected_mcast_route(
+        &self,
+        key: &MulticastRouteKey,
+    ) -> Option<MulticastRoute> {
+        self.mrib.get_selected_route(key)
+    }
+
+    /// Register a watcher for MRIB changes.
+    pub fn watch_mrib(
+        &self,
+        tag: String,
+        sender: Sender<MribChangeNotification>,
+    ) {
+        self.mrib.watch(tag, sender);
+    }
+
     pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
         match af {
             AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer.clone()),
@@ -1528,8 +1753,15 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
-        types::test_helpers::path_vecs_equal,
+        StaticRouteKey,
+        db::{Db, MRIB_SOURCE_CHUNK},
+        test::{TestDb, underlay_group, vni},
+        types::{
+            Asn, MulticastAddr, MulticastAddrV4, MulticastAddrV6,
+            MulticastRoute, MulticastRouteKey, MulticastSourceProtocol,
+            PrefixDbKey, UnderlayMulticastIpv6, UnicastAddrV4, UnicastAddrV6,
+            test_helpers::path_vecs_equal,
+        },
     };
     use client_common::eprintln_nopipe;
     use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
@@ -1539,6 +1771,7 @@ mod test {
     use oxnet::{IpNet, Ipv4Net, Ipv6Net};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
+    use std::sync::{Barrier, mpsc};
 
     fn get_test_db() -> TestDb {
         let log = init_file_logger("rib.log");
@@ -1859,6 +2092,678 @@ mod test {
         // rib should be empty again
         assert!(db.full_rib(None).is_empty());
         assert!(db.loc_rib(None).is_empty());
+    }
+
+    #[test]
+    fn test_mrib_revalidation_on_rib_change() {
+        // Exercise selection and withdrawal for both address families.
+        fn test_address_family<P: Into<IpNet> + Copy>(
+            db: &Db,
+            source: IpAddr,
+            prefix: P,
+            nexthop: IpAddr,
+            group: MulticastAddr,
+        ) {
+            let static_route = StaticRouteKey {
+                prefix: prefix.into(),
+                nexthop,
+                vlan_id: None,
+                rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+            };
+            db.add_static_routes(&[static_route]).unwrap();
+
+            let key = MulticastRouteKey::new(Some(source), group, vni())
+                .expect("valid unicast source in the group's address family");
+            let route = MulticastRoute::new(
+                key,
+                underlay_group(),
+                MulticastSourceProtocol::Static,
+            );
+            db.add_static_mcast_routes(&[route]);
+
+            assert!(
+                db.get_selected_mcast_route(&key).is_some(),
+                "(S,G) was not selected initially"
+            );
+
+            db.remove_static_routes(&[static_route]).unwrap();
+
+            assert!(
+                db.get_selected_mcast_route(&key).is_none(),
+                "(S,G) remained selected after unicast route removed"
+            );
+
+            db.add_static_routes(&[static_route]).unwrap();
+
+            assert!(
+                db.get_selected_mcast_route(&key).is_some(),
+                "(S,G) not re-selected after unicast route restored"
+            );
+
+            db.remove_static_routes(&[static_route]).unwrap();
+            db.remove_static_mcast_routes(&[key]);
+        }
+
+        let log = init_file_logger("mrib_reval.log");
+        let db =
+            crate::test::get_test_db("mrib_reval", log).expect("create db");
+
+        // IPv4
+        test_address_family(
+            &db,
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+            "192.0.2.0/24".parse::<Ipv4Net>().unwrap(),
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            MulticastAddr::new("225.1.1.1".parse().unwrap())
+                .expect("valid mcast"),
+        );
+
+        // IPv6
+        test_address_family(
+            &db,
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)),
+            "2001:db8::/32".parse::<Ipv6Net>().unwrap(),
+            IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
+            MulticastAddr::new("ff0e::1".parse().unwrap())
+                .expect("valid mcast"),
+        );
+    }
+
+    #[test]
+    fn test_mrib_default_route_and_shutdown_path() {
+        let log = init_file_logger("mrib_default.log");
+        let db =
+            crate::test::get_test_db("mrib_default", log).expect("create db");
+
+        let source = UnicastAddrV4::new(Ipv4Addr::new(203, 0, 113, 9))
+            .expect("valid unicast");
+        let group = MulticastAddrV4::new(Ipv4Addr::new(232, 9, 9, 9))
+            .expect("valid mcast");
+        let key = MulticastRouteKey::source_specific_v4(source, group, vni());
+        let route = MulticastRoute::new(
+            key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(&[route]);
+        assert!(db.get_selected_mcast_route(&key).is_none());
+
+        let nexthop = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        let default = StaticRouteKey {
+            prefix: "0.0.0.0/0".parse::<Ipv4Net>().unwrap().into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[default]).unwrap();
+        assert!(
+            db.get_selected_mcast_route(&key).is_some(),
+            "default route should resolve the source"
+        );
+
+        db.set_nexthop_shutdown(nexthop, true);
+        assert!(
+            db.get_selected_mcast_route(&key).is_some(),
+            "shutdown-only default route should still resolve the source"
+        );
+
+        db.set_nexthop_shutdown(nexthop, false);
+        assert!(db.get_selected_mcast_route(&key).is_some());
+
+        let specific_nexthop = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2));
+        let specific = StaticRouteKey {
+            prefix: "203.0.113.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: specific_nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[specific]).unwrap();
+        assert!(db.get_selected_mcast_route(&key).is_some());
+
+        db.set_nexthop_shutdown(specific_nexthop, true);
+        assert!(
+            db.get_selected_mcast_route(&key).is_some(),
+            "shutdown-only longest match should still resolve the source"
+        );
+
+        db.set_nexthop_shutdown(specific_nexthop, false);
+        db.remove_static_routes(&[default, specific]).unwrap();
+        assert!(
+            db.get_selected_mcast_route(&key).is_none(),
+            "no match for the source should withdraw the route"
+        );
+
+        let host: Ipv4Net = "203.0.113.9/32".parse().unwrap();
+        let host_path = Path::from(StaticRouteKey {
+            prefix: host.into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        });
+        db.add_prefix_path(&host.into(), &host_path);
+
+        let unrelated = StaticRouteKey {
+            prefix: "192.0.2.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[unrelated]).unwrap();
+        assert!(
+            db.get_selected_mcast_route(&key).is_none(),
+            "change to a prefix not covering the source leaves selection alone"
+        );
+
+        let covering = StaticRouteKey {
+            prefix: "203.0.113.0/26".parse::<Ipv4Net>().unwrap().into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[covering]).unwrap();
+        assert!(
+            db.get_selected_mcast_route(&key).is_some(),
+            "change to a prefix covering the source revalidates it"
+        );
+
+        db.remove_path_for_prefixes(&[host.into()], |path| *path == host_path);
+        db.remove_static_routes(&[unrelated, covering]).unwrap();
+        assert!(db.get_selected_mcast_route(&key).is_none());
+
+        db.add_static_routes(&[default]).unwrap();
+        assert!(db.get_selected_mcast_route(&key).is_some());
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+        db.remove_static_mcast_routes(&[key]);
+        let n = rx.try_recv().expect("removing a selected route notifies");
+        assert!(n.changed.contains(&key));
+        assert!(db.get_mcast_route(&key).is_none());
+        assert!(db.get_selected_mcast_route(&key).is_none());
+        assert!(db.full_mrib(None).is_empty());
+        assert!(db.loc_mrib(None).is_empty());
+
+        db.remove_static_routes(&[default]).unwrap();
+    }
+
+    /// Replaying an unchanged static route leaves `mrib_in` as is, without
+    /// notifying watchers.
+    #[test]
+    fn test_mrib_static_replay_is_unchanged() {
+        let log = init_file_logger("mrib_replay.log");
+        let db =
+            crate::test::get_test_db("mrib_replay", log).expect("create db");
+
+        let nexthop = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        let static_route = StaticRouteKey {
+            prefix: "192.0.2.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_route]).unwrap();
+
+        let key = MulticastRouteKey::new(
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
+            MulticastAddr::new("225.1.1.2".parse().unwrap())
+                .expect("valid mcast"),
+            vni(),
+        )
+        .expect("valid unicast source in the group's address family");
+
+        let route = MulticastRoute::new(
+            key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(&[route]);
+
+        assert!(
+            db.get_selected_mcast_route(&key).is_some(),
+            "(S,G) was not selected"
+        );
+
+        let before = db.get_mcast_route(&key).expect("route in mrib_in");
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+
+        let replay = MulticastRoute::new(
+            key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(std::slice::from_ref(&replay));
+        assert!(
+            rx.try_recv().is_err(),
+            "unchanged replay notified a watcher"
+        );
+
+        let replacement = MulticastRoute {
+            underlay_group: UnderlayMulticastIpv6::new(
+                "ff04::2".parse().unwrap(),
+            )
+            .unwrap(),
+            ..replay.clone()
+        };
+        db.add_static_mcast_routes(&[replacement, replay]);
+        assert!(
+            rx.try_recv().is_err(),
+            "unchanged replay with a duplicate key notified a watcher"
+        );
+
+        let after = db.get_mcast_route(&key).expect("route in mrib_in");
+        assert_eq!(after, before, "unchanged replay changed mrib_in");
+
+        db.remove_static_routes(&[static_route]).unwrap();
+        db.remove_static_mcast_routes(&[key]);
+    }
+
+    #[test]
+    fn test_mrib_static_update_refreshes_route() {
+        let log = init_file_logger("mrib_update.log");
+        let db =
+            crate::test::get_test_db("mrib_update", log).expect("create db");
+
+        let static_route = StaticRouteKey {
+            prefix: "192.0.2.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_route]).unwrap();
+
+        let key = MulticastRouteKey::new(
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
+            MulticastAddr::new("225.1.1.2".parse().unwrap())
+                .expect("valid mcast"),
+            vni(),
+        )
+        .expect("valid unicast source in the group address family");
+        let route = MulticastRoute::new(
+            key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+        db.add_static_mcast_routes(std::slice::from_ref(&route));
+        assert_eq!(db.get_selected_mcast_route(&key), Some(route.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+
+        let replacement = MulticastRoute {
+            underlay_group: UnderlayMulticastIpv6::new(Ipv6Addr::new(
+                0xff04, 0, 0, 0, 0, 0, 0, 2,
+            ))
+            .expect("valid underlay group"),
+            ..route.clone()
+        };
+        db.add_static_mcast_routes(std::slice::from_ref(&replacement));
+
+        let after = db.get_mcast_route(&key).expect("route in mrib_in");
+        assert_eq!(after, replacement);
+        assert_eq!(db.get_selected_mcast_route(&key), Some(after.clone()));
+        assert_eq!(db.get_static_mcast_routes(), vec![after]);
+
+        let n = rx.try_recv().expect("update notifies");
+        assert_eq!(n.changed, [key].into_iter().collect());
+        assert!(rx.try_recv().is_err(), "one notification per update");
+
+        db.remove_static_mcast_routes(&[key]);
+        db.remove_static_routes(&[static_route]).unwrap();
+    }
+
+    /// Test `(*,G)` vs `(S,G)` selection behavior.
+    ///
+    /// - `(*,G)` routes are always selected
+    /// - `(S,G)` routes require a unicast route to the source
+    #[test]
+    fn test_mrib_any_source_vs_source_specific() {
+        let log = init_file_logger("mrib_asm_ssm.log");
+        let db =
+            crate::test::get_test_db("mrib_asm_ssm", log).expect("create db");
+
+        let asm_group = MulticastAddr::new("225.5.5.5".parse().unwrap())
+            .expect("valid mcast");
+        let star_g_key =
+            MulticastRouteKey::any_source(asm_group, vni()).expect("ASM group");
+        let star_g_route = MulticastRoute::new(
+            star_g_key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[star_g_route]);
+
+        assert!(
+            db.get_selected_mcast_route(&star_g_key).is_some(),
+            "(*,G) should be in mrib_loc immediately"
+        );
+        assert!(
+            db.get_mcast_route(&star_g_key).is_some(),
+            "(*,G) should also be in mrib_in"
+        );
+
+        let ssm_group = MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, 1))
+            .expect("valid mcast");
+        let source = UnicastAddrV4::new(Ipv4Addr::new(10, 0, 0, 100))
+            .expect("valid unicast");
+        let sg_key =
+            MulticastRouteKey::source_specific_v4(source, ssm_group, vni());
+        let sg_route = MulticastRoute::new(
+            sg_key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[sg_route]);
+
+        assert!(
+            db.get_mcast_route(&sg_key).is_some(),
+            "(S,G) should be in mrib_in"
+        );
+        assert!(
+            db.get_selected_mcast_route(&sg_key).is_none(),
+            "(S,G) should NOT be in mrib_loc without unicast route"
+        );
+
+        let v6_group = MulticastAddr::new("ff0e::5555".parse().unwrap())
+            .expect("valid mcast");
+        let v6_star_g_key =
+            MulticastRouteKey::any_source(v6_group, vni()).expect("ASM group");
+        let v6_star_g_route = MulticastRoute::new(
+            v6_star_g_key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[v6_star_g_route]);
+
+        assert!(
+            db.get_selected_mcast_route(&v6_star_g_key).is_some(),
+            "IPv6 (*,G) should be selected immediately"
+        );
+
+        let v6_ssm_group = MulticastAddrV6::new(Ipv6Addr::new(
+            0xff3e, 0, 0, 0, 0, 0, 0x8000, 0x1234,
+        ))
+        .expect("valid mcast");
+        let v6_source = UnicastAddrV6::new(Ipv6Addr::new(
+            0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100,
+        ))
+        .expect("valid unicast");
+        let v6_sg_key = MulticastRouteKey::source_specific_v6(
+            v6_source,
+            v6_ssm_group,
+            vni(),
+        );
+        let v6_sg_route = MulticastRoute::new(
+            v6_sg_key,
+            underlay_group(),
+            MulticastSourceProtocol::Static,
+        );
+
+        db.add_static_mcast_routes(&[v6_sg_route]);
+
+        assert!(
+            db.get_mcast_route(&v6_sg_key).is_some(),
+            "IPv6 (S,G) should be in mrib_in"
+        );
+        assert!(
+            db.get_selected_mcast_route(&v6_sg_key).is_none(),
+            "IPv6 (S,G) should NOT be in mrib_loc without unicast route"
+        );
+
+        db.remove_static_mcast_routes(&[
+            star_g_key,
+            sg_key,
+            v6_star_g_key,
+            v6_sg_key,
+        ]);
+    }
+
+    #[test]
+    fn test_mrib_concurrent_add_remove_batches() {
+        let log = init_file_logger("mrib_add_remove_race.log");
+        let db = crate::test::get_test_db("mrib_add_remove_race", log)
+            .expect("create db");
+
+        let static_route = StaticRouteKey {
+            prefix: "10.9.0.0/16".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_route]).unwrap();
+
+        let star_g = MulticastRouteKey::any_source(
+            MulticastAddr::new("225.9.9.9".parse().unwrap())
+                .expect("valid mcast"),
+            vni(),
+        )
+        .expect("ASM group");
+        let sg = MulticastRouteKey::source_specific_v4(
+            UnicastAddrV4::new(Ipv4Addr::new(10, 9, 9, 9))
+                .expect("valid unicast"),
+            MulticastAddrV4::new(Ipv4Addr::new(232, 9, 9, 10))
+                .expect("valid mcast"),
+            vni(),
+        );
+        let keys = [star_g, sg];
+        let routes = keys.map(|key| {
+            MulticastRoute::new(
+                key,
+                underlay_group(),
+                MulticastSourceProtocol::Static,
+            )
+        });
+
+        for _ in 0..1000 {
+            let start = Barrier::new(2);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    start.wait();
+                    db.add_static_mcast_routes(&routes);
+                });
+                scope.spawn(|| {
+                    start.wait();
+                    db.remove_static_mcast_routes(&keys);
+                });
+            });
+
+            let configured: Vec<bool> = keys
+                .iter()
+                .map(|key| db.get_mcast_route(key).is_some())
+                .collect();
+            assert!(
+                configured.iter().all(|&c| c) || configured.iter().all(|&c| !c),
+                "batches interleaved in mrib_in: {configured:?}"
+            );
+            for key in &keys {
+                assert_eq!(
+                    db.get_selected_mcast_route(key).is_some(),
+                    db.get_mcast_route(key).is_some(),
+                    "mrib_loc disagrees with mrib_in for {key}"
+                );
+            }
+
+            db.remove_static_mcast_routes(&keys);
+        }
+
+        db.remove_static_routes(&[static_route]).unwrap();
+    }
+
+    #[test]
+    fn test_mrib_revalidation_batches_notification() {
+        let log = init_file_logger("mrib_reval_batch.log");
+        let db = crate::test::get_test_db("mrib_reval_batch", log)
+            .expect("create db");
+
+        let group = MulticastAddrV4::new(Ipv4Addr::new(232, 8, 8, 8))
+            .expect("valid mcast");
+        let keys: Vec<MulticastRouteKey> = [1u8, 2]
+            .into_iter()
+            .map(|host| {
+                let source = UnicastAddrV4::new(Ipv4Addr::new(10, 8, 8, host))
+                    .expect("valid unicast");
+                MulticastRouteKey::source_specific_v4(source, group, vni())
+            })
+            .collect();
+        let routes: Vec<MulticastRoute> = keys
+            .iter()
+            .map(|key| {
+                MulticastRoute::new(
+                    *key,
+                    underlay_group(),
+                    MulticastSourceProtocol::Static,
+                )
+            })
+            .collect();
+        db.add_static_mcast_routes(&routes);
+        assert!(
+            keys.iter()
+                .all(|key| db.get_selected_mcast_route(key).is_none())
+        );
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+
+        let static_route = StaticRouteKey {
+            prefix: "10.8.8.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_route]).unwrap();
+
+        let n = rx.try_recv().expect("revalidation notifies");
+        assert_eq!(n.changed, keys.iter().copied().collect());
+        assert!(rx.try_recv().is_err(), "one notification per revalidation");
+        assert!(
+            keys.iter()
+                .all(|key| db.get_selected_mcast_route(key).is_some())
+        );
+
+        db.remove_static_routes(&[static_route]).unwrap();
+        let n = rx.try_recv().expect("deselection notifies");
+        assert_eq!(n.changed, keys.iter().copied().collect());
+        assert!(rx.try_recv().is_err(), "one notification per revalidation");
+        assert!(
+            keys.iter()
+                .all(|key| db.get_selected_mcast_route(key).is_none())
+        );
+
+        db.remove_static_mcast_routes(&keys);
+    }
+
+    #[test]
+    fn test_mrib_revalidation_spans_source_chunks() {
+        let log = init_file_logger("mrib_reval_chunks.log");
+        let db = crate::test::get_test_db("mrib_reval_chunks", log)
+            .expect("create db");
+
+        let source = UnicastAddrV4::new(Ipv4Addr::new(10, 9, 9, 9))
+            .expect("valid unicast");
+        let count = u8::try_from(MRIB_SOURCE_CHUNK * 2 + 1).unwrap();
+        let keys: Vec<MulticastRouteKey> = (1..=count)
+            .map(|octet| {
+                let group =
+                    MulticastAddrV4::new(Ipv4Addr::new(232, 9, 0, octet))
+                        .expect("valid mcast");
+                MulticastRouteKey::source_specific_v4(source, group, vni())
+            })
+            .collect();
+        let routes: Vec<MulticastRoute> = keys
+            .iter()
+            .map(|key| {
+                MulticastRoute::new(
+                    *key,
+                    underlay_group(),
+                    MulticastSourceProtocol::Static,
+                )
+            })
+            .collect();
+        db.add_static_mcast_routes(&routes);
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+
+        let static_route = StaticRouteKey {
+            prefix: "10.9.9.0/24".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_route]).unwrap();
+
+        let n = rx.try_recv().expect("revalidation notifies");
+        assert_eq!(n.changed, keys.iter().copied().collect());
+        assert!(rx.try_recv().is_err(), "one notification across chunks");
+        assert_eq!(db.loc_mrib(None).len(), keys.len());
+
+        db.remove_static_routes(&[static_route]).unwrap();
+        let n = rx.try_recv().expect("deselection notifies");
+        assert_eq!(n.changed, keys.iter().copied().collect());
+        assert!(rx.try_recv().is_err(), "one notification across chunks");
+        assert!(db.loc_mrib(None).is_empty());
+
+        db.remove_static_mcast_routes(&keys);
+    }
+
+    #[test]
+    fn test_mrib_static_batch_notifies_once() {
+        let log = init_file_logger("mrib_batch_notify.log");
+        let db = crate::test::get_test_db("mrib_batch_notify", log)
+            .expect("create db");
+
+        db.add_static_routes(&[StaticRouteKey {
+            prefix: "10.9.0.0/16".parse::<Ipv4Net>().unwrap().into(),
+            nexthop: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        }])
+        .unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        db.watch_mrib("test".to_string(), tx);
+
+        let any_source = MulticastRouteKey::any_source(
+            MulticastAddr::new("225.9.9.9".parse().unwrap())
+                .expect("valid mcast"),
+            vni(),
+        )
+        .expect("ASM group");
+        let source_specific = [(1u8, 1u8), (1, 2), (2, 3)].map(|(host, g)| {
+            let source = UnicastAddrV4::new(Ipv4Addr::new(10, 9, 0, host))
+                .expect("valid unicast");
+            let group = MulticastAddrV4::new(Ipv4Addr::new(232, 9, 9, g))
+                .expect("valid mcast");
+            MulticastRouteKey::source_specific_v4(source, group, vni())
+        });
+        let keys: Vec<MulticastRouteKey> =
+            std::iter::once(any_source).chain(source_specific).collect();
+
+        let routes: Vec<MulticastRoute> = keys
+            .iter()
+            .map(|key| {
+                MulticastRoute::new(
+                    *key,
+                    underlay_group(),
+                    MulticastSourceProtocol::Static,
+                )
+            })
+            .collect();
+
+        db.add_static_mcast_routes(&routes);
+        let n = rx.try_recv().expect("add notifies");
+        assert_eq!(n.changed, keys.iter().copied().collect());
+        assert!(rx.try_recv().is_err(), "one notification per add");
+        assert_eq!(db.loc_mrib(None).len(), keys.len());
+
+        db.remove_static_mcast_routes(&keys);
+        let n = rx.try_recv().expect("remove notifies");
+        assert_eq!(n.changed, keys.iter().copied().collect());
+        assert!(rx.try_recv().is_err(), "one notification per remove");
     }
 
     #[test]
