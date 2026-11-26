@@ -11,9 +11,28 @@ pub mod v3;
 
 // DDMv2 tunnel routes carry no path, so converting them to DDMv3 needs the
 // peer they were received from. They are treated as originated by that peer.
+// It is also important to note that it is unsafe for DDMv2 Transit routers to
+// propagate tunnel routes due to their lack of advertisement path. This means a
+// deployment converting from single to multi-rack must first ensure all DDM
+// speakers have a minimum version of 3 before configuring external peers, else
+// they introduce an advertisement loop for tunnel routes.
 // DDMv2 also does not distinguish bootstrap routes from underlay routes.
 // Conversions handle this by mapping both bootstrap/underlay -> underlay during
-// downgrade and by handling all v2 underlay routes as underlay.
+// downgrade and by mapping all v2 underlay routes as v3 bootstrap routes. This
+// is done for practical reasons:
+//
+// 1) In DDMv3, routes are always installed into illumos with SETSRC
+// 2) `bootstrap_addr` is mandatory for ddmd startup, so it's always present and
+//    is used as the SETSRC for v3 Bootstrap routes.
+// 3) Nexus populates `underlay_addr` asynchronously, and it's used as the
+//    SETSRC for v3 Underlay routes.
+// 4) Nexus requires a functional bootstrap network to provide `underlay_addr`
+//
+// By mapping v2 underlay -> v3 bootstrap, all routes are guaranteed
+// to have their SETSRC (`bootstrap_addr`) available at all times.
+// This eliminates the chicken-or-the-egg problem of us needing
+// `underlay_addr` from nexus, who needs a functional bootstrap
+// network from us.
 // All conversions use manual destructuring to prevent compilation if types are
 // modified, which should never happen after a DDM version is published.
 
@@ -22,8 +41,8 @@ impl v3::Update {
     pub fn from_v2(value: v2::Update, peer: &str) -> Self {
         let v2::Update { underlay, tunnel } = value;
         Self {
-            underlay: underlay.map(v3::UnderlayUpdate::from),
-            bootstrap: None,
+            underlay: None,
+            bootstrap: underlay.map(v3::BootstrapUpdate::from),
             tunnel: tunnel.map(|t| v3::TunnelUpdate::from_v2(t, peer)),
         }
     }
@@ -62,9 +81,9 @@ impl v3::PullResponse {
     pub fn from_v2(value: v2::PullResponse, peer: &str) -> Self {
         let v2::PullResponse { underlay, tunnel } = value;
         Self {
-            underlay: underlay
+            underlay: None,
+            bootstrap: underlay
                 .map(|x| x.into_iter().map(v3::PathVector::from).collect()),
-            bootstrap: None,
             tunnel: tunnel.map(|x| {
                 x.into_iter()
                     .map(|t| v3::TunnelOrigin::from_v2(t, peer))
@@ -109,7 +128,7 @@ impl From<v3::UnderlayUpdate> for v2::UnderlayUpdate {
     }
 }
 
-impl From<v2::UnderlayUpdate> for v3::UnderlayUpdate {
+impl From<v2::UnderlayUpdate> for v3::BootstrapUpdate {
     fn from(value: v2::UnderlayUpdate) -> Self {
         let v2::UnderlayUpdate { announce, withdraw } = value;
         Self {

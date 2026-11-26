@@ -7,6 +7,7 @@ edition = "2024"
 schemars.workspace = true
 serde.workspace = true
 serde_repr.workspace = true
+thiserror.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 ddm-protocol.workspace = true

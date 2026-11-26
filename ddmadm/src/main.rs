@@ -426,8 +426,7 @@ async fn run() -> Result<()> {
             tw.flush()?;
         }
         SubCommand::SetUnderlayAddress { address } => {
-            let address =
-                UnderlayAddress::new(address).map_err(anyhow::Error::msg)?;
+            let address = UnderlayAddress::new(address)?;
             client.set_underlay_address(&address).await?;
         }
         SubCommand::ClearUnderlayAddress => {

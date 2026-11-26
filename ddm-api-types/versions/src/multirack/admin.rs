@@ -16,15 +16,65 @@ pub struct RackPrefix {
     pub prefix: Ipv6Net,
 }
 
+/// Why an `Ipv6Addr` cannot be an [`UnderlayAddress`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum UnderlayAddressError {
+    #[error("underlay address must not be unspecified")]
+    UnspecifiedAddress,
+    #[error("underlay address must not be loopback")]
+    LoopbackAddress,
+    #[error("underlay address must be unicast, not multicast {0}")]
+    MulticastAddress(Ipv6Addr),
+    #[error("underlay address must not be link-local {0}")]
+    LinkLocalAddress(Ipv6Addr),
+}
+
 /// The underlay address of this router, used as the source address of the
 /// underlay routes it installs.
 ///
 /// Must be a routable unicast address: not unspecified, loopback, multicast,
 /// or link-local.
-// Construct with `UnderlayAddress::new`, which deserializing also uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct UnderlayAddress {
-    pub(crate) address: Ipv6Addr,
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
+pub struct UnderlayAddress(Ipv6Addr);
+
+impl UnderlayAddress {
+    /// Returns an error unless `address` is a routable unicast address: not
+    /// unspecified, loopback, multicast, or link-local.
+    pub fn new(address: Ipv6Addr) -> Result<Self, UnderlayAddressError> {
+        if address.is_unspecified() {
+            return Err(UnderlayAddressError::UnspecifiedAddress);
+        }
+        if address.is_loopback() {
+            return Err(UnderlayAddressError::LoopbackAddress);
+        }
+        if address.is_multicast() {
+            return Err(UnderlayAddressError::MulticastAddress(address));
+        }
+        if address.is_unicast_link_local() {
+            return Err(UnderlayAddressError::LinkLocalAddress(address));
+        }
+        Ok(Self(address))
+    }
+
+    pub fn address(&self) -> Ipv6Addr {
+        self.0
+    }
+}
+
+impl TryFrom<Ipv6Addr> for UnderlayAddress {
+    type Error = UnderlayAddressError;
+    fn try_from(address: Ipv6Addr) -> Result<Self, Self::Error> {
+        Self::new(address)
+    }
+}
+
+impl From<UnderlayAddress> for Ipv6Addr {
+    fn from(address: UnderlayAddress) -> Self {
+        address.0
+    }
 }
 
 #[derive(

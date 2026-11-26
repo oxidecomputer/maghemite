@@ -88,7 +88,7 @@ impl Update {
         }
     }
 
-    /// Whether this update announces or withdraws nothing.
+    /// Returns true if this `Update` contains no advertisements or withdrawals.
     pub fn is_empty(&self) -> bool {
         // compilation barrier. a new route class must be checked here.
         let Self {
@@ -116,7 +116,8 @@ pub struct UnderlayUpdate {
 }
 
 impl UnderlayUpdate {
-    /// Whether this update announces or withdraws nothing.
+    /// Returns true if this `UnderlayUpdate` contains no advertisements or
+    /// withdrawals.
     pub fn is_empty(&self) -> bool {
         self.announce.is_empty() && self.withdraw.is_empty()
     }
@@ -189,7 +190,8 @@ pub struct BootstrapUpdate {
 }
 
 impl BootstrapUpdate {
-    /// Whether this update announces or withdraws nothing.
+    /// Returns true if this `BootstrapUpdate` contains no advertisements or
+    /// withdrawals.
     pub fn is_empty(&self) -> bool {
         self.announce.is_empty() && self.withdraw.is_empty()
     }

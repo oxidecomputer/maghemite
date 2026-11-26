@@ -16,6 +16,7 @@ pub mod admin {
     pub use crate::v6::admin::PrefixMap;
     pub use crate::v6::admin::RackPrefix;
     pub use crate::v6::admin::UnderlayAddress;
+    pub use crate::v6::admin::UnderlayAddressError;
 }
 
 pub mod db {

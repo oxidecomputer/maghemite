@@ -1507,6 +1507,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_repr",
+ "thiserror 2.0.21",
  "uuid",
 ]
 

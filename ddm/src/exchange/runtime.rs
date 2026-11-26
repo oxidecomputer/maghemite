@@ -441,7 +441,7 @@ async fn pull_handler_common(
     let mut bootstrap = HashSet::new();
     let mut tunnel = HashSet::new();
 
-    if ctx.tx_allowances.redistributed {
+    if ctx.tx_allowances.redistributed_routes {
         for route in &ctx.ctx.db.imported_underlay() {
             // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer.addr {
@@ -475,7 +475,7 @@ async fn pull_handler_common(
         }
     }
 
-    if ctx.tx_allowances.underlay {
+    if ctx.tx_allowances.originated_underlay_routes {
         let originated = ctx.ctx.db.originated_underlay();
         for prefix in &originated {
             let pv = v3::PathVector {
@@ -486,7 +486,7 @@ async fn pull_handler_common(
         }
     }
 
-    if ctx.tx_allowances.bootstrap {
+    if ctx.tx_allowances.originated_bootstrap_routes {
         let originated = ctx.ctx.db.originated_bootstrap();
         for prefix in &originated {
             let pv = v3::PathVector {
@@ -497,7 +497,7 @@ async fn pull_handler_common(
         }
     }
 
-    if ctx.tx_allowances.rack
+    if ctx.tx_allowances.originated_rack_prefix
         && let Some(prefix) = ctx.ctx.db.rack_prefix()
     {
         underlay.insert(v3::PathVector {
@@ -506,7 +506,7 @@ async fn pull_handler_common(
         });
     }
 
-    if ctx.tx_allowances.tunnel {
+    if ctx.tx_allowances.originated_tunnel_routes {
         let originated_tunnel = ctx.ctx.db.originated_tunnel();
         tunnel.extend(
             originated_tunnel
@@ -614,23 +614,11 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     }
 
     if let Some(underlay_update) = &update.underlay {
-        handle_standard_update(
-            PrefixKind::Underlay,
-            &underlay_update.announce,
-            &underlay_update.withdraw,
-            ctx,
-            peer,
-        );
+        handle_underlay_update(ctx, underlay_update, peer);
     }
 
     if let Some(bootstrap_update) = &update.bootstrap {
-        handle_standard_update(
-            PrefixKind::Bootstrap,
-            &bootstrap_update.announce,
-            &bootstrap_update.withdraw,
-            ctx,
-            peer,
-        );
+        handle_bootstrap_update(ctx, bootstrap_update, peer);
     }
 
     if let Some(tunnel_update) = &update.tunnel {
@@ -707,12 +695,34 @@ fn handle_tunnel_update(
     }
 }
 
-fn handle_standard_update(
+// Handler for underlay routes in a received Update.
+fn handle_underlay_update(
+    ctx: &SmContext,
+    underlay: &v3::UnderlayUpdate,
+    peer: &PeerIdentity,
+) {
+    let v3::UnderlayUpdate { announce, withdraw } = underlay;
+    handle_prefix_update(ctx, peer, PrefixKind::Underlay, announce, withdraw)
+}
+
+// Handler for bootstrap routes in a received Update.
+fn handle_bootstrap_update(
+    ctx: &SmContext,
+    bootstrap: &v3::BootstrapUpdate,
+    peer: &PeerIdentity,
+) {
+    let v3::BootstrapUpdate { announce, withdraw } = bootstrap;
+    handle_prefix_update(ctx, peer, PrefixKind::Bootstrap, announce, withdraw)
+}
+
+// Common handler for underlay and bootstrap (non-tunnel) routes in a received
+// Update.
+fn handle_prefix_update(
+    ctx: &SmContext,
+    peer: &PeerIdentity,
     kind: PrefixKind,
     announce: &HashSet<v3::PathVector>,
     withdraw: &HashSet<v3::PathVector>,
-    ctx: &SmContext,
-    peer: &PeerIdentity,
 ) {
     let mut import = HashSet::new();
     let mut add = Vec::new();

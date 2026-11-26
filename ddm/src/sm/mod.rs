@@ -236,22 +236,22 @@ impl Display for PeerIdentity {
 /// The route types that are allowed to be advertised to a DDM peer.
 ///
 /// This is computed once when a DDM moves into Exchange state, using the local
-/// and remote RouterKind to determine the set of route types that should be
-/// propagated to the peer. If the peer expires, RouteAdvertisementAllowances is
-/// dropped since the next peer may come up with a different RouterKind which
-/// would warrant a new evaluation of their RouteAdvertisementAllowances.
+/// and remote `RouterKind` to determine the set of route types that should be
+/// propagated to the peer. If the peer expires, `RouteAdvertisementAllowances`
+/// is dropped since the next peer may come up with a different `RouterKind`,
+/// warranting a new `RouteAdvertisementAllowances`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteAdvertisementAllowances {
     /// Originated underlay prefixes.
-    pub underlay: bool,
+    pub originated_underlay_routes: bool,
     /// Originated bootstrap prefixes.
-    pub bootstrap: bool,
+    pub originated_bootstrap_routes: bool,
     /// Originated tunnel routes.
-    pub tunnel: bool,
+    pub originated_tunnel_routes: bool,
     /// The originated rack prefix.
-    pub rack: bool,
+    pub originated_rack_prefix: bool,
     /// Routes learned from other peers.
-    pub redistributed: bool,
+    pub redistributed_routes: bool,
 }
 
 impl RouteAdvertisementAllowances {
@@ -267,11 +267,11 @@ impl RouteAdvertisementAllowances {
             // Servers generate or terminate packets, but never transit them.
             // Transit -> Server -> Transit can never happen.
             (Server, _) => Self {
-                underlay: true,
-                bootstrap: true,
-                tunnel: false,
-                rack: false,
-                redistributed: false,
+                originated_underlay_routes: true,
+                originated_bootstrap_routes: true,
+                originated_tunnel_routes: false,
+                originated_rack_prefix: false,
+                redistributed_routes: false,
             },
 
             // Transit routers originate Tunnel routes and a Rack prefix when
@@ -281,11 +281,11 @@ impl RouteAdvertisementAllowances {
             // do not have their own (either due to network design or failures).
             // Bootstrap routes must never leave the rack, and are not allowed.
             (Transit, Transit) => Self {
-                underlay: false,
-                bootstrap: false,
-                tunnel: true,
-                rack: true,
-                redistributed: false,
+                originated_underlay_routes: false,
+                originated_bootstrap_routes: false,
+                originated_tunnel_routes: true,
+                originated_rack_prefix: true,
+                redistributed_routes: false,
             },
 
             // Transit routers are allowed to originate underlay and tunnel
@@ -310,11 +310,11 @@ impl RouteAdvertisementAllowances {
             // 5) Rack prefixes learned from other racks are redistributed to
             //    Servers. This allows Servers to learn routes to other racks.
             (Transit, Server) => Self {
-                underlay: true,
-                bootstrap: true,
-                tunnel: true,
-                rack: false,
-                redistributed: true,
+                originated_underlay_routes: true,
+                originated_bootstrap_routes: true,
+                originated_tunnel_routes: true,
+                originated_rack_prefix: false,
+                redistributed_routes: true,
             },
         }
     }
@@ -523,11 +523,11 @@ mod test {
             assert_eq!(
                 Allow::tx(local, peer),
                 Allow {
-                    underlay,
-                    bootstrap,
-                    tunnel,
-                    rack,
-                    redistributed
+                    originated_underlay_routes: underlay,
+                    originated_bootstrap_routes: bootstrap,
+                    originated_tunnel_routes: tunnel,
+                    originated_rack_prefix: rack,
+                    redistributed_routes: redistributed,
                 },
                 "{local} -> {peer}",
             );

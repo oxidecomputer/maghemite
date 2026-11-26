@@ -1054,16 +1054,8 @@
       },
       "UnderlayAddress": {
         "description": "The underlay address of this router, used as the source address of the underlay routes it installs.\n\nMust be a routable unicast address: not unspecified, loopback, multicast, or link-local.",
-        "type": "object",
-        "properties": {
-          "address": {
-            "type": "string",
-            "format": "ipv6"
-          }
-        },
-        "required": [
-          "address"
-        ]
+        "type": "string",
+        "format": "ipv6"
       }
     },
     "responses": {

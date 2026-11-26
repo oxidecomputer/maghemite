@@ -286,19 +286,19 @@ impl Exchange {
     fn originated(&self, set: PrefixSet) -> Option<HashSet<PathVector>> {
         let prefixes = match set {
             PrefixSet::Underlay(p) => {
-                if !self.tx_allowances.underlay {
+                if !self.tx_allowances.originated_underlay_routes {
                     return None;
                 }
                 p
             }
             PrefixSet::Bootstrap(p) => {
-                if !self.tx_allowances.bootstrap {
+                if !self.tx_allowances.originated_bootstrap_routes {
                     return None;
                 }
                 p
             }
             PrefixSet::Rack(p) => {
-                if !self.tx_allowances.rack {
+                if !self.tx_allowances.originated_rack_prefix {
                     return None;
                 }
                 HashSet::from([p])
@@ -632,15 +632,10 @@ impl State for Exchange {
                         continue;
                     };
 
-                    err!(
-                        self.log,
-                        self.ctx.config.if_name,
-                        "underlay announce: {e}"
-                    );
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "expiring peer {} due to failed underlay announce",
+                        "expiring peer {} due to failed underlay announce: {e}",
                         self.peer,
                     );
                     self.expire_peer(
@@ -675,15 +670,10 @@ impl State for Exchange {
                         continue;
                     };
 
-                    err!(
-                        self.log,
-                        self.ctx.config.if_name,
-                        "bootstrap announce: {e}"
-                    );
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "expiring peer {} due to failed bootstrap announce",
+                        "expiring peer {} due to failed bootstrap announce: {e}",
                         self.peer,
                     );
                     self.expire_peer(
@@ -703,7 +693,7 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
-                    if !self.tx_allowances.tunnel {
+                    if !self.tx_allowances.originated_tunnel_routes {
                         continue;
                     }
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
@@ -718,16 +708,10 @@ impl State for Exchange {
                         continue;
                     };
 
-                    err!(
-                        self.log,
-                        self.ctx.config.if_name,
-                        "announce tunnel: {}",
-                        e,
-                    );
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
-                        "expiring peer {} due to failed tunnel announce",
+                        "expiring peer {} due to failed tunnel announce: {e}",
                         self.peer,
                     );
                     self.expire_peer(
@@ -831,7 +815,7 @@ impl State for Exchange {
                 Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
                     endpoints,
                 ))) => {
-                    if !self.tx_allowances.tunnel {
+                    if !self.tx_allowances.originated_tunnel_routes {
                         continue;
                     }
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
@@ -976,7 +960,7 @@ impl State for Exchange {
                     return (None, event);
                 }
                 Event::Peer(PeerEvent::Push(update)) => {
-                    if !self.tx_allowances.redistributed {
+                    if !self.tx_allowances.redistributed_routes {
                         continue;
                     }
                     inf!(
