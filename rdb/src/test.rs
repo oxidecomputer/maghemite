@@ -4,10 +4,10 @@
 
 //! Test utilities for rdb tests.
 
-use crate::{Db, error::Error};
+use crate::{Db, RouterDb, error::Error};
 use client_common::eprintln_nopipe;
 use slog::Logger;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A test database wrapper that automatically cleans up the database directory
@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// If the test panics (fails), the database is left in /tmp for debugging.
 /// This allows you to examine the database state after a test failure.
 ///
-/// The wrapper implements `Deref` and `DerefMut`, so you can use it exactly
-/// like a regular `Db`.
+/// The wrapper implements `Deref` to the [`RouterDb`], so you can use it like
+/// a regular `RouterDb`.
 ///
 /// Cloning a `TestDb` clones the underlying `Db` (which is cheap since `Db`
 /// uses `Arc` internally) but shares the same database path. Only the last
@@ -34,6 +34,11 @@ impl TestDb {
         &self.db
     }
 
+    /// Get the router's RouterDb reference
+    pub fn router(&self) -> &RouterDb {
+        self.db.router()
+    }
+
     /// Get the database path
     pub fn path(&self) -> &str {
         &self.path
@@ -41,16 +46,10 @@ impl TestDb {
 }
 
 impl Deref for TestDb {
-    type Target = Db;
+    type Target = RouterDb;
 
     fn deref(&self) -> &Self::Target {
-        &self.db
-    }
-}
-
-impl DerefMut for TestDb {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.db
+        self.db.router()
     }
 }
 

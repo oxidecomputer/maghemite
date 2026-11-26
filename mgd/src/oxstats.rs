@@ -15,7 +15,7 @@ use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::types::{Cumulative, ProducerRegistry};
 use oximeter::{MetricsError, Producer, Sample};
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
-use rdb::Db;
+use rdb::RouterDb;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -91,7 +91,7 @@ pub(crate) struct Stats {
     pub(crate) start_time: DateTime<Utc>,
     pub(crate) bfd: BfdContext,
     pub(crate) bgp: BgpContext,
-    pub(crate) db: Db,
+    pub(crate) db: RouterDb,
     pub(crate) mg_lower_stats: Arc<MgLowerStats>,
     log: Logger,
 }
@@ -776,7 +776,7 @@ pub(crate) fn start_server(
         start_time: chrono::offset::Utc::now(),
         bfd: context.bfd.clone(),
         bgp: context.bgp.clone(),
-        db: context.db.clone(),
+        db: context.db.router().clone(),
         mg_lower_stats: context.mg_lower_stats.clone(),
         log: log.clone(),
     };

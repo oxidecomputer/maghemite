@@ -41,7 +41,7 @@ use mg_common::{IpNetExt, lock, read_lock, write_lock};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use oxnet::{IPV4_NET_WIDTH_MAX, IPV6_NET_WIDTH_MAX, IpNet, Ipv4Net, Ipv6Net};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, Db};
+use rdb::{Asn, RouterDb};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -1869,7 +1869,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     pub caps_tx: Arc<Mutex<BTreeSet<Capability>>>,
 
     shutdown_state: AtomicShutdownState,
-    db: Db,
+    db: RouterDb,
     fanout4: Arc<RwLock<Fanout4<Cnx>>>,
     fanout6: Arc<RwLock<Fanout6<Cnx>>>,
     // This must remain a strong Arc: the no-`Drop` argument on
@@ -9501,7 +9501,7 @@ mod tests {
                 id: 100,
             },
             log,
-            db.db().clone(),
+            db.router().clone(),
             Arc::new(Mutex::new(crate::router::SessionMap::new())),
         ));
         let local = "192.0.2.1:179".parse().unwrap();
@@ -9565,7 +9565,7 @@ mod tests {
                     id: 100,
                 },
                 log,
-                db.db().clone(),
+                db.router().clone(),
                 Arc::new(Mutex::new(crate::router::SessionMap::new())),
             ));
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -11118,7 +11118,7 @@ mod tests {
                 id: 100,
             },
             log.clone(),
-            db.db().clone(),
+            db.router().clone(),
             Arc::new(Mutex::new(crate::router::SessionMap::new())),
         ));
         let local: SocketAddr = "192.0.2.1:179".parse().unwrap();
@@ -11482,7 +11482,7 @@ mod tests {
                         id: 100,
                     },
                     log.clone(),
-                    db.db().clone(),
+                    db.router().clone(),
                     Arc::new(Mutex::new(crate::router::SessionMap::new())),
                 ));
                 *write_lock!(router.policy.checker) = Some(
@@ -11714,7 +11714,7 @@ mod tests {
                 id: 100,
             },
             log.clone(),
-            db.db().clone(),
+            db.router().clone(),
             Arc::new(Mutex::new(crate::router::SessionMap::new())),
         ));
         let local: SocketAddr = "192.0.2.1:179".parse().unwrap();

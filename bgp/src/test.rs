@@ -374,7 +374,10 @@ where
         let db_path =
             format!("/tmp/{}.{actual_test_name}.db", logical_router.name);
         let _ = std::fs::remove_dir_all(&db_path);
-        let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
+        let db = rdb::Db::new(&db_path, log.clone())
+            .expect("create db")
+            .router()
+            .clone();
 
         // Create shared session map
         let sessions: Arc<Mutex<SessionMap<Cnx>>> =
@@ -2047,7 +2050,7 @@ fn unnumbered_peering_helper(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -2056,7 +2059,7 @@ fn unnumbered_peering_helper(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
 
@@ -2834,7 +2837,7 @@ fn unnumbered_pair(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -2843,7 +2846,7 @@ fn unnumbered_pair(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
 
@@ -3100,7 +3103,7 @@ fn unnumbered_three_router_chain(
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -3109,7 +3112,7 @@ fn unnumbered_three_router_chain(
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
     let router3 = Arc::new(Router::new(
@@ -3118,7 +3121,7 @@ fn unnumbered_three_router_chain(
             id: 3,
         },
         log.clone(),
-        db3.db().clone(),
+        db3.router().clone(),
         sessions3.clone(),
     ));
 
@@ -4060,7 +4063,7 @@ fn test_unnumbered_interface_lifecycle() {
             id: 1,
         },
         log.clone(),
-        db1.db().clone(),
+        db1.router().clone(),
         sessions1.clone(),
     ));
     let router2 = Arc::new(Router::new(
@@ -4069,7 +4072,7 @@ fn test_unnumbered_interface_lifecycle() {
             id: 2,
         },
         log.clone(),
-        db2.db().clone(),
+        db2.router().clone(),
         sessions2.clone(),
     ));
 
@@ -4380,7 +4383,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
             id: 1,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
     let router_b = Arc::new(Router::new(
@@ -4389,7 +4392,7 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
             id: 2,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4585,7 +4588,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let old_router = Arc::new(Router::new(
         config,
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4615,7 +4618,7 @@ fn recreated_router_does_not_claim_predecessors_sessions() {
     let new_router = Arc::new(Router::new(
         config,
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 
@@ -4695,7 +4698,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
             id: 1,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
     let router_b = Arc::new(Router::new(
@@ -4704,7 +4707,7 @@ fn admin_events_do_not_reach_other_routers_sessions() {
             id: 2,
         },
         log.clone(),
-        db.db().clone(),
+        db.router().clone(),
         sessions.clone(),
     ));
 

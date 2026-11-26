@@ -82,10 +82,24 @@ const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 use crate::rib::{Rib, Rib4, Rib6};
 
-/// The central routing information base. Both persistent an volatile route
-/// information is managed through this structure.
+/// The routing database of a switch. Holds the state that belongs to the
+/// switch as a whole, and the router's state ([`RouterDb`]).
 #[derive(Clone)]
 pub struct Db {
+    /// The routing tables and configuration of the router.
+    router: RouterDb,
+
+    /// Switch slot reported from MGS.
+    /// Information is not available until first successful communication with MGS.
+    slot: Arc<RwLock<Option<u16>>>,
+
+    log: Logger,
+}
+
+/// A router's routing information base. Both persistent and volatile route
+/// information is managed through this structure.
+#[derive(Clone)]
+pub struct RouterDb {
     /// A sled database handle where persistent routing information is stored.
     persistent: sled::Db,
 
@@ -113,10 +127,6 @@ pub struct Db {
 
     /// Reaps expired routes from the local RIB.
     reaper: Arc<Reaper>,
-
-    /// Switch slot reported from MGS.
-    /// Information is not available until first successful communication with MGS.
-    slot: Arc<RwLock<Option<u16>>>,
 
     log: Logger,
 }
@@ -165,19 +175,44 @@ impl Db {
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
         let rib_loc = Arc::new(Mutex::new(Rib::new()));
         Ok(Self {
-            persistent: sled::open(path)?,
-            rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
-            rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
-            rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
-            rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
-            generation: Arc::new(AtomicU64::new(0)),
-            watchers: Arc::new(RwLock::new(Vec::new())),
-            reaper: Reaper::new(rib_loc),
+            router: RouterDb {
+                persistent: sled::open(path)?,
+                rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
+                rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
+                rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
+                rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
+                generation: Arc::new(AtomicU64::new(0)),
+                watchers: Arc::new(RwLock::new(Vec::new())),
+                reaper: Reaper::new(rib_loc),
+                log: log.clone(),
+            },
             slot: Arc::new(RwLock::new(None)),
             log,
         })
     }
 
+    /// Get a handle to the router's part of the database.
+    pub fn router(&self) -> &RouterDb {
+        &self.router
+    }
+
+    pub fn slot(&self) -> Option<u16> {
+        match self.slot.read() {
+            Ok(v) => *v,
+            Err(e) => {
+                error!(self.log, "unable to read switch slot"; "error" => %e);
+                None
+            }
+        }
+    }
+
+    pub fn set_slot(&mut self, slot: Option<u16>) {
+        let mut value = self.slot.write().unwrap();
+        *value = slot;
+    }
+}
+
+impl RouterDb {
     pub fn set_reaper_interval(&self, interval: std::time::Duration) {
         *lock!(self.reaper.interval) = interval;
     }
@@ -1452,21 +1487,6 @@ impl Db {
         });
     }
 
-    pub fn slot(&self) -> Option<u16> {
-        match self.slot.read() {
-            Ok(v) => *v,
-            Err(e) => {
-                error!(self.log, "unable to read switch slot"; "error" => %e);
-                None
-            }
-        }
-    }
-
-    pub fn set_slot(&mut self, slot: Option<u16>) {
-        let mut value = self.slot.write().unwrap();
-        *value = slot;
-    }
-
     pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
         match af {
             AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer.clone()),
@@ -1528,8 +1548,8 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        StaticRouteKey, db::Db, test::TestDb, types::Asn, types::PrefixDbKey,
-        types::test_helpers::path_vecs_equal,
+        StaticRouteKey, db::RouterDb, test::TestDb, types::Asn,
+        types::PrefixDbKey, types::test_helpers::path_vecs_equal,
     };
     use client_common::eprintln_nopipe;
     use mg_api_types::rdb::DEFAULT_RIB_PRIORITY_STATIC;
@@ -1546,7 +1566,7 @@ mod test {
     }
 
     pub fn check_prefix_path(
-        db: &Db,
+        db: &RouterDb,
         prefix: &IpNet,
         rib_in_paths: Vec<Path>,
         loc_rib_paths: Vec<Path>,
@@ -1672,7 +1692,10 @@ mod test {
         let log = init_file_logger("rib.log");
         let db_path = "/tmp/rib.db".to_string();
         let _ = std::fs::remove_dir_all(&db_path);
-        let db = Db::new(&db_path, log.clone()).expect("create db");
+        let db = Db::new(&db_path, log.clone())
+            .expect("create db")
+            .router()
+            .clone();
 
         // Start test cases
 

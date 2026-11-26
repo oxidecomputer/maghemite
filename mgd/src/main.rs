@@ -153,7 +153,7 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
     let bgp = init_bgp(&args, &log);
 
-    let tep_ula = get_tunnel_endpoint_ula(&db);
+    let tep_ula = get_tunnel_endpoint_ula(db.router());
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
@@ -188,7 +188,7 @@ async fn run(args: RunArgs) {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = context.clone();
         let log = log.clone();
-        let db = ctx.db.clone();
+        let db = ctx.db.router().clone();
         let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
             client: mg_lower::new_dpd_client(&log, args.dendrite_addr),
@@ -208,21 +208,25 @@ async fn run(args: RunArgs) {
 
     start_bgp_routers(
         context.clone(),
-        db.get_bgp_routers()
+        db.router()
+            .get_bgp_routers()
             .expect("get BGP routers from datastore"),
-        db.get_bgp_neighbors()
+        db.router()
+            .get_bgp_neighbors()
             .expect("get BGP neighbors from data store"),
-        db.get_unnumbered_bgp_neighbors()
+        db.router()
+            .get_unnumbered_bgp_neighbors()
             .expect("get BGP unnumbered neighbors from data store"),
     );
 
     start_bfd_sessions(
         context.clone(),
-        db.get_bfd_neighbors()
+        db.router()
+            .get_bfd_neighbors()
             .expect("get BFD neighbors from data store"),
     );
 
-    initialize_static_routes(&db, &context.log);
+    initialize_static_routes(db.router(), &context.log);
 
     let hostname = hostname::get()
         .expect("failed to get hostname")
@@ -514,7 +518,7 @@ fn start_bfd_sessions(
 // the rib). This handles migration from old versions where host bits weren't
 // automatically zeroed, and consolidates routes that differ only in host bits
 // into ECMP routes.
-fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
+fn initialize_static_routes(db: &rdb::RouterDb, log: &Logger) {
     let routes = db
         .get_static(None)
         .expect("failed to get static routes from db");
@@ -569,7 +573,7 @@ fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
     }
 }
 
-fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
+fn get_tunnel_endpoint_ula(db: &rdb::RouterDb) -> Ipv6Addr {
     if let Some(addr) = db.get_tep_addr().unwrap() {
         return addr;
     }
@@ -594,11 +598,13 @@ mod tests {
     use std::str::FromStr;
     use tempfile::TempDir;
 
-    fn setup_test_db() -> (rdb::Db, TempDir, Logger) {
+    fn setup_test_db() -> (rdb::RouterDb, TempDir, Logger) {
         let temp_dir = TempDir::new().unwrap();
         let log = mg_common::log::init_logger();
         let db = rdb::Db::new(temp_dir.path().to_str().unwrap(), log.clone())
-            .unwrap();
+            .unwrap()
+            .router()
+            .clone();
         (db, temp_dir, log)
     }
 

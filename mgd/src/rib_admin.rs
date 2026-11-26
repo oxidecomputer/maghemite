@@ -22,7 +22,10 @@ pub async fn get_rib_imported_v2(
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let imported = ctx.db.full_rib(query.address_family.map(Into::into));
+    let imported = ctx
+        .db
+        .router()
+        .full_rib(query.address_family.map(Into::into));
     let filtered = imported.filter_by_protocol(query.protocol.map(Into::into));
     Ok(HttpResponseOk(v1::rib::Rib::from(v5::rib::Rib::from(
         filtered.into_latest_api_rib(),
@@ -35,7 +38,10 @@ pub async fn get_rib_selected_v2(
 ) -> Result<HttpResponseOk<v1::rib::Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let selected = ctx.db.loc_rib(query.address_family.map(Into::into));
+    let selected = ctx
+        .db
+        .router()
+        .loc_rib(query.address_family.map(Into::into));
     let filtered = selected.filter_by_protocol(query.protocol.map(Into::into));
     Ok(HttpResponseOk(v1::rib::Rib::from(v5::rib::Rib::from(
         filtered.into_latest_api_rib(),
@@ -49,7 +55,7 @@ pub async fn get_rib_imported(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let imported = ctx.db.full_rib(query.address_family);
+    let imported = ctx.db.router().full_rib(query.address_family);
     let filtered = imported.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(filtered.into_latest_api_rib()))
 }
@@ -60,7 +66,7 @@ pub async fn get_rib_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let ctx = ctx.context();
     let query = query.into_inner();
-    let selected = ctx.db.loc_rib(query.address_family);
+    let selected = ctx.db.router().loc_rib(query.address_family);
     let filtered = selected.filter_by_protocol(query.protocol);
     Ok(HttpResponseOk(filtered.into_latest_api_rib()))
 }
@@ -71,6 +77,7 @@ pub async fn read_bestpath_fanout(
     let ctx = ctx.context();
     let fanout = ctx
         .db
+        .router()
         .get_bestpath_fanout()
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
 
@@ -85,6 +92,7 @@ pub async fn update_bestpath_fanout(
     let rq = request.into_inner();
 
     ctx.db
+        .router()
         .set_bestpath_fanout(rq.fanout)
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
 

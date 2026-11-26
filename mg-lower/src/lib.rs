@@ -19,7 +19,7 @@ use mg_common::stats::MgLowerStats as Stats;
 use oxnet::IpNet;
 use platform::{Ddm, Dpd, SwitchZone};
 use rdb::Rib;
-use rdb::{DEFAULT_ROUTE_PRIORITY, Db, PrefixChangeNotification};
+use rdb::{DEFAULT_ROUTE_PRIORITY, PrefixChangeNotification, RouterDb};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
@@ -61,7 +61,7 @@ const UNIT_EVENT_LOOP: &str = "event_loop";
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     tep: Ipv6Addr, //tunnel endpoint address
-    db: Db,
+    db: RouterDb,
     log: Logger,
     stats: Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
@@ -153,7 +153,7 @@ pub fn run(
 #[allow(clippy::too_many_arguments)]
 fn full_sync(
     tep: Ipv6Addr, // tunnel endpoint address
-    db: &Db,
+    db: &RouterDb,
     log: &Logger,
     dpd: &impl Dpd,
     ddm: &impl Ddm,
@@ -180,7 +180,7 @@ fn full_sync(
 #[allow(clippy::too_many_arguments)]
 fn handle_change(
     tep: Ipv6Addr, // tunnel endpoint address
-    db: &Db,
+    db: &RouterDb,
     notification: PrefixChangeNotification,
     log: &Logger,
     dpd: &impl Dpd,
