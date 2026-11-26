@@ -8,11 +8,12 @@
 //! illumos-only.
 
 use super::{
-    AdminEvent, Event, FsmState, NeighborEvent, PeerEvent, PrefixSet,
-    SmContext, SmError, StateMachine,
+    AdminEvent, DiscoveryEvent, Event, FsmState, PeerEvent, PeerIdentity,
+    PrefixSet, SmContext, SmError, StateMachine,
 };
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use ddm_api_types::db::RouterKind;
+use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::v3::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use libnet::get_ipaddr_info;
 use slog::Logger;
@@ -23,10 +24,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::thread::{JoinHandle, sleep, spawn};
 use std::time::Duration;
-
-use crate::discovery::Version;
-use ddm_api_types::net::TunnelOrigin;
-use std::net::Ipv6Addr;
 
 impl StateMachine {
     pub fn run(&mut self) -> Result<(), SmError> {
@@ -72,7 +69,6 @@ impl State for Init {
         event: Receiver<Event>,
     ) -> (Option<Box<dyn State>>, Receiver<Event>) {
         self.ctx.iface.transition(FsmState::Init);
-        self.ctx.iface.clear_peer();
         loop {
             // Check for shutdown or new peers
             while let Ok(e) = event.try_recv() {
@@ -140,7 +136,6 @@ impl State for Init {
                 self.ctx.router_id.clone(),
                 self.ctx.config.clone(),
                 self.ctx.tx.clone(),
-                self.ctx.iface.clone(),
                 self.ctx.stats.clone(),
                 self.ctx.log.clone(),
             ) {
@@ -198,7 +193,7 @@ impl State for Solicit {
                 }
             };
             match e {
-                Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
+                Event::Discovery(DiscoveryEvent::Advertise(peer)) => {
                     dbg!(
                         self.log,
                         self.ctx.config.if_name,
@@ -207,15 +202,14 @@ impl State for Solicit {
                     return (
                         Some(Box::new(Exchange::new(
                             self.ctx.clone(),
-                            addr,
-                            version,
+                            peer,
                             self.log.clone(),
                         ))),
                         event,
                     );
                 }
-                Event::Neighbor(NeighborEvent::Expire) => {}
-                Event::Neighbor(NeighborEvent::SolicitFail) => {
+                Event::Discovery(DiscoveryEvent::Expire) => {}
+                Event::Discovery(DiscoveryEvent::SolicitFail) => {
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
@@ -227,14 +221,6 @@ impl State for Solicit {
                             self.log.clone(),
                         ))),
                         event,
-                    );
-                }
-                Event::Peer(e) => {
-                    wrn!(
-                        self.log,
-                        self.ctx.config.if_name,
-                        "peer event in solicit state: {:?}",
-                        e
                     );
                 }
                 Event::Admin(AdminEvent::NewExternalPeer(tx)) => {
@@ -254,36 +240,32 @@ impl State for Solicit {
                         e
                     );
                 }
+                Event::Peer(e) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "peer event in solicit state: {:?}",
+                        e
+                    );
+                }
             }
         }
     }
 }
 
 struct Exchange {
-    peer: Ipv6Addr,
-    version: Version,
+    peer: PeerIdentity,
     ctx: SmContext,
     log: Logger,
 }
 
 impl Exchange {
-    fn new(
-        ctx: SmContext,
-        peer: Ipv6Addr,
-        version: Version,
-        log: Logger,
-    ) -> Self {
-        Self {
-            ctx,
-            peer,
-            version,
-            log,
-        }
+    fn new(ctx: SmContext, peer: PeerIdentity, log: Logger) -> Self {
+        Self { ctx, peer, log }
     }
 
     fn initial_pull(&mut self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
-        let peer = self.peer;
-        let version = self.version;
+        let peer = self.peer.clone();
         let rt = self.ctx.rt.clone();
         let log = self.log.clone();
         let interval = self.ctx.config.solicit_interval;
@@ -291,13 +273,9 @@ impl Exchange {
         let ctx = self.ctx.clone();
 
         spawn(move || {
-            while let Err(e) = crate::exchange::pull(
-                &ctx,
-                peer,
-                version,
-                rt.clone(),
-                stop.clone(),
-            ) {
+            while let Err(e) =
+                crate::exchange::pull(&ctx, &peer, rt.clone(), stop.clone())
+            {
                 sleep(interval);
                 wrn!(log, if_name, "exchange pull: {}", e);
                 if stop.load(Ordering::Relaxed) {
@@ -317,7 +295,7 @@ impl Exchange {
         loop {
             match exchange::do_pull(
                 &self.ctx,
-                &self.ctx.config.addr,
+                self.ctx.config.addr,
                 &self.ctx.rt,
             ) {
                 Ok(_) => break,
@@ -355,9 +333,8 @@ impl Exchange {
         }
 
         exchange_thread.abort();
-        self.ctx.iface.clear_peer();
         let (mut to_remove, to_remove_tnl) =
-            self.ctx.db.remove_nexthop_routes(self.peer);
+            self.ctx.db.remove_nexthop_routes(self.peer.addr);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
@@ -455,12 +432,15 @@ impl State for Exchange {
         &mut self,
         event: Receiver<Event>,
     ) -> (Option<Box<dyn State>>, Receiver<Event>) {
-        self.ctx.iface.transition(FsmState::Exchange);
+        self.ctx
+            .iface
+            .transition(FsmState::Exchange(self.peer.clone()));
+
         let exchange_thread = loop {
             match exchange::handler(
                 self.ctx.clone(),
                 self.ctx.config.addr,
-                self.peer,
+                self.peer.clone(),
                 self.log.clone(),
             ) {
                 Ok(handle) => break handle,
@@ -486,7 +466,7 @@ impl State for Exchange {
         // loop below.
         let initial_pull = self.initial_pull(pull_stop.clone());
 
-        if self.ctx.iface.external && self.ctx.first_run {
+        if self.ctx.iface.snapshot().external && self.ctx.first_run {
             self.ctx.first_run = false;
             crate::sm::send(
                 Event::Admin(AdminEvent::NewExternalPeer(self.ctx.tx.clone())),
@@ -522,8 +502,7 @@ impl State for Exchange {
                         &self.ctx,
                         self.ctx.config.clone(),
                         pv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) else {
@@ -559,8 +538,7 @@ impl State for Exchange {
                         &self.ctx,
                         self.ctx.config.clone(),
                         tv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) else {
@@ -607,8 +585,7 @@ impl State for Exchange {
                         &self.ctx,
                         self.ctx.config.clone(),
                         pv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) else {
@@ -645,8 +622,7 @@ impl State for Exchange {
                         &self.ctx,
                         self.ctx.config.clone(),
                         tv,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) else {
@@ -680,7 +656,7 @@ impl State for Exchange {
                     );
                 }
                 Event::Admin(AdminEvent::Expire(peer)) => {
-                    if self.peer != peer {
+                    if self.peer.addr != peer {
                         continue;
                     }
 
@@ -707,8 +683,7 @@ impl State for Exchange {
                     let rt = self.ctx.rt.clone();
                     if let Err(e) = crate::exchange::pull(
                         &self.ctx,
-                        self.peer,
-                        self.version,
+                        &self.peer,
                         rt,
                         pull_stop.clone(),
                     ) {
@@ -772,8 +747,7 @@ impl State for Exchange {
                             &self.ctx,
                             self.ctx.config.clone(),
                             push.announce,
-                            self.peer,
-                            self.version,
+                            &self.peer,
                             self.ctx.rt.clone(),
                             self.log.clone(),
                         )
@@ -808,8 +782,7 @@ impl State for Exchange {
                             &self.ctx,
                             self.ctx.config.clone(),
                             push.withdraw,
-                            self.peer,
-                            self.version,
+                            &self.peer,
                             self.ctx.rt.clone(),
                             self.log.clone(),
                         )
@@ -879,27 +852,7 @@ impl State for Exchange {
                         &mut self.ctx.event_channels,
                     );
                 }
-                Event::Neighbor(NeighborEvent::Expire) => {
-                    wrn!(
-                        self.log,
-                        self.ctx.config.if_name,
-                        "expiring peer {} due to discovery event",
-                        self.peer,
-                    );
-                    self.expire_peer(
-                        &exchange_thread,
-                        &pull_stop,
-                        initial_pull,
-                    );
-                    return (
-                        Some(Box::new(Solicit::new(
-                            self.ctx.clone(),
-                            self.log.clone(),
-                        ))),
-                        event,
-                    );
-                }
-                Event::Neighbor(NeighborEvent::SolicitFail) => {
+                Event::Discovery(DiscoveryEvent::SolicitFail) => {
                     wrn!(
                         self.log,
                         self.ctx.config.if_name,
@@ -919,9 +872,55 @@ impl State for Exchange {
                         event,
                     );
                 }
-                Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
-                    self.peer = addr;
-                    self.version = version;
+                Event::Discovery(DiscoveryEvent::Advertise(peer)) => {
+                    // Discovery re-announces the current neighbor
+                    // periodically, so most of these are for our own peer.
+                    if peer == self.peer {
+                        continue;
+                    }
+                    // The neighbor has changed out from under us. Tear down
+                    // the old session and return to Solicit, which enters
+                    // Exchange with the new peer on discovery's next
+                    // announcement.
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "discovered peer changed to {peer}, expiring peer {}",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
+                }
+                Event::Discovery(DiscoveryEvent::Expire) => {
+                    // Our peer has expired. Return to Solicit.
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "peer {} expired by discovery subsystem",
+                        self.peer,
+                    );
+                    self.expire_peer(
+                        &exchange_thread,
+                        &pull_stop,
+                        initial_pull,
+                    );
+                    return (
+                        Some(Box::new(Solicit::new(
+                            self.ctx.clone(),
+                            self.log.clone(),
+                        ))),
+                        event,
+                    );
                 }
             }
         }

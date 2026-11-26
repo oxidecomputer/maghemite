@@ -4,14 +4,14 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
-use ddm::admin::{HandlerContext, RouterStats, Tunables};
+use ddm::admin::{ApiHandlerContext, RouterStats, Tunables};
 use ddm::db::Db;
 use ddm::defaults::{
     DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
     EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
 };
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
+use ddm::sm::{DpdConfig, Interface, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -179,7 +179,7 @@ async fn run() {
     let router_stats = Arc::new(RouterStats::default());
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
-    let context = Arc::new(Mutex::new(HandlerContext {
+    let context = Arc::new(Mutex::new(ApiHandlerContext {
         db,
         stats: router_stats,
         peers,
@@ -295,7 +295,7 @@ fn start_state_machines(
             log: log.clone(),
             router_id: router_id.to_string(),
             rt: rt.clone(),
-            iface: Arc::new(InterfaceState::default()),
+            iface: Interface::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
             discovery_stop: None,
             first_run: true,

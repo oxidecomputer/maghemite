@@ -11,16 +11,17 @@ use crate::db::Db;
 use crate::discovery::{self, Version};
 use ddm_api_types::db::{PeerStatus, RouterKind};
 use ddm_api_types::net::TunnelOrigin;
-use mg_common::lock;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::net::Ipv6Addr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 #[cfg(target_os = "illumos")]
@@ -71,10 +72,10 @@ pub enum PeerEvent {
 }
 
 #[derive(Debug, Clone)]
-pub enum NeighborEvent {
+pub enum DiscoveryEvent {
     /// An event sent from the discovery subsystem to the state machine letting
-    /// it know the link local ipv6 address of the peer and it's version.
-    Advertise((Ipv6Addr, Version)),
+    /// it know the identity of a newly discovered or changed peer.
+    Advertise(PeerIdentity),
 
     /// An event sent from the discovery subsystem to the state machine letting
     /// it know that solicitation has failed.
@@ -87,14 +88,14 @@ pub enum NeighborEvent {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    Neighbor(NeighborEvent),
+    Discovery(DiscoveryEvent),
     Peer(PeerEvent),
     Admin(AdminEvent),
 }
 
-impl From<NeighborEvent> for Event {
-    fn from(e: NeighborEvent) -> Self {
-        Self::Neighbor(e)
+impl From<DiscoveryEvent> for Event {
+    fn from(e: DiscoveryEvent) -> Self {
+        Self::Discovery(e)
     }
 }
 
@@ -193,7 +194,7 @@ pub struct DpdConfig {
 pub enum FsmState {
     Init,
     Solicit,
-    Exchange,
+    Exchange(PeerIdentity),
 }
 
 impl FsmState {
@@ -201,7 +202,7 @@ impl FsmState {
         match self {
             FsmState::Init => PeerStatus::Init(elapsed),
             FsmState::Solicit => PeerStatus::Solicit(elapsed),
-            FsmState::Exchange => PeerStatus::Exchange(elapsed),
+            FsmState::Exchange(_) => PeerStatus::Exchange(elapsed),
         }
     }
 }
@@ -211,15 +212,30 @@ pub struct PeerIdentity {
     pub addr: Ipv6Addr,
     pub hostname: String,
     pub kind: RouterKind,
+    pub version: Version,
 }
 
+impl Display for PeerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let PeerIdentity {
+            addr,
+            hostname,
+            kind,
+            version,
+        } = self;
+        write!(f, "{hostname}@{addr} ({kind}, version {})", *version as u8,)
+    }
+}
+
+/// A snapshot of an interface's state machine, published by the state machine
+/// through [`Interface`] and read by the admin API and stats collection.
+#[derive(Clone, Debug)]
 pub struct InterfaceState {
-    pub if_index: Mutex<u32>,
-    pub if_name: Mutex<String>,
+    pub if_index: u32,
+    pub if_name: String,
     pub external: bool,
-    pub fsm_state: Mutex<FsmState>,
-    pub last_fsm_state_change: Mutex<Instant>,
-    pub peer_identity: Mutex<Option<PeerIdentity>>,
+    pub fsm_state: FsmState,
+    pub last_fsm_state_change: Instant,
 }
 
 impl InterfaceState {
@@ -230,36 +246,61 @@ impl InterfaceState {
         }
     }
 
-    pub fn transition(&self, state: FsmState) {
-        *lock!(self.fsm_state) = state;
-        *lock!(self.last_fsm_state_change) = Instant::now();
+    fn transition(&mut self, state: FsmState) {
+        self.fsm_state = state;
+        self.last_fsm_state_change = Instant::now();
     }
 
-    pub fn clear_peer(&self) {
-        *lock!(self.peer_identity) = None;
-    }
-
-    pub fn set_if_info(&self, index: u32, name: String) {
-        *lock!(self.if_index) = index;
-        *lock!(self.if_name) = name;
-    }
-
-    pub fn peer_status(&self) -> PeerStatus {
-        let elapsed = lock!(self.last_fsm_state_change).elapsed();
-        lock!(self.fsm_state).to_peer_status(elapsed)
+    /// The peer this interface is exchanging routes with, if any, and how
+    /// long the interface has been in its current state.
+    pub fn peer(&self) -> Option<(PeerStatus, PeerIdentity)> {
+        let FsmState::Exchange(peer) = &self.fsm_state else {
+            return None;
+        };
+        let elapsed = self.last_fsm_state_change.elapsed();
+        Some((self.fsm_state.to_peer_status(elapsed), peer.clone()))
     }
 }
 
 impl Default for InterfaceState {
     fn default() -> Self {
         Self {
-            if_index: Mutex::new(0),
-            if_name: Mutex::new(String::new()),
+            if_index: 0,
+            if_name: String::new(),
             external: false,
-            fsm_state: Mutex::new(FsmState::Init),
-            last_fsm_state_change: Mutex::new(Instant::now()),
-            peer_identity: Mutex::new(None),
+            fsm_state: FsmState::Init,
+            last_fsm_state_change: Instant::now(),
         }
+    }
+}
+
+/// Publishes an interface's [`InterfaceState`] from its state machine to
+/// readers in other threads without them sharing a lock.
+///
+/// The `watch` sender is private so every update goes through `send_modify`
+/// (`send` silently drops updates when there are no receivers), and readers
+/// get a clone rather than a guard that would block the next update.
+#[derive(Clone)]
+pub struct Interface(watch::Sender<InterfaceState>);
+
+impl Interface {
+    pub fn new(state: InterfaceState) -> Self {
+        Self(watch::Sender::new(state))
+    }
+
+    pub fn transition(&self, state: FsmState) {
+        self.0.send_modify(|i| i.transition(state));
+    }
+
+    pub fn set_if_info(&self, index: u32, name: String) {
+        self.0.send_modify(|i| {
+            i.if_index = index;
+            i.if_name = name;
+        });
+    }
+
+    pub fn snapshot(&self) -> InterfaceState {
+        self.0.borrow().clone()
     }
 }
 
@@ -290,7 +331,7 @@ pub struct SmContext {
     pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub router_id: String,
-    pub iface: Arc<InterfaceState>,
+    pub iface: Interface,
     pub stats: Arc<SessionStats>,
     pub log: Logger,
     pub discovery_stop: Option<Arc<AtomicBool>>,

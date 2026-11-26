@@ -8,8 +8,8 @@ use crate::defaults::{
     EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL,
 };
 use crate::sm::{
-    AdminEvent, Event, InterfaceState, PrefixSet, SessionStats, SmContext,
-    StateMachine,
+    AdminEvent, Event, Interface, InterfaceState, PrefixSet, SessionStats,
+    SmContext, StateMachine,
 };
 use camino::Utf8PathBuf;
 use ddm_api::DdmAdminApi;
@@ -56,7 +56,7 @@ pub struct RouterStats {
 }
 
 #[derive(Clone)]
-pub struct HandlerContext {
+pub struct ApiHandlerContext {
     pub db: Db,
     pub stats: Arc<RouterStats>,
     pub peers: Vec<SmContext>,
@@ -69,7 +69,7 @@ pub struct HandlerContext {
     pub log: Logger,
 }
 
-impl HandlerContext {
+impl ApiHandlerContext {
     pub fn event_channels(&self) -> impl Iterator<Item = &Sender<Event>> {
         self.peers.iter().map(|x| &x.tx)
     }
@@ -108,7 +108,7 @@ pub fn handler(
     addr: IpAddr,
     port: u16,
     admin_port_file: Option<Utf8PathBuf>,
-    context: Arc<Mutex<HandlerContext>>,
+    context: Arc<Mutex<ApiHandlerContext>>,
     log: Logger,
 ) -> Result<(), String> {
     let sa: SocketAddr = match addr {
@@ -176,7 +176,7 @@ pub fn handler(
 pub enum DdmAdminApiImpl {}
 
 impl DdmAdminApi for DdmAdminApiImpl {
-    type Context = Arc<Mutex<HandlerContext>>;
+    type Context = Arc<Mutex<ApiHandlerContext>>;
 
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
@@ -184,13 +184,11 @@ impl DdmAdminApi for DdmAdminApiImpl {
         let ctx = lock!(ctx.context());
         let mut result = HashMap::new();
         for sm in &ctx.peers {
-            // Compute status first so peer_status() never runs while we hold
-            // any of the InterfaceState mutexes below.
-            let status = sm.iface.peer_status();
-            let if_index = *lock!(sm.iface.if_index);
-            let Some(peer) = lock!(sm.iface.peer_identity).clone() else {
+            let iface = sm.iface.snapshot();
+            let Some((status, peer)) = iface.peer() else {
                 continue;
             };
+            let if_index = iface.if_index;
             result.insert(
                 if_index,
                 PeerInfo {
@@ -494,7 +492,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
                 log: ctx.log.clone(),
                 router_id: ctx.router_id.clone(),
                 rt: Arc::new(tokio::runtime::Handle::current()),
-                iface: Arc::new(InterfaceState::external()),
+                iface: Interface::new(InterfaceState::external()),
                 stats: Arc::new(SessionStats::default()),
                 discovery_stop: None,
                 first_run: true,
@@ -514,7 +512,7 @@ impl DdmAdminApi for DdmAdminApiImpl {
 
         for aobj in to_remove.into_iter() {
             for (i, p) in ctx.peers.iter().enumerate() {
-                if p.iface.external {
+                if p.iface.snapshot().external {
                     if &p.config.aobj_name == aobj {
                         let _ = p.tx.send(Event::Admin(AdminEvent::Shutdown));
                         remove_idx.insert(i);
@@ -555,8 +553,9 @@ impl DdmAdminApi for DdmAdminApiImpl {
     }
 }
 
-pub fn api_description()
--> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, ApiDescriptionBuildErrors>
-{
+pub fn api_description() -> Result<
+    ApiDescription<Arc<Mutex<ApiHandlerContext>>>,
+    ApiDescriptionBuildErrors,
+> {
     ddm_admin_api_mod::api_description::<DdmAdminApiImpl>()
 }
