@@ -77,7 +77,7 @@ pub(crate) fn add_peer(
 ) -> Result<(), HttpError> {
     let mut daemon = lock!(ctx.bfd.daemon);
     daemon
-        .add_peer(ctx.db.router().clone(), rq.into())
+        .add_peer(ctx.default_router()?, rq.into())
         .map_err(|err| match err {
             AddPeerError::PeerExists(_) => HttpError::for_client_error(
                 None,

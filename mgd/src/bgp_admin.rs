@@ -107,8 +107,7 @@ pub async fn read_routers(
 ) -> Result<HttpResponseOk<Vec<mg_api_types::bgp::config::Router>>, HttpError> {
     let ctx = ctx.context();
     let routers = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_routers()
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
     let mut result = Vec::new();
@@ -151,8 +150,7 @@ pub async fn read_router(
     let rq = request.into_inner();
 
     let routers = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_routers()
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
 
@@ -196,8 +194,7 @@ async fn do_delete_router(
     // are keyed on peer address/interface, not ASN, so nothing else prunes
     // them). See https://github.com/oxidecomputer/maghemite/issues/772.
     let numbered: Vec<_> = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_neighbors()
         .map_err(Error::Db)?
         .into_iter()
@@ -208,8 +205,7 @@ async fn do_delete_router(
     }
 
     let unnumbered: Vec<_> = ctx
-        .db
-        .router()
+        .default_router()?
         .get_unnumbered_bgp_neighbors()
         .map_err(Error::Db)?
         .into_iter()
@@ -220,16 +216,16 @@ async fn do_delete_router(
             .await?;
     }
 
-    ctx.db
-        .router()
+    ctx.default_router()?
         .clear_origin4(asn.into())
         .map_err(Error::Db)?;
-    ctx.db
-        .router()
+    ctx.default_router()?
         .clear_origin6(asn.into())
         .map_err(Error::Db)?;
 
-    ctx.db.router().remove_bgp_router(asn).map_err(Error::Db)?;
+    ctx.default_router()?
+        .remove_bgp_router(asn)
+        .map_err(Error::Db)?;
 
     let mut routers = lock!(ctx.bgp.router);
     if let Some(r) = routers.remove(&asn) {
@@ -249,8 +245,7 @@ pub async fn read_neighbors_v1(
     let ctx = ctx.context();
 
     let nbrs = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_neighbors()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -283,8 +278,11 @@ pub async fn read_neighbor_v1(
     request: Query<v1::bgp::config::NeighborSelector>,
 ) -> Result<HttpResponseOk<v1::bgp::config::Neighbor>, HttpError> {
     let rq = request.into_inner();
-    let db_neighbors =
-        ctx.context().db.router().get_bgp_neighbors().map_err(|e| {
+    let db_neighbors = ctx
+        .context()
+        .default_router()?
+        .get_bgp_neighbors()
+        .map_err(|e| {
             HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
         })?;
     let neighbor_info = db_neighbors
@@ -344,8 +342,11 @@ pub async fn read_neighbor(
     match peer_id {
         PeerId::Ip(addr) => {
             // Numbered peer - query numbered neighbors DB
-            let db_neighbors =
-                ctx.context().db.router().get_bgp_neighbors().map_err(|e| {
+            let db_neighbors = ctx
+                .context()
+                .default_router()?
+                .get_bgp_neighbors()
+                .map_err(|e| {
                     HttpError::for_internal_error(format!(
                         "get neighbors kv tree: {e}"
                     ))
@@ -365,8 +366,7 @@ pub async fn read_neighbor(
             // Unnumbered peer - query unnumbered neighbors DB
             let db_neighbors = ctx
                 .context()
-                .db
-                .router()
+                .default_router()?
                 .get_unnumbered_bgp_neighbors()
                 .map_err(|e| {
                     HttpError::for_internal_error(format!(
@@ -408,8 +408,7 @@ pub async fn read_neighbors(
     let ctx = ctx.context();
 
     let nbrs = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_neighbors()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -461,8 +460,7 @@ pub async fn read_unnumbered_neighbors(
     let ctx = rqctx.context();
 
     let nbrs = ctx
-        .db
-        .router()
+        .default_router()?
         .get_unnumbered_bgp_neighbors()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -492,8 +490,7 @@ pub async fn read_unnumbered_neighbor(
     let rq = request.into_inner();
     let db_neighbors = rqctx
         .context()
-        .db
-        .router()
+        .default_router()?
         .get_unnumbered_bgp_neighbors()
         .map_err(|e| {
             HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
@@ -641,8 +638,7 @@ pub async fn get_ndp_interfaces(
 
     // Get all unnumbered neighbors for this ASN
     let unnumbered_neighbors = ctx
-        .db
-        .router()
+        .default_router()?
         .get_unnumbered_bgp_neighbors()
         .map_err(|e| {
             HttpError::for_internal_error(format!(
@@ -692,8 +688,7 @@ pub async fn get_ndp_interface_detail(
 
     // Verify this interface has an unnumbered neighbor configured for this ASN
     let neighbor = ctx
-        .db
-        .router()
+        .default_router()?
         .get_unnumbered_bgp_neighbors()
         .map_err(|e| {
             HttpError::for_internal_error(format!(
@@ -1322,16 +1317,14 @@ async fn do_bgp_apply(
     }
 
     let groups = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_neighbors()
         .map_err(Error::Db)?
         .into_iter()
         .map(|x| x.group)
         .collect::<HashSet<_>>();
     let ugroups = ctx
-        .db
-        .router()
+        .default_router()?
         .get_unnumbered_bgp_neighbors()
         .map_err(Error::Db)?
         .into_iter()
@@ -1359,8 +1352,7 @@ async fn do_bgp_apply(
     // down completely. Routing this through do_delete_router keeps all router
     // teardown (db rows, in-memory router, sessions, neighbors) in one place.
     let routers = ctx
-        .db
-        .router()
+        .default_router()?
         .get_bgp_routers()
         .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
     for (old_asn, _router) in routers {
@@ -1384,8 +1376,7 @@ async fn do_bgp_apply(
         let current: Vec<
             mg_api_types::rdb::neighbor::BgpUnnumberedNeighborInfo,
         > = ctx
-            .db
-            .router()
+            .default_router()?
             .get_unnumbered_bgp_neighbors()
             .map_err(Error::Db)?
             .into_iter()
@@ -1474,8 +1465,7 @@ async fn do_bgp_apply(
 
     for (group, peers) in &peers {
         let current: Vec<mg_api_types::rdb::neighbor::BgpNeighborInfo> = ctx
-            .db
-            .router()
+            .default_router()?
             .get_bgp_neighbors()
             .map_err(Error::Db)?
             .into_iter()
@@ -1985,11 +1975,11 @@ pub(crate) mod helpers {
         // Only remove routes learned from this peer if the session belonged
         // to this router.
         if get_router!(&ctx, asn).is_ok_and(|r| r.get_session(addr).is_some()) {
-            ctx.db
-                .router()
+            ctx.default_router()?
                 .remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
         }
-        ctx.db.router().remove_bgp_neighbor(asn.into(), addr)?;
+        ctx.default_router()?
+            .remove_bgp_neighbor(asn.into(), addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
         Ok(HttpResponseDeleted())
@@ -2018,8 +2008,7 @@ pub(crate) mod helpers {
         }
 
         // And now clear out the top level database entry
-        ctx.db
-            .router()
+        ctx.default_router()?
             .remove_unnumbered_bgp_neighbor(asn.into(), interface)?;
 
         Ok(HttpResponseDeleted())
@@ -2074,7 +2063,7 @@ pub(crate) mod helpers {
         // XXX Note that if this fails, we'll have an orphaned session that's
         // live without a DB row. This should either use a prepare-and-commit
         // pattern or rollbacks.
-        ctx.db.router().add_bgp_neighbor(
+        ctx.default_router()?.add_bgp_neighbor(
             mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,
                 name: rq.name.clone(),
@@ -2197,7 +2186,7 @@ pub(crate) mod helpers {
         // XXX Note that if this fails, we'll have an orphaned session that's
         // live without a DB row. This should either use a prepare-and-commit
         // pattern or rollbacks.
-        ctx.db.router().add_bgp_neighbor(
+        ctx.default_router()?.add_bgp_neighbor(
             mg_api_types::rdb::neighbor::BgpNeighborInfo {
                 asn: rq.asn,
                 group: rq.group.clone(),
@@ -2324,7 +2313,7 @@ pub(crate) mod helpers {
                 ),
             };
 
-        ctx.db.router().add_unnumbered_bgp_neighbor(
+        ctx.default_router()?.add_unnumbered_bgp_neighbor(
             mg_api_types::rdb::neighbor::BgpUnnumberedNeighborInfo {
                 asn: rq.asn,
                 name: rq.name.clone(),
@@ -2512,7 +2501,7 @@ pub(crate) mod helpers {
             id: rq.id,
         };
 
-        let db = ctx.db.router().clone();
+        let db = ctx.default_router()?;
 
         let router = Arc::new(Router::<BgpConnectionTcp>::new(
             cfg,
@@ -2816,6 +2805,11 @@ fn update(message, asn, addr) {
         })
     }
 
+    /// The default router's RouterDb handle for a test context.
+    fn default_router(ctx: &Arc<HandlerContext>) -> rdb::RouterDb {
+        ctx.default_router().expect("default router db")
+    }
+
     /// Common peer parameters with both address families enabled.
     fn params(hold_time: u64) -> BgpPeerParameters {
         BgpPeerParameters {
@@ -2918,8 +2912,7 @@ fn update(message, asn, addr) {
         unnumbered: usize,
     ) {
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(ctx)
                 .get_bgp_neighbors()
                 .expect("get bgp neighbors")
                 .len(),
@@ -2927,8 +2920,7 @@ fn update(message, asn, addr) {
             "numbered neighbor count",
         );
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(ctx)
                 .get_unnumbered_bgp_neighbors()
                 .expect("get unnumbered neighbors")
                 .len(),
@@ -2942,14 +2934,10 @@ fn update(message, asn, addr) {
         asn: u32,
         hold_time: u64,
     ) {
-        let num = ctx
-            .db
-            .router()
+        let num = default_router(ctx)
             .get_bgp_neighbors()
             .expect("get bgp neighbors");
-        let unum = ctx
-            .db
-            .router()
+        let unum = default_router(ctx)
             .get_unnumbered_bgp_neighbors()
             .expect("get unnumbered neighbors");
 
@@ -3006,8 +2994,7 @@ fn update(message, asn, addr) {
             .expect("bgp apply request");
 
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_bgp_neighbors()
                 .expect("get bgp neighbors")
                 .len(),
@@ -3020,8 +3007,7 @@ fn update(message, asn, addr) {
             .await
             .expect("bgp apply request");
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_bgp_neighbors()
                 .expect("get bgp neighbors")
                 .len(),
@@ -3054,8 +3040,7 @@ fn update(message, asn, addr) {
         // The now-empty old router should be gone, leaving only ASN 456.
         let routers = ctx.bgp.router.lock().unwrap();
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_bgp_routers()
                 .expect("get routers")
                 .into_keys()
@@ -3134,15 +3119,13 @@ fn update(message, asn, addr) {
         .expect("load shaper");
 
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_origin4(123_u32.into())
                 .expect("get origin4"),
             vec![first_prefix4],
         );
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_origin6(123_u32.into())
                 .expect("get origin6"),
             vec![first_prefix6],
@@ -3157,8 +3140,7 @@ fn update(message, asn, addr) {
         do_delete_router(&ctx, 123).await.expect("delete router");
 
         assert!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_bgp_routers()
                 .expect("get routers")
                 .is_empty()
@@ -3166,16 +3148,14 @@ fn update(message, asn, addr) {
         assert!(!ctx.bgp.router.lock().unwrap().contains_key(&123));
         assert_neighbor_counts(&ctx, 0, 0);
         assert!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_origin4(123_u32.into())
                 .expect("get deleted origin4")
                 .is_empty(),
             "router deletion should clear stale origin4 prefixes",
         );
         assert!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_origin6(123_u32.into())
                 .expect("get deleted origin6")
                 .is_empty(),
@@ -3200,15 +3180,13 @@ fn update(message, asn, addr) {
         create_origin4_for_router(&ctx, 456, second_prefix4);
         create_origin6_for_router(&ctx, 456, second_prefix6);
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_origin4(456_u32.into())
                 .expect("get asn 456 origin4"),
             vec![second_prefix4],
         );
         assert_eq!(
-            ctx.db
-                .router()
+            default_router(&ctx)
                 .get_origin6(456_u32.into())
                 .expect("get asn 456 origin6"),
             vec![second_prefix6],

@@ -19,6 +19,12 @@ mod proptest;
 /// The priority routes default to.
 pub const DEFAULT_ROUTE_PRIORITY: u64 = u64::MAX;
 
+/// Name of the default router.
+pub const DEFAULT_ROUTER_NAME: &str = "default";
+
+/// Id of the default router.
+pub const DEFAULT_ROUTER_ID: RouterId = RouterId(uuid::Uuid::nil());
+
 pub const COMPONENT_RDB: &str = "rdb";
 pub const MOD_DB: &str = "database";
 

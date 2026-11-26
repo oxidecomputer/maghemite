@@ -6353,6 +6353,7 @@ dependencies = [
  "chrono",
  "clap",
  "client-common",
+ "iddqd 0.5.0",
  "itertools 0.15.0",
  "mg-api-types",
  "mg-api-types-versions",
@@ -6365,6 +6366,7 @@ dependencies = [
  "sled",
  "slog",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

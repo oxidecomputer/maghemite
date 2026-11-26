@@ -153,7 +153,8 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
     let bgp = init_bgp(&args, &log);
 
-    let tep_ula = get_tunnel_endpoint_ula(db.router());
+    let default_router = ensure_default_router(&db);
+    let tep_ula = default_router.tep();
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
@@ -188,7 +189,7 @@ async fn run(args: RunArgs) {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = context.clone();
         let log = log.clone();
-        let db = ctx.db.router().clone();
+        let db = default_router.clone();
         let stats = context.mg_lower_stats.clone();
         let dpd = mg_lower::ProductionDpd {
             client: mg_lower::new_dpd_client(&log, args.dendrite_addr),
@@ -208,25 +209,25 @@ async fn run(args: RunArgs) {
 
     start_bgp_routers(
         context.clone(),
-        db.router()
+        default_router
             .get_bgp_routers()
             .expect("get BGP routers from datastore"),
-        db.router()
+        default_router
             .get_bgp_neighbors()
             .expect("get BGP neighbors from data store"),
-        db.router()
+        default_router
             .get_unnumbered_bgp_neighbors()
             .expect("get BGP unnumbered neighbors from data store"),
     );
 
     start_bfd_sessions(
         context.clone(),
-        db.router()
+        default_router
             .get_bfd_neighbors()
             .expect("get BFD neighbors from data store"),
     );
 
-    initialize_static_routes(db.router(), &context.log);
+    initialize_static_routes(&default_router, &context.log);
 
     let hostname = hostname::get()
         .expect("failed to get hostname")
@@ -573,9 +574,10 @@ fn initialize_static_routes(db: &rdb::RouterDb, log: &Logger) {
     }
 }
 
-fn get_tunnel_endpoint_ula(db: &rdb::RouterDb) -> Ipv6Addr {
-    if let Some(addr) = db.get_tep_addr().unwrap() {
-        return addr;
+/// Create the default router if the database doesn't have it.
+fn ensure_default_router(db: &rdb::Db) -> rdb::RouterDb {
+    if let Ok(rdb) = db.router(admin::DEFAULT_ROUTER_ID) {
+        return rdb;
     }
 
     // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
@@ -585,9 +587,12 @@ fn get_tunnel_endpoint_ula(db: &rdb::RouterDb) -> Ipv6Addr {
         0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
     ]);
 
-    db.set_tep_addr(tep_ula).unwrap();
-
-    tep_ula
+    db.create_router(rdb::types::RouterInfo {
+        id: admin::DEFAULT_ROUTER_ID,
+        name: admin::DEFAULT_ROUTER_NAME.to_string(),
+        tep: tep_ula,
+    })
+    .expect("create default router")
 }
 
 #[cfg(test)]
@@ -602,9 +607,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let log = mg_common::log::init_logger();
         let db = rdb::Db::new(temp_dir.path().to_str().unwrap(), log.clone())
-            .unwrap()
-            .router()
-            .clone();
+            .unwrap();
+        let db = db
+            .create_router(rdb::types::RouterInfo {
+                id: admin::DEFAULT_ROUTER_ID,
+                name: admin::DEFAULT_ROUTER_NAME.to_string(),
+                tep: Ipv6Addr::UNSPECIFIED,
+            })
+            .unwrap();
         (db, temp_dir, log)
     }
 
