@@ -186,8 +186,9 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     instance_id: RouterInstanceId,
 
     /// A set of BGP session runners indexed by PeerId (IP or interface).
-    /// Shared with the Dispatcher for connection routing.
-    pub sessions: Arc<Mutex<SessionMap<Cnx>>>,
+    /// Shared with the Dispatcher for connection routing, and with other
+    /// routers.
+    sessions: Arc<Mutex<SessionMap<Cnx>>>,
 
     /// Compiled policy programs.
     pub policy: Policy,
@@ -251,13 +252,24 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         self.instance_id
     }
 
-    // Get the session runner mapped to the peer id
+    /// Return this router's sessions.
+    pub fn sessions(&self) -> Vec<Arc<SessionRunner<Cnx>>> {
+        lock!(self.sessions)
+            .sessions_of(self)
+            .map(|(_, s)| s.clone())
+            .collect()
+    }
+
+    /// Return the session that matches this `PeerId`.
     pub fn get_session(
         &self,
         peer: impl Into<PeerId>,
     ) -> Option<Arc<SessionRunner<Cnx>>> {
         let key: PeerId = peer.into();
-        lock!(self.sessions).get(&key).cloned()
+        lock!(self.sessions)
+            .get(&key)
+            .filter(|s| s.belongs_to(self))
+            .cloned()
     }
 
     /// Spawn an FSM thread for the given session.
@@ -426,13 +438,16 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let sessions = lock!(self.sessions);
-        if sessions.contains_key(&peer.id) {
-            drop(sessions);
-            Ok(EnsureSessionResult::Updated(
-                self.update_session(peer, info)?,
-            ))
-        } else {
-            Ok(EnsureSessionResult::New(self.new_session_locked(
+        match sessions.get(&peer.id).map(|s| s.belongs_to(self)) {
+            Some(true) => {
+                drop(sessions);
+                Ok(EnsureSessionResult::Updated(
+                    self.update_session(peer, info)?,
+                ))
+            }
+            // The peer has a session in another router.
+            Some(false) => Err(Error::PeerExists(peer.id)),
+            None => Ok(EnsureSessionResult::New(self.new_session_locked(
                 sessions,
                 peer,
                 bind_addr,
@@ -440,7 +455,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 event_rx,
                 info,
                 unnumbered_manager,
-            )?))
+            )?)),
         }
     }
 
@@ -517,15 +532,15 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(runner)
     }
 
+    /// Updates the parameters for a session in this router.
     pub fn update_session(
         self: &Arc<Self>,
         peer: PeerConfig,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let key = peer.id.clone();
-        let session = match lock!(self.sessions).get(&key) {
-            None => return Err(Error::UnknownPeer(key)),
-            Some(s) => s.clone(),
+        let session = match self.get_session(peer.id.clone()) {
+            None => return Err(Error::UnknownPeer(peer.id)),
+            Some(s) => s,
         };
 
         session.update_session_parameters(peer, info)?;
@@ -533,12 +548,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(session)
     }
 
-    pub fn delete_session(&self, peer: impl Into<PeerId>) {
+    /// Deletes a session for this router.
+    ///
+    /// Returns true if this router had a session with the peer.
+    pub fn delete_session(&self, peer: impl Into<PeerId>) -> bool {
         let peer_id = peer.into();
         self.remove_fanout(peer_id.clone());
-        if let Some(s) = lock!(self.sessions).remove(&peer_id) {
+        let mut sessions = lock!(self.sessions);
+        if sessions.get(&peer_id).is_some_and(|s| s.belongs_to(self))
+            && let Some(s) = sessions.remove(&peer_id)
+        {
             s.shutdown();
+            return true;
         }
+        false
     }
 
     pub fn send_admin_event(&self, e: AdminEvent) -> Result<(), Error> {

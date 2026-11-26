@@ -4485,6 +4485,86 @@ fn router_teardown_leaves_other_routers_sessions_alone() {
 
 #[test]
 #[serial_test::parallel]
+fn sessions_are_isolated_per_router() {
+    use crate::error::Error;
+
+    let name = "sessions_are_isolated_per_router";
+    let log = init_file_logger(&format!("{name}.log"));
+    let db = rdb::test::get_test_db(name, log.clone()).unwrap();
+    let sessions = Arc::new(Mutex::new(SessionMap::new()));
+    let make_router = |asn| {
+        Arc::new(Router::<BgpConnectionChannel>::new(
+            RouterConfig {
+                asn: Asn::FourOctet(asn),
+                id: asn,
+            },
+            log.clone(),
+            (*db).clone(),
+            sessions.clone(),
+        ))
+    };
+    let this_router = make_router(64512);
+    let other_router = make_router(64513);
+
+    let local: SocketAddr = "[2001:db8::1]:10179".parse().unwrap();
+    let remote: SocketAddr = "[2001:db8::2]:10179".parse().unwrap();
+    let info = create_test_session_info(
+        RouteExchange::Ipv6 { nexthop: None },
+        local,
+        remote,
+        true,
+    );
+    let id = PeerId::Ip(remote.ip());
+    let peer = PeerConfig {
+        name: "peer".into(),
+        group: String::new(),
+        id: id.clone(),
+        port: BGP_PORT,
+        hold_time: TEST_HOLD_TIME_SECS,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: TEST_CONNECT_RETRY_SECS,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let new_session = |router: &Arc<Router<BgpConnectionChannel>>| {
+        let (tx, rx) = channel();
+        router.new_session(
+            peer.clone(),
+            Some(local),
+            tx,
+            rx,
+            info.clone(),
+            None,
+        )
+    };
+
+    let session = new_session(&this_router).unwrap();
+
+    // Another router can't see, update or delete this session, or create one
+    // for the same peer.
+    assert!(other_router.get_session(id.clone()).is_none());
+    assert!(matches!(
+        other_router.update_session(peer.clone(), info.clone()),
+        Err(Error::UnknownPeer(p)) if p == id
+    ));
+    assert!(matches!(
+        new_session(&other_router),
+        Err(Error::PeerExists(p)) if p == id
+    ));
+    assert!(!other_router.delete_session(id.clone()));
+    assert!(Arc::ptr_eq(
+        &this_router.get_session(id.clone()).unwrap(),
+        &session
+    ));
+
+    // Deletion (not just shutdown) is needed for cleanup (see
+    // router_teardown_leaves_other_routers_sessions_alone for more details).
+    this_router.delete_session(id);
+}
+
+#[test]
+#[serial_test::parallel]
 fn recreated_router_does_not_claim_predecessors_sessions() {
     let test_name = "recreated_router_does_not_claim_predecessors_sessions";
     let log = init_file_logger(&format!("{test_name}.log"));
