@@ -46,6 +46,10 @@ impl Daemon {
         self.sessions.iter()
     }
 
+    pub fn session(&self, peer: &IpAddr) -> Option<&Session> {
+        self.sessions.get(peer)
+    }
+
     pub fn listen_addr_for_peer(&self, peer: &IpAddr) -> Option<SocketAddr> {
         self.dispatcher.listen_addr_for_peer(peer)
     }

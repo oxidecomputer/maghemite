@@ -693,3 +693,48 @@ impl MgAdminApi for MgAdminApiImpl {
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     mg_admin_api_mod::api_description::<MgAdminApiImpl>().unwrap()
 }
+
+#[cfg(test)]
+pub(crate) mod test {
+    use super::HandlerContext;
+    use crate::{bfd_admin::BfdContext, bgp_admin::BgpContext};
+    use bgp::router::SessionMap;
+    use client_common::println_nopipe;
+    use mg_common::stats::MgLowerStats;
+    use rdb::test::get_test_db;
+    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
+    use std::net::Ipv6Addr;
+    use std::{
+        env::temp_dir,
+        fs::{create_dir_all, remove_dir_all},
+        sync::{Arc, Mutex},
+    };
+
+    /// Build a fresh handler context backed by an isolated on-disk test db.
+    pub(crate) fn test_ctx(name: &str) -> Arc<HandlerContext> {
+        let tmpdir = temp_dir();
+        let tmpdir =
+            format!("{}/maghemite-test/{name}", tmpdir.to_str().unwrap());
+        if std::fs::exists(&tmpdir).unwrap() {
+            remove_dir_all(&tmpdir).unwrap();
+        }
+        create_dir_all(&tmpdir).unwrap();
+        println_nopipe!("tmpdir is {tmpdir}");
+        let log = mg_common::log::init_file_logger(&format!("{name}.log"));
+        let db = get_test_db(name, log.clone()).unwrap();
+        Arc::new(HandlerContext {
+            #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
+            tep: Ipv6Addr::UNSPECIFIED,
+            bgp: BgpContext::new(
+                Arc::new(Mutex::new(SessionMap::new())),
+                log.clone(),
+            ),
+            bfd: BfdContext::new(log.clone()),
+            log: log.clone(),
+            db: db.db().clone(),
+            mg_lower_stats: Arc::new(MgLowerStats::default()),
+            stats_server_running: Mutex::new(false),
+            oximeter_port: 0,
+        })
+    }
+}
