@@ -2,16 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_api_types::db::TunnelRoute;
-use ddm_api_types::net::TunnelOrigin;
+use ddm_api_types::db::{MulticastRoute, TunnelRoute};
+use ddm_api_types::net::{MulticastOrigin, TunnelOrigin};
 use ddm_protocol::v3::PathVector;
 use mg_common::lock;
+use omicron_common::api::external::Generation;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
+
+pub(crate) mod mcast;
+
+pub use mcast::{
+    ImportedMcast, McastPathSnapshot, McastUpdateOutcome, McastUpdateSource,
+    MulticastRibChange,
+};
 
 #[derive(Clone, Default)]
 pub struct Db {
@@ -24,9 +32,16 @@ pub struct Db {
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
+    /// Imported multicast routes, keyed by origin and then by nexthop.
+    pub imported_mcast: ImportedMcast,
+    /// Sequence of the most recent multicast push.
+    pub mcast_seq: Option<Generation>,
+    /// Sequence of the last multicast push recorded for each nexthop.
+    pub mcast_push_seq: HashMap<Ipv6Addr, Generation>,
     pub external_peers: BTreeSet<String>,
     pub originated: HashSet<Ipv6Net>,
     pub originated_tunnel: HashSet<TunnelOrigin>,
+    pub originated_mcast: HashSet<MulticastOrigin>,
 }
 
 const _: () = {
@@ -61,11 +76,11 @@ impl Db {
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
-        lock!(self.data).imported.extend(r.clone());
+        lock!(self.data).imported.extend(r.iter().cloned());
     }
 
     pub fn import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        lock!(self.data).imported_tunnel.extend(r.clone());
+        lock!(self.data).imported_tunnel.extend(r.iter().copied());
     }
 
     pub fn delete_import(&self, r: &HashSet<Route>) {
@@ -126,33 +141,26 @@ impl Db {
         }
     }
 
+    /// Remove all routes via `nexthop`.
     pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
-    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
+    ) -> RemovedNexthopRoutes {
         let mut data = lock!(self.data);
-        // Routes are generally held in sets to prevent duplication and provide
-        // handy set-algebra operations.
-        let mut removed = HashSet::new();
-        for x in &data.imported {
-            if x.nexthop == nexthop {
-                removed.insert(x.clone());
-            }
-        }
-        for x in &removed {
-            data.imported.remove(x);
-        }
+        let underlay =
+            data.imported.extract_if(|x| x.nexthop == nexthop).collect();
+        let tunnel = data
+            .imported_tunnel
+            .extract_if(|x| x.nexthop == nexthop)
+            .collect();
+        let multicast = data.imported_mcast.extract_nexthop(nexthop);
+        data.mcast_push_seq.remove(&nexthop);
 
-        let mut tnl_removed = HashSet::new();
-        for x in &data.imported_tunnel {
-            if x.nexthop == nexthop {
-                tnl_removed.insert(*x);
-            }
+        RemovedNexthopRoutes {
+            underlay,
+            tunnel,
+            multicast,
         }
-        for x in &tnl_removed {
-            data.imported_tunnel.remove(x);
-        }
-        (removed, tnl_removed)
     }
 
     pub fn routes_by_vector(
@@ -161,13 +169,11 @@ impl Db {
         nexthop: Ipv6Addr,
     ) -> Vec<Route> {
         let data = lock!(self.data);
-        let mut result = Vec::new();
-        for x in &data.imported {
-            if x.destination == dst && x.nexthop == nexthop {
-                result.push(x.clone());
-            }
-        }
-        result
+        data.imported
+            .iter()
+            .filter(|x| x.destination == dst && x.nexthop == nexthop)
+            .cloned()
+            .collect()
     }
 
     pub fn get_external_peers(&self) -> BTreeSet<String> {
@@ -177,6 +183,13 @@ impl Db {
     pub fn set_external_peers(&mut self, value: BTreeSet<String>) {
         lock!(self.data).external_peers = value;
     }
+}
+
+/// Routes removed for a next hop, grouped by route kind.
+pub struct RemovedNexthopRoutes {
+    pub underlay: HashSet<Route>,
+    pub tunnel: HashSet<TunnelRoute>,
+    pub multicast: HashSet<MulticastRoute>,
 }
 
 #[derive(
@@ -272,10 +285,10 @@ pub fn effective_route_set(
             }
         }
     }
-    let mut result = HashSet::new();
-    for xs in sets.values() {
-        for x in xs.values() {
-            let mut v = *x;
+    sets.values()
+        .flat_map(|set| set.values())
+        .copied()
+        .map(|mut v| {
             //NOTE the point of this function is to determine an effective set
             //     of routes based on the metric value to send to a data plane.
             //     So from the data plane's perspective all routes returned
@@ -283,14 +296,13 @@ pub fn effective_route_set(
             //     metric to zero so there are not hash function differences
             //     on subsequent operations involving the returned set.
             v.origin.metric = 0;
-            result.insert(v);
-        }
-    }
-    result
+            v
+        })
+        .collect()
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;

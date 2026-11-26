@@ -1449,6 +1449,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "slog",
  "slog-error-chain",
  "socket2",
@@ -1494,6 +1495,7 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
+ "dpd-types-versions",
  "schemars 0.8.22",
  "serde",
  "serde_repr",
@@ -4177,6 +4179,7 @@ dependencies = [
  "ddm-api-types-versions",
  "oxnet",
  "rand 0.10.4",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-envlogger",
