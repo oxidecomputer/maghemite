@@ -183,10 +183,16 @@ pub mod mrib {
     pub use crate::v15::mrib::EmbeddedIpv4;
     pub use crate::v15::mrib::InvalidEmbeddedRp;
     pub use crate::v15::mrib::InvalidMulticastSource;
+    pub use crate::v15::mrib::MribAddStaticRequest;
+    pub use crate::v15::mrib::MribDeleteStaticGroupRequest;
+    pub use crate::v15::mrib::MribDeleteStaticRequest;
+    pub use crate::v15::mrib::MribQuery;
+    pub use crate::v15::mrib::MribQueryError;
     pub use crate::v15::mrib::MulticastAddr;
     pub use crate::v15::mrib::MulticastAddrV4;
     pub use crate::v15::mrib::MulticastAddrV6;
     pub use crate::v15::mrib::MulticastGroupError;
+    pub use crate::v15::mrib::MulticastGroupKey;
     pub use crate::v15::mrib::MulticastRoute;
     pub use crate::v15::mrib::MulticastRouteError;
     pub use crate::v15::mrib::MulticastRouteKey;
@@ -194,6 +200,9 @@ pub mod mrib {
     pub use crate::v15::mrib::MulticastRouteKeyV6;
     pub use crate::v15::mrib::MulticastSourceError;
     pub use crate::v15::mrib::MulticastSourceProtocol;
+    pub use crate::v15::mrib::RouteOriginFilter;
+    pub use crate::v15::mrib::StaticMulticastGroupKey;
+    pub use crate::v15::mrib::StaticMulticastRoute;
     pub use crate::v15::mrib::UnderlayMulticastError;
     pub use crate::v15::mrib::UnderlayMulticastIpv6;
     pub use crate::v15::mrib::UnicastAddrV4;
