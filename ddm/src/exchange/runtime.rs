@@ -484,6 +484,10 @@ fn handle_pull_response(
 fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
+    if update.is_empty() {
+        return;
+    }
+
     if let Some(underlay_update) = &update.underlay {
         handle_underlay_update(underlay_update, ctx, peer);
     }
@@ -492,7 +496,7 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
         handle_tunnel_update(tunnel_update, ctx, peer);
     }
 
-    // distribute updates
+    // distribute updates, unless there is nothing to distribute
 
     if ctx.config.kind == RouterKind::Transit
         && let Err(e) = ctx
