@@ -66,10 +66,10 @@ enum SubCommand {
     /// Get the tunnel endpoints a DDM router has originated.
     TunnelOriginated,
 
-    /// Advertise prefixes from a DDM router.
+    /// Advertise tunnel endpoints from a transit router.
     TunnelAdvertise(TunnelEndpoint),
 
-    /// Withdraw prefixes from a DDM router.
+    /// Withdraw tunnel endpoints from a transit router.
     TunnelWithdraw(TunnelEndpoint),
 
     /// Sync prefix information from peers.
