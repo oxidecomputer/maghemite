@@ -135,8 +135,9 @@ mod tests {
 
     fn import(db: &Db, routes: &HashSet<MulticastRoute>) {
         for route in routes {
-            db.update_imported_mcast(MulticastRibChange::new(
+            db.splice_imported_mcast(MulticastRibChange::new(
                 route.nexthop,
+                "test0",
                 &HashSet::from([route.clone()]),
                 &HashSet::new(),
             ));

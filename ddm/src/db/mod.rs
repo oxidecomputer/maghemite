@@ -13,17 +13,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
 
 pub(crate) mod mcast;
 
+use mcast::ImportedMcast;
 pub use mcast::{
-    ImportedMcast, McastPathSnapshot, McastUpdateOutcome, McastUpdateSource,
-    MulticastRibChange,
+    McastPathSnapshot, McastUpdateOutcome, McastUpdateSource,
+    MulticastRibChange, SplicedMulticast,
 };
 
 #[derive(Clone, Default)]
 pub struct Db {
     data: Arc<Mutex<DbData>>,
+    /// A generation counter incremented once per edit of the imported
+    /// multicast set that adds or removes an `(origin, nexthop, ifname)`
+    /// entry, waking [`crate::mcast::run`].
+    mcast_wake: Arc<watch::Sender<u64>>,
 }
 
 // All state is held in memory only. Sled-agent's DDM reconciler re-advertises
@@ -32,12 +38,14 @@ pub struct Db {
 pub struct DbData {
     pub imported: HashSet<Route>,
     pub imported_tunnel: HashSet<TunnelRoute>,
-    /// Imported multicast routes, keyed by origin and then by nexthop.
-    pub imported_mcast: ImportedMcast,
+    /// Imported multicast routes, keyed by origin and then by nexthop and
+    /// interface.
+    pub(in crate::db) imported_mcast: ImportedMcast,
     /// Sequence of the most recent multicast push.
     pub mcast_seq: Option<Generation>,
-    /// Sequence of the last multicast push recorded for each nexthop.
-    pub mcast_push_seq: HashMap<Ipv6Addr, Generation>,
+    /// Sequence of the last multicast push recorded for each link (nexthop
+    /// and interface).
+    pub mcast_push_seq: HashMap<(Ipv6Addr, String), Generation>,
     pub external_peers: BTreeSet<String>,
     pub originated: HashSet<Ipv6Net>,
     pub originated_tunnel: HashSet<TunnelOrigin>,
@@ -53,10 +61,16 @@ impl Db {
     pub fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(DbData::default())),
+            mcast_wake: Arc::new(watch::Sender::new(0)),
         }
     }
     pub fn dump(&self) -> DbData {
         lock!(self.data).clone()
+    }
+
+    /// Subscribe to wakes on modifications made to the imported multicast set.
+    pub fn subscribe_mcast_sweep(&self) -> watch::Receiver<u64> {
+        self.mcast_wake.subscribe()
     }
 
     pub fn imported(&self) -> HashSet<Route> {
@@ -142,19 +156,29 @@ impl Db {
     }
 
     /// Remove all routes via `nexthop`.
+    ///
+    /// Underlay and tunnel routes are removed on every interface. Multicast
+    /// routes are removed only for the specific link `(nexthop, ifname)` entry.
     pub fn remove_nexthop_routes(
         &self,
         nexthop: Ipv6Addr,
+        ifname: &str,
     ) -> RemovedNexthopRoutes {
-        let mut data = lock!(self.data);
-        let underlay =
-            data.imported.extract_if(|x| x.nexthop == nexthop).collect();
-        let tunnel = data
-            .imported_tunnel
-            .extract_if(|x| x.nexthop == nexthop)
-            .collect();
-        let multicast = data.imported_mcast.extract_nexthop(nexthop);
-        data.mcast_push_seq.remove(&nexthop);
+        let (underlay, tunnel, multicast) = {
+            let mut data = lock!(self.data);
+            let underlay =
+                data.imported.extract_if(|x| x.nexthop == nexthop).collect();
+            let tunnel = data
+                .imported_tunnel
+                .extract_if(|x| x.nexthop == nexthop)
+                .collect();
+            let multicast = data
+                .imported_mcast
+                .edit(&self.mcast_wake)
+                .extract_link(nexthop, ifname);
+            data.mcast_push_seq.remove(&(nexthop, ifname.to_string()));
+            (underlay, tunnel, multicast)
+        };
 
         RemovedNexthopRoutes {
             underlay,

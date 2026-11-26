@@ -7,6 +7,7 @@ pub mod db;
 pub mod defaults;
 pub mod discovery;
 pub mod exchange;
+pub mod mcast;
 pub mod oxstats;
 pub mod sm;
 #[cfg(all(feature = "backend", target_os = "illumos"))]
@@ -15,6 +16,7 @@ pub mod sys;
 pub const COMPONENT_DDM: &str = "ddm";
 pub const MOD_ADMIN: &str = "admin";
 pub const MOD_EXCHANGE: &str = "exchange";
+pub(crate) const DDM_TAG: &str = "ddmd";
 
 #[macro_export]
 macro_rules! err {

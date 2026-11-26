@@ -25,7 +25,7 @@ use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, channel};
-use std::thread::sleep;
+use std::thread::{Builder, JoinHandle, sleep};
 use std::time::Duration;
 
 // Re-export production backends so callers (e.g. mgd) can construct them.
@@ -40,6 +40,7 @@ mod ddm;
 mod dendrite;
 mod error;
 mod log;
+pub mod mrib;
 mod platform;
 
 #[cfg(test)]
@@ -51,15 +52,48 @@ const COMPONENT_MG_LOWER: &str = MG_LOWER_TAG;
 const MOD_SYNC: &str = "sync";
 const UNIT_EVENT_LOOP: &str = "event_loop";
 
+/// Platform backends used for route lookups and synchronization.
+pub struct Backends<D, M, S> {
+    /// Programs routes and the tunnel endpoint address into the switch ASIC
+    /// via DPD.
+    pub dpd: D,
+    /// Advertises tunnel endpoints to DDM.
+    pub ddm: M,
+    /// Looks up kernel routes in the switch zone in order to resolve
+    /// next hops to switch ports.
+    pub sw: S,
+}
+
+/// Run the lower-half loop on a dedicated `mg-lower` thread.
+///
+/// # Errors
+///
+/// Returns an error if the thread cannot be spawned.
+pub fn spawn(
+    tep: Ipv6Addr,
+    db: Db,
+    log: Logger,
+    stats: Arc<Stats>,
+    rt: Arc<tokio::runtime::Handle>,
+    backends: Backends<
+        impl Dpd + Send + 'static,
+        impl Ddm + Send + 'static,
+        impl SwitchZone + Send + 'static,
+    >,
+) -> std::io::Result<JoinHandle<()>> {
+    let Backends { dpd, ddm, sw } = backends;
+    Builder::new()
+        .name(MG_LOWER_TAG.to_string())
+        .spawn(move || run(tep, db, log, stats, rt, &dpd, &ddm, &sw))
+}
+
 /// This is the primary entry point for the lower half. It loops forever,
-/// observing changes in the routing databse and synchronizing them to the
+/// observing changes in the routing database and synchronizing them to the
 /// underlying forwarding platform. The loop sets up a watcher to start
 /// receiving events, does an initial synchronization, then responds to changes
-/// moving foward. The loop runs on the calling thread, so callers are
-/// responsible for running this function in a separate thread if asynchronous
-/// execution is required.
+/// moving forward.
 #[allow(clippy::too_many_arguments)]
-pub fn run(
+fn run(
     tep: Ipv6Addr, //tunnel endpoint address
     db: Db,
     log: Logger,

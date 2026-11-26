@@ -152,16 +152,16 @@ iddqd = "0.5"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "7bdb93d99511f236a13ba7a67a7371f7a4743a7d"
+rev = "329962f0eb39971627ec3856bb296dde0a792142"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "7bdb93d99511f236a13ba7a67a7371f7a4743a7d"
+rev = "329962f0eb39971627ec3856bb296dde0a792142"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "775c56a4a75c73f852913e7c3883832876499709"
+rev = "783db6e5e896155cced0e2fde105877602872447"
 
 [workspace.dependencies.dpd-types-versions]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "775c56a4a75c73f852913e7c3883832876499709"
+rev = "783db6e5e896155cced0e2fde105877602872447"

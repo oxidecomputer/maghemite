@@ -136,7 +136,7 @@ pub(super) fn apply_multicast_update(
     ctx: &SmContext,
     import: HashSet<MulticastRoute>,
     remove: &HashSet<MulticastRoute>,
-    source: McastUpdateSource,
+    source: McastUpdateSource<'_>,
 ) -> Option<AppliedMulticastUpdate> {
     let batch = MulticastRibChange {
         import: &import,
@@ -144,10 +144,10 @@ pub(super) fn apply_multicast_update(
         source,
     };
 
-    match ctx.db.update_imported_mcast(batch) {
-        McastUpdateOutcome::Applied(removed) => Some(AppliedMulticastUpdate {
-            imported: import,
-            removed,
+    match ctx.db.splice_imported_mcast(batch) {
+        McastUpdateOutcome::Applied(spliced) => Some(AppliedMulticastUpdate {
+            imported: spliced.imported,
+            removed: spliced.removed,
             hop: MulticastPathHop::new(ctx.router_id.clone(), ctx.config.addr),
         }),
         McastUpdateOutcome::Superseded => None,
@@ -248,7 +248,9 @@ mod tests {
     use slog::{Discard, Logger, o};
 
     use super::partition_multicast_update;
-    use crate::db::{Db, McastUpdateOutcome, MulticastRibChange};
+    use crate::db::{
+        Db, McastUpdateOutcome, MulticastRibChange, SplicedMulticast,
+    };
 
     const PEER: Ipv6Addr = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0xa);
     const LOCAL: &str = "local";
@@ -351,19 +353,26 @@ mod tests {
         };
         let db = Db::new();
         let existing = HashSet::from([route(1)]);
-        db.update_imported_mcast(MulticastRibChange::new(
+        db.splice_imported_mcast(MulticastRibChange::new(
             PEER,
+            "test0",
             &existing,
             &HashSet::new(),
         ));
 
         let (import, remove) = partition(&update);
-        let outcome = db.update_imported_mcast(MulticastRibChange::new(
-            PEER, &import, &remove,
+        let outcome = db.splice_imported_mcast(MulticastRibChange::new(
+            PEER, "test0", &import, &remove,
         ));
 
-        assert_eq!(outcome, McastUpdateOutcome::Applied(existing));
-        assert!(db.imported_mcast().is_empty());
+        assert_eq!(
+            outcome,
+            McastUpdateOutcome::Applied(SplicedMulticast {
+                imported: HashSet::new(),
+                removed: existing,
+            })
+        );
+        assert!(db.imported_mcast_links().is_empty());
         assert!(import.is_empty());
     }
 

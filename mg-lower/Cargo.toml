@@ -5,6 +5,7 @@ edition = "2024"
 
 [dev-dependencies]
 util  = { path = "../util" }
+uuid.workspace = true
 
 [dependencies]
 ddm-admin-client = { path = "../ddm-admin-client" }

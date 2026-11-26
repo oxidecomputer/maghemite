@@ -827,7 +827,9 @@ impl Exchange {
             self.retired.clear();
             *session = None;
             self.ctx.iface.clear_peer();
-            self.ctx.db.remove_nexthop_routes(self.peer)
+            self.ctx
+                .db
+                .remove_nexthop_routes(self.peer, &self.ctx.config.if_name)
         };
         let routes = removed
             .underlay
@@ -1120,7 +1122,10 @@ impl Exchange {
             self.session = Arc::new(ExchangeSession::new(version));
             *session = Some(self.session.clone());
             if prior_version >= Version::V4 && version < Version::V4 {
-                Some(self.ctx.db.remove_nexthop_mcast_routes(self.peer))
+                Some(self.ctx.db.remove_nexthop_mcast_routes(
+                    self.peer,
+                    &self.ctx.config.if_name,
+                ))
             } else {
                 None
             }
