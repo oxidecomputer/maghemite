@@ -358,7 +358,7 @@ dependencies = [
  "itertools 0.15.0",
  "lazy_static",
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=trey%2Fsetsrc)",
  "mg-api-types",
  "mg-api-types-versions",
  "mg-common",
@@ -1434,6 +1434,7 @@ dependencies = [
  "chrono",
  "ddm-api",
  "ddm-api-types",
+ "ddm-api-types-versions",
  "ddm-protocol",
  "dpd-client",
  "dropshot 0.18.0",
@@ -1441,9 +1442,11 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "iddqd 0.5.0",
  "ispf",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=trey%2Fsetsrc)",
  "mg-common",
+ "num_enum 0.7.6",
  "omicron-common",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
@@ -1500,9 +1503,11 @@ name = "ddm-api-types-versions"
 version = "0.1.0"
 dependencies = [
  "ddm-protocol",
+ "oxnet",
  "schemars 0.8.22",
  "serde",
  "serde_repr",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -3794,7 +3799,7 @@ dependencies = [
  "futures",
  "indicatif",
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "oxnet",
  "prettyplease",
  "propolis-client",
@@ -3831,6 +3836,28 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 name = "libnet"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#83c624ff7a18197f8073682af91e8eed833242a2"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "colored",
+ "dlpi",
+ "libc",
+ "num_enum 0.7.6",
+ "nvpair",
+ "nvpair-sys",
+ "oxnet",
+ "rand 0.10.4",
+ "rusty-doors",
+ "socket2",
+ "thiserror 2.0.21",
+ "tracing",
+ "winnow 1.0.4",
+]
+
+[[package]]
+name = "libnet"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=trey%2Fsetsrc#3609cfec377db2a5ff02463e8ba666aec94f8268"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -4114,7 +4141,7 @@ dependencies = [
  "backoff",
  "clap",
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=trey%2Fsetsrc)",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -4146,7 +4173,7 @@ dependencies = [
  "ddm-admin-client",
  "ddm-api-types-versions",
  "dpd-client",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=trey%2Fsetsrc)",
  "mg-api-types",
  "mg-common",
  "oxnet",
@@ -5015,7 +5042,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238#2c6efefe14321dafe7e9e80129d38316adb2d238"
 dependencies = [
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=2c6efefe14321dafe7e9e80129d38316adb2d238)",
  "postcard",
@@ -5029,7 +5056,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d#7bdb93d99511f236a13ba7a67a7371f7a4743a7d"
 dependencies = [
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "opte 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=7bdb93d99511f236a13ba7a67a7371f7a4743a7d)",
  "postcard",
@@ -9097,7 +9124,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=trey%2Fsetsrc)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -9797,7 +9824,7 @@ source = "git+https://github.com/oxidecomputer/falcon?branch=main#7844ad97064115
 dependencies = [
  "anyhow",
  "cargo_metadata",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "oxnet",
  "zone 0.3.1 (git+https://github.com/oxidecomputer/zone)",
 ]

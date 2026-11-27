@@ -8,11 +8,16 @@
 //! forwarding platform via [`crate::sys`]. illumos-only.
 
 use super::ExchangeError;
-use crate::db::{Route, effective_route_set};
+use crate::db::{Route, TunnelRoute, effective_route_set};
 use crate::discovery::Version;
-use crate::sm::{Config, Event, PeerEvent, SmContext};
+use crate::sm::{
+    Config, Event, PeerEvent, PeerIdentity, RouteAdvertisementAllowances,
+    SmContext,
+};
 use crate::{err, inf, wrn};
-use ddm_api_types::db::{RouterKind, TunnelRoute};
+use ddm_api_types::admin::PrefixKind;
+use ddm_api_types::db::RouterKind;
+use ddm_api_types::net::TunnelOrigin;
 use ddm_protocol::{v2, v3};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -35,72 +40,103 @@ use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const UNIT_EXCHANGE_SERVER: &str = "exchange_server";
 
-#[derive(Clone)]
-pub struct HandlerContext {
+/// Fixed for the life of the exchange server, so handlers share it without
+/// locking.
+pub struct ExchangeHandlerContext {
     ctx: SmContext,
-    peer: Ipv6Addr,
+    peer: PeerIdentity,
+    tx_allowances: RouteAdvertisementAllowances,
 }
 
 pub(crate) fn announce_underlay(
     ctx: &SmContext,
     config: Config,
     prefixes: HashSet<v3::PathVector>,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::announce(prefixes);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), peer, rt, log)
+}
+
+pub(crate) fn announce_bootstrap(
+    ctx: &SmContext,
+    config: Config,
+    prefixes: HashSet<v3::PathVector>,
+    peer: &PeerIdentity,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = v3::BootstrapUpdate::announce(prefixes);
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn announce_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<v3::TunnelOrigin>,
-    addr: Ipv6Addr,
-    version: Version,
+    endpoints: HashSet<TunnelOrigin>,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::TunnelUpdate::announce(endpoints.into_iter().collect());
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    let update = v3::TunnelUpdate::announce(
+        endpoints
+            .into_iter()
+            .map(|x| x.to_wire(vec![ctx.router_id.clone()]))
+            .collect(),
+    );
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn withdraw_underlay(
     ctx: &SmContext,
     config: Config,
     prefixes: HashSet<v3::PathVector>,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = v3::UnderlayUpdate::withdraw(prefixes);
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), peer, rt, log)
+}
+
+pub(crate) fn withdraw_bootstrap(
+    ctx: &SmContext,
+    config: Config,
+    prefixes: HashSet<v3::PathVector>,
+    peer: &PeerIdentity,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = v3::BootstrapUpdate::withdraw(prefixes);
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn withdraw_tunnel(
     ctx: &SmContext,
     config: Config,
-    endpoints: HashSet<v3::TunnelOrigin>,
-    addr: Ipv6Addr,
-    version: Version,
+    endpoints: HashSet<TunnelOrigin>,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = v3::TunnelUpdate::withdraw(endpoints.into_iter().collect());
-    send_update(ctx, config, update.into(), addr, version, rt, log)
+    let update = v3::TunnelUpdate::withdraw(
+        endpoints
+            .into_iter()
+            .map(|x| x.to_wire(vec![ctx.router_id.clone()]))
+            .collect(),
+    );
+    send_update(ctx, config, update.into(), peer, rt, log)
 }
 
 pub(crate) fn do_pull(
     ctx: &SmContext,
-    addr: &Ipv6Addr,
+    addr: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<v3::PullResponse, ExchangeError> {
     let uri = format!(
@@ -113,7 +149,7 @@ pub(crate) fn do_pull(
 
 pub(crate) fn do_pull_v2(
     ctx: &SmContext,
-    addr: &Ipv6Addr,
+    addr: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<v2::PullResponse, ExchangeError> {
     let uri = format!(
@@ -151,42 +187,41 @@ fn do_pull_common(
 
 pub(crate) fn pull(
     ctx: &SmContext,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), ExchangeError> {
-    let pr: v3::PullResponse = match version {
-        Version::V2 => do_pull_v2(ctx, &addr, &rt)?.into(),
-        Version::V3 => do_pull(ctx, &addr, &rt)?,
+    let pr: v3::PullResponse = match peer.version {
+        Version::V2 => v3::PullResponse::from_v2(
+            do_pull_v2(ctx, peer.addr, &rt)?,
+            &peer.hostname,
+        ),
+        Version::V3 => do_pull(ctx, peer.addr, &rt)?,
     };
 
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
 
-    let update = v3::Update::announce(pr);
-
-    handle_update(&update, ctx, addr);
+    handle_pull_response(pr, ctx, peer);
 
     Ok(())
 }
 
-fn send_update(
+pub(crate) fn send_update(
     ctx: &SmContext,
     config: Config,
     update: v3::Update,
-    addr: Ipv6Addr,
-    version: Version,
+    peer: &PeerIdentity,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
-    match version {
+    match peer.version {
         Version::V2 => {
-            send_update_v2(ctx, config, update.into(), addr, rt, log)
+            send_update_v2(ctx, config, update.into(), peer.addr, rt, log)
         }
-        Version::V3 => send_update_v3(ctx, config, update, addr, rt, log),
+        Version::V3 => send_update_v3(ctx, config, update, peer.addr, rt, log),
     }
 }
 
@@ -262,13 +297,15 @@ fn send_update_common(
 pub fn handler(
     ctx: SmContext,
     addr: Ipv6Addr,
-    peer: Ipv6Addr,
+    peer: PeerIdentity,
+    tx_allowances: RouteAdvertisementAllowances,
     log: Logger,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
-    let context = Arc::new(Mutex::new(HandlerContext {
+    let context = Arc::new(ExchangeHandlerContext {
         ctx: ctx.clone(),
         peer,
-    }));
+        tx_allowances,
+    });
 
     let sa = SocketAddrV6::new(addr, ctx.config.exchange_port, 0, 0);
 
@@ -320,7 +357,7 @@ pub fn handler(
 }
 
 pub fn api_description() -> Result<
-    ApiDescription<Arc<Mutex<HandlerContext>>>,
+    ApiDescription<Arc<ExchangeHandlerContext>>,
     ApiDescriptionRegisterError,
 > {
     let mut api = ApiDescription::new();
@@ -336,11 +373,11 @@ pub fn api_description() -> Result<
     path = "/v2/push",
 }]
 async fn push_handler_v2(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<ExchangeHandlerContext>>,
     request: TypedBody<v2::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let update_v2 = request.into_inner();
-    let update = v3::Update::from(update_v2);
+    let peer = &ctx.context().peer.hostname;
+    let update = v3::Update::from_v2(request.into_inner(), peer);
     push_handler_common(ctx, update).await
 }
 
@@ -349,7 +386,7 @@ async fn push_handler_v2(
     path = "/v3/push",
 }]
 async fn push_handler(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<ExchangeHandlerContext>>,
     request: TypedBody<v3::Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let update = request.into_inner();
@@ -357,13 +394,13 @@ async fn push_handler(
 }
 
 async fn push_handler_common(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<ExchangeHandlerContext>>,
     update: v3::Update,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
+    let ctx = ctx.context().clone();
 
     tokio::task::spawn_blocking(move || {
-        handle_update(&update, &ctx.ctx, ctx.peer);
+        handle_update(&update, &ctx.ctx, &ctx.peer);
     })
     .await
     .map_err(|e| {
@@ -378,67 +415,11 @@ async fn push_handler_common(
     path = "/v2/pull",
 }]
 async fn pull_handler_v2(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<ExchangeHandlerContext>>,
 ) -> Result<HttpResponseOk<v2::PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
-
-    let mut underlay = HashSet::new();
-    let mut tunnel = HashSet::new();
-
-    // Only transit routers redistribute prefixes
-    if ctx.ctx.config.kind == RouterKind::Transit {
-        for route in &ctx.ctx.db.imported() {
-            // don't redistribute prefixes to their originators
-            if route.nexthop == ctx.peer {
-                continue;
-            }
-            let mut pv = v3::PathVector {
-                destination: route.destination,
-                path: route.path.clone(),
-            };
-            pv.path.push(ctx.ctx.router_id.clone());
-            underlay.insert(pv);
-        }
-        for route in &ctx.ctx.db.imported_tunnel() {
-            if route.nexthop == ctx.peer {
-                continue;
-            }
-            let tv = route.origin;
-            tunnel.insert(tv);
-        }
-    }
-    let originated = ctx.ctx.db.originated();
-    for prefix in &originated {
-        let pv = v3::PathVector {
-            destination: *prefix,
-            path: vec![ctx.ctx.router_id.clone()],
-        };
-        underlay.insert(pv);
-    }
-
-    let originated_tunnel = ctx.ctx.db.originated_tunnel();
-    for prefix in &originated_tunnel {
-        let tv = v3::TunnelOrigin {
-            overlay_prefix: prefix.overlay_prefix,
-            boundary_addr: prefix.boundary_addr,
-            vni: prefix.vni,
-            metric: prefix.metric,
-        };
-        tunnel.insert(tv);
-    }
-
-    Ok(HttpResponseOk(v2::PullResponse {
-        underlay: if underlay.is_empty() {
-            None
-        } else {
-            Some(underlay.into_iter().map(v2::PathVector::from).collect())
-        },
-        tunnel: if tunnel.is_empty() {
-            None
-        } else {
-            Some(tunnel.into_iter().map(v2::TunnelOrigin::from).collect())
-        },
-    }))
+    pull_handler_common(ctx)
+        .await
+        .map(|res| res.map(Into::into))
 }
 
 #[endpoint {
@@ -446,18 +427,24 @@ async fn pull_handler_v2(
     path = "/v3/pull",
 }]
 async fn pull_handler(
-    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<ExchangeHandlerContext>>,
 ) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
+    pull_handler_common(ctx).await
+}
+
+async fn pull_handler_common(
+    ctx: RequestContext<Arc<ExchangeHandlerContext>>,
+) -> Result<HttpResponseOk<v3::PullResponse>, HttpError> {
+    let ctx = ctx.context();
 
     let mut underlay = HashSet::new();
+    let mut bootstrap = HashSet::new();
     let mut tunnel = HashSet::new();
 
-    // Only transit routers redistribute prefixes
-    if ctx.ctx.config.kind == RouterKind::Transit {
-        for route in &ctx.ctx.db.imported() {
+    if ctx.tx_allowances.redistributed_routes {
+        for route in &ctx.ctx.db.imported_underlay() {
             // don't redistribute prefixes to their originators
-            if route.nexthop == ctx.peer {
+            if route.nexthop == ctx.peer.addr {
                 continue;
             }
             let mut pv = v3::PathVector {
@@ -467,32 +454,65 @@ async fn pull_handler(
             pv.path.push(ctx.ctx.router_id.clone());
             underlay.insert(pv);
         }
-        for route in &ctx.ctx.db.imported_tunnel() {
-            if route.nexthop == ctx.peer {
+        for route in &ctx.ctx.db.imported_bootstrap() {
+            if route.nexthop == ctx.peer.addr {
                 continue;
             }
-            let tv = route.origin;
+            let mut pv = v3::PathVector {
+                destination: route.destination,
+                path: route.path.clone(),
+            };
+            pv.path.push(ctx.ctx.router_id.clone());
+            bootstrap.insert(pv);
+        }
+        for route in ctx.ctx.db.imported_tunnel() {
+            if route.nexthop == ctx.peer.addr {
+                continue;
+            }
+            let mut tv = v3::TunnelOrigin::from(route);
+            tv.path.push(ctx.ctx.router_id.clone());
             tunnel.insert(tv);
         }
     }
-    let originated = ctx.ctx.db.originated();
-    for prefix in &originated {
-        let pv = v3::PathVector {
-            destination: *prefix,
-            path: vec![ctx.ctx.router_id.clone()],
-        };
-        underlay.insert(pv);
+
+    if ctx.tx_allowances.originated_underlay_routes {
+        let originated = ctx.ctx.db.originated_underlay();
+        for prefix in &originated {
+            let pv = v3::PathVector {
+                destination: *prefix,
+                path: vec![ctx.ctx.router_id.clone()],
+            };
+            underlay.insert(pv);
+        }
     }
 
-    let originated_tunnel = ctx.ctx.db.originated_tunnel();
-    for prefix in &originated_tunnel {
-        let tv = v3::TunnelOrigin {
-            overlay_prefix: prefix.overlay_prefix,
-            boundary_addr: prefix.boundary_addr,
-            vni: prefix.vni,
-            metric: prefix.metric,
-        };
-        tunnel.insert(tv);
+    if ctx.tx_allowances.originated_bootstrap_routes {
+        let originated = ctx.ctx.db.originated_bootstrap();
+        for prefix in &originated {
+            let pv = v3::PathVector {
+                destination: *prefix,
+                path: vec![ctx.ctx.router_id.clone()],
+            };
+            bootstrap.insert(pv);
+        }
+    }
+
+    if ctx.tx_allowances.originated_rack_prefix
+        && let Some(prefix) = ctx.ctx.db.rack_prefix()
+    {
+        underlay.insert(v3::PathVector {
+            destination: prefix,
+            path: vec![ctx.ctx.router_id.clone()],
+        });
+    }
+
+    if ctx.tx_allowances.originated_tunnel_routes {
+        let originated_tunnel = ctx.ctx.db.originated_tunnel();
+        tunnel.extend(
+            originated_tunnel
+                .into_iter()
+                .map(|x| x.to_wire(vec![ctx.ctx.router_id.clone()])),
+        );
     }
 
     Ok(HttpResponseOk(v3::PullResponse {
@@ -500,6 +520,11 @@ async fn pull_handler(
             None
         } else {
             Some(underlay)
+        },
+        bootstrap: if bootstrap.is_empty() {
+            None
+        } else {
+            Some(bootstrap)
         },
         tunnel: if tunnel.is_empty() {
             None
@@ -509,23 +534,103 @@ async fn pull_handler(
     }))
 }
 
-fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
+/// Handle a PullResponse we received from the peer (in response to our Pull).
+///
+/// A PullResponse holds the peer's entire set of routes, not an incremental
+/// update. That means we need to _replace_ the set of routes learned from them
+/// with the set they stuffed into the PullResponse.
+fn handle_pull_response(
+    pr: v3::PullResponse,
+    ctx: &SmContext,
+    peer: &PeerIdentity,
+) {
+    // Convert what we hold from this peer into wire types for the diff.
+    let held_underlay: HashSet<v3::PathVector> = ctx
+        .db
+        .imported_underlay_from(peer.addr)
+        .into_iter()
+        .map(v3::PathVector::from)
+        .collect();
+    let held_bootstrap: HashSet<v3::PathVector> = ctx
+        .db
+        .imported_bootstrap_from(peer.addr)
+        .into_iter()
+        .map(v3::PathVector::from)
+        .collect();
+    let held_tunnel: HashSet<v3::TunnelOrigin> = ctx
+        .db
+        .imported_tunnel_from(peer.addr)
+        .into_iter()
+        .map(v3::TunnelOrigin::from)
+        .collect();
+
+    let update = v3::Update::from_pull_response(
+        pr,
+        &held_underlay,
+        &held_bootstrap,
+        &held_tunnel,
+    );
+
+    handle_update(&update, ctx, peer);
+}
+
+fn handle_update(update: &v3::Update, ctx: &SmContext, peer: &PeerIdentity) {
     ctx.stats.updates_received.fetch_add(1, Ordering::Relaxed);
 
+    // Path vector loop breaking. An announcement with our router ID in its
+    // path has already gone through us: neither import nor redistribute it.
+    let sans_loops = update.break_loops(&ctx.router_id);
+    if let (Some(u), Some(s)) = (&update.underlay, &sans_loops.underlay) {
+        for x in u.announce.difference(&s.announce) {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "loop detected: dropping underlay announcement: {x:?}"
+            );
+        }
+    }
+    if let (Some(b), Some(s)) = (&update.bootstrap, &sans_loops.bootstrap) {
+        for x in b.announce.difference(&s.announce) {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "loop detected: dropping bootstrap announcement: {x:?}"
+            );
+        }
+    }
+    if let (Some(t), Some(s)) = (&update.tunnel, &sans_loops.tunnel) {
+        for x in t.announce.difference(&s.announce) {
+            wrn!(
+                ctx.log,
+                ctx.config.if_name,
+                "loop detected: dropping tunnel announcement: {x:?}"
+            );
+        }
+    }
+    let update = &sans_loops;
+
+    if update.is_empty() {
+        return;
+    }
+
     if let Some(underlay_update) = &update.underlay {
-        handle_underlay_update(underlay_update, ctx, peer_addr);
+        handle_underlay_update(ctx, underlay_update, peer);
+    }
+
+    if let Some(bootstrap_update) = &update.bootstrap {
+        handle_bootstrap_update(ctx, bootstrap_update, peer);
     }
 
     if let Some(tunnel_update) = &update.tunnel {
-        handle_tunnel_update(tunnel_update, ctx, peer_addr);
+        handle_tunnel_update(tunnel_update, ctx, peer);
     }
 
-    // distribute updates
+    // distribute updates, unless there is nothing to distribute
 
     if ctx.config.kind == RouterKind::Transit
-        && let Err(e) = ctx
-            .tx
-            .send(Event::Peer(PeerEvent::Redistribute(update.clone())))
+        && let Err(e) = ctx.tx.send(Event::Peer(PeerEvent::Redistribute(
+            Box::new(update.clone()),
+        )))
     {
         wrn!(
             ctx.log,
@@ -538,7 +643,7 @@ fn handle_update(update: &v3::Update, ctx: &SmContext, peer_addr: Ipv6Addr) {
 fn handle_tunnel_update(
     update: &v3::TunnelUpdate,
     ctx: &SmContext,
-    peer_addr: Ipv6Addr,
+    peer: &PeerIdentity,
 ) {
     let mut import = HashSet::new();
     let mut remove = HashSet::new();
@@ -547,35 +652,25 @@ fn handle_tunnel_update(
     let before = effective_route_set(&db.imported_tunnel());
 
     for x in &update.announce {
-        import.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
-            nexthop: peer_addr,
-        });
+        import.insert(TunnelRoute::received(x, peer.addr));
     }
     db.import_tunnel(&import);
 
     for x in &update.withdraw {
-        remove.insert(TunnelRoute {
-            origin: v3::TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-                metric: x.metric,
-            },
-            nexthop: peer_addr,
-        });
+        remove.insert(TunnelRoute::received(x, peer.addr));
     }
     db.delete_import_tunnel(&remove);
 
+    // Tunnel routes are programmed into OPTE, which only servers have.
+    // Transits keep them in the RIB for redistribution.
+    if ctx.config.kind != RouterKind::Server {
+        return;
+    }
+
     let after = effective_route_set(&db.imported_tunnel());
 
-    let to_add = after.difference(&before).copied().collect();
-    let to_del = before.difference(&after).copied().collect();
+    let to_add = after.difference(&before).cloned().collect();
+    let to_del = before.difference(&after).cloned().collect();
 
     if let Err(e) =
         crate::sys::add_tunnel_routes(&ctx.log, &ctx.config.if_name, &to_add)
@@ -598,74 +693,107 @@ fn handle_tunnel_update(
             import,
         )
     }
-
-    ctx.stats
-        .imported_underlay_prefixes
-        .store(ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
+// Handler for underlay routes in a received Update.
 fn handle_underlay_update(
-    update: &v3::UnderlayUpdate,
     ctx: &SmContext,
-    peer_addr: Ipv6Addr,
+    underlay: &v3::UnderlayUpdate,
+    peer: &PeerIdentity,
+) {
+    let v3::UnderlayUpdate { announce, withdraw } = underlay;
+    handle_prefix_update(ctx, peer, PrefixKind::Underlay, announce, withdraw)
+}
+
+// Handler for bootstrap routes in a received Update.
+fn handle_bootstrap_update(
+    ctx: &SmContext,
+    bootstrap: &v3::BootstrapUpdate,
+    peer: &PeerIdentity,
+) {
+    let v3::BootstrapUpdate { announce, withdraw } = bootstrap;
+    handle_prefix_update(ctx, peer, PrefixKind::Bootstrap, announce, withdraw)
+}
+
+// Common handler for underlay and bootstrap (non-tunnel) routes in a received
+// Update.
+fn handle_prefix_update(
+    ctx: &SmContext,
+    peer: &PeerIdentity,
+    kind: PrefixKind,
+    announce: &HashSet<v3::PathVector>,
+    withdraw: &HashSet<v3::PathVector>,
 ) {
     let mut import = HashSet::new();
     let mut add = Vec::new();
     let db = &ctx.db;
 
-    for prefix in &update.announce {
-        // Skip announcements with ourselves in the path e.g. path vector
-        // loop breaking.
-        if prefix.path.contains(&ctx.router_id) {
-            continue;
-        }
+    let source = match kind {
+        PrefixKind::Underlay => ctx.db.underlay_addr().map(|a| a.address()),
+        PrefixKind::Bootstrap => Some(ctx.bootstrap_addr),
+    };
+    for prefix in announce {
         import.insert(Route {
             destination: prefix.destination,
-            nexthop: peer_addr,
-            ifname: ctx.config.if_name.clone(),
+            nexthop: peer.addr,
+            addrobj_name: ctx.config.addrobj_name.clone(),
             path: prefix.path.clone(),
+            kind,
         });
-        let mut r = crate::sys::Route::new(
-            prefix.destination.addr().into(),
-            prefix.destination.width(),
-            peer_addr.into(),
-        );
-        r.ifname.clone_from(&ctx.config.if_name);
-        add.push(r);
-    }
-    db.import(&import);
-    crate::sys::add_underlay_routes(&ctx.log, &ctx.config, add, &ctx.rt);
-
-    let mut withdraw = HashSet::new();
-    for prefix in &update.withdraw {
-        withdraw.insert(Route {
-            destination: prefix.destination,
-            nexthop: peer_addr,
-            ifname: ctx.config.if_name.clone(),
-            path: prefix.path.clone(),
-        });
-    }
-    db.delete_import(&withdraw);
-
-    // We cannot simply delete withdrawn routes here. If we have other paths to
-    // the destination with the same nexthop, we'll be left with a route in the
-    // DB but not the underlying forwarding platform. We cannot delete a
-    // (destination, nexthop) pair until all path-vector routes with that tuple
-    // are gone. Another way to say this is that while we track routes by path,
-    // the underlying forwarding platform only knows about a vector. And since
-    // there can be many paths along vector, we can only delete a route from the
-    // forwarding platform if the complete vector is gone.
-    let mut del = Vec::new();
-    for w in &withdraw {
-        if db.routes_by_vector(w.destination, w.nexthop).is_empty() {
+        if let Some(src) = source {
             let mut r = crate::sys::Route::new(
-                w.destination.addr().into(),
-                w.destination.width(),
-                w.nexthop.into(),
+                prefix.destination.addr().into(),
+                prefix.destination.width(),
+                peer.addr.into(),
+                src,
             );
             r.ifname.clone_from(&ctx.config.if_name);
-            del.push(r);
+            add.push(r);
         }
+    }
+    match kind {
+        PrefixKind::Underlay => db.import_underlay(&import),
+        PrefixKind::Bootstrap => db.import_bootstrap(&import),
+    }
+    if source.is_some() {
+        crate::sys::add_underlay_routes(&ctx.log, &ctx.config, add, &ctx.rt);
+    } else {
+        // TODO: nothing installs deferred routes once an underlay address is
+        // set, and changing the address leaves installed routes with the old
+        // source. They stay out of sys until a peer re-announces them.
+        inf!(
+            ctx.log,
+            ctx.config.if_name,
+            "source IP not ready, deferring install of routes into sys"
+        )
+    }
+
+    let mut delete = HashSet::new();
+    for prefix in withdraw {
+        delete.insert(Route {
+            destination: prefix.destination,
+            nexthop: peer.addr,
+            addrobj_name: ctx.config.addrobj_name.clone(),
+            path: prefix.path.clone(),
+            kind,
+        });
+    }
+
+    // We cannot simply delete withdrawn routes from the forwarding platform.
+    // We track routes by path, but the platform only knows about a
+    // (destination, nexthop) vector, and there can be many paths along one
+    // vector. delete_import returns only the vectors whose last path is gone.
+    let mut del = Vec::new();
+    for (destination, nexthop) in db.delete_import(kind, &delete) {
+        // Route removal does not use the source address.
+        let mut r = crate::sys::Route::new(
+            destination.addr().into(),
+            destination.width(),
+            nexthop.into(),
+            Ipv6Addr::UNSPECIFIED,
+        );
+        r.ifname.clone_from(&ctx.config.if_name);
+        del.push(r);
     }
     crate::sys::remove_underlay_routes(
         &ctx.log,
@@ -674,8 +802,4 @@ fn handle_underlay_update(
         del,
         &ctx.rt,
     );
-
-    ctx.stats
-        .imported_underlay_prefixes
-        .store(ctx.db.imported_count() as u64, Ordering::Relaxed);
 }

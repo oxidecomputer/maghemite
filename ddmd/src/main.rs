@@ -4,16 +4,16 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
-use ddm::admin::{HandlerContext, RouterStats, Tunables};
+use ddm::admin::{ApiHandlerContext, RouterStats, Tunables};
 use ddm::db::Db;
 use ddm::defaults::{
     DISCOVERY_READ_TIMEOUT, EXCHANGE_TCP_PORT, EXCHANGE_TIMEOUT,
     EXPIRE_THRESHOLD, IP_ADDR_WAIT, SOLICIT_INTERVAL, millis_u64,
 };
 #[cfg(all(feature = "backend", target_os = "illumos"))]
-use ddm::sm::{DpdConfig, InterfaceState, SmContext, StateMachine};
+use ddm::sm::{DpdConfig, Interface, InterfaceState, SmContext, StateMachine};
 #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-use ddm::sm::{DpdConfig, SmContext, StateMachine};
+use ddm::sm::{DpdConfig, StateMachine};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use ddm::sys::Route;
 use ddm_api_types::DEFAULT_ADMIN_PORT;
@@ -21,6 +21,8 @@ use ddm_api_types::db::RouterKind;
 use mg_common::lock;
 use signal::handle_signals;
 use slog::{Drain, Logger, error};
+#[cfg(all(feature = "backend", target_os = "illumos"))]
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 #[cfg(all(feature = "backend", target_os = "illumos"))]
 use std::sync::mpsc::channel;
@@ -130,6 +132,11 @@ struct Arg {
     /// directory should.
     #[arg(long)]
     admin_port_file: Option<Utf8PathBuf>,
+
+    /// The local IP corresponding to the Bootstrap network.
+    /// Used as the RTA_SRC for Bootstrap routes installed into Illumos.
+    #[arg(long)]
+    bootstrap_addr: Ipv6Addr,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -174,17 +181,24 @@ async fn run() {
 
     let sms = start_state_machines(&arg, &db, &dpd, &router_id, &rt, &log);
 
-    termination_handler(db.clone(), dpd.clone(), rt.clone(), log.clone());
+    termination_handler(
+        db.clone(),
+        dpd.clone(),
+        arg.kind,
+        rt.clone(),
+        log.clone(),
+    );
 
     let router_stats = Arc::new(RouterStats::default());
-    let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
+    let peers = sms.iter().map(|x| x.ctx.clone()).collect();
 
-    let context = Arc::new(Mutex::new(HandlerContext {
+    let context = Arc::new(Mutex::new(ApiHandlerContext {
         db,
         stats: router_stats,
         peers,
         stats_handler: Arc::new(Mutex::new(None)),
         router_kind: arg.kind,
+        bootstrap_addr: arg.bootstrap_addr,
         tunables: Tunables {
             solicit_interval: Duration::from_millis(arg.solicit_interval),
             expire_threshold: Duration::from_millis(arg.expire_threshold),
@@ -263,9 +277,14 @@ fn start_state_machines(
     }
 
     let mut sms = Vec::new();
-    let mut event_channels = Vec::new();
+    let mut event_channels = BTreeMap::new();
 
     for name in &arg.addresses {
+        if event_channels.contains_key(name) {
+            slog::warn!(log, "ignoring repeated address object {name}");
+            continue;
+        }
+
         let (tx, rx) = channel();
 
         let config = ddm::sm::Config {
@@ -277,7 +296,7 @@ fn start_state_machines(
             ip_addr_wait: Duration::from_millis(arg.ip_addr_wait),
             exchange_timeout: Duration::from_millis(arg.exchange_timeout),
             exchange_port: arg.exchange_port,
-            aobj_name: name.clone(),
+            addrobj_name: name.clone(),
             if_name: String::new(),
             if_index: 0,
             kind: arg.kind,
@@ -290,12 +309,13 @@ fn start_state_machines(
         let ctx = SmContext {
             config,
             db: db.clone(),
-            event_channels: Vec::new(),
+            event_channels: BTreeMap::new(),
             tx: tx.clone(),
             log: log.clone(),
             router_id: router_id.to_string(),
+            bootstrap_addr: arg.bootstrap_addr,
             rt: rt.clone(),
-            iface: Arc::new(InterfaceState::default()),
+            iface: Interface::new(InterfaceState::default()),
             stats: Arc::new(ddm::sm::SessionStats::default()),
             discovery_stop: None,
             first_run: true,
@@ -303,19 +323,18 @@ fn start_state_machines(
 
         let sm = StateMachine { ctx, rx: Some(rx) };
         sms.push(sm);
-        event_channels.push(tx);
+        event_channels.insert(name.clone(), tx);
     }
 
     // Add an event channel sender for each state machine to every other state
     // machine.
-    for (i, sm) in sms.iter_mut().enumerate() {
-        for (j, e) in event_channels.iter().enumerate() {
-            // dont give a state machine an event sender to itself.
-            if i == j {
-                continue;
-            }
-            sm.ctx.event_channels.push(e.clone());
-        }
+    for sm in &mut sms {
+        // dont give a state machine an event sender to itself.
+        sm.ctx.event_channels = event_channels
+            .iter()
+            .filter(|(name, _)| **name != sm.ctx.config.addrobj_name)
+            .map(|(name, tx)| (name.clone(), tx.clone()))
+            .collect();
     }
 
     for sm in &mut sms {
@@ -346,6 +365,7 @@ fn start_state_machines(
 fn termination_handler(
     db: Db,
     dendrite: Option<DpdConfig>,
+    kind: RouterKind,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) {
@@ -357,9 +377,26 @@ fn termination_handler(
 
         #[cfg(all(feature = "backend", target_os = "illumos"))]
         {
-            let imported = db.imported();
-            let routes: Vec<Route> =
-                imported.iter().map(|x| (x.clone()).into()).collect();
+            let imported = db.imported_underlay();
+            let routes: Vec<Route> = imported
+                .iter()
+                .map(|x| {
+                    // Route removal does not use the source address.
+                    let mut r = Route::new(
+                        x.destination.addr().into(),
+                        x.destination.width(),
+                        x.nexthop.into(),
+                        Ipv6Addr::UNSPECIFIED,
+                    );
+                    // An illumos address object is named <interface>/<tag>.
+                    r.ifname = x
+                        .addrobj_name
+                        .split_once('/')
+                        .map_or(x.addrobj_name.as_str(), |(ifname, _)| ifname)
+                        .to_string();
+                    r
+                })
+                .collect();
             ddm::sys::remove_underlay_routes(
                 &log,
                 "shutdown-all",
@@ -368,17 +405,20 @@ fn termination_handler(
                 &rt,
             );
 
-            let imported_tnl = db.imported_tunnel();
-            if let Err(e) = ddm::sys::remove_tunnel_routes(
-                &log,
-                "shutdown-all",
-                &imported_tnl,
-            ) {
-                error!(log, "shutdown tunnel routes: {e}");
+            // Tunnel routes are programmed into OPTE only on servers.
+            if kind == RouterKind::Server {
+                let imported_tnl = db.imported_tunnel();
+                if let Err(e) = ddm::sys::remove_tunnel_routes(
+                    &log,
+                    "shutdown-all",
+                    &imported_tnl,
+                ) {
+                    error!(log, "shutdown tunnel routes: {e}");
+                }
             }
         }
         #[cfg(not(all(feature = "backend", target_os = "illumos")))]
-        let _ = (db, dendrite, rt, log);
+        let _ = (db, dendrite, kind, rt, log);
 
         std::process::exit(SIGTERM_EXIT);
     });

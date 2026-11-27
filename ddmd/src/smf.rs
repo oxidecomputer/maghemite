@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm::admin::{DDM_STATS_PORT, HandlerContext};
+use ddm::admin::{ApiHandlerContext, DDM_STATS_PORT};
 use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
 use slog::{Logger, error, info, warn};
@@ -10,7 +10,7 @@ use smf::PropertyGroup;
 use std::sync::{Arc, Mutex};
 
 pub(crate) async fn smf_refresh(
-    ctx: Arc<Mutex<HandlerContext>>,
+    ctx: Arc<Mutex<ApiHandlerContext>>,
     log: Logger,
 ) -> anyhow::Result<()> {
     info!(log, "handling smf refresh");
@@ -43,7 +43,7 @@ pub(crate) async fn smf_refresh(
 }
 
 fn refresh_stats_server(
-    ctx: &Arc<Mutex<HandlerContext>>,
+    ctx: &Arc<Mutex<ApiHandlerContext>>,
     pg: PropertyGroup<'_>,
     log: &Logger,
 ) -> anyhow::Result<()> {
