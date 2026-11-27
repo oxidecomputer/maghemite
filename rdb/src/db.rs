@@ -15,6 +15,7 @@ use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use iddqd::{IdOrdItem, IdOrdMap, id_upcast};
+use itertools::Itertools;
 use mg_api_types::bfd::BfdPeerConfig;
 use mg_api_types::bgp::peer::PeerId;
 use mg_api_types::rdb::neighbor::{BgpNeighborInfo, BgpUnnumberedNeighborInfo};
@@ -80,7 +81,7 @@ const ROUTER: &str = "router";
 const BESTPATH_FANOUT: &str = "bestpath_fanout";
 
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
-const DEFAULT_BESTPATH_FANOUT: u8 = 1;
+pub const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 use crate::rib::{Rib, Rib4, Rib6};
 
@@ -113,7 +114,7 @@ pub struct RouterDb {
     id: RouterId,
 
     /// This router's name.
-    name: String,
+    name: Arc<RwLock<String>>,
 
     /// Tunnel endpoint address.
     tep: Ipv6Addr,
@@ -281,7 +282,7 @@ impl Db {
                 "router_id" => info.id.to_string(),
             )),
             id: info.id,
-            name: info.name,
+            name: Arc::new(RwLock::new(info.name)),
             tep: info.tep,
             rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
             rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
@@ -303,7 +304,7 @@ impl Db {
             )));
         }
         for r in routers.iter() {
-            if r.name == info.name {
+            if *read_lock!(r.name) == info.name {
                 return Err(Error::Conflict(format!(
                     "router {} already exists",
                     info.name
@@ -315,6 +316,59 @@ impl Db {
         rdb.persistent.clear()?;
         routers.insert_overwrite(rdb.clone());
         Ok(rdb)
+    }
+
+    /// Rename routers. Fails on naming conflicts.
+    pub fn rename_routers(
+        &self,
+        names: &BTreeMap<RouterId, String>,
+    ) -> Result<(), Error> {
+        let routers = write_lock!(self.routers);
+        let renames: Vec<(&RouterDb, &String)> = routers
+            .iter()
+            .filter_map(|router| Some((router, names.get(&router.id)?)))
+            .filter(|(router, name)| **name != *read_lock!(router.name))
+            .collect();
+        if renames.is_empty() {
+            return Ok(());
+        }
+
+        let final_names =
+            routers.iter().map(|router| match names.get(&router.id) {
+                Some(name) => name.clone(),
+                None => read_lock!(router.name).clone(),
+            });
+        if let Some(name) = final_names.duplicates().next() {
+            return Err(Error::Conflict(format!(
+                "router {name} already exists"
+            )));
+        }
+
+        let records = renames
+            .iter()
+            .map(|(router, name)| {
+                let info = RouterInfo {
+                    id: router.id,
+                    name: (*name).clone(),
+                    tep: router.tep,
+                };
+                Ok((router.id, serde_json::to_string(&info)?))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let tree = self.persistent.open_tree(ROUTER)?;
+        tree.transaction(|tx_db| {
+            for (id, value) in &records {
+                tx_db.insert(&id.as_bytes()[..], value.as_str())?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        for (router, name) in renames {
+            *write_lock!(router.name) = name.clone();
+        }
+        Ok(())
     }
 
     fn persist_router(&self, info: &RouterInfo) -> Result<(), Error> {
@@ -342,7 +396,7 @@ impl Db {
             .iter()
             .map(|r| RouterInfo {
                 id: r.id,
-                name: r.name.clone(),
+                name: read_lock!(r.name).clone(),
                 tep: r.tep,
             })
             .collect()
@@ -354,6 +408,15 @@ impl Db {
             .get(&id)
             .cloned()
             .ok_or_else(|| Error::NotFound(format!("router {id}")))
+    }
+
+    /// Look a router up by name.
+    pub fn router_by_name(&self, name: &str) -> Result<RouterDb, Error> {
+        read_lock!(self.routers)
+            .iter()
+            .find(|r| *read_lock!(r.name) == name)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("router {name}")))
     }
 
     pub fn slot(&self) -> Option<u16> {

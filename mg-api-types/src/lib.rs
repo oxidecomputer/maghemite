@@ -22,5 +22,6 @@ pub mod bgp;
 pub mod ndp;
 pub mod rdb;
 pub mod rib;
+pub mod router;
 pub mod static_routes;
 pub mod switch;
